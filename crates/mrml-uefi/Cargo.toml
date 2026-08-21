@@ -19,3 +19,4 @@ bench = false
 required-features = ["uefi-image"]
 
 [dependencies]
+mrml-kernel = { path = "../mrml-kernel" }
