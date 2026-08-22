@@ -309,6 +309,10 @@ pub enum ExprKind<'source> {
         base: ExprId,
         address: ExprId,
     },
+    RawPointerWithMetadata {
+        base: ExprId,
+        metadata: ExprId,
+    },
     RawPointerWrite {
         base: ExprId,
         value: ExprId,
@@ -513,6 +517,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerPointeeCast { .. }
             | ExprKind::RawPointerAsReference { .. }
             | ExprKind::RawPointerWithAddress { .. }
+            | ExprKind::RawPointerWithMetadata { .. }
             | ExprKind::RawPointerWrite { .. }
             | ExprKind::RawPointerWriteBytes { .. }
             | ExprKind::RawPointerCopy { .. }
@@ -740,6 +745,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerPointeeCast { .. }
             | ExprKind::RawPointerAsReference { .. }
             | ExprKind::RawPointerWithAddress { .. }
+            | ExprKind::RawPointerWithMetadata { .. }
             | ExprKind::RawPointerWrite { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerWriteBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerCopy { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -1970,6 +1976,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::RawPointerWithAddress { base, address } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(address, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerWithMetadata { base, metadata } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(metadata, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerWrite { base, value, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3626,6 +3636,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "write_unaligned"
                         | "write_volatile"
                         | "with_addr"
+                        | "with_metadata_of"
                 )
             }) else {
                 return Err(self.error(ExpressionErrorKind::ExpectedExpression, method));
@@ -3665,6 +3676,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "write_unaligned"
                     | "write_volatile"
                     | "with_addr"
+                    | "with_metadata_of"
             ) {
                 Some(self.expression(0, depth + 1)?)
             } else {
@@ -3771,6 +3783,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "with_addr" => ExprKind::RawPointerWithAddress {
                     base,
                     address: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "with_metadata_of" => ExprKind::RawPointerWithMetadata {
+                    base,
+                    metadata: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },

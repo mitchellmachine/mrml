@@ -1970,6 +1970,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::RawPointerWithAddress { base, address } => {
             recurse(base, inside_inline_const) || recurse(address, inside_inline_const)
         }
+        ExprKind::RawPointerWithMetadata { base, metadata } => {
+            recurse(base, inside_inline_const) || recurse(metadata, inside_inline_const)
+        }
         ExprKind::RawPointerWrite { base, value, .. } => {
             recurse(base, inside_inline_const) || recurse(value, inside_inline_const)
         }
@@ -2077,6 +2080,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         | ExprKind::RawPointerPointeeCast { base, .. }
         | ExprKind::RawPointerAsReference { base, .. } => recurse(base),
         ExprKind::RawPointerWithAddress { base, address } => recurse(base) || recurse(address),
+        ExprKind::RawPointerWithMetadata { base, metadata } => recurse(base) || recurse(metadata),
         ExprKind::RawPointerWrite { base, value, .. } => recurse(base) || recurse(value),
         ExprKind::RawPointerWriteBytes { base, value, count } => {
             recurse(base) || recurse(value) || recurse(count)

@@ -2250,6 +2250,19 @@ fn rustc_raw_pointer_addresses_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_raw_pointer_metadata_replacement_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u8, metadata: *const u32) -> *const u32 { input.with_metadata_of(metadata) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u8, metadata: *const i16) -> *mut i16 { input.with_metadata_of(metadata) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut bool, metadata: *mut char) -> *mut char { input.with_metadata_of(metadata) }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_raw_pointer_mutability_casts_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u16) -> *mut u16 { input.cast_mut() }",

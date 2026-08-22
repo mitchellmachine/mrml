@@ -2221,6 +2221,10 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(address)?;
         }
+        ExprKind::RawPointerWithMetadata { base, metadata } => {
+            recurse(base)?;
+            recurse(metadata)?;
+        }
         ExprKind::RawPointerWrite { base, value, .. } => {
             recurse(base)?;
             recurse(value)?;
@@ -2787,6 +2791,33 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::RawPointerWithMetadata { base, metadata } => {
+            let RuntimeExpressionType::RawPointer { mutable, .. } =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let RuntimeExpressionType::RawPointer { pointee, .. } =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    metadata,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            Ok(RuntimeExpressionType::RawPointer { pointee, mutable })
         }
         ExprKind::RawPointerWrite {
             base,
@@ -4331,6 +4362,14 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_expression(tree, address, depth + 1)?;
                 self.evaluation_depth -= 1;
                 self.emit(&[0x48, 0x83, 0xc4, 0x08])?;
+            }
+            ExprKind::RawPointerWithMetadata { base, metadata } => {
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, metadata, depth + 1)?;
+                self.emit(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x83, 0xc4, 0x08])?;
+                self.evaluation_depth -= 1;
             }
             ExprKind::RawPointerWrite {
                 base,
@@ -10349,6 +10388,46 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn replaces_scalar_raw_pointer_metadata() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u8, metadata: *const u32) -> *const u32 { input.with_metadata_of(metadata) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *mut u8, metadata: *const i16) -> *mut i16 { input.with_metadata_of(metadata) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *mut bool, metadata: *mut char) -> *mut char { input.with_metadata_of(metadata) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 4, 128>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, metadata: *const u32) -> *const u32 { input.with_metadata_of(metadata) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u8, metadata: usize) -> *const u32 { input.with_metadata_of(metadata) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

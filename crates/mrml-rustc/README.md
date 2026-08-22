@@ -540,7 +540,15 @@ including pointee and mutability changes; non-integer scalar sources remain
 type errors. An independent caller preserved an address through `usize`, `u8`,
 and differently typed raw-pointer views through a 206-byte COFF and 592-byte
 ELF64 object. Constant evaluation continues to reject address casts. Raw
-pointers support element-scaled `add`, `sub`, `wrapping_add`, and
+pointer `with_metadata_of(other)` is supported for the current sized scalar
+pointees. Both operands are evaluated in source order; the result preserves the
+receiver's address, provenance-facing representation, and mutability while
+taking the other pointer's pointee type. Non-pointer operands are rejected.
+An independent Linux caller verified const and mutable conversions, pointer
+identity, and an in-place `i16` mutation through 520- and 512-byte ELF64
+objects. Unsized metadata remains tied to future raw-slice and trait-object
+support rather than being represented as scalar metadata.
+Raw pointers support element-scaled `add`, `sub`, `wrapping_add`, and
 `wrapping_sub` with `usize` offsets plus `offset` and `wrapping_offset` with
 `isize` offsets while preserving pointee and mutability. The signed forms
 preserve negative two's-complement offsets after element scaling; unsigned and
@@ -1182,7 +1190,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 377 Windows library, conformance, rustc-nightly-replacement, and driver
+The 379 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
@@ -1856,7 +1864,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 377 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 379 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
