@@ -2218,6 +2218,10 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(address)?;
         }
+        ExprKind::RawPointerWrite { base, value } => {
+            recurse(base)?;
+            recurse(value)?;
+        }
         ExprKind::RawPointerOffset { base, offset, .. } => {
             recurse(base)?;
             recurse(offset)?;
@@ -2675,6 +2679,35 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::RawPointerWrite { base, value } => {
+            let RuntimeExpressionType::RawPointer {
+                pointee,
+                mutable: true,
+            } = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let expected = runtime_type_from_array_element(pointee);
+            let actual = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                value,
+                depth + 1,
+            )?;
+            if !runtime_types_compatible(actual, expected) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Unit)
         }
         ExprKind::RawPointerOffset {
             base,
@@ -4010,6 +4043,35 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_expression(tree, address, depth + 1)?;
                 self.evaluation_depth -= 1;
                 self.emit(&[0x48, 0x83, 0xc4, 0x08])?;
+            }
+            ExprKind::RawPointerWrite { base, value } => {
+                let RuntimeExpressionType::RawPointer { pointee, .. } =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        0,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                let previous_width = self.width;
+                self.width = runtime_expression_width(runtime_type_from_array_element(pointee))
+                    .unwrap_or(previous_width);
+                let emission = self.emit_expression(tree, value, depth + 1);
+                self.width = previous_width;
+                emission?;
+                self.emit(&[0x48, 0x8b, 0x14, 0x24])?;
+                self.emit_reference_store(pointee)?;
+                self.emit(&[0x48, 0x83, 0xc4, 0x08])?;
+                self.evaluation_depth -= 1;
+                self.emit(&[0x31, 0xc0])?;
             }
             ExprKind::RawPointerOffset {
                 base,
@@ -9076,6 +9138,49 @@ mod tests {
                 .kind,
             CodegenErrorKind::RuntimeTypeMismatch,
         );
+    }
+
+    #[test]
+    fn writes_scalar_raw_pointers() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: u32) { input.write(value) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: u32) { input.write_unaligned(value) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: u32) { input.write_volatile(value) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut bool, value: bool) { input.write(value) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut char, value: char) { input.write(value) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 160>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *const u32) { input.write(42) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: bool) { input.write(value) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: usize) { input.write(42) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
     }
 
     #[test]

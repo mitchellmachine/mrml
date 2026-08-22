@@ -298,6 +298,10 @@ pub enum ExprKind<'source> {
         base: ExprId,
         address: ExprId,
     },
+    RawPointerWrite {
+        base: ExprId,
+        value: ExprId,
+    },
     RawPointerOffset {
         base: ExprId,
         offset: ExprId,
@@ -470,6 +474,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerWithAddress { .. }
+            | ExprKind::RawPointerWrite { .. }
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }
             | ExprKind::Integer(_)
@@ -687,7 +692,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerIsNull { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
-            | ExprKind::RawPointerWithAddress { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            | ExprKind::RawPointerWithAddress { .. }
+            | ExprKind::RawPointerWrite { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDifference { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
@@ -1909,6 +1915,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::RawPointerWithAddress { base, address } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(address, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerWrite { base, value } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(value, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerOffset { base, offset, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3474,6 +3484,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "read"
                         | "read_unaligned"
                         | "read_volatile"
+                        | "write"
+                        | "write_unaligned"
+                        | "write_volatile"
                         | "with_addr"
                 )
             }) else {
@@ -3500,6 +3513,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_byte_sub"
                     | "wrapping_byte_offset"
                     | "byte_offset_from"
+                    | "write"
+                    | "write_unaligned"
+                    | "write_volatile"
                     | "with_addr"
             ) {
                 Some(self.expression(0, depth + 1)?)
@@ -3536,6 +3552,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "read" | "read_unaligned" | "read_volatile" => ExprKind::Unary {
                     operator: UnaryOperator::Dereference,
                     operand: base,
+                },
+                "write" | "write_unaligned" | "write_volatile" => ExprKind::RawPointerWrite {
+                    base,
+                    value: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
                 },
                 "with_addr" => ExprKind::RawPointerWithAddress {
                     base,

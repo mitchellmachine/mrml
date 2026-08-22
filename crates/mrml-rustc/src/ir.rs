@@ -284,6 +284,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerWithAddress { .. }
+            | ExprKind::RawPointerWrite { .. }
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. } => {
                 return Err(IrError {
