@@ -2190,6 +2190,20 @@ fn rustc_scalar_raw_pointer_alignment_checks_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_raw_pointer_masks_and_explicit_alignment_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u32, mask: usize) -> *const u32 { input.mask(mask) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut i16, mask: usize) -> *mut i16 { input.mask(mask) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u32, alignment: usize) -> bool { input.is_aligned_to(alignment) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut char, alignment: usize) -> bool { input.is_aligned_to(alignment) }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_scalar_raw_pointer_drops_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u32) { input.drop_in_place() }",

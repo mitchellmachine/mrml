@@ -352,6 +352,14 @@ pub enum ExprKind<'source> {
         base: ExprId,
         alignment: ExprId,
     },
+    RawPointerMask {
+        base: ExprId,
+        mask: ExprId,
+    },
+    RawPointerIsAlignedTo {
+        base: ExprId,
+        alignment: ExprId,
+    },
     RawPointerDrop {
         base: ExprId,
     },
@@ -525,6 +533,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }
             | ExprKind::RawPointerAlignOffset { .. }
+            | ExprKind::RawPointerMask { .. }
+            | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
@@ -753,6 +763,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDifference { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerAlignOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::RawPointerMask { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::RawPointerIsAlignedTo { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDrop { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
@@ -2015,6 +2027,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(origin, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerAlignOffset { base, alignment } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(alignment, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerMask { base, mask } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(mask, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerIsAlignedTo { base, alignment } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(alignment, name, replacement, depth + 1)?;
             }
@@ -3605,6 +3625,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "offset_from"
                         | "offset_from_unsigned"
                         | "align_offset"
+                        | "is_aligned_to"
+                        | "mask"
                         | "drop_in_place"
                         | "byte_add"
                         | "byte_sub"
@@ -3649,6 +3671,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 method.text,
                 "is_char_boundary"
                     | "align_offset"
+                    | "is_aligned_to"
+                    | "mask"
                     | "add"
                     | "sub"
                     | "wrapping_add"
@@ -3801,6 +3825,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "align_offset" => ExprKind::RawPointerAlignOffset {
                     base,
                     alignment: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "is_aligned_to" => ExprKind::RawPointerIsAlignedTo {
+                    base,
+                    alignment: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "mask" => ExprKind::RawPointerMask {
+                    base,
+                    mask: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },

@@ -2268,6 +2268,14 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(alignment)?;
         }
+        ExprKind::RawPointerMask { base, mask } => {
+            recurse(base)?;
+            recurse(mask)?;
+        }
+        ExprKind::RawPointerIsAlignedTo { base, alignment } => {
+            recurse(base)?;
+            recurse(alignment)?;
+        }
         ExprKind::RawPointerDrop { base } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -3076,6 +3084,60 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::Integer(Some(
                 crate::IntegerType::Usize,
             )))
+        }
+        ExprKind::RawPointerMask { base, mask } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::RawPointer { .. })
+                || !matches!(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        mask,
+                        depth + 1,
+                    )?,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+                )
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
+        }
+        ExprKind::RawPointerIsAlignedTo { base, alignment } => {
+            if !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::RawPointer { .. }
+            ) || !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    alignment,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::Integer(None)
+                    | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Bool)
         }
         ExprKind::Integer(literal) => Ok(RuntimeExpressionType::Integer(
             literal.suffix.and_then(crate::IntegerType::from_name),
@@ -4749,6 +4811,36 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 }
                 self.patch_forward_branch(aligned_end)?;
                 self.patch_forward_branch(end)?;
+            }
+            ExprKind::RawPointerMask { base, mask } => {
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, mask, depth + 1)?;
+                self.emit(&[
+                    0x48, 0x8b, 0x0c, 0x24, 0x48, 0x83, 0xc4, 0x08, 0x48, 0x21, 0xc8,
+                ])?;
+                self.evaluation_depth -= 1;
+            }
+            ExprKind::RawPointerIsAlignedTo { base, alignment } => {
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, alignment, depth + 1)?;
+                self.evaluation_depth -= 1;
+                self.emit(&[
+                    0x48, 0x89, 0xc1, 0x48, 0x8b, 0x14, 0x24, 0x48, 0x83, 0xc4, 0x08, 0x48, 0x85,
+                    0xc9,
+                ])?;
+                self.emit_trap_branch(0x84)?;
+                self.emit(&[
+                    0x49, 0x89, 0xc8, 0x49, 0x83, 0xe8, 0x01, 0x49, 0x89, 0xc9, 0x4d, 0x21, 0xc1,
+                    0x4d, 0x85, 0xc9,
+                ])?;
+                self.emit_trap_branch(0x85)?;
+                self.emit(&[
+                    0x48, 0x89, 0xd0, 0x4c, 0x21, 0xc0, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0,
+                ])?;
             }
             ExprKind::RawPointerDrop { base } => {
                 self.emit_expression(tree, base, depth + 1)?;
@@ -10256,6 +10348,48 @@ mod tests {
                 .kind,
             CodegenErrorKind::RuntimeTypeMismatch,
         );
+    }
+
+    #[test]
+    fn masks_and_checks_scalar_raw_pointer_alignment() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u32, mask: usize) -> *const u32 { input.mask(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *mut i16, mask: usize) -> *mut i16 { input.mask(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u32, alignment: usize) -> bool { input.is_aligned_to(alignment) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *mut char, alignment: usize) -> bool { input.is_aligned_to(alignment) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 160>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, mask: usize) -> usize { input.mask(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u32, mask: u32) -> *const u32 { input.mask(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u32, alignment: u32) -> bool { input.is_aligned_to(alignment) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
     }
 
     #[test]

@@ -295,6 +295,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }
             | ExprKind::RawPointerAlignOffset { .. }
+            | ExprKind::RawPointerMask { .. }
+            | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
