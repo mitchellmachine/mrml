@@ -2034,6 +2034,20 @@ fn rustc_scalar_raw_pointer_replacements_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_raw_pointer_swaps_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(left: *mut u32, right: *mut u32) { left.swap(right) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(left: *mut i16, right: *mut i16) { left.swap(right) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(left: *mut bool, right: *mut bool) { left.swap(right) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(left: *mut char, right: *mut char) { left.swap(right) }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_scalar_raw_pointer_comparisons_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: *const u16, right: *const u16) -> bool { left == right }",
