@@ -2206,6 +2206,20 @@ fn rustc_raw_pointer_mutability_casts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_raw_pointer_pointee_casts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u32) -> *const u8 { input.cast::<u8>() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u32) -> *mut i16 { input.cast::<i16>() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const bool) -> *const char { input.cast::<char>() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut char) -> *mut bool { input.cast::<bool>() }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_typed_and_mutable_scalar_reference_copies_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &usize) -> usize { let copied: &usize = input; *copied }",

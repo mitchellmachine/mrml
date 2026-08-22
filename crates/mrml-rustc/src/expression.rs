@@ -294,6 +294,10 @@ pub enum ExprKind<'source> {
         base: ExprId,
         mutable: bool,
     },
+    RawPointerPointeeCast {
+        base: ExprId,
+        pointee: PointerPointee,
+    },
     RawPointerWithAddress {
         base: ExprId,
         address: ExprId,
@@ -486,6 +490,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerIsNull { .. }
             | ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
+            | ExprKind::RawPointerPointeeCast { .. }
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. }
             | ExprKind::RawPointerSwap { .. }
@@ -708,6 +713,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerIsNull { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
+            | ExprKind::RawPointerPointeeCast { .. }
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerSwap { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -1928,7 +1934,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::RawPointerIsNull { base } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
-            ExprKind::RawPointerAddress { base } | ExprKind::RawPointerMutability { base, .. } => {
+            ExprKind::RawPointerAddress { base }
+            | ExprKind::RawPointerMutability { base, .. }
+            | ExprKind::RawPointerPointeeCast { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerWithAddress { base, address } => {
@@ -3483,6 +3491,49 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             self.take()?;
             let method = self.take()?;
+            if method.is_some_and(|method| method.text == "cast") {
+                let separator = self.take()?;
+                if !separator.is_some_and(|token| token.kind == TokenKind::PathSeparator) {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, separator));
+                }
+                let open_generic = self.take()?;
+                if !open_generic.is_some_and(|token| token.text == "<") {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, open_generic));
+                }
+                let pointee = self.take()?;
+                let Some(pointee) = pointee.filter(|token| token.kind == TokenKind::Identifier)
+                else {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, pointee));
+                };
+                let pointee =
+                    match pointee.text {
+                        "bool" => PointerPointee::Bool,
+                        "char" => PointerPointee::Char,
+                        name => PointerPointee::Integer(IntegerType::from_name(name).ok_or_else(
+                            || self.error(ExpressionErrorKind::UnsupportedCastType, Some(pointee)),
+                        )?),
+                    };
+                let close_generic = self.take()?;
+                if !close_generic.is_some_and(|token| token.text == ">") {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, close_generic));
+                }
+                let open = self.take()?;
+                if !open.is_some_and(|token| token.kind == TokenKind::OpenParen) {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, open));
+                }
+                let close = self.take()?;
+                let Some(close) = close.filter(|token| token.kind == TokenKind::CloseParen) else {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, close));
+                };
+                base = self.push(Expr {
+                    kind: ExprKind::RawPointerPointeeCast { base, pointee },
+                    span: Span {
+                        start: self.node_span(base)?.start,
+                        end: close.span.end,
+                    },
+                })?;
+                continue;
+            }
             let Some(method) = method.filter(|method| {
                 matches!(
                     method.text,

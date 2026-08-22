@@ -2211,9 +2211,9 @@ fn validate_runtime_inline_const<
         }
         ExprKind::ReferenceAsPointer { base, .. } => recurse(base)?,
         ExprKind::RawPointerIsNull { base } => recurse(base)?,
-        ExprKind::RawPointerAddress { base } | ExprKind::RawPointerMutability { base, .. } => {
-            recurse(base)?
-        }
+        ExprKind::RawPointerAddress { base }
+        | ExprKind::RawPointerMutability { base, .. }
+        | ExprKind::RawPointerPointeeCast { base, .. } => recurse(base)?,
         ExprKind::RawPointerWithAddress { base, address } => {
             recurse(base)?;
             recurse(address)?;
@@ -2675,6 +2675,26 @@ fn runtime_expression_type_with_locals<
                 )?
             else {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            Ok(RuntimeExpressionType::RawPointer { pointee, mutable })
+        }
+        ExprKind::RawPointerPointeeCast { base, pointee } => {
+            let RuntimeExpressionType::RawPointer { mutable, .. } =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let pointee = match pointee {
+                crate::PointerPointee::Integer(ty) => RuntimeArrayElementType::Integer(Some(ty)),
+                crate::PointerPointee::Bool => RuntimeArrayElementType::Bool,
+                crate::PointerPointee::Char => RuntimeArrayElementType::Char,
             };
             Ok(RuntimeExpressionType::RawPointer { pointee, mutable })
         }
@@ -4130,7 +4150,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_expression(tree, base, depth + 1)?;
                 self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0])?;
             }
-            ExprKind::RawPointerAddress { base } | ExprKind::RawPointerMutability { base, .. } => {
+            ExprKind::RawPointerAddress { base }
+            | ExprKind::RawPointerMutability { base, .. }
+            | ExprKind::RawPointerPointeeCast { base, .. } => {
                 self.emit_expression(tree, base, depth + 1)?;
             }
             ExprKind::RawPointerWithAddress { base, address } => {
@@ -9876,6 +9898,40 @@ mod tests {
                 .unwrap_err()
                 .kind,
             CodegenErrorKind::RuntimeTypeMismatch
+        );
+    }
+
+    #[test]
+    fn casts_raw_pointer_pointee_types() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u32) -> *const u8 { input.cast::<u8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *mut u32) -> *mut i16 { input.cast::<i16>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const bool) -> *const char { input.cast::<char>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *mut char) -> *mut bool { input.cast::<bool>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u64) -> *mut u16 { input.cast::<u16>().cast_mut() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> usize { input.cast::<u8>() as usize }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
         );
     }
 
