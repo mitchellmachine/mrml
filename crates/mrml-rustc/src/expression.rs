@@ -319,6 +319,7 @@ pub enum ExprKind<'source> {
         pointer: ExprId,
         origin: ExprId,
         bytes: bool,
+        unsigned: bool,
     },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
@@ -3480,6 +3481,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "offset"
                         | "wrapping_offset"
                         | "offset_from"
+                        | "offset_from_unsigned"
                         | "byte_add"
                         | "byte_sub"
                         | "byte_offset"
@@ -3487,6 +3489,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_byte_sub"
                         | "wrapping_byte_offset"
                         | "byte_offset_from"
+                        | "byte_offset_from_unsigned"
                         | "is_null"
                         | "addr"
                         | "expose_provenance"
@@ -3519,6 +3522,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
+                    | "offset_from_unsigned"
                     | "byte_add"
                     | "byte_sub"
                     | "byte_offset"
@@ -3526,6 +3530,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_byte_sub"
                     | "wrapping_byte_offset"
                     | "byte_offset_from"
+                    | "byte_offset_from_unsigned"
                     | "replace"
                     | "swap"
                     | "write"
@@ -3595,12 +3600,22 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },
-                "offset_from" | "byte_offset_from" => ExprKind::RawPointerDifference {
+                "offset_from"
+                | "offset_from_unsigned"
+                | "byte_offset_from"
+                | "byte_offset_from_unsigned" => ExprKind::RawPointerDifference {
                     pointer: base,
                     origin: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
-                    bytes: method.text == "byte_offset_from",
+                    bytes: matches!(
+                        method.text,
+                        "byte_offset_from" | "byte_offset_from_unsigned"
+                    ),
+                    unsigned: matches!(
+                        method.text,
+                        "offset_from_unsigned" | "byte_offset_from_unsigned"
+                    ),
                 },
                 method => ExprKind::RawPointerOffset {
                     base,

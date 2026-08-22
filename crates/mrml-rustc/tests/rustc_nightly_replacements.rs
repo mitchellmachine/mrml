@@ -2106,6 +2106,19 @@ fn rustc_scalar_raw_pointer_distances_reach_native_objects() {
 }
 
 #[test]
+fn rustc_unsigned_raw_pointer_distances_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(pointer: *const u16, origin: *const u16) -> usize { pointer.offset_from_unsigned(origin) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(pointer: *mut u64, origin: *const u64) -> usize { pointer.offset_from_unsigned(origin) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(pointer: *const u32, origin: *const u32) -> usize { pointer.byte_offset_from_unsigned(origin) }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_raw_pointer_byte_offsets_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *const u32, offset: usize) -> *const u32 { input.byte_add(offset) }",

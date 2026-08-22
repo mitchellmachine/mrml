@@ -2795,7 +2795,10 @@ fn runtime_expression_type_with_locals<
             Ok(base_type)
         }
         ExprKind::RawPointerDifference {
-            pointer, origin, ..
+            pointer,
+            origin,
+            unsigned,
+            ..
         } => {
             let pointer_type = runtime_expression_type_with_locals(
                 function,
@@ -2820,9 +2823,11 @@ fn runtime_expression_type_with_locals<
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
-            Ok(RuntimeExpressionType::Integer(Some(
-                crate::IntegerType::Isize,
-            )))
+            Ok(RuntimeExpressionType::Integer(Some(if unsigned {
+                crate::IntegerType::Usize
+            } else {
+                crate::IntegerType::Isize
+            })))
         }
         ExprKind::Integer(literal) => Ok(RuntimeExpressionType::Integer(
             literal.suffix.and_then(crate::IntegerType::from_name),
@@ -4210,6 +4215,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 pointer,
                 origin,
                 bytes,
+                unsigned,
             } => {
                 let RuntimeExpressionType::RawPointer { pointee, .. } =
                     runtime_expression_type_with_locals(
@@ -4239,6 +4245,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit(&[0x48, 0x29, 0xc1, 0x48, 0x89, 0xc8])?;
                 match element_bytes {
                     1 => {}
+                    2 if unsigned => self.emit(&[0x48, 0xd1, 0xe8])?,
+                    4 if unsigned => self.emit(&[0x48, 0xc1, 0xe8, 2])?,
+                    8 if unsigned => self.emit(&[0x48, 0xc1, 0xe8, 3])?,
                     2 => self.emit(&[0x48, 0xd1, 0xf8])?,
                     4 => self.emit(&[0x48, 0xc1, 0xf8, 2])?,
                     8 => self.emit(&[0x48, 0xc1, 0xf8, 3])?,
@@ -9510,6 +9519,38 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn measures_unsigned_raw_pointer_distances() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(pointer: *const u16, origin: *const u16) -> usize { pointer.offset_from_unsigned(origin) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(pointer: *mut u64, origin: *const u64) -> usize { pointer.offset_from_unsigned(origin) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(pointer: *const u32, origin: *const u32) -> usize { pointer.byte_offset_from_unsigned(origin) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(pointer: *const u16, origin: *const u8) -> usize { pointer.offset_from_unsigned(origin) }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]
