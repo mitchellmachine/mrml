@@ -478,6 +478,13 @@ scalar references; writes through `*const T` are rejected. Native callers read
 ABI functions accept the `unsafe fn` qualifier in its ordinary position after
 `const` and before `extern`; the native raw-pointer probes retain that explicit
 unsafe boundary without changing their deterministic object bytes.
+Scalar raw pointers convert directly to shared references with
+`as_ref_unchecked()` and mutable pointers convert to mutable references with
+`as_mut_unchecked()`. The address is preserved while the runtime type changes,
+so existing reference loads, locals, mutation, and reborrowing apply. A const
+pointer cannot produce a mutable reference, and non-pointer receivers are
+rejected. An independent Linux caller read 42 and mutated an `i16` from 40 to
+42 through 496- and 584-byte ELF64 objects.
 The scalar `read()`, `read_unaligned()`, and `read_volatile()` methods reuse the
 same typed load path for shared or mutable pointers. An independent caller
 observed aligned, deliberately unaligned, and volatile `u32` values through
@@ -1175,7 +1182,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 375 Windows library, conformance, rustc-nightly-replacement, and driver
+The 377 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
@@ -1849,7 +1856,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 375 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 377 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,

@@ -301,6 +301,10 @@ pub enum ExprKind<'source> {
         base: ExprId,
         pointee: PointerPointee,
     },
+    RawPointerAsReference {
+        base: ExprId,
+        mutable: bool,
+    },
     RawPointerWithAddress {
         base: ExprId,
         address: ExprId,
@@ -507,6 +511,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerPointeeCast { .. }
+            | ExprKind::RawPointerAsReference { .. }
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. }
             | ExprKind::RawPointerWriteBytes { .. }
@@ -733,6 +738,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerPointeeCast { .. }
+            | ExprKind::RawPointerAsReference { .. }
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerWriteBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -1957,7 +1963,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::RawPointerAddress { base }
             | ExprKind::RawPointerMutability { base, .. }
-            | ExprKind::RawPointerPointeeCast { base, .. } => {
+            | ExprKind::RawPointerPointeeCast { base, .. }
+            | ExprKind::RawPointerAsReference { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerWithAddress { base, address } => {
@@ -3603,6 +3610,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "expose_provenance"
                         | "cast_const"
                         | "cast_mut"
+                        | "as_ref_unchecked"
+                        | "as_mut_unchecked"
                         | "read"
                         | "read_unaligned"
                         | "read_volatile"
@@ -3704,6 +3713,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "cast_mut" => ExprKind::RawPointerMutability {
                     base,
                     mutable: true,
+                },
+                "as_ref_unchecked" | "as_mut_unchecked" => ExprKind::RawPointerAsReference {
+                    base,
+                    mutable: method.text == "as_mut_unchecked",
                 },
                 "read" | "read_unaligned" | "read_volatile" => ExprKind::Unary {
                     operator: UnaryOperator::Dereference,

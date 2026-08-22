@@ -2007,6 +2007,19 @@ fn rustc_scalar_raw_pointer_dereferences_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_raw_pointer_unchecked_references_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *const u32) -> u32 { *input.as_ref_unchecked() }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut i16) -> i16 { *input.as_ref_unchecked() }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut i16) -> i16 { let reference: &mut i16 = input.as_mut_unchecked(); *reference += 2; *reference }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_scalar_raw_pointer_writes_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u32, value: u32) { input.write(value) }",
