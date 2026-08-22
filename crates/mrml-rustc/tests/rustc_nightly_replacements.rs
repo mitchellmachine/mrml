@@ -2034,6 +2034,22 @@ fn rustc_scalar_raw_pointer_byte_fills_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_raw_pointer_copies_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(source: *const u8, destination: *mut u8, count: usize) { source.copy_to(destination, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(source: *const u16, destination: *mut u16, count: usize) { source.copy_to(destination, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(source: *const u32, destination: *mut u32, count: usize) { source.copy_to_nonoverlapping(destination, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(source: *const u64, destination: *mut u64, count: usize) { source.copy_to_nonoverlapping(destination, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(source: *const u8, destination: *mut u8, count: usize) { destination.copy_from(source, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(source: *const u32, destination: *mut u32, count: usize) { destination.copy_from_nonoverlapping(source, count) }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_scalar_raw_pointer_replacements_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u32, value: u32) -> u32 { input.replace(value) }",

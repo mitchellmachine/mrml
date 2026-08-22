@@ -315,6 +315,13 @@ pub enum ExprKind<'source> {
         value: ExprId,
         count: ExprId,
     },
+    RawPointerCopy {
+        source: ExprId,
+        destination: ExprId,
+        count: ExprId,
+        overlapping: bool,
+        destination_first: bool,
+    },
     RawPointerSwap {
         left: ExprId,
         right: ExprId,
@@ -503,6 +510,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. }
             | ExprKind::RawPointerWriteBytes { .. }
+            | ExprKind::RawPointerCopy { .. }
             | ExprKind::RawPointerSwap { .. }
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }
@@ -728,6 +736,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerWriteBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::RawPointerCopy { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerSwap { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDifference { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -1962,6 +1971,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::RawPointerWriteBytes { base, value, count } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(value, name, replacement, depth + 1)?;
+                self.substitute_identifier(count, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerCopy {
+                source,
+                destination,
+                count,
+                ..
+            } => {
+                self.substitute_identifier(source, name, replacement, depth + 1)?;
+                self.substitute_identifier(destination, name, replacement, depth + 1)?;
                 self.substitute_identifier(count, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerSwap { left, right } => {
@@ -3591,6 +3610,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "swap"
                         | "write"
                         | "write_bytes"
+                        | "copy_to"
+                        | "copy_to_nonoverlapping"
+                        | "copy_from"
+                        | "copy_from_nonoverlapping"
                         | "write_unaligned"
                         | "write_volatile"
                         | "with_addr"
@@ -3626,6 +3649,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "swap"
                     | "write"
                     | "write_bytes"
+                    | "copy_to"
+                    | "copy_to_nonoverlapping"
+                    | "copy_from"
+                    | "copy_from_nonoverlapping"
                     | "write_unaligned"
                     | "write_volatile"
                     | "with_addr"
@@ -3634,7 +3661,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             } else {
                 None
             };
-            let second_argument = if method.text == "write_bytes" {
+            let second_argument = if matches!(
+                method.text,
+                "write_bytes"
+                    | "copy_to"
+                    | "copy_to_nonoverlapping"
+                    | "copy_from"
+                    | "copy_from_nonoverlapping"
+            ) {
                 let comma = self.take()?;
                 if !comma.is_some_and(|token| token.kind == TokenKind::Comma) {
                     return Err(self.error(ExpressionErrorKind::ExpectedExpression, comma));
@@ -3692,6 +3726,28 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     count: second_argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
+                },
+                "copy_to" | "copy_to_nonoverlapping" => ExprKind::RawPointerCopy {
+                    source: base,
+                    destination: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    count: second_argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    overlapping: method.text == "copy_to",
+                    destination_first: false,
+                },
+                "copy_from" | "copy_from_nonoverlapping" => ExprKind::RawPointerCopy {
+                    source: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    destination: base,
+                    count: second_argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    overlapping: method.text == "copy_from",
+                    destination_first: true,
                 },
                 "swap" => ExprKind::RawPointerSwap {
                     left: base,

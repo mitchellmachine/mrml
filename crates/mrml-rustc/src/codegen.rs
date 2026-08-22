@@ -2229,6 +2229,22 @@ fn validate_runtime_inline_const<
             recurse(value)?;
             recurse(count)?;
         }
+        ExprKind::RawPointerCopy {
+            source,
+            destination,
+            count,
+            destination_first,
+            ..
+        } => {
+            if destination_first {
+                recurse(destination)?;
+                recurse(source)?;
+            } else {
+                recurse(source)?;
+                recurse(destination)?;
+            }
+            recurse(count)?;
+        }
         ExprKind::RawPointerSwap { left, right } => {
             recurse(left)?;
             recurse(right)?;
@@ -2810,6 +2826,50 @@ fn runtime_expression_type_with_locals<
                 RuntimeExpressionType::Integer(None)
                     | RuntimeExpressionType::Integer(Some(crate::IntegerType::U8))
             ) || !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    count,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::Integer(None)
+                    | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Unit)
+        }
+        ExprKind::RawPointerCopy {
+            source,
+            destination,
+            count,
+            ..
+        } => {
+            let RuntimeExpressionType::RawPointer { pointee, .. } =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    source,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                destination,
+                depth + 1,
+            )? != (RuntimeExpressionType::RawPointer {
+                pointee,
+                mutable: true,
+            }) || !matches!(
                 runtime_expression_type_with_locals(
                     function,
                     resolver,
@@ -4344,6 +4404,108 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit(&[0x45, 0x88, 0x0a, 0x49, 0xff, 0xc2, 0x49, 0xff, 0xc8])?;
                 self.emit_backward_branch(loop_start)?;
                 self.patch_forward_branch(done)?;
+                self.emit(&[0x31, 0xc0])?;
+            }
+            ExprKind::RawPointerCopy {
+                source,
+                destination,
+                count,
+                overlapping,
+                destination_first,
+            } => {
+                let RuntimeExpressionType::RawPointer { pointee, .. } =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        source,
+                        0,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let element_bytes = runtime_array_element_bytes(pointee)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let first = if destination_first {
+                    destination
+                } else {
+                    source
+                };
+                let second = if destination_first {
+                    source
+                } else {
+                    destination
+                };
+                self.emit_expression(tree, first, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, second, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                let previous_width = self.width;
+                self.width = runtime_expression_width(RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::Usize,
+                )))
+                .unwrap_or(previous_width);
+                let emission = self.emit_expression(tree, count, depth + 1);
+                self.width = previous_width;
+                emission?;
+                self.emit(&[0x49, 0x89, 0xc0])?;
+                if destination_first {
+                    self.emit(&[0x4c, 0x8b, 0x14, 0x24, 0x4c, 0x8b, 0x5c, 0x24, 0x08])?;
+                } else {
+                    self.emit(&[0x4c, 0x8b, 0x1c, 0x24, 0x4c, 0x8b, 0x54, 0x24, 0x08])?;
+                }
+                self.emit(&[0x48, 0x83, 0xc4, 0x10])?;
+                self.evaluation_depth -= 2;
+                match element_bytes {
+                    1 => {}
+                    2 => self.emit(&[0x49, 0xd1, 0xe0])?,
+                    4 => self.emit(&[0x49, 0xc1, 0xe0, 0x02])?,
+                    8 => self.emit(&[0x49, 0xc1, 0xe0, 0x03])?,
+                    _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                }
+                self.emit(&[0x4d, 0x85, 0xc0])?;
+                let empty = self.emit_forward_branch(0x84)?;
+                let forward = if overlapping {
+                    self.emit(&[0x4d, 0x39, 0xd3])?;
+                    Some(self.emit_forward_branch(0x86)?)
+                } else {
+                    None
+                };
+                let backward_finished = if overlapping {
+                    self.emit(&[0x4d, 0x01, 0xc2, 0x4d, 0x01, 0xc3])?;
+                    let loop_start = self.length;
+                    self.emit(&[
+                        0x49, 0xff, 0xca, 0x49, 0xff, 0xcb, 0x45, 0x8a, 0x0a, 0x45, 0x88, 0x0b,
+                        0x49, 0xff, 0xc8,
+                    ])?;
+                    self.emit(&[0x4d, 0x85, 0xc0])?;
+                    let done = self.emit_forward_branch(0x84)?;
+                    self.emit_backward_branch(loop_start)?;
+                    self.patch_forward_branch(done)?;
+                    Some(self.emit_unconditional_forward_branch()?)
+                } else {
+                    None
+                };
+                if let Some(forward) = forward {
+                    self.patch_forward_branch(forward)?;
+                }
+                let loop_start = self.length;
+                self.emit(&[
+                    0x45, 0x8a, 0x0a, 0x45, 0x88, 0x0b, 0x49, 0xff, 0xc2, 0x49, 0xff, 0xc3, 0x49,
+                    0xff, 0xc8,
+                ])?;
+                self.emit(&[0x4d, 0x85, 0xc0])?;
+                let done = self.emit_forward_branch(0x84)?;
+                self.emit_backward_branch(loop_start)?;
+                self.patch_forward_branch(done)?;
+                if let Some(backward_finished) = backward_finished {
+                    self.patch_forward_branch(backward_finished)?;
+                }
+                self.patch_forward_branch(empty)?;
                 self.emit(&[0x31, 0xc0])?;
             }
             ExprKind::RawPointerSwap { left, right } => {
@@ -9585,6 +9747,52 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn copies_between_scalar_raw_pointers() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u8, destination: *mut u8, count: usize) { source.copy_to(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *mut u16, destination: *mut u16, count: usize) { source.copy_to(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u32, destination: *mut u32, count: usize) { source.copy_to_nonoverlapping(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u64, destination: *mut u64, count: usize) { source.copy_to_nonoverlapping(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u8, destination: *mut u8, count: usize) { destination.copy_from(source, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u32, destination: *mut u32, count: usize) { destination.copy_from_nonoverlapping(source, count) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 3072, 4, 192>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u32, destination: *const u32, count: usize) { source.copy_to(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u32, destination: *mut u16, count: usize) { source.copy_to(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u32, destination: *mut u32, count: u32) { source.copy_to(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: usize, destination: *mut u32, count: usize) { source.copy_to(destination, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(source: *const u32, destination: *const u32, count: usize) { destination.copy_from(source, count) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1536, 4, 128>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
