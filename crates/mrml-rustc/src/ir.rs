@@ -287,6 +287,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::RawPointerPointeeCast { .. }
             | ExprKind::RawPointerWithAddress { .. }
             | ExprKind::RawPointerWrite { .. }
+            | ExprKind::RawPointerWriteBytes { .. }
             | ExprKind::RawPointerSwap { .. }
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }

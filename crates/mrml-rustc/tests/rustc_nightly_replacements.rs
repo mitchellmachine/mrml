@@ -2020,6 +2020,20 @@ fn rustc_scalar_raw_pointer_writes_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_raw_pointer_byte_fills_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u8, value: u8, count: usize) { input.write_bytes(value, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u16, value: u8, count: usize) { input.write_bytes(value, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u32, value: u8, count: usize) { input.write_bytes(value, count) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u64, value: u8, count: usize) { input.write_bytes(value, count) }",
+    ];
+    for source in sources {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_scalar_raw_pointer_replacements_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: *mut u32, value: u32) -> u32 { input.replace(value) }",

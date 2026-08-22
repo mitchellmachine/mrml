@@ -2224,6 +2224,11 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(value)?;
         }
+        ExprKind::RawPointerWriteBytes { base, value, count } => {
+            recurse(base)?;
+            recurse(value)?;
+            recurse(count)?;
+        }
         ExprKind::RawPointerSwap { left, right } => {
             recurse(left)?;
             recurse(right)?;
@@ -2779,6 +2784,46 @@ fn runtime_expression_type_with_locals<
             } else {
                 Ok(RuntimeExpressionType::Unit)
             }
+        }
+        ExprKind::RawPointerWriteBytes { base, value, count } => {
+            let RuntimeExpressionType::RawPointer { mutable: true, .. } =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    value,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::Integer(None)
+                    | RuntimeExpressionType::Integer(Some(crate::IntegerType::U8))
+            ) || !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    count,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::Integer(None)
+                    | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Unit)
         }
         ExprKind::RawPointerSwap { left, right } => {
             let RuntimeExpressionType::RawPointer {
@@ -4244,6 +4289,62 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 if !returns_old {
                     self.emit(&[0x31, 0xc0])?;
                 }
+            }
+            ExprKind::RawPointerWriteBytes { base, value, count } => {
+                let RuntimeExpressionType::RawPointer { pointee, .. } =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        0,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let element_bytes = runtime_array_element_bytes(pointee)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                let previous_width = self.width;
+                self.width = runtime_expression_width(RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U8,
+                )))
+                .unwrap_or(previous_width);
+                let emission = self.emit_expression(tree, value, depth + 1);
+                self.width = previous_width;
+                emission?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.width = runtime_expression_width(RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::Usize,
+                )))
+                .unwrap_or(previous_width);
+                let emission = self.emit_expression(tree, count, depth + 1);
+                self.width = previous_width;
+                emission?;
+                self.emit(&[
+                    0x49, 0x89, 0xc0, 0x44, 0x0f, 0xb6, 0x0c, 0x24, 0x4c, 0x8b, 0x54, 0x24, 0x08,
+                    0x48, 0x83, 0xc4, 0x10,
+                ])?;
+                self.evaluation_depth -= 2;
+                match element_bytes {
+                    1 => {}
+                    2 => self.emit(&[0x49, 0xd1, 0xe0])?,
+                    4 => self.emit(&[0x49, 0xc1, 0xe0, 0x02])?,
+                    8 => self.emit(&[0x49, 0xc1, 0xe0, 0x03])?,
+                    _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                }
+                let loop_start = self.length;
+                self.emit(&[0x4d, 0x85, 0xc0])?;
+                let done = self.emit_forward_branch(0x84)?;
+                self.emit(&[0x45, 0x88, 0x0a, 0x49, 0xff, 0xc2, 0x49, 0xff, 0xc8])?;
+                self.emit_backward_branch(loop_start)?;
+                self.patch_forward_branch(done)?;
+                self.emit(&[0x31, 0xc0])?;
             }
             ExprKind::RawPointerSwap { left, right } => {
                 let RuntimeExpressionType::RawPointer { pointee, .. } =
@@ -9434,6 +9535,49 @@ mod tests {
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *const u32) { input.write(42) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: bool) { input.write(value) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: usize) { input.write(42) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn fills_bytes_through_scalar_raw_pointers() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u8, value: u8, count: usize) { input.write_bytes(value, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u16, value: u8, count: usize) { input.write_bytes(value, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: u8, count: usize) { input.write_bytes(value, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u64, value: u8, count: usize) { input.write_bytes(value, count) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 160>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *const u32, value: u8, count: usize) { input.write_bytes(value, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: u16, count: usize) { input.write_bytes(value, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32, value: u8, count: u32) { input.write_bytes(value, count) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: usize, value: u8, count: usize) { input.write_bytes(value, count) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

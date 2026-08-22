@@ -490,6 +490,15 @@ stored at its Boolean, character, or integer width. Independent native callers
 observed aligned, deliberately unaligned, and volatile `u32` mutations through
 128-, 138-, and 137-byte COFF objects plus 512-, 528-, and 528-byte ELF64
 objects. Shared pointers, non-pointers, and mismatched values are rejected.
+`write_bytes(value, count)` evaluates its mutable scalar pointer, `u8` fill
+value, and `usize` element count in source order, then writes the repeated byte
+across `count * size_of::<T>()` bytes. The generated bounded x86-64 loop handles
+one-, two-, four-, and eight-byte scalar pointees and performs no access for a
+zero count. Shared pointers, non-`u8` values, and non-`usize` counts are
+rejected. Both native object formats are covered by original replacements. An
+independent Linux caller used 560-byte `u32` and `u16` ELF64 objects to verify
+full fills, a partial fill that preserved the following element, and a zero-
+count no-op.
 `replace(value)` follows the same receiver-first typed store path but returns the
 previous scalar pointee value. An independent native caller observed two
 successive old/new `u32` pairs through a 145-byte COFF and 536-byte ELF64
@@ -1157,7 +1166,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 371 Windows library, conformance, rustc-nightly-replacement, and driver
+The 373 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
@@ -1831,7 +1840,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 371 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 373 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
