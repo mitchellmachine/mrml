@@ -526,6 +526,14 @@ The pinned-nightly `offset_from_unsigned` and `byte_offset_from_unsigned`
 counterparts require the same compatible scalar pointer types and return
 `usize`. An independent native caller measured three elements and twelve bytes
 through 137- and 138-byte COFF objects plus 528- and 536-byte ELF64 objects.
+`align_offset(usize)` validates a nonzero power-of-two alignment, returns zero
+for an already aligned address, computes the forward scalar-element count when
+reachable, and returns `usize::MAX` when repeated element steps cannot reach the
+requested alignment. Invalid alignments reach the shared native trap. Native
+callers matched the pinned nightly across 192 address/alignment combinations
+for one- and four-byte pointees through 201- and 228-byte COFF objects plus
+592- and 624-byte ELF64 objects; non-pointer and non-`usize` operands are
+rejected.
 `byte_add`, `byte_sub`, `byte_offset`, their three wrapping counterparts, and
 `byte_offset_from` use one-byte scaling while preserving the original pointer
 type. Native callers advanced three bytes, rewound three bytes, and measured an
@@ -1134,7 +1142,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 363 Windows library, conformance, rustc-nightly-replacement, and driver
+The 365 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
@@ -1808,7 +1816,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 363 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 365 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,

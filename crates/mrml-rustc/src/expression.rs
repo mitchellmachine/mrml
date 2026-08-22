@@ -321,6 +321,10 @@ pub enum ExprKind<'source> {
         bytes: bool,
         unsigned: bool,
     },
+    RawPointerAlignOffset {
+        base: ExprId,
+        alignment: ExprId,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -484,6 +488,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerSwap { .. }
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }
+            | ExprKind::RawPointerAlignOffset { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -704,6 +709,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerSwap { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDifference { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::RawPointerAlignOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -1941,6 +1947,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             } => {
                 self.substitute_identifier(pointer, name, replacement, depth + 1)?;
                 self.substitute_identifier(origin, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerAlignOffset { base, alignment } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(alignment, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3482,6 +3492,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_offset"
                         | "offset_from"
                         | "offset_from_unsigned"
+                        | "align_offset"
                         | "byte_add"
                         | "byte_sub"
                         | "byte_offset"
@@ -3515,6 +3526,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             let argument = if matches!(
                 method.text,
                 "is_char_boundary"
+                    | "align_offset"
                     | "add"
                     | "sub"
                     | "wrapping_add"
@@ -3597,6 +3609,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "is_char_boundary" => ExprKind::StrIsCharBoundary {
                     base,
                     index: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "align_offset" => ExprKind::RawPointerAlignOffset {
+                    base,
+                    alignment: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },
