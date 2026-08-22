@@ -2240,6 +2240,7 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(alignment)?;
         }
+        ExprKind::RawPointerDrop { base } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
@@ -2506,6 +2507,22 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::Integer(Some(
                 crate::IntegerType::Usize,
             )))
+        }
+        ExprKind::RawPointerDrop { base } => {
+            if !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::RawPointer { mutable: true, .. }
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Unit)
         }
         ExprKind::SliceIsEmpty { base } => {
             let base_type = runtime_expression_type_with_locals(
@@ -4344,6 +4361,10 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 }
                 self.patch_forward_branch(aligned_end)?;
                 self.patch_forward_branch(end)?;
+            }
+            ExprKind::RawPointerDrop { base } => {
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x31, 0xc0])?;
             }
             ExprKind::Integer(literal) => {
                 if literal.value > u128::from(self.width.maximum) {
@@ -9667,6 +9688,46 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: usize, alignment: usize) -> usize { pointer.align_offset(alignment) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: *const u32, alignment: u32) -> usize { pointer.align_offset(alignment) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn drops_scalar_raw_pointer_values_in_place() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut u32) { input.drop_in_place() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut bool) { input.drop_in_place() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *mut char) { input.drop_in_place() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: *const u32) { input.drop_in_place() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: usize) { input.drop_in_place() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

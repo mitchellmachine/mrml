@@ -1982,6 +1982,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::RawPointerAlignOffset { base, alignment } => {
             recurse(base, inside_inline_const) || recurse(alignment, inside_inline_const)
         }
+        ExprKind::RawPointerDrop { base } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2062,6 +2063,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
             pointer, origin, ..
         } => recurse(pointer) || recurse(origin),
         ExprKind::RawPointerAlignOffset { base, alignment } => recurse(base) || recurse(alignment),
+        ExprKind::RawPointerDrop { base } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }

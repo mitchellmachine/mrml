@@ -500,6 +500,11 @@ scalar pointees, exchanges their exact-width values, and returns unit. An
 independent native caller swapped and restored two `u32` values through a
 156-byte COFF and 544-byte ELF64 object. Shared operands and different pointee
 types are rejected.
+`drop_in_place()` accepts mutable pointers to the currently supported scalar
+pointees, evaluates the receiver, and returns unit. Those pointees have no drop
+glue, so an independent native caller observed its `u32` unchanged through a
+108-byte COFF and 496-byte ELF64 object. Shared pointers and non-pointers are
+rejected; aggregate destructor lowering remains separate work.
 Pointers with compatible scalar pointees support `==`, `!=`, `<`, `<=`, `>`,
 and `>=`, using unsigned address ordering and mutable-to-const compatibility.
 An independent caller exercised equal, ascending, and descending addresses
@@ -1142,7 +1147,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 365 Windows library, conformance, rustc-nightly-replacement, and driver
+The 367 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
@@ -1816,7 +1821,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 365 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 367 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,

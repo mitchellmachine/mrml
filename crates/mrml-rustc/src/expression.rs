@@ -325,6 +325,9 @@ pub enum ExprKind<'source> {
         base: ExprId,
         alignment: ExprId,
     },
+    RawPointerDrop {
+        base: ExprId,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -489,6 +492,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerOffset { .. }
             | ExprKind::RawPointerDifference { .. }
             | ExprKind::RawPointerAlignOffset { .. }
+            | ExprKind::RawPointerDrop { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -710,6 +714,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDifference { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerAlignOffset { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::RawPointerDrop { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -1951,6 +1956,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::RawPointerAlignOffset { base, alignment } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(alignment, name, replacement, depth + 1)?;
+            }
+            ExprKind::RawPointerDrop { base } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3493,6 +3501,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "offset_from"
                         | "offset_from_unsigned"
                         | "align_offset"
+                        | "drop_in_place"
                         | "byte_add"
                         | "byte_sub"
                         | "byte_offset"
@@ -3618,6 +3627,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },
+                "drop_in_place" => ExprKind::RawPointerDrop { base },
                 "offset_from"
                 | "offset_from_unsigned"
                 | "byte_offset_from"
