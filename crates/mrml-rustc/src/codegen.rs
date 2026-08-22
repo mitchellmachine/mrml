@@ -2210,7 +2210,9 @@ fn validate_runtime_inline_const<
             recurse(index)?;
         }
         ExprKind::ReferenceAsPointer { base, .. } => recurse(base)?,
-        ExprKind::RawPointerIsNull { base } => recurse(base)?,
+        ExprKind::RawPointerIsNull { base } | ExprKind::RawPointerIsAligned { base } => {
+            recurse(base)?
+        }
         ExprKind::RawPointerAddress { base }
         | ExprKind::RawPointerMutability { base, .. }
         | ExprKind::RawPointerPointeeCast { base, .. } => recurse(base)?,
@@ -2630,6 +2632,22 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::RawPointer { pointee, mutable })
         }
         ExprKind::RawPointerIsNull { base } => {
+            if !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::RawPointer { .. }
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Bool)
+        }
+        ExprKind::RawPointerIsAligned { base } => {
             if !matches!(
                 runtime_expression_type_with_locals(
                     function,
@@ -4149,6 +4167,27 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             ExprKind::RawPointerIsNull { base } => {
                 self.emit_expression(tree, base, depth + 1)?;
                 self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0])?;
+            }
+            ExprKind::RawPointerIsAligned { base } => {
+                let RuntimeExpressionType::RawPointer { pointee, .. } =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let alignment = runtime_array_element_bytes(pointee)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x48, 0xa9])?;
+                self.emit(&(alignment as u32 - 1).to_le_bytes())?;
+                self.emit(&[0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0])?;
             }
             ExprKind::RawPointerAddress { base }
             | ExprKind::RawPointerMutability { base, .. }
@@ -9726,6 +9765,40 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn checks_scalar_raw_pointer_alignment() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: *const u8) -> bool { pointer.is_aligned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: *const u16) -> bool { pointer.is_aligned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: *mut u32) -> bool { pointer.is_aligned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: *const u64) -> bool { pointer.is_aligned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: *mut char) -> bool { pointer.is_aligned() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(pointer: usize) -> bool { pointer.is_aligned() }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]

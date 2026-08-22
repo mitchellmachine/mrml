@@ -281,6 +281,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::StrIsCharBoundary { .. }
             | ExprKind::ReferenceAsPointer { .. }
             | ExprKind::RawPointerIsNull { .. }
+            | ExprKind::RawPointerIsAligned { .. }
             | ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerPointeeCast { .. }

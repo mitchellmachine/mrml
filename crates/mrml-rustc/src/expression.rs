@@ -287,6 +287,9 @@ pub enum ExprKind<'source> {
     RawPointerIsNull {
         base: ExprId,
     },
+    RawPointerIsAligned {
+        base: ExprId,
+    },
     RawPointerAddress {
         base: ExprId,
     },
@@ -488,6 +491,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::StrIsCharBoundary { .. }
             | ExprKind::ReferenceAsPointer { .. }
             | ExprKind::RawPointerIsNull { .. }
+            | ExprKind::RawPointerIsAligned { .. }
             | ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerPointeeCast { .. }
@@ -711,6 +715,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::StrIsCharBoundary { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::ReferenceAsPointer { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerIsNull { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::RawPointerIsAligned { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerAddress { .. }
             | ExprKind::RawPointerMutability { .. }
             | ExprKind::RawPointerPointeeCast { .. }
@@ -1931,7 +1936,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             | ExprKind::ReferenceAsPointer { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
-            ExprKind::RawPointerIsNull { base } => {
+            ExprKind::RawPointerIsNull { base } | ExprKind::RawPointerIsAligned { base } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::RawPointerAddress { base }
@@ -3562,6 +3567,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "byte_offset_from"
                         | "byte_offset_from_unsigned"
                         | "is_null"
+                        | "is_aligned"
                         | "addr"
                         | "expose_provenance"
                         | "cast_const"
@@ -3632,6 +3638,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     mutable: true,
                 },
                 "is_null" => ExprKind::RawPointerIsNull { base },
+                "is_aligned" => ExprKind::RawPointerIsAligned { base },
                 "addr" | "expose_provenance" => ExprKind::RawPointerAddress { base },
                 "cast_const" => ExprKind::RawPointerMutability {
                     base,

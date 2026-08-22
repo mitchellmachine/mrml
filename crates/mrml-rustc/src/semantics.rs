@@ -1960,7 +1960,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         | ExprKind::SliceIsEmpty { base }
         | ExprKind::StrAsBytes { base }
         | ExprKind::ReferenceAsPointer { base, .. } => recurse(base, inside_inline_const),
-        ExprKind::RawPointerIsNull { base } => recurse(base, inside_inline_const),
+        ExprKind::RawPointerIsNull { base } | ExprKind::RawPointerIsAligned { base } => {
+            recurse(base, inside_inline_const)
+        }
         ExprKind::RawPointerAddress { base }
         | ExprKind::RawPointerMutability { base, .. }
         | ExprKind::RawPointerPointeeCast { base, .. } => recurse(base, inside_inline_const),
@@ -2051,7 +2053,9 @@ fn expression_contains_call<const MAX_NODES: usize>(
         | ExprKind::SliceIsEmpty { base }
         | ExprKind::StrAsBytes { base }
         | ExprKind::ReferenceAsPointer { base, .. } => recurse(base),
-        ExprKind::RawPointerIsNull { base } => recurse(base),
+        ExprKind::RawPointerIsNull { base } | ExprKind::RawPointerIsAligned { base } => {
+            recurse(base)
+        }
         ExprKind::RawPointerAddress { base }
         | ExprKind::RawPointerMutability { base, .. }
         | ExprKind::RawPointerPointeeCast { base, .. } => recurse(base),
