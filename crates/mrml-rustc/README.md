@@ -490,6 +490,11 @@ stored at its Boolean, character, or integer width. Independent native callers
 observed aligned, deliberately unaligned, and volatile `u32` mutations through
 128-, 138-, and 137-byte COFF objects plus 512-, 528-, and 528-byte ELF64
 objects. Shared pointers, non-pointers, and mismatched values are rejected.
+`replace(value)` follows the same receiver-first typed store path but returns the
+previous scalar pointee value. An independent native caller observed two
+successive old/new `u32` pairs through a 145-byte COFF and 536-byte ELF64
+object. Signed integers, Booleans, and characters retain their exact widths;
+shared pointers and mismatched values are rejected.
 Pointers with compatible scalar pointees support `==`, `!=`, `<`, `<=`, `>`,
 and `>=`, using unsigned address ordering and mutable-to-const compatibility.
 An independent caller exercised equal, ascending, and descending addresses
@@ -1120,7 +1125,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 357 Windows library, conformance, rustc-nightly-replacement, and driver
+The 359 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
@@ -1794,7 +1799,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 357 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 359 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,

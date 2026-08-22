@@ -301,6 +301,7 @@ pub enum ExprKind<'source> {
     RawPointerWrite {
         base: ExprId,
         value: ExprId,
+        returns_old: bool,
     },
     RawPointerOffset {
         base: ExprId,
@@ -1916,7 +1917,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(address, name, replacement, depth + 1)?;
             }
-            ExprKind::RawPointerWrite { base, value } => {
+            ExprKind::RawPointerWrite { base, value, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(value, name, replacement, depth + 1)?;
             }
@@ -3484,6 +3485,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "read"
                         | "read_unaligned"
                         | "read_volatile"
+                        | "replace"
                         | "write"
                         | "write_unaligned"
                         | "write_volatile"
@@ -3513,6 +3515,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_byte_sub"
                     | "wrapping_byte_offset"
                     | "byte_offset_from"
+                    | "replace"
                     | "write"
                     | "write_unaligned"
                     | "write_volatile"
@@ -3553,12 +3556,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     operator: UnaryOperator::Dereference,
                     operand: base,
                 },
-                "write" | "write_unaligned" | "write_volatile" => ExprKind::RawPointerWrite {
-                    base,
-                    value: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                },
+                "replace" | "write" | "write_unaligned" | "write_volatile" => {
+                    ExprKind::RawPointerWrite {
+                        base,
+                        value: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        returns_old: method.text == "replace",
+                    }
+                }
                 "with_addr" => ExprKind::RawPointerWithAddress {
                     base,
                     address: argument.ok_or_else(|| {
