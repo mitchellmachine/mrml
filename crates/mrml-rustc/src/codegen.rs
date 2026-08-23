@@ -2310,6 +2310,10 @@ fn validate_runtime_inline_const<
         }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base)?,
         ExprKind::IntegerUnsignedAbsolute { base } => recurse(base)?,
+        ExprKind::IntegerAbsoluteDifference { base, other } => {
+            recurse(base)?;
+            recurse(other)?;
+        }
         ExprKind::IntegerBitCount { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -3241,6 +3245,34 @@ fn runtime_expression_type_with_locals<
             let result_type = base_type
                 .unsigned_counterpart()
                 .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+            Ok(RuntimeExpressionType::Integer(Some(result_type)))
+        }
+        ExprKind::IntegerAbsoluteDifference { base, other } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if !runtime_types_compatible(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    other,
+                    depth + 1,
+                )?,
+                base_type,
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            let result_type = integer_type.unsigned_counterpart().unwrap_or(integer_type);
             Ok(RuntimeExpressionType::Integer(Some(result_type)))
         }
         ExprKind::IntegerBitCount { base, .. } => {
@@ -5211,6 +5243,45 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 let nonnegative = self.emit_forward_branch(0x89)?;
                 self.emit(&[0x48, 0xf7, 0xd8])?;
                 self.patch_forward_branch(nonnegative)?;
+                self.emit_normalize_width(result_width)?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerAbsoluteDifference { base, other } => {
+                let RuntimeExpressionType::Integer(Some(base_integer_type)) =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let result_type = base_integer_type
+                    .unsigned_counterpart()
+                    .unwrap_or(base_integer_type);
+                let operand_width = runtime_width(base_integer_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let result_width = runtime_width(result_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, other, depth + 1)?;
+                self.emit(&[0x59, 0x48, 0x89, 0xc2, 0x48, 0x39, 0xd1])?;
+                self.evaluation_depth -= 1;
+                let left_at_least_right =
+                    self.emit_forward_branch(if operand_width.signed { 0x8d } else { 0x83 })?;
+                self.emit(&[0x48, 0x29, 0xc8])?;
+                let end = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(left_at_least_right)?;
+                self.emit(&[0x48, 0x89, 0xc8, 0x48, 0x29, 0xd0])?;
+                self.patch_forward_branch(end)?;
                 self.emit_normalize_width(result_width)?;
                 self.width = previous_width;
             }
@@ -12067,6 +12138,49 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn computes_integer_absolute_differences() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> u8 { left.abs_diff(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: u16) -> u16 { left.abs_diff(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i32, right: i32) -> u32 { left.abs_diff(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: u64) -> u64 { left.abs_diff(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: isize, right: isize) -> usize { left.abs_diff(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1280, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.abs_diff(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.abs_diff(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.abs_diff(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 896, 4, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

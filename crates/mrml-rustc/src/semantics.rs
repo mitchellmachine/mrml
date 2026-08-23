@@ -214,6 +214,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
                         | ExprKind::IntegerUnsignedAbsolute { .. }
+                        | ExprKind::IntegerAbsoluteDifference { .. }
                         | ExprKind::IntegerBitCount { .. }
                 )
             });
@@ -1914,6 +1915,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
                 | ExprKind::IntegerUnsignedAbsolute { .. }
+                | ExprKind::IntegerAbsoluteDifference { .. }
                 | ExprKind::IntegerBitCount { .. }
         )
     }) {
@@ -2057,6 +2059,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base, inside_inline_const),
         ExprKind::IntegerUnsignedAbsolute { base } => recurse(base, inside_inline_const),
+        ExprKind::IntegerAbsoluteDifference { base, other } => {
+            recurse(base, inside_inline_const) || recurse(other, inside_inline_const)
+        }
         ExprKind::IntegerBitCount { base, .. } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
@@ -2165,6 +2170,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerWrappingPower { base, exponent } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
         ExprKind::IntegerUnsignedAbsolute { base } => recurse(base),
+        ExprKind::IntegerAbsoluteDifference { base, other } => recurse(base) || recurse(other),
         ExprKind::IntegerBitCount { base, .. } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
@@ -2495,6 +2501,41 @@ fn evaluate_call_aware_integer<
             } else {
                 0_u128.wrapping_sub(value) & signed_mask(base_bits)
             }
+        }
+        ExprKind::IntegerAbsoluteDifference { base, other } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants)
+                .unwrap_or(crate::IntegerType::I32);
+            if integer_expression_type(context, symbol_count, tree, other, constants)
+                .is_some_and(|other_type| other_type != base_type)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let result_type = base_type.unsigned_counterpart().unwrap_or(base_type);
+            if result_type != ty {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let base_bits = base_type
+                .bits(context.target.pointer_bits())
+                .ok_or(SemanticErrorKind::UnsupportedConstCall)?;
+            let left = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                base,
+                base_type,
+                constants,
+                depth,
+            )?;
+            let right = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                other,
+                base_type,
+                constants,
+                depth,
+            )?;
+            absolute_difference_integer_bits(left, right, base_bits, base_type.is_signed())
         }
         ExprKind::IntegerBitCount { base, count } => {
             if ty != crate::IntegerType::U32 {
@@ -3341,6 +3382,11 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
                 .unwrap_or(crate::IntegerType::I32)
                 .unsigned_counterpart()
         }
+        ExprKind::IntegerAbsoluteDifference { base, .. } => {
+            let base_type =
+                expression_integer_type(tree, base, constants).unwrap_or(crate::IntegerType::I32);
+            Some(base_type.unsigned_counterpart().unwrap_or(base_type))
+        }
         ExprKind::IntegerBitCount { .. } => Some(crate::IntegerType::U32),
         ExprKind::If {
             then_branch,
@@ -3371,6 +3417,22 @@ fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u12
         ((value << distance) | (value >> (u32::from(bits) - distance))) & mask
     } else {
         ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
+    }
+}
+
+fn absolute_difference_integer_bits(left: u128, right: u128, bits: u8, signed: bool) -> u128 {
+    let mask = signed_mask(bits);
+    let left = left & mask;
+    let right = right & mask;
+    let left_first = if signed {
+        decode_signed(left, bits) >= decode_signed(right, bits)
+    } else {
+        left >= right
+    };
+    if left_first {
+        left.wrapping_sub(right) & mask
+    } else {
+        right.wrapping_sub(left) & mask
     }
 }
 

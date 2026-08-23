@@ -414,6 +414,10 @@ pub enum ExprKind<'source> {
     IntegerUnsignedAbsolute {
         base: ExprId,
     },
+    IntegerAbsoluteDifference {
+        base: ExprId,
+        other: ExprId,
+    },
     IntegerBitCount {
         base: ExprId,
         count: IntegerBitCount,
@@ -652,6 +656,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
+            | ExprKind::IntegerAbsoluteDifference { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
@@ -920,6 +925,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerUnsignedAbsolute { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerAbsoluteDifference { .. } => {
+                Err(ConstEvalError::InvalidExpressionTree)
+            }
             ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
@@ -2229,6 +2237,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerUnsignedAbsolute { base } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerAbsoluteDifference { base, other } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(other, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerBitCount { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3831,6 +3843,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_abs"
                         | "abs"
                         | "unsigned_abs"
+                        | "abs_diff"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -3915,6 +3928,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_shl"
                     | "wrapping_shr"
                     | "wrapping_pow"
+                    | "abs_diff"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -4029,6 +4043,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
+                "abs_diff" => ExprKind::IntegerAbsoluteDifference {
+                    base,
+                    other: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
                 "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
                 | "wrapping_abs" | "abs" | "signum" => ExprKind::IntegerBitTransform {
                     base,

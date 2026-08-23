@@ -307,6 +307,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
+            | ExprKind::IntegerAbsoluteDifference { .. }
             | ExprKind::IntegerBitCount { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
