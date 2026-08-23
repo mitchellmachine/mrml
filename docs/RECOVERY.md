@@ -201,11 +201,12 @@ and local-array range reads retain their corresponding projection. Validation
 walks the list through the base type and rejects holes, invalid transitions,
 out-of-range fields, and overflow. The exact projection-capacity error is
 `TooManyRuntimePlaceProjections`.
-Before prologue emission, a bounded pass types and preassigns identities to the
-supported leading straight-line named-local prefix. When that prefix reaches
-the first supported conditional assignment, the pass also visits every branch
-from the same outer scope without rewinding the fact-ID sequence, so same-named
-mutually exclusive branch locals remain distinct. The emitter must consume each
+Before prologue emission, a bounded pass types and preassigns identities across
+the supported top-level region before the first loop. It continues through
+assignments, expressions, returns, and repeated conditional assignments. Every
+conditional branch begins from the same outer scope without rewinding the fact-
+ID sequence, so same-named mutually exclusive or sequential branch locals and
+later top-level declarations remain distinct. The emitter must consume each
 preassigned declaration once. Helper parameters and later scoped locals
 append to the dynamic fact tail and cannot inherit those reserved IDs. The table
 is bounded ephemeral compiler state and includes expanded inlined helper bodies;
@@ -221,8 +222,8 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. Later conditionals, loop declarations, arbitrary nested
-scopes, and general accesses are not yet preanalyzed, and parser-level IDs,
+classified as a borrow. Loop declarations, arbitrary nested scopes, and general
+accesses are not yet preanalyzed, and parser-level IDs,
 initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
 milestone is to expand the standalone table across scoped declarations and

@@ -577,6 +577,19 @@ object format, ABI optimization, or persistent representation.
 Patent review: `NOT_TRIGGERED` — ordinary compiler scope and definition
 bookkeeping.
 
+## 2026-08-23 — sequential top-level compiler declaration facts
+
+MRML source: `crates/mrml-rustc`.
+
+The compiler continues conventional bounded symbol-table preanalysis across
+ordinary top-level statements and repeated lexical conditional scopes until its
+existing loop boundary. It retains monotonic definition identities and copies
+outer lexical environments for branches. This introduces no novel analysis
+algorithm, parser, object format, ABI optimization, or persistent representation.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler scope and definition
+bookkeeping.
+
 ## 2026-08-23 — capability-native storage identity and metadata foundation
 
 MRML source: `crates/mrml-storage`.
