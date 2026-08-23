@@ -763,3 +763,14 @@ format, allocator, recovery method, cryptographic construction, or storage
 optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional checksummed allocation metadata.
+
+## 2026-08-23 — bounded assignment-expression read traversal
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+The compiler performs a conventional bounded recursive syntax traversal in the
+same operand order as code emission and stores resolved reads in fixed-capacity
+fact tables. This adds no novel parsing, ownership, borrowing, optimization,
+code-generation, or compiler-analysis technique.
+
+Patent review: `NOT_TRIGGERED` — conventional compiler fact collection.

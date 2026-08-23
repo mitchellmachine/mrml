@@ -195,7 +195,14 @@ a separate fixed 256-entry read-expectation table. The pass resolves the root
 base against the exact active scope and retains its projection list and span.
 Emission consumes each expectation through the ordinary identifier-read recorder,
 so projected specialized paths and direct identifiers share the identity check.
-Non-root reads inside compound expressions are not yet covered.
+For scalar assignment RHS expressions, the pass now recursively visits casts,
+type ascriptions, unary wrappers, returns/break values, sequences, binary
+operands, and conditional condition/arms in the emitter's exact source order.
+A discovered projected place reserves one read without separately reserving its
+identifier base. Address-taking follows its specialized lowering rather than
+inventing a pointee read. Nested indexes remain emission-time facts because
+reference indexing and by-value local-array materialization have different read
+shapes; method/call and aggregate families also remain outside this slice.
 Emission must consume every preassigned declaration exactly once. Inlined helper
 parameters and later scoped locals append to a checked dynamic tail and cannot
 steal a preassigned source identity; mismatches fail as
@@ -212,10 +219,11 @@ emission consumes that discovery and records one projected read instead of an
 empty base read. Specialized direct aggregate paths reuse the same recorder.
 The discovery is not yet universally consumed by nested emission paths. The
 prepass now enumerates every declaration and assignment-target form represented
-by the supported runtime body and loop parsers, plus root-place reads of
-assignment RHS expressions. It does not yet preanalyze nested expression reads
-or replace name lookup across the whole body. Expanded inlined-helper locals
-still append dynamically. There is not
+by the supported runtime body and loop parsers, plus root-place and supported
+nested scalar reads of assignment RHS expressions. It does not yet preanalyze
+typed nested-index, method/call, aggregate, or non-assignment body reads or
+replace name lookup across the whole body. Expanded inlined-helper locals still
+append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of
 ownership checking.

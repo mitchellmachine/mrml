@@ -2913,14 +2913,26 @@ Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, wrapper, or sequence tail additionally reserve a
 separate fixed 256-entry read-expectation table. Each root is resolved against
 the exact active scope and consumed through the ordinary identifier-read path,
-including specialized projected emitters. Reads nested inside non-place root
-expressions remain emission-time facts.
+including specialized projected emitters. Scalar compound RHS expressions now
+visit casts, ascriptions, unary wrappers, return/break values, sequences, binary
+operands, and conditional condition/arms in exact emission order. Each
+discoverable projected place remains one read rather than a projected read plus
+a duplicate empty base read. Nested indexes remain emission-time facts until
+the prepass has typed lowering-family dispatch; method/call, aggregate, and
+non-assignment body reads also remain outside this slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
 and assignment-target forms represented by the supported runtime body and loop
-parsers, plus assignment RHS root-place reads. It does not yet preanalyze nested
-expression reads; it is not a complete typed body IR.
+parsers, plus assignment RHS root-place and supported nested scalar reads. It is
+not a complete typed body IR.
+
+The nested assignment-read milestone passed all 574 compiler and driver tests
+on Windows gnullvm and all 574 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Its adversarial unit test proves exact
+left-to-right parameter and stable local-tuple-field identity order through
+nested binary and conditional expressions. Its original replacement emits both
+COFF and ELF64 objects through the same assignment shapes.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

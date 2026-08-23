@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8b14591ea7c8457d6020e037078dc5c23a9ff9e7`
-  (`Preanalyze assignment root reads`)
+- Compiler checkpoint commit: `6cce0c15c79cdc0fb53e7cb117d2166a8ef37b54`
+  (`Preanalyze nested assignment reads`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -68,29 +68,31 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   and
 - a separate fixed 256-entry expectation table for assignment RHS expressions
   whose root is a discoverable place, resolved against the exact active scope
-  and consumed through the ordinary identifier-read path.
+  and consumed through the ordinary identifier-read path; and
+- bounded recursive assignment-RHS traversal for casts, ascriptions, unary
+  wrappers, return/break values, sequences, binary operands, and conditional
+  condition/arms in exact emission order, with one fact per discovered place.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Reads nested inside non-place expression roots are not yet
-preanalyzed. Names are still
-resolved during emission, expanded inlined-helper declarations append
-dynamically, and read-place discovery
-is not yet run body-wide or consumed by every nested emission family. Parser
-locals do not yet carry these IDs. Initialization/move paths, body basic blocks
-and edges, borrows, loans, regions, Polonius-style analysis, and a general trait
-solver are unimplemented.
+borrow checker. Typed nested indexes, method/call and aggregate expression
+families, and non-assignment body reads remain emission-time facts. Names are
+still resolved during emission, expanded inlined-helper declarations append
+dynamically, and read-place discovery is not yet body-wide. Parser locals do not
+yet carry these IDs. Initialization/move paths, body basic blocks and edges,
+borrows, loans, regions, Polonius-style analysis, and a general trait solver are
+unimplemented.
 
 ## Next compiler work
 
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. expand bounded read-place preanalysis from assignment roots across nested and
-   non-assignment body expressions rather than rediscovering names during emission;
+1. add typed lowering-family dispatch for nested assignment indexes, then expand
+   bounded read-place preanalysis across supported non-assignment body expressions;
 2. add explicit basic blocks and control-flow edges;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
@@ -117,8 +119,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 572 tests on each host: 316
-library tests, 10 conformance tests, 244 replacement tests, and 2 driver tests.
+The checkpoint source passed 574 tests on each host: 317
+library tests, 10 conformance tests, 245 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
