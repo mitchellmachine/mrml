@@ -270,8 +270,14 @@ shared ancestors to the root. This is non-authorizing construction only;
 the complete plan now preflights distinct bounded metadata/entry layouts before
 any write, stages every unreachable canonical successor child-before-parent,
 and can build one directory-only transaction containing every participant and
-image. Allocation-successor integration, COW-root publication, receipt-driven
-activation, and crash-safe identity allocation remain pending.
+image. The publication helper now additionally requires one allocation
+successor to own every exact directory metadata/entry range with the matching
+object, successor generation, and allocation kind; it binds that allocation
+participant and image plus every directory participant and image into one
+transaction and one COW-root plan. Successful publication returns a one-use
+receipt whose directory participants are consumed atomically before their
+successors are exposed. Concrete block integration, power-loss evidence, and
+crash-safe identity allocation remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

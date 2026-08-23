@@ -2750,9 +2750,18 @@ intra-plan overlap before the first write, and then stages and flushes all
 unreachable canonical successors child-before-parent. A prepared plan retains
 every typed directory update and can create a fresh transaction that admits all
 directory participants and their two images; transaction-capacity failure
-returns no partial transaction. Allocation-successor admission, COW-root
-publication, and receipt-driven activation remain pending; publishing only
-source, destination, and child would be rejected by reachable-tree validation.
+returns no partial transaction. Publication additionally requires the prepared
+allocation successor to contain exact ownership records for every directory
+metadata and entry image, including object, successor generation, pointer, and
+allocation kind. A helper binds all directory writes plus the allocation write
+to the next volume generation and constructs the COW plan with the successor
+root-directory and allocation pointers. The focused simulation admits all five
+participants, verifies and publishes all nine images once, atomically consumes
+the four directory receipt entries, exposes the complete successor state set,
+and then consumes the allocation receipt. Missing ownership, omitted writes,
+receipt mismatch, duplicate batch entries, and replay fail closed without
+partial receipt consumption; publishing only source, destination, and child
+would be rejected by reachable-tree validation.
 The object-ID allocator is volatile simulation state and must be
 persisted in the same future transaction before create becomes crash-safe.
 
@@ -2933,7 +2942,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 62 tests, and both strict crate-local clippy
+Both current unit-test runs pass 63 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -2953,8 +2962,9 @@ metadata record and parent link as hostile and requires exact immutable-
 generation binding for every closure entry, exact predecessor-state reload,
 bounded source/destination traversal, duplicate/cycle rejection, checked
 generation advance, exact parent-entry replacement, whole-plan layout preflight,
-pairwise range disjointness, and fail-closed backend uncertainty. This agent
-review is not independent human audit.
+pairwise range disjointness, exact allocation ownership, complete COW-plan
+membership, atomic batch receipt consumption, replay rejection, and fail-closed
+backend uncertainty. This agent review is not independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte

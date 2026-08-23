@@ -31,9 +31,9 @@ pub use cow::{
     CowPublishError,
 };
 pub use directory::{
-    DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend, DirectoryAncestryError,
-    DirectoryAncestryProof, DirectoryClosureError, DirectoryError, DirectoryImage,
-    DirectoryImageError, DirectoryMoveStageError, DirectoryMoveSuccessor,
+    CommittedDirectoryMovePlan, DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend,
+    DirectoryAncestryError, DirectoryAncestryProof, DirectoryClosureError, DirectoryError,
+    DirectoryImage, DirectoryImageError, DirectoryMoveStageError, DirectoryMoveSuccessor,
     DirectoryMoveSuccessorPlan, DirectoryState, DirectorySuccessorBackend,
     DirectorySuccessorClosure, DirectorySuccessorError, DirectorySuccessorLayout,
     DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryMovePlan,

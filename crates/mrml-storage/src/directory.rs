@@ -1,10 +1,11 @@
 use mrml_crypto::Sha3_256;
 
 use crate::{
-    CowMetadataImage, DirectoryEntry, DirectoryMetadata, MetadataPointer, StorageAuthorityError,
+    AllocationKind, CowMetadataImage, CowPlanError, CowPublicationPlan, DirectoryEntry,
+    DirectoryMetadata, MetadataPointer, PreparedAllocationUpdate, StorageAuthorityError,
     StorageAuthorityTable, StorageHandle, StorageName, StorageObjectId, StorageObjectKind,
-    StoragePrincipal, StorageRights, StorageTransaction, StorageTransactionId, TransactionError,
-    TransactionParticipant, TransactionReceipt, VolumeHeader, VolumeId,
+    StoragePrincipal, StorageRights, StorageTransaction, StorageTransactionId, Superblock,
+    TransactionError, TransactionParticipant, TransactionReceipt, VolumeHeader, VolumeId,
 };
 
 pub const DIRECTORY_IMAGE_HEADER_BYTES: usize = 96;
@@ -563,6 +564,142 @@ impl<const C: usize, const E: usize> PreparedDirectoryMovePlan<C, E> {
             transaction.admit_directory(update)?;
         }
         Ok(transaction)
+    }
+
+    pub fn transaction_with_allocation<const A: usize, const P: usize, const W: usize>(
+        &self,
+        allocation: &PreparedAllocationUpdate<A>,
+        identity: StorageTransactionId,
+        publication_generation: u64,
+    ) -> Result<StorageTransaction<P, W>, TransactionError> {
+        let mut transaction = StorageTransaction::new(identity, publication_generation)?;
+        for update in self.updates[..self.count].iter().flatten() {
+            transaction.admit_directory(update)?;
+        }
+        transaction.admit_allocation(allocation)?;
+        Ok(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn publication_plan<const A: usize, const W: usize>(
+        &self,
+        allocation: &PreparedAllocationUpdate<A>,
+        header: VolumeHeader,
+        active_superblock_block: u64,
+        active: Superblock,
+        root: StorageObjectId,
+        protected_active: &[MetadataPointer],
+    ) -> Result<CowPublicationPlan<W>, CowPlanError> {
+        let publication_generation = active
+            .generation()
+            .checked_add(1)
+            .ok_or(CowPlanError::GenerationExhausted)?;
+        if allocation.generation() != publication_generation {
+            return Err(CowPlanError::InvalidGeneration);
+        }
+        if self.count == 0
+            || self
+                .count
+                .checked_mul(2)
+                .and_then(|count| count.checked_add(1))
+                .is_none_or(|count| count > W)
+        {
+            return Err(CowPlanError::Capacity);
+        }
+        let root_metadata = self.updates[..self.count]
+            .iter()
+            .flatten()
+            .find(|update| update.object() == root)
+            .ok_or(CowPlanError::MissingPublicationRoot)?
+            .metadata_image()
+            .pointer();
+        for update in self.updates[..self.count].iter().flatten() {
+            if !allocation.owns_image(
+                update.object(),
+                update.generation(),
+                update.metadata_image().pointer(),
+                AllocationKind::ObjectMetadata,
+            ) || !allocation.owns_image(
+                update.object(),
+                update.generation(),
+                update.entries_image().pointer(),
+                AllocationKind::DirectoryEntries,
+            ) {
+                return Err(CowPlanError::InvalidWrite);
+            }
+        }
+        let allocation_write = allocation.metadata_image().bind(publication_generation)?;
+        let mut writes = [allocation_write; W];
+        let mut count = 0;
+        for update in self.updates[..self.count].iter().flatten() {
+            for image in update.metadata_images() {
+                writes[count] = image.bind(publication_generation)?;
+                count += 1;
+            }
+        }
+        writes[count] = allocation_write;
+        count += 1;
+        CowPublicationPlan::build(
+            header,
+            active_superblock_block,
+            active,
+            root,
+            root_metadata,
+            allocation.pointer(),
+            &writes[..count],
+            protected_active,
+        )
+    }
+
+    pub fn commit_transaction<const P: usize>(
+        self,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<CommittedDirectoryMovePlan<C, E>, TransactionError> {
+        let mut participants = [None; C];
+        for (index, update) in self.updates[..self.count].iter().enumerate() {
+            participants[index] = Some(
+                update
+                    .as_ref()
+                    .ok_or(TransactionError::ParticipantMismatch)?
+                    .transaction_participant()?,
+            );
+        }
+        receipt.consume_batch(&participants, self.count)?;
+        let mut states = core::array::from_fn(|_| None);
+        for (index, update) in self.updates.into_iter().take(self.count).enumerate() {
+            states[index] = Some(
+                update
+                    .ok_or(TransactionError::ParticipantMismatch)?
+                    .into_successor(),
+            );
+        }
+        Ok(CommittedDirectoryMovePlan {
+            states,
+            count: self.count,
+        })
+    }
+}
+
+pub struct CommittedDirectoryMovePlan<const C: usize, const E: usize> {
+    states: [Option<DirectoryState<E>>; C],
+    count: usize,
+}
+
+impl<const C: usize, const E: usize> CommittedDirectoryMovePlan<C, E> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub const fn state(&self, index: usize) -> Option<&DirectoryState<E>> {
+        if index < self.count {
+            self.states[index].as_ref()
+        } else {
+            None
+        }
     }
 }
 
@@ -1204,6 +1341,10 @@ impl<const N: usize> PreparedDirectoryUpdate<N> {
         receipt.consume(self.transaction_participant()?)?;
         Ok(self.successor)
     }
+
+    fn into_successor(self) -> DirectoryState<N> {
+        self.successor
+    }
 }
 
 impl<const N: usize> DirectoryImage<N> {
@@ -1552,8 +1693,9 @@ pub enum DirectoryError {
 mod tests {
     use super::*;
     use crate::{
-        CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, StorageTransaction,
-        StorageTransactionId, Superblock,
+        AllocationChange, AllocationImage, AllocationKind, AllocationRecord,
+        AllocationWriteBackend, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
+        StorageTransaction, StorageTransactionId, Superblock,
     };
 
     fn volume() -> VolumeId {
@@ -1666,6 +1808,24 @@ mod tests {
         }
 
         fn flush_directory_update(&mut self) -> Result<(), Self::Error> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    unsafe impl AllocationWriteBackend for UpdateBackend {
+        type Error = ();
+
+        fn stage_allocation_image(
+            &mut self,
+            _image: CowMetadataImage,
+            _encoded: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn flush_allocation_image(&mut self) -> Result<(), Self::Error> {
             self.flushed = true;
             Ok(())
         }
@@ -2367,6 +2527,127 @@ mod tests {
             Err(DirectoryMoveStageError::InvalidLayout)
         ));
         assert_eq!(rejected_backend.staged, 0);
+
+        let active_root =
+            AllocationRecord::new(object(1), 5, 10, 1, AllocationKind::ObjectMetadata).unwrap();
+        let active_allocation =
+            AllocationRecord::new(object(1), 5, 20, 1, AllocationKind::AllocationMetadata).unwrap();
+        let active_allocation_image = AllocationImage::<12>::build(
+            header,
+            5,
+            MetadataPointer::new(20, 1).unwrap(),
+            &[active_root, active_allocation],
+        )
+        .unwrap();
+        let changes = [
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(9), 2, 50, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(9), 2, 51, 1, AllocationKind::DirectoryEntries)
+                    .unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(3), 2, 52, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(3), 2, 53, 1, AllocationKind::DirectoryEntries)
+                    .unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(2), 2, 54, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(2), 2, 55, 1, AllocationKind::DirectoryEntries)
+                    .unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(1), 6, 56, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(object(1), 6, 57, 1, AllocationKind::DirectoryEntries)
+                    .unwrap(),
+            ),
+        ];
+        let mut allocation_output = [0; 4096];
+        let allocation = active_allocation_image
+            .prepare_successor(
+                header,
+                object(1),
+                MetadataPointer::new(58, 1).unwrap(),
+                &changes,
+                &mut allocation_output,
+                &mut update_backend,
+            )
+            .unwrap();
+        assert_eq!(update_backend.staged, 9);
+        let transaction = prepared
+            .transaction_with_allocation::<12, 5, 9>(
+                &allocation,
+                StorageTransactionId::new(19).unwrap(),
+                6,
+            )
+            .unwrap();
+        assert_eq!(transaction.participant_count(), 5);
+        let active_superblock = Superblock::new(
+            header,
+            5,
+            4,
+            object(1),
+            MetadataPointer::new(10, 1).unwrap(),
+            MetadataPointer::new(20, 1).unwrap(),
+        )
+        .unwrap();
+        let publication = prepared
+            .publication_plan::<12, 9>(
+                &allocation,
+                header,
+                1,
+                active_superblock,
+                object(1),
+                &[
+                    MetadataPointer::new(10, 1).unwrap(),
+                    MetadataPointer::new(20, 1).unwrap(),
+                ],
+            )
+            .unwrap();
+        let mut incomplete_allocation_output = [0; 4096];
+        let incomplete_allocation = active_allocation_image
+            .prepare_successor(
+                header,
+                object(1),
+                MetadataPointer::new(59, 1).unwrap(),
+                &changes[..changes.len() - 1],
+                &mut incomplete_allocation_output,
+                &mut update_backend,
+            )
+            .unwrap();
+        assert!(matches!(
+            prepared.publication_plan::<12, 9>(
+                &incomplete_allocation,
+                header,
+                1,
+                active_superblock,
+                object(1),
+                &[
+                    MetadataPointer::new(10, 1).unwrap(),
+                    MetadataPointer::new(20, 1).unwrap(),
+                ],
+            ),
+            Err(CowPlanError::InvalidWrite)
+        ));
+        let mut receipt = transaction
+            .publish(&publication, &mut update_backend)
+            .unwrap();
+        assert_eq!((update_backend.verified, receipt.remaining()), (9, 5));
+        let committed = prepared.commit_transaction(&mut receipt).unwrap();
+        assert_eq!(committed.len(), 4);
+        assert_eq!(committed.state(0).unwrap().object(), object(9));
+        assert_eq!(committed.state(3).unwrap().generation(), 6);
+        assert_eq!(receipt.remaining(), 1);
+        let committed_allocation = allocation.commit_transaction(&mut receipt).unwrap();
+        assert_eq!(committed_allocation.generation(), 6);
+        assert_eq!(receipt.remaining(), 0);
     }
 
     #[test]

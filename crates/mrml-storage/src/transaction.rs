@@ -238,6 +238,34 @@ impl<const P: usize> TransactionReceipt<P> {
         self.remaining -= 1;
         Ok(())
     }
+
+    pub(crate) fn consume_batch<const N: usize>(
+        &mut self,
+        expected: &[Option<TransactionParticipant>; N],
+        count: usize,
+    ) -> Result<(), TransactionError> {
+        if count == 0 || count > N || count > self.remaining {
+            return Err(TransactionError::ParticipantMismatch);
+        }
+        for index in 0..count {
+            let participant = expected[index].ok_or(TransactionError::ParticipantMismatch)?;
+            if expected[..index].contains(&Some(participant))
+                || !self.participants.contains(&Some(participant))
+            {
+                return Err(TransactionError::ParticipantMismatch);
+            }
+        }
+        for participant in expected[..count].iter().flatten() {
+            let entry = self
+                .participants
+                .iter_mut()
+                .find(|entry| **entry == Some(*participant))
+                .ok_or(TransactionError::ParticipantMismatch)?;
+            *entry = None;
+        }
+        self.remaining -= count;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -361,6 +389,39 @@ mod tests {
             Err(TransactionError::ParticipantMismatch)
         );
         assert_eq!(receipt.consume(second), Ok(()));
+        assert_eq!(receipt.remaining(), 0);
+    }
+
+    #[test]
+    fn batch_receipt_consumption_is_atomic_and_replay_safe() {
+        let first = participant(10, 3);
+        let second = participant(20, 8);
+        let missing = participant(30, 5);
+        let mut receipt = TransactionReceipt::<2> {
+            identity: StorageTransactionId::new(21).unwrap(),
+            publication_generation: 10,
+            participants: [Some(first), Some(second)],
+            remaining: 2,
+        };
+        assert_eq!(
+            receipt.consume_batch(&[Some(first), Some(missing)], 2),
+            Err(TransactionError::ParticipantMismatch)
+        );
+        assert_eq!(receipt.remaining(), 2);
+        assert_eq!(
+            receipt.consume_batch(&[Some(first), Some(first)], 2),
+            Err(TransactionError::ParticipantMismatch)
+        );
+        assert_eq!(receipt.remaining(), 2);
+        assert_eq!(
+            receipt.consume_batch(&[Some(first), Some(second)], 2),
+            Ok(())
+        );
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(
+            receipt.consume_batch(&[Some(first), Some(second)], 2),
+            Err(TransactionError::ParticipantMismatch)
+        );
         assert_eq!(receipt.remaining(), 0);
     }
 

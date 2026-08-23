@@ -410,6 +410,19 @@ impl<const N: usize> PreparedAllocationUpdate<N> {
         self.metadata
     }
 
+    pub(crate) fn owns_image(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+        pointer: MetadataPointer,
+        kind: AllocationKind,
+    ) -> bool {
+        self.successor
+            .index
+            .exact_record_index(owner, owner_generation, pointer, kind)
+            .is_some()
+    }
+
     pub(crate) fn transaction_participant(
         &self,
     ) -> Result<TransactionParticipant, TransactionError> {

@@ -136,8 +136,12 @@ explicitly and downgrade the status rather than guessing.
   complete closure and propagates child generations through every affected
   ancestor to the root. Complete-plan staging preflights disjoint output ranges,
   durably stages every unreachable directory image, and admits the complete
-  directory set to a fresh transaction. Allocation-successor integration,
-  COW-root publication, and receipt-driven activation remain pending.
+  directory set to a fresh transaction. The focused simulation also verifies
+  that one allocation successor owns every exact new directory range, binds all
+  directory/allocation images into one COW plan, publishes once, and consumes
+  the complete directory receipt set atomically before exposing successors.
+  Concrete block integration, power-loss evidence, and persistent identity
+  allocation remain pending.
   Capability-authorized
   bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
@@ -148,8 +152,8 @@ explicitly and downgrade the status rather than guessing.
   successors under one independently generated COW root publication and return
   one-use activation receipts. Directory successors now stage canonical object
   metadata and entry-list images and activate only through a directory
-  transaction receipt; persistent allocator participation and concrete
-  block/allocation integration are not yet implemented. Redundant-root
+  transaction receipt; the object-ID allocator remains volatile and concrete
+  block integration is not yet implemented. Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming
@@ -182,8 +186,8 @@ explicitly and downgrade the status rather than guessing.
   no active range—including one freed by that successor—may be reused before
   publication. Exact encoded successor bytes are now staged, durably flushed,
   digest-bound into a distinct allocation transaction resource, and exposed only
-  after a one-use publication receipt. Concrete block and directory transaction
-  integration remain pending. UEFI
+  after a one-use publication receipt. Focused directory-move transaction
+  integration is simulated; concrete block integration remains pending. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

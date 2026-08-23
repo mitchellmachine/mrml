@@ -880,7 +880,9 @@ entry removal/insertion, and bottom-up generation replacement to construct the
 complete in-memory successor worklist through the root.
 It preflights conventional disjoint COW output ranges, stages canonical images
 in dependency order, and admits their typed participants to one bounded
-transaction.
+transaction. Conventional allocation-record membership checks, COW-plan
+construction, and atomic one-use receipt consumption bind and activate the
+complete simulated update.
 This adds no novel namespace structure, graph algorithm,
 transaction protocol, cryptographic construction, or storage optimization.
 

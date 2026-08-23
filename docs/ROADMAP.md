@@ -244,10 +244,14 @@ authority; unrelated domains continue.
    ancestors to the root. Complete-plan staging now preflights all metadata and
    entry ranges for volume bounds, exact entry-image size, and pairwise
    disjointness before writing; it stages every successor child-before-parent
-   and can admit every prepared directory and image to one new transaction.
-   Allocation-successor admission, COW-root publication, receipt-driven plan
-   activation, and allocator persistence remain pending, so directory
-   operations are not yet complete or crash-safe.
+   and can admit every prepared directory and image to one new transaction. A
+   focused publication helper now requires the allocation successor to own each
+   exact new directory range with the correct object, generation, and kind,
+   includes all directory and allocation participants/images in one COW plan,
+   and atomically consumes the directory receipt set before exposing successors.
+   This remains in-memory simulation: concrete block integration, power-loss
+   evidence, persistent object-ID allocation, and full recovery validation are
+   pending, so directory operations are not yet complete or crash-safe.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
