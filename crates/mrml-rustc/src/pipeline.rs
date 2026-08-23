@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn inlines_earlier_scalar_rust_functions_without_relocations() {
-        let source = "fn add(value: u16, offset: u16) -> u16 { value + offset } fn twice(value: u16) -> u64 { add(value, value) as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u8) -> u64 { twice(add(value as u16, 5)) }";
+        let source = "fn add(value: u16, offset: u16) -> u16 { let mut total: u16 = value; total += offset; total } fn twice(value: u16) -> u64 { let doubled: u16 = add(value, value); doubled as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u8) -> u64 { twice(add(value as u16, 5)) }";
         let elf = compile(source, "answer", ObjectFormat::Elf64).unwrap();
         assert_eq!(&elf.bytes()[..4], b"\x7fELF");
         let coff = compile(source, "answer", ObjectFormat::Coff).unwrap();
@@ -366,6 +366,13 @@ mod tests {
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let early_return = "fn stop(value: u64) -> u64 { return value; } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { stop(value) }";
+        let error = compile(early_return, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
         );
     }
 }

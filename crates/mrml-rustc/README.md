@@ -2571,17 +2571,20 @@ references do not implement `Default`. Captured parameters and locals remain
 available to the mapping closure.
 
 Runtime expressions can call an earlier, safe, non-const Rust-ABI function with
-up to four built-in integer or Boolean parameters and a scalar result. The
-callee must have an expression-only body. Arguments execute eagerly in source
-order, are normalized to their declared types, and become immutable lexical
-bindings while the body is emitted. Calls may nest to eight levels and are
-inlined into the selected exported function, so the object still contains one
-symbol and no call relocations. Forward calls, caller-local capture, unsafe or
-foreign-ABI callees, statement bodies, aggregates, references, and recursion
-fail closed. An original nested-call probe produced a 400-byte COFF object and
-a 792-byte ELF64 object; independent pinned-nightly callers exercised both
-Boolean branches and inputs at narrow-width boundaries on Windows and Arch
-Linux WSL.
+up to four built-in integer or Boolean parameters and a scalar result.
+Arguments execute eagerly in source order, are normalized to their declared
+types, and become immutable lexical bindings while the body is emitted. A
+callee body may additionally sequence bounded scalar local declarations,
+assignments, and discarded expression statements before its tail value; its
+temporary frame is removed without disturbing the returned register value.
+Calls may nest to eight levels and are inlined into the selected exported
+function, so the object still contains one symbol and no call relocations.
+Forward calls, caller-local capture, unsafe or foreign-ABI callees, early
+returns, loops, conditional statement actions, aggregates, references, and
+recursion fail closed. An original nested statement-body probe produced a
+516-byte COFF object and a 904-byte ELF64 object; independent pinned-nightly
+callers exercised both Boolean branches and inputs at narrow-width boundaries
+on Windows and Arch Linux WSL.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

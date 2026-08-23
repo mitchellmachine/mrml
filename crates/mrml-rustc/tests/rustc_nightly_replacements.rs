@@ -3464,7 +3464,7 @@ fn rustc_underscore_assignments_reach_native_objects() {
 
 #[test]
 fn rustc_prior_scalar_function_calls_reach_native_objects() {
-    let source = "fn add(value: u16, offset: u16) -> u16 { value + offset } fn twice(value: u16) -> u64 { add(value, value) as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u8, choose: bool) -> u64 { if choose { twice(add(value as u16, 5)) } else { twice(add(value as u16, 6)) } }";
+    let source = "fn add(value: u16, offset: u16) -> u16 { let mut total: u16 = value; total += offset; total } fn twice(value: u16) -> u64 { let doubled: u16 = add(value, value); doubled as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u8, choose: bool) -> u64 { if choose { twice(add(value as u16, 5)) } else { twice(add(value as u16, 6)) } }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
     assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
 }

@@ -6567,10 +6567,13 @@ impl<
             self.saved_locals += 1;
         }
         self.evaluation_depth -= target.parameter_count;
-        let body = crate::ExpressionParser::<MAX_NODES>::new(target.body_expression)
-            .parse()
-            .map_err(|error| self.error(CodegenErrorKind::Expression(error.kind)))?;
+        let body = crate::parser::parse_function_body::<MAX_PARAMETERS>(target.body_expression)
+            .map_err(|error| self.error(CodegenErrorKind::Body(error.kind)))?;
         let return_type = runtime_type_from_scalar(target.return_type);
+        let return_type_name = match target.return_type {
+            crate::ScalarType::Integer(ty) => ty.name(),
+            crate::ScalarType::Bool => "bool",
+        };
         let previous_width = self.width;
         if let Some(width) = runtime_expression_width(return_type) {
             self.width = width;
@@ -6578,7 +6581,54 @@ impl<
         let previous_floor = self.runtime_call_local_floor;
         self.runtime_call_local_floor = Some(checkpoint);
         self.runtime_call_depth += 1;
-        let emission = self.emit_expression(&body, body.root(), depth);
+        let body_start = self.function.body_expression_span.start;
+        let emission = (|| {
+            for statement in body.statements().iter().flatten() {
+                match statement {
+                    crate::BodyStatement::Local(index) => {
+                        let local = body.locals()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        self.emit_local::<MAX_NODES>(&local, return_type_name, body_start)?;
+                    }
+                    crate::BodyStatement::Assignment(index) => {
+                        let assignment = body.assignments()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        self.emit_assignment::<MAX_NODES>(&assignment, body_start)?;
+                    }
+                    crate::BodyStatement::Expression(index) => {
+                        let statement = body.expression_statements()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        self.emit_expression_statement::<MAX_NODES>(&statement, body_start)?;
+                    }
+                    crate::BodyStatement::Loop(_)
+                    | crate::BodyStatement::ConditionalReturn(_)
+                    | crate::BodyStatement::ConditionalReturnElse(_)
+                    | crate::BodyStatement::ConditionalAssignment(_)
+                    | crate::BodyStatement::Return(_) => {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
+                }
+            }
+            if body.tail_diverges {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            let tree = body
+                .parse_tail::<MAX_NODES>()
+                .map_err(|error| self.error(CodegenErrorKind::Expression(error.kind)))?;
+            let actual = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                &tree,
+                tree.root(),
+                depth,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(actual, return_type) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_expression(&tree, tree.root(), depth)
+        })();
         self.runtime_call_depth -= 1;
         self.runtime_call_local_floor = previous_floor;
         emission?;
@@ -10402,7 +10452,7 @@ impl<
 
     fn emit_local<const MAX_EXPRESSION_NODES: usize>(
         &mut self,
-        local: &crate::LocalBinding<'source>,
+        local: &crate::LocalBinding<'tree>,
         operand_type: &str,
         body_start: usize,
     ) -> Result<(), CodegenError> {

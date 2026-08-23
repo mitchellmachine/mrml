@@ -705,6 +705,12 @@ impl<'source, const MAX_LOCALS: usize> FunctionBody<'source, MAX_LOCALS> {
     }
 }
 
+pub(crate) fn parse_function_body<'source, const MAX_LOCALS: usize>(
+    source: &'source str,
+) -> Result<FunctionBody<'source, MAX_LOCALS>, ParseError> {
+    BodyParser::new(source).parse()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConstItem<'source> {
     pub public: bool,
