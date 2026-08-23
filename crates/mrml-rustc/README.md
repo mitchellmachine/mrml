@@ -2901,11 +2901,27 @@ arm actions copy the active loop environment and discard it without rewinding
 the monotonic fact identity. The next loop starts from the outer environment, so
 same-named scoped locals retain distinct IDs and later declarations cannot
 inherit them.
+The same traversal pre-resolves every supported non-wildcard assignment target
+into a separate fixed 256-entry expectation table. Each expectation retains the
+stable local/parameter identity, source-independent projections, base type,
+`Write` or `ReadModifyWrite` class, and span. Emission consumes exact matches at
+assignment sites while continuing to append actual reads and writes to the true
+emission-order access ledger, so precomputed writes never move ahead of RHS
+reads. Missing, reordered, malformed, or identity-drifted expectations fail
+closed.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
-forms represented by the supported runtime body and loop parsers, but it does
-not yet preanalyze all body accesses; it is not a complete typed body IR.
+and assignment-target forms represented by the supported runtime body and loop
+parsers, but it does not yet preanalyze expression reads; it is not a complete
+typed body IR.
+
+The assignment-access expectation milestone passed all 572 compiler and driver
+tests on Windows gnullvm and all 572 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Existing adversarial tests now prove
+six sequential/conditional and four loop/nested/branch assignment expectations,
+exact `Write` versus `ReadModifyWrite` classification, consumption, and corrupt-
+identity rejection. Existing native COFF/ELF replacements exercise those sites.
 
 The loop-scope declaration milestone passed all 572 compiler and driver tests
 on Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

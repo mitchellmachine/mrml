@@ -181,6 +181,14 @@ nested-loop and conditional-arm actions, and restores the outer environment for
 the next loop. The fact-ID sequence remains monotonic across every discarded
 scope, so same-named locals retain distinct identities and later declarations
 cannot inherit a scoped ID.
+The same traversal now resolves every non-wildcard assignment target represented
+by those body forms into a separate fixed 256-entry expectation table containing
+stable base identity, projection list, base type, access class, and source span.
+Emission consumes each matching expectation at the assignment site while still
+appending reads and writes to the existing true emission-order access ledger.
+This separation prevents precomputed writes from being reordered ahead of RHS
+reads. Missing, reordered, malformed, immutable, or identity-drifted expectations
+fail as `InvalidRuntimePlaceFacts`.
 Emission must consume every preassigned declaration exactly once. Inlined helper
 parameters and later scoped locals append to a checked dynamic tail and cannot
 steal a preassigned source identity; mismatches fail as
@@ -196,9 +204,9 @@ syntax into an ordered read-place projection chain. A fifth projection and a
 emission consumes that discovery and records one projected read instead of an
 empty base read. Specialized direct aggregate paths reuse the same recorder.
 The discovery is not yet universally consumed by nested emission paths. The
-prepass now enumerates every declaration form represented by the supported
-runtime body and loop parsers, but it does not yet analyze all reads and writes
-or replace name lookup across the whole body. Expanded inlined-helper locals
+prepass now enumerates every declaration and assignment-target form represented
+by the supported runtime body and loop parsers, but it does not yet preanalyze
+expression reads or replace name lookup across the whole body. Expanded inlined-helper locals
 still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of

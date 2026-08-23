@@ -862,6 +862,7 @@ pub fn compile_x86_64_function_with_options<
         body_facts: &mut body_facts,
         preanalyzed_local_count,
         preanalyzed_local_cursor: 0,
+        preanalyzed_assignment_access_cursor: 0,
         evaluation_depth: 0,
         runtime_call_depth: 0,
         runtime_call_names: [None; 8],
@@ -2127,6 +2128,8 @@ struct RuntimePlaceAccessFact {
 struct RuntimeBodyFacts<'source> {
     locals: [Option<RuntimeLocalFact<'source>>; MAX_RUNTIME_LOCAL_FACTS],
     local_count: usize,
+    assignment_accesses: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
+    assignment_access_count: usize,
     accesses: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
     access_count: usize,
 }
@@ -2135,6 +2138,8 @@ impl<'source> RuntimeBodyFacts<'source> {
     const EMPTY: Self = Self {
         locals: [None; MAX_RUNTIME_LOCAL_FACTS],
         local_count: 0,
+        assignment_accesses: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
+        assignment_access_count: 0,
         accesses: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
         access_count: 0,
     };
@@ -2160,6 +2165,19 @@ impl<'source> RuntimeBodyFacts<'source> {
         });
         self.local_count += 1;
         Ok(id)
+    }
+
+    fn push_assignment_access(
+        &mut self,
+        fact: RuntimePlaceAccessFact,
+    ) -> Result<(), CodegenErrorKind> {
+        let slot = self
+            .assignment_accesses
+            .get_mut(self.assignment_access_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimePlaceAccessFacts)?;
+        *slot = Some(fact);
+        self.assignment_access_count += 1;
+        Ok(())
     }
 }
 
@@ -2353,6 +2371,103 @@ fn preanalyze_runtime_local_binding<
     Ok(())
 }
 
+fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    assignment: &crate::Assignment<'source>,
+) -> Result<RuntimePlace<'source>, CodegenErrorKind> {
+    let name = assignment.binding_name();
+    let (base, ty, binding_mutable) = if let Some((index, local)) =
+        locals.iter().enumerate().rev().find_map(|(index, local)| {
+            local
+                .filter(|local| local.name == name)
+                .map(|local| (index, local))
+        }) {
+        (
+            RuntimePlaceBase::Local {
+                id: local.id,
+                index,
+            },
+            local.ty,
+            local.mutable,
+        )
+    } else if let Some((index, parameter)) = function
+        .parameters()
+        .iter()
+        .flatten()
+        .enumerate()
+        .find(|(_, parameter)| parameter.name == name)
+    {
+        (
+            RuntimePlaceBase::Parameter { index },
+            runtime_type_from_text(parameter.ty.text)
+                .ok_or(CodegenErrorKind::UnsupportedRuntimeType)?,
+            false,
+        )
+    } else {
+        return Err(CodegenErrorKind::UnknownRuntimeName);
+    };
+    let mutable = match assignment.projection {
+        Some(crate::parser::AssignmentProjection::Dereference { .. }) => match ty {
+            RuntimeExpressionType::Reference { mutable, .. }
+            | RuntimeExpressionType::RawPointer { mutable, .. } => mutable,
+            _ => binding_mutable,
+        },
+        Some(crate::parser::AssignmentProjection::Index { .. }) => match ty {
+            RuntimeExpressionType::Reference { mutable, .. } => mutable,
+            _ => binding_mutable,
+        },
+        _ => binding_mutable,
+    };
+    Ok(RuntimePlace {
+        base,
+        projection: assignment.projection,
+        ty,
+        mutable,
+        access: RuntimePlaceAccess::from_operator(assignment.operator),
+    })
+}
+
+fn preanalyze_runtime_assignment_access<'source, const MAX_PARAMETERS: usize>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    assignment: &crate::Assignment<'source>,
+) -> Result<(), CodegenError> {
+    if assignment.binding_name() == "_" {
+        return Ok(());
+    }
+    let place = resolve_runtime_assignment_place(function, locals, assignment).map_err(|kind| {
+        CodegenError {
+            kind,
+            span: assignment.name_span,
+        }
+    })?;
+    let base = match place.base {
+        RuntimePlaceBase::Local { id, .. } => RuntimePlaceIdentity::Local(id),
+        RuntimePlaceBase::Parameter { index } => RuntimePlaceIdentity::Parameter(index),
+    };
+    let projections =
+        RuntimePlaceProjections::from_assignment(place.projection).map_err(|kind| {
+            CodegenError {
+                kind,
+                span: assignment.name_span,
+            }
+        })?;
+    facts
+        .push_assignment_access(RuntimePlaceAccessFact {
+            base,
+            projections,
+            ty: place.ty,
+            access: place.access,
+            span: assignment.name_span,
+        })
+        .map_err(|kind| CodegenError {
+            kind,
+            span: assignment.name_span,
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn preanalyze_runtime_conditional_actions<
     'source,
@@ -2372,17 +2487,29 @@ fn preanalyze_runtime_conditional_actions<
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
     for action in actions.iter().flatten() {
-        if let crate::ConditionalAssignmentAction::Local(local) = *action {
-            preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-                function,
-                resolver,
-                local,
-                operand_type,
-                body_start,
-                facts,
-                &mut locals,
-                &mut local_count,
-            )?;
+        match *action {
+            crate::ConditionalAssignmentAction::Local(local) => {
+                preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                    function,
+                    resolver,
+                    local,
+                    operand_type,
+                    body_start,
+                    facts,
+                    &mut locals,
+                    &mut local_count,
+                )?;
+            }
+            crate::ConditionalAssignmentAction::Assignment(assignment) => {
+                preanalyze_runtime_assignment_access(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    &assignment,
+                )?;
+            }
+            crate::ConditionalAssignmentAction::Expression(_)
+            | crate::ConditionalAssignmentAction::Return(_) => {}
         }
     }
     Ok(())
@@ -2407,17 +2534,28 @@ fn preanalyze_runtime_loop_actions<
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
     for action in actions.iter().flatten() {
-        if let crate::ConditionalLoopAction::Local(local) = *action {
-            preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-                function,
-                resolver,
-                local,
-                operand_type,
-                body_start,
-                facts,
-                &mut locals,
-                &mut local_count,
-            )?;
+        match *action {
+            crate::ConditionalLoopAction::Local(local) => {
+                preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                    function,
+                    resolver,
+                    local,
+                    operand_type,
+                    body_start,
+                    facts,
+                    &mut locals,
+                    &mut local_count,
+                )?;
+            }
+            crate::ConditionalLoopAction::Assignment(assignment) => {
+                preanalyze_runtime_assignment_access(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    &assignment,
+                )?;
+            }
+            crate::ConditionalLoopAction::Expression(_) => {}
         }
     }
     Ok(())
@@ -2453,6 +2591,14 @@ fn preanalyze_runtime_loop_declarations<
                     facts,
                     &mut locals,
                     &mut local_count,
+                )?;
+            }
+            crate::LoopOperation::Assignment(assignment) => {
+                preanalyze_runtime_assignment_access(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    &assignment,
                 )?;
             }
             crate::LoopOperation::NestedBlock(index) => {
@@ -2505,8 +2651,7 @@ fn preanalyze_runtime_loop_declarations<
                     }
                 }
             }
-            crate::LoopOperation::Assignment(_)
-            | crate::LoopOperation::Expression(_)
+            crate::LoopOperation::Expression(_)
             | crate::LoopOperation::Break
             | crate::LoopOperation::Continue
             | crate::LoopOperation::ConditionalBreak(_)
@@ -2581,8 +2726,19 @@ fn preanalyze_runtime_top_level_statement<
                 *local_count,
             )?;
         }
-        crate::BodyStatement::Assignment(_)
-        | crate::BodyStatement::ConditionalReturn(_)
+        crate::BodyStatement::Assignment(index) => {
+            let assignment = body.assignments()[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: function.name_span,
+            })?;
+            preanalyze_runtime_assignment_access(
+                facts,
+                &locals[..*local_count],
+                function,
+                &assignment,
+            )?;
+        }
+        crate::BodyStatement::ConditionalReturn(_)
         | crate::BodyStatement::ConditionalReturnElse(_)
         | crate::BodyStatement::Expression(_)
         | crate::BodyStatement::Return(_)
@@ -7041,6 +7197,7 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     body_facts: &'tree mut RuntimeBodyFacts<'tree>,
     preanalyzed_local_count: usize,
     preanalyzed_local_cursor: usize,
+    preanalyzed_assignment_access_cursor: usize,
     evaluation_depth: usize,
     runtime_call_depth: usize,
     runtime_call_names: [Option<&'tree str>; 8],
@@ -7112,61 +7269,12 @@ impl<
         &self,
         assignment: &crate::Assignment<'tree>,
     ) -> Result<RuntimePlace<'tree>, CodegenError> {
-        let name = assignment.binding_name();
-        let (base, ty, binding_mutable) = if let Some((index, local)) = self.locals
-            [..self.saved_locals]
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, local)| {
-                local
-                    .filter(|local| local.name == name)
-                    .map(|local| (index, local))
-            }) {
-            (
-                RuntimePlaceBase::Local {
-                    id: local.id,
-                    index,
-                },
-                local.ty,
-                local.mutable,
-            )
-        } else if let Some((index, parameter)) = self
-            .function
-            .parameters()
-            .iter()
-            .flatten()
-            .enumerate()
-            .find(|(_, parameter)| parameter.name == name)
-        {
-            (
-                RuntimePlaceBase::Parameter { index },
-                runtime_type_from_text(parameter.ty.text)
-                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?,
-                false,
-            )
-        } else {
-            return Err(self.error(CodegenErrorKind::UnknownRuntimeName));
-        };
-        let mutable = match assignment.projection {
-            Some(crate::parser::AssignmentProjection::Dereference { .. }) => match ty {
-                RuntimeExpressionType::Reference { mutable, .. }
-                | RuntimeExpressionType::RawPointer { mutable, .. } => mutable,
-                _ => binding_mutable,
-            },
-            Some(crate::parser::AssignmentProjection::Index { .. }) => match ty {
-                RuntimeExpressionType::Reference { mutable, .. } => mutable,
-                _ => binding_mutable,
-            },
-            _ => binding_mutable,
-        };
-        Ok(RuntimePlace {
-            base,
-            projection: assignment.projection,
-            ty,
-            mutable,
-            access: RuntimePlaceAccess::from_operator(assignment.operator),
-        })
+        resolve_runtime_assignment_place(
+            self.function,
+            &self.locals[..self.saved_locals],
+            assignment,
+        )
+        .map_err(|kind| self.error(kind))
     }
 
     fn record_place_access(
@@ -7180,6 +7288,19 @@ impl<
         };
         let projections = RuntimePlaceProjections::from_assignment(place.projection)
             .map_err(|kind| self.error(kind))?;
+        let fact = RuntimePlaceAccessFact {
+            base,
+            projections,
+            ty: place.ty,
+            access: place.access,
+            span,
+        };
+        if self.preanalyzed_assignment_access_cursor < self.body_facts.assignment_access_count
+            && self.body_facts.assignment_accesses[self.preanalyzed_assignment_access_cursor]
+                == Some(fact)
+        {
+            self.preanalyzed_assignment_access_cursor += 1;
+        }
         self.record_place_access_fact(base, projections, place.ty, place.access, span)
     }
 
@@ -7690,9 +7811,60 @@ impl<
         Ok(())
     }
 
+    fn validate_runtime_access_fact(
+        &self,
+        fact: RuntimePlaceAccessFact,
+    ) -> Result<(), CodegenError> {
+        if fact.span.end < fact.span.start
+            || !runtime_place_projections_valid(fact.ty, fact.projections)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        match fact.base {
+            RuntimePlaceIdentity::Local(id) => {
+                let local = self
+                    .body_facts
+                    .locals
+                    .get(id.0)
+                    .and_then(|fact| *fact)
+                    .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+                if local.id != id || local.ty != fact.ty {
+                    return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                }
+                let mutates_binding = !matches!(
+                    (fact.projections.items[0], fact.ty),
+                    (
+                        Some(RuntimePlaceProjection::Dereference),
+                        RuntimeExpressionType::Reference { .. }
+                            | RuntimeExpressionType::RawPointer { .. }
+                    ) | (
+                        Some(RuntimePlaceProjection::Index),
+                        RuntimeExpressionType::Reference { .. }
+                    )
+                );
+                if fact.access != RuntimePlaceAccess::Read && mutates_binding && !local.mutable {
+                    return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                }
+            }
+            RuntimePlaceIdentity::Parameter(index) => {
+                let parameter = self
+                    .function
+                    .parameters()
+                    .get(index)
+                    .and_then(|parameter| *parameter)
+                    .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+                if runtime_type_from_text(parameter.ty.text) != Some(fact.ty) {
+                    return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn validate_runtime_place_facts(&self) -> Result<(), CodegenError> {
         if self.preanalyzed_local_cursor != self.preanalyzed_local_count
             || self.preanalyzed_local_count > self.body_facts.local_count
+            || self.preanalyzed_assignment_access_cursor != self.body_facts.assignment_access_count
         {
             return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
         }
@@ -7710,59 +7882,26 @@ impl<
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
             }
         }
+        if self.body_facts.assignment_accesses[..self.body_facts.assignment_access_count]
+            .iter()
+            .any(Option::is_none)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        for fact in self.body_facts.assignment_accesses[..self.body_facts.assignment_access_count]
+            .iter()
+            .flatten()
+        {
+            if fact.access == RuntimePlaceAccess::Read {
+                return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+            self.validate_runtime_access_fact(*fact)?;
+        }
         for fact in self.body_facts.accesses[..self.body_facts.access_count]
             .iter()
             .flatten()
         {
-            if fact.span.end < fact.span.start
-                || !runtime_place_projections_valid(fact.ty, fact.projections)
-            {
-                return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
-            }
-            match fact.access {
-                RuntimePlaceAccess::Read
-                | RuntimePlaceAccess::Write
-                | RuntimePlaceAccess::ReadModifyWrite => {}
-            }
-            match fact.base {
-                RuntimePlaceIdentity::Local(id) => {
-                    let local = self
-                        .body_facts
-                        .locals
-                        .get(id.0)
-                        .and_then(|fact| *fact)
-                        .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
-                    if local.id != id || local.ty != fact.ty {
-                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
-                    }
-                    let mutates_binding = !matches!(
-                        (fact.projections.items[0], fact.ty),
-                        (
-                            Some(RuntimePlaceProjection::Dereference),
-                            RuntimeExpressionType::Reference { .. }
-                                | RuntimeExpressionType::RawPointer { .. }
-                        ) | (
-                            Some(RuntimePlaceProjection::Index),
-                            RuntimeExpressionType::Reference { .. }
-                        )
-                    );
-                    if fact.access != RuntimePlaceAccess::Read && mutates_binding && !local.mutable
-                    {
-                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
-                    }
-                }
-                RuntimePlaceIdentity::Parameter(index) => {
-                    let parameter = self
-                        .function
-                        .parameters()
-                        .get(index)
-                        .and_then(|parameter| *parameter)
-                        .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
-                    if runtime_type_from_text(parameter.ty.text) != Some(fact.ty) {
-                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
-                    }
-                }
-            }
+            self.validate_runtime_access_fact(*fact)?;
         }
         if self.body_facts.accesses[..self.body_facts.access_count]
             .iter()
@@ -16645,6 +16784,7 @@ mod tests {
             body_facts: &mut body_facts,
             preanalyzed_local_count: 0,
             preanalyzed_local_cursor: 0,
+            preanalyzed_assignment_access_cursor: 0,
             evaluation_depth: 0,
             runtime_call_depth: 0,
             runtime_call_names: [None; 8],
@@ -16678,8 +16818,19 @@ mod tests {
         };
         let first_place = emitter.resolve_assignment_place(&assignment).unwrap();
         emitter
+            .body_facts
+            .push_assignment_access(RuntimePlaceAccessFact {
+                base: RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                projections: RuntimePlaceProjections::EMPTY,
+                ty: first_place.ty,
+                access: first_place.access,
+                span: assignment.name_span,
+            })
+            .unwrap();
+        emitter
             .record_place_access(first_place, assignment.name_span)
             .unwrap();
+        assert_eq!(emitter.preanalyzed_assignment_access_cursor, 1);
         emitter
             .record_identifier_read(
                 "value",
@@ -16807,6 +16958,17 @@ mod tests {
         );
         emitter.validate_runtime_place_facts().unwrap();
 
+        let valid_assignment_fact = emitter.body_facts.assignment_accesses[0].unwrap();
+        emitter.body_facts.assignment_accesses[0] = Some(RuntimePlaceAccessFact {
+            base: RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
+            ..valid_assignment_fact
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.assignment_accesses[0] = Some(valid_assignment_fact);
+
         let valid_fact = emitter.body_facts.accesses[2].unwrap();
         emitter.body_facts.accesses[2] = Some(RuntimePlaceAccessFact {
             base: RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
@@ -16925,6 +17087,7 @@ mod tests {
             body_facts: &mut facts,
             preanalyzed_local_count: count,
             preanalyzed_local_cursor: 0,
+            preanalyzed_assignment_access_cursor: 0,
             evaluation_depth: 0,
             runtime_call_depth: 0,
             runtime_call_names: [None; 8],
@@ -17028,6 +17191,18 @@ mod tests {
             facts.locals[4].unwrap().declaration_span,
             facts.locals[5].unwrap().declaration_span
         );
+        assert_eq!(facts.assignment_access_count, 6);
+        for fact in facts.assignment_accesses[..6].iter().flatten() {
+            assert_eq!(fact.base, RuntimePlaceIdentity::Local(RuntimeLocalId(0)));
+        }
+        assert_eq!(
+            facts.assignment_accesses[0].unwrap().access,
+            RuntimePlaceAccess::ReadModifyWrite
+        );
+        assert_eq!(
+            facts.assignment_accesses[3].unwrap().access,
+            RuntimePlaceAccess::ReadModifyWrite
+        );
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 2048, 8, 64>(&function, &resolver, abi).unwrap();
@@ -17069,6 +17244,23 @@ mod tests {
             facts.locals[4].unwrap().declaration_span,
             facts.locals[5].unwrap().declaration_span
         );
+        assert_eq!(facts.assignment_access_count, 4);
+        for (fact, id) in facts.assignment_accesses[..4].iter().zip([
+            RuntimeLocalId(1),
+            RuntimeLocalId(1),
+            RuntimeLocalId(1),
+            RuntimeLocalId(0),
+        ]) {
+            assert_eq!(fact.unwrap().base, RuntimePlaceIdentity::Local(id));
+        }
+        assert_eq!(
+            facts.assignment_accesses[0].unwrap().access,
+            RuntimePlaceAccess::ReadModifyWrite
+        );
+        assert_eq!(
+            facts.assignment_accesses[3].unwrap().access,
+            RuntimePlaceAccess::Write
+        );
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
@@ -17102,6 +17294,7 @@ mod tests {
             body_facts: &mut body_facts,
             preanalyzed_local_count: 0,
             preanalyzed_local_cursor: 0,
+            preanalyzed_assignment_access_cursor: 0,
             evaluation_depth: 0,
             runtime_call_depth: 0,
             runtime_call_names: [None; 8],
