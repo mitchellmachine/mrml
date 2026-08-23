@@ -1793,6 +1793,25 @@ fn rustc_independent_scalar_integer_widths_reach_native_objects() {
 }
 
 #[test]
+fn rustc_unsigned_integer_predicates_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> bool { input.is_power_of_two() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> bool { input.is_multiple_of(divisor) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: usize) -> bool { input.is_multiple_of(0) }",
+        "const VALUE: bool = 16u16.is_power_of_two(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
+        "const VALUE: bool = 0u32.is_multiple_of(0); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_independent_aggregate_parameter_widths_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, values: [u16; 3]) -> u8 { if values[1] == 257 { input + 1 } else { input } }",

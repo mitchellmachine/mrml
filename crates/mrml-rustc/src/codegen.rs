@@ -2277,6 +2277,12 @@ fn validate_runtime_inline_const<
             recurse(alignment)?;
         }
         ExprKind::RawPointerDrop { base } => recurse(base)?,
+        ExprKind::UnsignedIntegerPredicate { base, argument, .. } => {
+            recurse(base)?;
+            if let Some(argument) = argument {
+                recurse(argument)?;
+            }
+        }
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
@@ -2559,6 +2565,40 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(RuntimeExpressionType::Unit)
+        }
+        ExprKind::UnsignedIntegerPredicate {
+            base,
+            argument,
+            power_of_two,
+        } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if integer_type.is_signed()
+                || (!power_of_two
+                    && !runtime_types_compatible(
+                        runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            argument.ok_or(CodegenErrorKind::RuntimeTypeMismatch)?,
+                            depth + 1,
+                        )?,
+                        base_type,
+                    ))
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Bool)
         }
         ExprKind::SliceIsEmpty { base } => {
             let base_type = runtime_expression_type_with_locals(
@@ -4845,6 +4885,57 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             ExprKind::RawPointerDrop { base } => {
                 self.emit_expression(tree, base, depth + 1)?;
                 self.emit(&[0x31, 0xc0])?;
+            }
+            ExprKind::UnsignedIntegerPredicate {
+                base,
+                argument,
+                power_of_two,
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                let emission = self.emit_expression(tree, base, depth + 1);
+                self.width = previous_width;
+                emission?;
+                if power_of_two {
+                    self.emit(&[
+                        0x48, 0x89, 0xc1, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc2, 0x48, 0xff, 0xc9,
+                        0x48, 0x21, 0xc8, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0, 0x0f, 0xb6, 0xd2,
+                        0x21, 0xd0,
+                    ])?;
+                } else {
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                    self.width = operand_width;
+                    let emission = self.emit_expression(
+                        tree,
+                        argument.ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?,
+                        depth + 1,
+                    );
+                    self.width = previous_width;
+                    emission?;
+                    self.emit(&[0x49, 0x89, 0xc0, 0x59, 0x4d, 0x85, 0xc0])?;
+                    self.evaluation_depth -= 1;
+                    let nonzero = self.emit_forward_branch(0x85)?;
+                    self.emit(&[0x48, 0x85, 0xc9, 0x0f, 0x94, 0xc0, 0x0f, 0xb6, 0xc0])?;
+                    let end = self.emit_unconditional_forward_branch()?;
+                    self.patch_forward_branch(nonzero)?;
+                    self.emit(&[
+                        0x48, 0x89, 0xc8, 0x31, 0xd2, 0x49, 0xf7, 0xf0, 0x48, 0x85, 0xd2, 0x0f,
+                        0x94, 0xc0, 0x0f, 0xb6, 0xc0,
+                    ])?;
+                    self.patch_forward_branch(end)?;
+                }
             }
             ExprKind::Integer(literal) => {
                 if literal.value > u128::from(self.width.maximum) {
@@ -11005,6 +11096,47 @@ mod tests {
                     compile_x86_64_function::<_, 1536, 4, 128>(&function, &NoConstants, abi);
                 assert!(result.is_ok(), "{source}: {result:?}");
             }
+        }
+    }
+
+    #[test]
+    fn checks_unsigned_integer_multiples_and_powers_of_two() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { input.is_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, divisor: u64) -> bool { input.is_multiple_of(divisor) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> bool { input.is_multiple_of(0) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 160>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> bool { input.is_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, divisor: u16) -> bool { input.is_multiple_of(divisor) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.is_power_of_two() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
         }
     }
 

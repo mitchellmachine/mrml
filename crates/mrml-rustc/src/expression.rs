@@ -363,6 +363,11 @@ pub enum ExprKind<'source> {
     RawPointerDrop {
         base: ExprId,
     },
+    UnsignedIntegerPredicate {
+        base: ExprId,
+        argument: Option<ExprId>,
+        power_of_two: bool,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -541,7 +546,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::Identifier(_)
             | ExprKind::Call { .. }
             | ExprKind::Cast { .. } => false,
-            ExprKind::SliceIsEmpty { .. } => true,
+            ExprKind::SliceIsEmpty { .. } | ExprKind::UnsignedIntegerPredicate { .. } => true,
             ExprKind::Ascribe {
                 operand,
                 target: ScalarType::Bool,
@@ -766,6 +771,28 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::RawPointerMask { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerIsAlignedTo { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerDrop { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::UnsignedIntegerPredicate {
+                base,
+                argument,
+                power_of_two,
+            } => {
+                let value = self.evaluate_node(base, resolver, depth + 1)?;
+                let result = if power_of_two {
+                    value != 0 && value & (value - 1) == 0
+                } else {
+                    let divisor = self.evaluate_node(
+                        argument.ok_or(ConstEvalError::InvalidExpressionTree)?,
+                        resolver,
+                        depth + 1,
+                    )?;
+                    if divisor == 0 {
+                        value == 0
+                    } else {
+                        value % divisor == 0
+                    }
+                };
+                Ok(u128::from(result))
+            }
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -2040,6 +2067,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::RawPointerDrop { base } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
+            }
+            ExprKind::UnsignedIntegerPredicate { base, argument, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                if let Some(argument) = argument {
+                    self.substitute_identifier(argument, name, replacement, depth + 1)?;
+                }
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3659,6 +3692,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "write_volatile"
                         | "with_addr"
                         | "with_metadata_of"
+                        | "is_power_of_two"
+                        | "is_multiple_of"
                 )
             }) else {
                 return Err(self.error(ExpressionErrorKind::ExpectedExpression, method));
@@ -3701,6 +3736,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "write_volatile"
                     | "with_addr"
                     | "with_metadata_of"
+                    | "is_multiple_of"
             ) {
                 Some(self.expression(0, depth + 1)?)
             } else {
@@ -3740,6 +3776,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     mutable: true,
                 },
                 "is_null" => ExprKind::RawPointerIsNull { base },
+                "is_power_of_two" => ExprKind::UnsignedIntegerPredicate {
+                    base,
+                    argument: None,
+                    power_of_two: true,
+                },
+                "is_multiple_of" => ExprKind::UnsignedIntegerPredicate {
+                    base,
+                    argument,
+                    power_of_two: false,
+                },
                 "is_aligned" => ExprKind::RawPointerIsAligned { base },
                 "addr" | "expose_provenance" => ExprKind::RawPointerAddress { base },
                 "cast_const" => ExprKind::RawPointerMutability {
