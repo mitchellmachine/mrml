@@ -1,8 +1,54 @@
 use crate::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LaunchRequest, PhysAddr, ProtectedChannelError,
     ProtectionBackend, ProtectionClaims, ProtectionError, ProtectionPolicy, ProtectionReport,
-    ProtectionSession,
+    ProtectionSession, ValidatedBoot,
 };
+use mrml_crypto::Sha3_256;
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_seed() -> Result<[u8; 32], MonitorError> {
+    let features = core::arch::x86_64::__cpuid_count(7, 0);
+    if features.ebx & (1 << 18) == 0 {
+        return Err(MonitorError::HardwareEntropyUnavailable);
+    }
+    let mut output = [0; 32];
+    let (chunks, remainder) = output.as_chunks_mut::<8>();
+    debug_assert!(remainder.is_empty());
+    for chunk in chunks {
+        let mut accepted = None;
+        for _ in 0..32 {
+            let value: u64;
+            let success: u8;
+            // SAFETY: support was checked with CPUID. RDSEED touches no memory;
+            // carry indicates whether the returned seed is valid.
+            unsafe {
+                core::arch::asm!(
+                    "rdseed {value}",
+                    "setc {success}",
+                    value = out(reg) value,
+                    success = out(reg_byte) success,
+                    options(nomem, nostack)
+                );
+            }
+            if success != 0 {
+                accepted = Some(value);
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        let value = accepted.ok_or(MonitorError::HardwareEntropyUnavailable)?;
+        chunk.copy_from_slice(&value.to_le_bytes());
+    }
+    if output == [0; 32] {
+        return Err(MonitorError::HardwareEntropyUnavailable);
+    }
+    Ok(output)
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu_seed() -> Result<[u8; 32], MonitorError> {
+    Err(MonitorError::HardwareEntropyUnavailable)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DomainId(u64);
@@ -160,6 +206,8 @@ pub enum MonitorError {
     HardwareStateUncertain,
     InvalidSecurityVersion,
     InvalidAuthorityKey,
+    HardwareEntropyUnavailable,
+    UnverifiedBootChain,
     AuthorityKeyAlreadyProvisioned,
     AuthorityKeyNotProvisioned,
     InvalidLaunchRequest,
@@ -249,22 +297,51 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         Ok(DomainId::new(index, generation))
     }
 
-    /// Installs the local receipt key before any protected-domain state exists.
-    /// The trusted boot path must provision this from authenticated entropy;
-    /// this method does not itself establish secrecy or remote identity.
-    pub fn provision_authority_key(&mut self, key: [u8; 32]) -> Result<(), MonitorError> {
-        if key == [0; 32] {
-            return Err(MonitorError::InvalidAuthorityKey);
+    /// Derives a launch-unique local receipt key internally from validated boot
+    /// identity, loader entropy, and fresh post-entry CPU entropy.
+    pub fn bootstrap_authority_key(&mut self, boot: &ValidatedBoot) -> Result<(), MonitorError> {
+        if !boot.signed_chain_verified() {
+            return Err(MonitorError::UnverifiedBootChain);
         }
+        let cpu_entropy = cpu_seed()?;
+        self.bootstrap_authority_key_inner(boot, cpu_entropy)
+    }
+
+    fn bootstrap_authority_key_inner(
+        &mut self,
+        boot: &ValidatedBoot,
+        cpu_entropy: [u8; 32],
+    ) -> Result<(), MonitorError> {
         if self.authority_key_provisioned {
             return Err(MonitorError::AuthorityKeyAlreadyProvisioned);
         }
         if self.domains.iter().any(Option::is_some) || self.granules.iter().any(Option::is_some) {
             return Err(MonitorError::InvalidDomainState);
         }
-        self.authority_key = key;
+        if cpu_entropy == [0; 32] {
+            return Err(MonitorError::HardwareEntropyUnavailable);
+        }
+        let mut digest = Sha3_256::new();
+        digest.update(b"MRML-BARE-METAL-AUTHORITY-KEY-v1\0");
+        digest.update(boot.entropy());
+        digest.update(boot.image_measurement());
+        digest.update(&boot.image_version().to_le_bytes());
+        digest.update(&cpu_entropy);
+        self.authority_key = digest.finalize();
+        if self.authority_key == [0; 32] {
+            return Err(MonitorError::InvalidAuthorityKey);
+        }
         self.authority_key_provisioned = true;
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn bootstrap_authority_key_for_test(
+        &mut self,
+        boot: &ValidatedBoot,
+        cpu_entropy: [u8; 32],
+    ) -> Result<(), MonitorError> {
+        self.bootstrap_authority_key_inner(boot, cpu_entropy)
     }
 
     pub fn seal_domain(&mut self, id: DomainId, measurement: [u8; 64]) -> Result<(), MonitorError> {
@@ -731,6 +808,12 @@ impl<const DOMAINS: usize, const GRANULES: usize> Default for ProtectedMonitor<D
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BootEvidence, BootPolicy};
+
+    fn validated_boot(entropy: [u8; 32], measurement: [u8; 64]) -> ValidatedBoot {
+        let evidence = BootEvidence::new(entropy, measurement, 1, true, true, true).unwrap();
+        BootPolicy::production(1).admit(&evidence).unwrap()
+    }
 
     struct RecordingHardware {
         outcome: GranuleHardwareOutcome,
@@ -886,11 +969,13 @@ mod tests {
 
     #[test]
     fn monitor_receipt_authenticates_exact_live_domain_mode() {
-        const KEY: [u8; 32] = [0x44; 32];
         const MEASUREMENT: [u8; 64] = [0xb1; 64];
         const NONCE: [u8; 32] = [0xb2; 32];
         let mut monitor = ProtectedMonitor::<1, 1>::with_security_version(9).unwrap();
-        monitor.provision_authority_key(KEY).unwrap();
+        monitor
+            .bootstrap_authority_key_for_test(&validated_boot([0x41; 32], [0x42; 64]), [0x43; 32])
+            .unwrap();
+        let key = monitor.authority_key;
         let domain = monitor.create_domain().unwrap();
         let granule = monitor
             .register_granule(PhysAddr::new(0x70_0000).unwrap())
@@ -914,7 +999,7 @@ mod tests {
             .unwrap();
         let mut session = ProtectionSession::new(NONCE).unwrap();
         let admitted = AuthorityReceipt::verify_and_admit(
-            &KEY,
+            &key,
             request,
             &receipt,
             policy.commitment(),
@@ -929,16 +1014,16 @@ mod tests {
 
     #[test]
     fn monitor_authority_rejects_late_keys_and_request_or_policy_substitution() {
-        const KEY: [u8; 32] = [0x54; 32];
         const MEASUREMENT: [u8; 64] = [0xc1; 64];
+        let boot = validated_boot([0x51; 32], [0x52; 64]);
         let mut monitor = ProtectedMonitor::<1, 0>::new();
         assert_eq!(
-            monitor.provision_authority_key([0; 32]),
-            Err(MonitorError::InvalidAuthorityKey)
+            monitor.bootstrap_authority_key_for_test(&boot, [0; 32]),
+            Err(MonitorError::HardwareEntropyUnavailable)
         );
         let domain = monitor.create_domain().unwrap();
         assert_eq!(
-            monitor.provision_authority_key(KEY),
+            monitor.bootstrap_authority_key_for_test(&boot, [0x53; 32]),
             Err(MonitorError::InvalidDomainState)
         );
         monitor.seal_domain(domain, MEASUREMENT).unwrap();
@@ -956,9 +1041,11 @@ mod tests {
         );
 
         let mut monitor = ProtectedMonitor::<1, 0>::new();
-        monitor.provision_authority_key(KEY).unwrap();
+        monitor
+            .bootstrap_authority_key_for_test(&boot, [0x53; 32])
+            .unwrap();
         assert_eq!(
-            monitor.provision_authority_key([0x55; 32]),
+            monitor.bootstrap_authority_key_for_test(&boot, [0x54; 32]),
             Err(MonitorError::AuthorityKeyAlreadyProvisioned)
         );
         let domain = monitor.create_domain().unwrap();
@@ -1013,6 +1100,42 @@ mod tests {
             monitor.issue_authenticated_receipt(domain, stale_request, policy),
             Err(MonitorError::StaleDomain)
         );
+    }
+
+    #[test]
+    fn monitor_authority_key_binds_boot_identity_and_fresh_cpu_entropy() {
+        let claim_only_boot = validated_boot([0x61; 32], [0x62; 64]);
+        assert_eq!(
+            ProtectedMonitor::<0, 0>::new().bootstrap_authority_key(&claim_only_boot),
+            Err(MonitorError::UnverifiedBootChain)
+        );
+        let mut first = ProtectedMonitor::<0, 0>::new();
+        first
+            .bootstrap_authority_key_for_test(&validated_boot([0x61; 32], [0x62; 64]), [0x63; 32])
+            .unwrap();
+        let mut changed_boot = ProtectedMonitor::<0, 0>::new();
+        changed_boot
+            .bootstrap_authority_key_for_test(&validated_boot([0x61; 32], [0x64; 64]), [0x63; 32])
+            .unwrap();
+        let mut changed_cpu_seed = ProtectedMonitor::<0, 0>::new();
+        changed_cpu_seed
+            .bootstrap_authority_key_for_test(&validated_boot([0x61; 32], [0x62; 64]), [0x65; 32])
+            .unwrap();
+        assert_ne!(first.authority_key, changed_boot.authority_key);
+        assert_ne!(first.authority_key, changed_cpu_seed.authority_key);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn cpu_seed_matches_advertised_rdseed_capability() {
+        let supported = core::arch::x86_64::__cpuid_count(7, 0).ebx & (1 << 18) != 0;
+        let seed = cpu_seed();
+        if supported {
+            assert!(seed.is_ok());
+            assert_ne!(seed.unwrap(), [0; 32]);
+        } else {
+            assert_eq!(seed, Err(MonitorError::HardwareEntropyUnavailable));
+        }
     }
 
     #[test]

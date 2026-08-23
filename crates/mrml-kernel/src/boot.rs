@@ -80,6 +80,34 @@ pub struct BootPolicy {
     require_rollback_protection: bool,
 }
 
+/// Opaque result of boot-policy validation. It preserves the authenticated
+/// kernel identity and loader entropy without allowing callers to manufacture
+/// a successful validation token directly.
+pub struct ValidatedBoot {
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    image_version: u64,
+    signed_chain_verified: bool,
+}
+
+impl ValidatedBoot {
+    pub(crate) const fn entropy(&self) -> &[u8; 32] {
+        &self.entropy
+    }
+
+    pub(crate) const fn image_measurement(&self) -> &[u8; 64] {
+        &self.image_measurement
+    }
+
+    pub(crate) const fn image_version(&self) -> u64 {
+        self.image_version
+    }
+
+    pub(crate) const fn signed_chain_verified(&self) -> bool {
+        self.signed_chain_verified
+    }
+}
+
 impl BootPolicy {
     pub const fn production(minimum_image_version: u64) -> Self {
         Self {
@@ -115,6 +143,21 @@ impl BootPolicy {
         Ok(())
     }
 
+    pub const fn admit(
+        self,
+        evidence: &BootEvidence,
+    ) -> Result<ValidatedBoot, BootValidationError> {
+        match self.validate(evidence) {
+            Ok(()) => Ok(ValidatedBoot {
+                entropy: *evidence.entropy(),
+                image_measurement: *evidence.image_measurement(),
+                image_version: evidence.image_version(),
+                signed_chain_verified: false,
+            }),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn validate_signed_chain(
         self,
         evidence: &BootEvidence,
@@ -144,6 +187,20 @@ impl BootPolicy {
             return Err(BootValidationError::MissingSignedArtifact);
         }
         Ok(())
+    }
+
+    pub fn admit_signed_chain(
+        self,
+        evidence: &BootEvidence,
+        artifacts: &[&crate::VerifiedArtifact],
+    ) -> Result<ValidatedBoot, BootValidationError> {
+        self.validate_signed_chain(evidence, artifacts)?;
+        Ok(ValidatedBoot {
+            entropy: *evidence.entropy(),
+            image_measurement: *evidence.image_measurement(),
+            image_version: evidence.image_version(),
+            signed_chain_verified: true,
+        })
     }
 }
 
@@ -250,6 +307,11 @@ mod tests {
             BootPolicy::production(8).validate_signed_chain(&valid, &references),
             Ok(())
         );
+        let admitted = BootPolicy::production(8)
+            .admit_signed_chain(&valid, &references)
+            .unwrap();
+        assert!(admitted.signed_chain_verified());
+        assert_eq!(admitted.image_measurement(), valid.image_measurement());
 
         let wrong_measurement = BootEvidence::new([1; 32], [9; 64], 8, true, true, true).unwrap();
         assert_eq!(

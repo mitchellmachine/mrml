@@ -38,7 +38,7 @@ pub use artifact::{
     SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VerifiedArtifact,
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
 };
-pub use boot::{BootEvidence, BootPolicy, BootValidationError};
+pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

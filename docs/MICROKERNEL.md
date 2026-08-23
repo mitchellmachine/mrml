@@ -349,8 +349,14 @@ authenticated; the ownership state machine alone is not remote attestation.
 
 The monitor can now authenticate that live decision through the same canonical
 receipt protocol used by the VBS control plane. A nonzero 256-bit authority key
-must be provisioned exactly once before any domain or granule exists; late,
-zero, or replacement keys are rejected. `issue_authenticated_receipt` requires
+is derived internally exactly once before any domain or granule exists. The
+bootstrap accepts only an opaque `ValidatedBoot` produced by full signed-chain
+validation; claim-only boot validation is rejected. It domain-separates
+SHA3-256 over loader entropy, the verified kernel measurement and version, and
+fresh post-kernel-entry CPU `RDSEED` output. RDSEED support is checked with
+CPUID and each 64-bit word receives 32 bounded retries; absence, exhaustion, or
+an all-zero result fails closed. No production API accepts or returns the key,
+and late or repeated bootstrap is rejected. `issue_authenticated_receipt` requires
 the request's sequence to equal the next monitor-owned sequence and its image
 and policy commitments to equal the live sealed domain and verifier-selected
 policy. It builds the report without mutating state, applies the complete policy
@@ -358,8 +364,9 @@ admission, seals the exact request/report pair, and commits the global sequence
 only after all steps succeed. Stale domains, policy substitution, request drift,
 and insufficient live claims therefore cannot produce receipts or desynchronize
 a subsequent valid request. A verified receipt yields the opaque authenticated
-`BareMetalVmxRoot` mode. Provisioning that local key remains a trusted-boot
-responsibility and is neither TPM sealing nor remote attestation.
+`BareMetalVmxRoot` mode. The key is launch-local and is neither TPM sealing,
+persistent identity, nor remote attestation; a persistent verifier channel
+would require a separate protected provisioning design.
 
 The allowable claim sets now match implemented mechanisms. VBS may claim
 `SEALED_KEYS` because its exact-code sealed, dual-gated consumer is implemented;
