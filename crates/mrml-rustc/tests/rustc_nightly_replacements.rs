@@ -1833,6 +1833,27 @@ fn rustc_wrapping_integer_methods_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_rotations_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.rotate_left(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, distance: u32) -> i16 { input.rotate_right(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, distance: u32) -> u32 { input.rotate_left(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, distance: u32) -> i64 { input.rotate_right(distance) }",
+        "const VALUE: u8 = 0x81u8.rotate_left(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-2i16).rotate_right(17); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u32 = 0x12345678u32.rotate_left(68); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",

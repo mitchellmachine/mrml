@@ -300,7 +300,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::UnsignedIntegerPredicate { .. }
             | ExprKind::AsciiPredicate { .. }
-            | ExprKind::WrappingArithmetic { .. } => {
+            | ExprKind::WrappingArithmetic { .. }
+            | ExprKind::IntegerRotate { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
                     span: expression.span,

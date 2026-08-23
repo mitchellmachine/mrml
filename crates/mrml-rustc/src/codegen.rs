@@ -2288,6 +2288,10 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(argument)?;
         }
+        ExprKind::IntegerRotate { base, distance, .. } => {
+            recurse(base)?;
+            recurse(distance)?;
+        }
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
@@ -3078,6 +3082,33 @@ fn runtime_expression_type_with_locals<
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
+        }
+        ExprKind::IntegerRotate { base, distance, .. } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || !matches!(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        distance,
+                        depth + 1,
+                    )?,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
         }
         ExprKind::RawPointerOffset {
             base,
@@ -4821,6 +4852,47 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     self.width = previous_width;
                     result?;
                 }
+            }
+            ExprKind::IntegerRotate {
+                base,
+                distance,
+                left,
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.width = runtime_width("u32")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, distance, depth + 1)?;
+                self.emit(&[0x48, 0x89, 0xc1, 0x58])?;
+                self.evaluation_depth -= 1;
+                self.width = operand_width;
+                match (operand_width.bits, left) {
+                    (8, true) => self.emit(&[0xd2, 0xc0])?,
+                    (8, false) => self.emit(&[0xd2, 0xc8])?,
+                    (16, true) => self.emit(&[0x66, 0xd3, 0xc0])?,
+                    (16, false) => self.emit(&[0x66, 0xd3, 0xc8])?,
+                    (32, true) => self.emit(&[0xd3, 0xc0])?,
+                    (32, false) => self.emit(&[0xd3, 0xc8])?,
+                    (64, true) => self.emit(&[0x48, 0xd3, 0xc0])?,
+                    (64, false) => self.emit(&[0x48, 0xd3, 0xc8])?,
+                    _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                }
+                self.emit_normalize()?;
+                self.width = previous_width;
             }
             ExprKind::RawPointerOffset {
                 base,
@@ -11333,6 +11405,48 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.wrapping_add(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.wrapping_mul(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u8, rhs: usize) -> *const u8 { input.wrapping_mul(rhs) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn rotates_primitive_integer_bits() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u32) -> u8 { input.rotate_left(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, distance: u32) -> i16 { input.rotate_right(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, distance: u32) -> u32 { input.rotate_left(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, distance: u32) -> i64 { input.rotate_right(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, distance: u32) -> usize { input.rotate_left(distance) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u16) -> u8 { input.rotate_left(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, distance: u32) -> bool { input.rotate_right(distance) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

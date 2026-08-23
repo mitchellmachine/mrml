@@ -204,11 +204,13 @@ pub fn analyze_constants<
                     end: constant.initializer_span.start + error.span.end,
                 },
             })?;
-        let requires_typed_evaluation =
-            expression_contains_call(&tree, tree.root(), 0)
-                || tree.nodes().iter().flatten().any(|expression| {
-                    matches!(expression.kind, ExprKind::WrappingArithmetic { .. })
-                });
+        let requires_typed_evaluation = expression_contains_call(&tree, tree.root(), 0)
+            || tree.nodes().iter().flatten().any(|expression| {
+                matches!(
+                    expression.kind,
+                    ExprKind::WrappingArithmetic { .. } | ExprKind::IntegerRotate { .. }
+                )
+            });
         let call_value = if requires_typed_evaluation {
             let resolver =
                 ConstCallResolver::from_constants(&table).map_err(|kind| SemanticError {
@@ -1897,12 +1899,12 @@ fn evaluate_integer_const_expression<
     if expression_contains_call(tree, id, 0) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
     }
-    if tree
-        .nodes()
-        .iter()
-        .flatten()
-        .any(|expression| matches!(expression.kind, ExprKind::WrappingArithmetic { .. }))
-    {
+    if tree.nodes().iter().flatten().any(|expression| {
+        matches!(
+            expression.kind,
+            ExprKind::WrappingArithmetic { .. } | ExprKind::IntegerRotate { .. }
+        )
+    }) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
     }
     if ty.is_signed() {
@@ -2031,6 +2033,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::WrappingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
+        ExprKind::IntegerRotate { base, distance, .. } => {
+            recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
+        }
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2132,6 +2137,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         }
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
+        ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -2322,6 +2328,31 @@ fn evaluate_call_aware_integer<
                 BinaryOperator::Multiply => left.overflowing_mul(right).0 & mask,
                 _ => return Err(arithmetic_error(ConstEvalError::InvalidExpressionTree)),
             }
+        }
+        ExprKind::IntegerRotate {
+            base,
+            distance,
+            left,
+        } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || integer_expression_type(context, symbol_count, tree, distance, constants)
+                    .is_some_and(|distance_type| distance_type != crate::IntegerType::U32)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)?;
+            let distance = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                distance,
+                crate::IntegerType::U32,
+                constants,
+                depth,
+            )?;
+            rotate_integer_bits(value, distance, bits, left)
         }
         _ => return Err(arithmetic_error(ConstEvalError::InvalidCast)),
     };
@@ -2984,6 +3015,25 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 }
             }
         }
+        ExprKind::IntegerRotate {
+            base,
+            distance,
+            left,
+        } => {
+            let base_type = expression_integer_type(tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || expression_integer_type(tree, distance, constants)
+                    .is_some_and(|distance_type| distance_type != crate::IntegerType::U32)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)?;
+            let distance = tree
+                .evaluate_at(distance, constants)
+                .map_err(ExecutionError::Arithmetic)?;
+            rotate_integer_bits(value, distance, bits, left)
+        }
         ExprKind::WrappingArithmetic {
             base,
             argument,
@@ -3036,6 +3086,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::Binary { left, right, .. } => expression_integer_type(tree, left, constants)
             .or_else(|| expression_integer_type(tree, right, constants)),
         ExprKind::WrappingArithmetic { base, .. } => expression_integer_type(tree, base, constants),
+        ExprKind::IntegerRotate { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::If {
             then_branch,
             else_branch,
@@ -3051,6 +3102,20 @@ const fn signed_mask(bits: u8) -> u128 {
         u128::MAX
     } else {
         (1u128 << bits) - 1
+    }
+}
+
+fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u128 {
+    let mask = signed_mask(bits);
+    let distance = (distance % u128::from(bits)) as u32;
+    if distance == 0 {
+        return value & mask;
+    }
+    let value = value & mask;
+    if left {
+        ((value << distance) | (value >> (u32::from(bits) - distance))) & mask
+    } else {
+        ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
     }
 }
 

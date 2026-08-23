@@ -377,6 +377,11 @@ pub enum ExprKind<'source> {
         argument: ExprId,
         operator: BinaryOperator,
     },
+    IntegerRotate {
+        base: ExprId,
+        distance: ExprId,
+        left: bool,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -584,6 +589,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::WrappingArithmetic { .. }
+            | ExprKind::IntegerRotate { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -844,6 +850,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 Ok(u128::from(predicate.matches(value)))
             }
             ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -2131,6 +2138,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::WrappingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(argument, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerRotate { base, distance, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(distance, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3712,6 +3723,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_add"
                         | "wrapping_sub"
                         | "wrapping_mul"
+                        | "rotate_left"
+                        | "rotate_right"
                         | "offset"
                         | "wrapping_offset"
                         | "offset_from"
@@ -3783,6 +3796,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_add"
                     | "wrapping_sub"
                     | "wrapping_mul"
+                    | "rotate_left"
+                    | "rotate_right"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -3868,6 +3883,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "wrapping_mul" => BinaryOperator::Multiply,
                         _ => unreachable!(),
                     },
+                },
+                "rotate_left" | "rotate_right" => ExprKind::IntegerRotate {
+                    base,
+                    distance: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    left: method.text == "rotate_left",
                 },
                 "is_ascii"
                 | "is_ascii_alphabetic"
