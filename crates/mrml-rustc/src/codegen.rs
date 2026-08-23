@@ -96,6 +96,7 @@ impl<R: ConstantResolver, const MAX_LOCALS: usize> ConstantResolver
     fn resolve(&self, name: &str) -> Option<u128> {
         self.values[..self.count]
             .iter()
+            .rev()
             .flatten()
             .find(|value| value.name == name)
             .map(|value| value.value)
@@ -103,7 +104,13 @@ impl<R: ConstantResolver, const MAX_LOCALS: usize> ConstantResolver
     }
 
     fn resolve_type(&self, name: &str) -> Option<crate::IntegerType> {
-        self.outer.resolve_type(name)
+        self.values[..self.count]
+            .iter()
+            .rev()
+            .flatten()
+            .find(|value| value.name == name)
+            .map(|value| value.ty)
+            .or_else(|| self.outer.resolve_type(name))
     }
 
     fn resolves_bool(&self, name: &str) -> bool {
@@ -173,16 +180,6 @@ pub fn compile_x86_64_constant_function<
     let mut local_values: [Option<ConstantLocal<'source>>; MAX_PARAMETERS] = [None; MAX_PARAMETERS];
     let mut local_count = 0usize;
     for local in body.locals().iter().flatten() {
-        if local_values[..local_count]
-            .iter()
-            .flatten()
-            .any(|value| value.name == local.name)
-        {
-            return Err(CodegenError {
-                kind: CodegenErrorKind::DuplicateLocal,
-                span: translate_span(function.body_expression_span.start, local.name_span),
-            });
-        }
         let tree = local
             .parse_initializer::<MAX_EXPRESSION_NODES>()
             .map_err(|error| CodegenError {
@@ -288,7 +285,7 @@ pub fn compile_x86_64_constant_function<
         }
         let index = local_values[..local_count]
             .iter()
-            .position(|value| value.is_some_and(|value| value.name == assignment.binding_name()))
+            .rposition(|value| value.is_some_and(|value| value.name == assignment.binding_name()))
             .ok_or(CodegenError {
                 kind: CodegenErrorKind::UnknownRuntimeName,
                 span: translate_span(function.body_expression_span.start, assignment.name_span),
@@ -783,7 +780,6 @@ pub fn compile_x86_64_function_with_options<
                     &local,
                     operand_type,
                     function.body_expression_span.start,
-                    false,
                 )?;
             }
             crate::BodyStatement::Assignment(index) => {
@@ -891,7 +887,6 @@ pub fn compile_x86_64_function_with_options<
                     local,
                     operand_type,
                     function.body_expression_span.start,
-                    true,
                 )?;
                 ends_with_unconditional_control = false;
                 continue;
@@ -1169,7 +1164,6 @@ pub fn compile_x86_64_function_with_options<
                                 &local,
                                 operand_type,
                                 function.body_expression_span.start,
-                                true,
                             )?;
                         }
                         crate::ConditionalLoopAction::Assignment(assignment) => {
@@ -1251,7 +1245,6 @@ pub fn compile_x86_64_function_with_options<
                                 local,
                                 operand_type,
                                 function.body_expression_span.start,
-                                true,
                             )?;
                         }
                         crate::ConditionalLoopAction::Assignment(assignment) => {
@@ -1351,7 +1344,6 @@ pub fn compile_x86_64_function_with_options<
                                         local,
                                         operand_type,
                                         function.body_expression_span.start,
-                                        true,
                                     )?;
                                 }
                                 crate::ConditionalLoopAction::Assignment(assignment) => {
@@ -1620,7 +1612,6 @@ pub fn compile_x86_64_function_with_options<
                     &local,
                     operand_type,
                     function.body_expression_span.start,
-                    false,
                 )?;
             }
             crate::BodyStatement::Assignment(index) if saw_loop_statement => {
@@ -10238,28 +10229,10 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         local: &crate::LocalBinding<'source>,
         operand_type: &str,
         body_start: usize,
-        allow_shadowing: bool,
     ) -> Result<(), CodegenError> {
         if self.saved_locals == MAX_PARAMETERS {
             return Err(CodegenError {
                 kind: CodegenErrorKind::TooManyRuntimeLocals,
-                span: translate_span(body_start, local.name_span),
-            });
-        }
-        if !allow_shadowing
-            && (self
-                .function
-                .parameters()
-                .iter()
-                .flatten()
-                .any(|parameter| parameter.name == local.name)
-                || self.locals[..self.saved_locals]
-                    .iter()
-                    .flatten()
-                    .any(|existing| existing.name == local.name))
-        {
-            return Err(CodegenError {
-                kind: CodegenErrorKind::DuplicateLocal,
                 span: translate_span(body_start, local.name_span),
             });
         }
@@ -11452,12 +11425,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             for action in branch.actions().iter().flatten() {
                 match action {
                     crate::ConditionalAssignmentAction::Local(local) => {
-                        self.emit_local::<MAX_EXPRESSION_NODES>(
-                            local,
-                            operand_type,
-                            body_start,
-                            true,
-                        )?;
+                        self.emit_local::<MAX_EXPRESSION_NODES>(local, operand_type, body_start)?;
                     }
                     crate::ConditionalAssignmentAction::Assignment(assignment) => {
                         self.emit_assignment::<MAX_EXPRESSION_NODES>(assignment, body_start)?;
@@ -11485,7 +11453,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         for action in conditional.else_actions().iter().flatten() {
             match action {
                 crate::ConditionalAssignmentAction::Local(local) => {
-                    self.emit_local::<MAX_EXPRESSION_NODES>(local, operand_type, body_start, true)?;
+                    self.emit_local::<MAX_EXPRESSION_NODES>(local, operand_type, body_start)?;
                 }
                 crate::ConditionalAssignmentAction::Assignment(assignment) => {
                     self.emit_assignment::<MAX_EXPRESSION_NODES>(assignment, body_start)?;
@@ -14017,18 +13985,47 @@ mod tests {
                 .unwrap();
         assert_eq!(&code.bytes()[2..10], &6u64.to_le_bytes());
 
-        let duplicate = Parser::new(
-            "#[unsafe(no_mangle)] pub extern \"C\" fn duplicate() -> usize { let x: usize = 1; let x: usize = 2; x }",
+        let shadowed = Parser::new(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn shadowed() -> usize { let x: usize = 1; let x: usize = x + 1; x }",
         )
         .parse_module::<2, 2>()
         .unwrap();
-        let Some(Item::Function(function)) = duplicate.items()[0] else {
+        let Some(Item::Function(function)) = shadowed.items()[0] else {
             panic!("expected function")
         };
-        let error =
+        let code =
             compile_x86_64_function::<_, 64, 2, 16>(&function, &NoConstants, X86_64Abi::Windows)
-                .unwrap_err();
-        assert_eq!(error.kind, CodegenErrorKind::DuplicateLocal);
+                .unwrap();
+        assert_eq!(&code.bytes()[2..10], &2u64.to_le_bytes());
+    }
+
+    #[test]
+    fn shadows_parameters_and_mutable_scalar_locals_in_source_order() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: u8) -> u64 { let value: u16 = value as u16 + 1; let value: u64 = value as u64 * 2; value }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { let mut value: u64 = 1; let mut value: u64 = 10; value += input; value }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result = compile_x86_64_function::<_, 512, 4, 64>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { let mut value: u64 = 1; let value: u64 = 2; value += 1; value }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 512, 4, 64>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::ImmutableAssignment
+        );
     }
 
     #[test]

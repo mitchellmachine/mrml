@@ -963,8 +963,11 @@ slots with checked displacement arithmetic and saved into the same bounded
 evaluation frame. Larger signatures are rejected before emission.
 Zero-parameter integer functions may use typed or inferred locals. Initializers
 are parsed, type-checked, lowered, and interpreted in declaration order; each
-binding becomes visible only after successful evaluation. Duplicate bindings,
-forward references, unsupported types, and out-of-range values are rejected.
+binding becomes visible only after successful evaluation. Sequential scalar
+bindings may shadow an earlier local or parameter, including with a different
+integer type. A shadowing initializer still resolves the previous binding,
+while later reads and assignments select the newest binding. Forward
+references, unsupported types, and out-of-range values are rejected.
 Parameterized functions emit independently typed integer locals and Boolean
 locals into bounded stack slots. Later initializers and the tail can reload those slots;
 parameter offsets incorporate saved locals and temporary expression depth, and
@@ -1198,7 +1201,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 547 Windows library, conformance, rustc-nightly-replacement, and driver
+The 549 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1226,6 +1229,10 @@ A Boolean-option probe covering eager `then_some` and lazy `then` emitted a
 callers observed both present and absent eager values, a selected lazy quotient,
 and a false lazy edge whose closure contained division by zero but was not
 executed, on Windows and Arch Linux WSL.
+A scalar-shadowing probe emitted a 265-byte COFF object and a 656-byte ELF64
+object. Independent pinned-nightly callers observed parameter shadowing across
+`u8`, `u16`, `u64`, and `u32`, mutation of the newest binding, and final values
+10, 42, and 520 on Windows and Arch Linux WSL.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.

@@ -3415,6 +3415,22 @@ fn rustc_boolean_option_constructors_preserve_eagerness() {
 }
 
 #[test]
+fn rustc_scalar_let_shadowing_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u64 { let input: u16 = input as u16 + 1; let mut input: u64 = input as u64 * 2; input += 3; let input: u32 = input as u32 + 5; input as u64 }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> i64 { let input: i32 = input as i32 - 1; let input: i64 = input as i64 * -2; input }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",
