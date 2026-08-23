@@ -416,7 +416,10 @@ mod tests {
         assert!(compile(structured_loop, "answer", ObjectFormat::Elf64).is_ok());
 
         let nested_loop = "fn count(value: u64) -> u64 { let mut current: u64 = 0; while current < value { while current < 3 { current += 1; } current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
-        let error = compile(nested_loop, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert!(compile(nested_loop, "answer", ObjectFormat::Elf64).is_ok());
+
+        let nested_unit_loop = "fn spin(value: u64) -> u64 { while value > 0 { loop {} } value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
+        let error = compile(nested_unit_loop, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)

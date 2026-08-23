@@ -7045,7 +7045,24 @@ impl<
                         &mut exit_count,
                     )?;
                 }
-                crate::LoopOperation::NestedUnitLoop | crate::LoopOperation::NestedBlock(_) => {
+                crate::LoopOperation::NestedBlock(index) => {
+                    let block = loop_statement.nested_blocks()[*index]
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    self.emit_inline_nested_loop_block::<MAX_NODES>(
+                        &block,
+                        expected_type,
+                        operand_type,
+                        call_checkpoint,
+                        local_checkpoint,
+                        loop_start,
+                        body_start,
+                        return_patches,
+                        return_count,
+                        &mut exit_patches,
+                        &mut exit_count,
+                    )?;
+                }
+                crate::LoopOperation::NestedUnitLoop => {
                     return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                 }
             }
@@ -7205,6 +7222,242 @@ impl<
         }
         for patch in end_patches[..end_count].iter().flatten().copied() {
             self.patch_forward_branch(patch)?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_inline_nested_loop_block<const MAX_NODES: usize>(
+        &mut self,
+        block: &crate::NestedLoopBlock<'tree>,
+        expected_type: RuntimeExpressionType,
+        operand_type: &str,
+        call_checkpoint: usize,
+        outer_checkpoint: usize,
+        outer_start: usize,
+        body_start: usize,
+        return_patches: &mut [Option<usize>],
+        return_count: &mut usize,
+        outer_exit_patches: &mut [Option<usize>],
+        outer_exit_count: &mut usize,
+    ) -> Result<(), CodegenError> {
+        if block.entry_condition.is_none() {
+            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+        }
+        let nested_checkpoint = self.saved_locals;
+        let nested_start = self.length;
+        let entry_exit = if let Some(condition) = block.entry_condition {
+            let tree = condition
+                .parse_condition::<MAX_NODES>()
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Expression(error.kind),
+                    span: translate_span(body_start + condition.condition_span.start, error.span),
+                })?;
+            self.emit_inline_loop_arm_condition(&tree)?;
+            Some(self.emit_forward_branch(0x84)?)
+        } else {
+            None
+        };
+        let mut nested_exit_patches = [None;
+            crate::MAX_NESTED_LOOP_CONDITIONAL_BREAKS
+                + crate::MAX_NESTED_LOOP_UNCONDITIONAL_CONTROLS];
+        let mut nested_exit_count = 0usize;
+        let control_count = block
+            .conditional_returns()
+            .len()
+            .checked_add(block.conditional_continues().len())
+            .and_then(|count| count.checked_add(block.conditional_breaks().len()))
+            .and_then(|count| count.checked_add(block.unconditional_controls().len()))
+            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+        for action_index in 0..=block.action_count() {
+            for control_order in 0..control_count {
+                for ((control, stored_action_index), stored_order) in block
+                    .unconditional_controls()
+                    .iter()
+                    .flatten()
+                    .zip(block.unconditional_control_action_indices())
+                    .zip(block.unconditional_control_orders())
+                {
+                    if action_index != *stored_action_index || control_order != *stored_order {
+                        continue;
+                    }
+                    match control {
+                        crate::NestedLoopUnconditionalControl::Break(target) => {
+                            let (checkpoint, patches, count) =
+                                if *target == crate::NestedLoopControlTarget::Outer {
+                                    (
+                                        outer_checkpoint,
+                                        &mut *outer_exit_patches,
+                                        &mut *outer_exit_count,
+                                    )
+                                } else {
+                                    (
+                                        nested_checkpoint,
+                                        &mut nested_exit_patches[..],
+                                        &mut nested_exit_count,
+                                    )
+                                };
+                            self.emit_stack_cleanup_to(checkpoint)?;
+                            let patch = self.emit_unconditional_forward_branch()?;
+                            *patches
+                                .get_mut(*count)
+                                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                            *count += 1;
+                        }
+                        crate::NestedLoopUnconditionalControl::Continue(target) => {
+                            let (checkpoint, start) =
+                                if *target == crate::NestedLoopControlTarget::Outer {
+                                    (outer_checkpoint, outer_start)
+                                } else {
+                                    (nested_checkpoint, nested_start)
+                                };
+                            self.emit_stack_cleanup_to(checkpoint)?;
+                            self.emit_backward_branch(start)?;
+                        }
+                        crate::NestedLoopUnconditionalControl::Return(value) => {
+                            let patch = self.emit_inline_return::<MAX_NODES>(
+                                value,
+                                expected_type,
+                                call_checkpoint,
+                                body_start,
+                            )?;
+                            *return_patches
+                                .get_mut(*return_count)
+                                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                            *return_count += 1;
+                        }
+                    }
+                }
+                for (((condition, stored_action_index), stored_order), target) in block
+                    .conditional_breaks()
+                    .iter()
+                    .flatten()
+                    .zip(block.conditional_break_action_indices())
+                    .zip(block.conditional_break_control_orders())
+                    .zip(block.conditional_break_targets())
+                {
+                    if action_index != *stored_action_index || control_order != *stored_order {
+                        continue;
+                    }
+                    let tree =
+                        condition
+                            .parse_condition::<MAX_NODES>()
+                            .map_err(|error| CodegenError {
+                                kind: CodegenErrorKind::Expression(error.kind),
+                                span: translate_span(
+                                    body_start + condition.condition_span.start,
+                                    error.span,
+                                ),
+                            })?;
+                    self.emit_inline_loop_arm_condition(&tree)?;
+                    let skip = self.emit_forward_branch(0x84)?;
+                    let (checkpoint, patches, count) =
+                        if *target == crate::NestedLoopControlTarget::Outer {
+                            (
+                                outer_checkpoint,
+                                &mut *outer_exit_patches,
+                                &mut *outer_exit_count,
+                            )
+                        } else {
+                            (
+                                nested_checkpoint,
+                                &mut nested_exit_patches[..],
+                                &mut nested_exit_count,
+                            )
+                        };
+                    self.emit_stack_cleanup_to(checkpoint)?;
+                    let patch = self.emit_unconditional_forward_branch()?;
+                    *patches
+                        .get_mut(*count)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                    *count += 1;
+                    self.patch_forward_branch(skip)?;
+                }
+                for ((conditional, stored_action_index), stored_order) in block
+                    .conditional_returns()
+                    .iter()
+                    .flatten()
+                    .zip(block.conditional_return_action_indices())
+                    .zip(block.conditional_return_control_orders())
+                {
+                    if action_index != *stored_action_index || control_order != *stored_order {
+                        continue;
+                    }
+                    let patch = self.emit_inline_conditional_return::<MAX_NODES>(
+                        conditional,
+                        expected_type,
+                        call_checkpoint,
+                        body_start,
+                    )?;
+                    *return_patches
+                        .get_mut(*return_count)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                    *return_count += 1;
+                }
+                for (((condition, stored_action_index), stored_order), target) in block
+                    .conditional_continues()
+                    .iter()
+                    .flatten()
+                    .zip(block.conditional_continue_action_indices())
+                    .zip(block.conditional_continue_control_orders())
+                    .zip(block.conditional_continue_targets())
+                {
+                    if action_index != *stored_action_index || control_order != *stored_order {
+                        continue;
+                    }
+                    let tree =
+                        condition
+                            .parse_condition::<MAX_NODES>()
+                            .map_err(|error| CodegenError {
+                                kind: CodegenErrorKind::Expression(error.kind),
+                                span: translate_span(
+                                    body_start + condition.condition_span.start,
+                                    error.span,
+                                ),
+                            })?;
+                    self.emit_inline_loop_arm_condition(&tree)?;
+                    let skip = self.emit_forward_branch(0x84)?;
+                    let (checkpoint, start) = if *target == crate::NestedLoopControlTarget::Outer {
+                        (outer_checkpoint, outer_start)
+                    } else {
+                        (nested_checkpoint, nested_start)
+                    };
+                    self.emit_stack_cleanup_to(checkpoint)?;
+                    self.emit_backward_branch(start)?;
+                    self.patch_forward_branch(skip)?;
+                }
+            }
+            if action_index == block.action_count() {
+                break;
+            }
+            let action = block.actions()[action_index]
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            match action {
+                crate::ConditionalLoopAction::Local(local) => {
+                    self.emit_local::<MAX_NODES>(&local, operand_type, body_start)?;
+                }
+                crate::ConditionalLoopAction::Assignment(assignment) => {
+                    self.emit_assignment::<MAX_NODES>(&assignment, body_start)?;
+                }
+                crate::ConditionalLoopAction::Expression(statement) => {
+                    self.emit_expression_statement::<MAX_NODES>(&statement, body_start)?;
+                }
+            }
+        }
+        self.emit_stack_cleanup_to(nested_checkpoint)?;
+        self.truncate_scoped_locals(nested_checkpoint)?;
+        if block.unconditional_controls().is_empty() {
+            self.emit_backward_branch(nested_start)?;
+        }
+        for patch in nested_exit_patches[..nested_exit_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            self.patch_forward_branch(patch)?;
+        }
+        if let Some(entry_exit) = entry_exit {
+            self.patch_forward_branch(entry_exit)?;
         }
         Ok(())
     }

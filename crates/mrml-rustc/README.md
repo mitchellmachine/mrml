@@ -2604,7 +2604,17 @@ scalar actions with terminal `break`, `continue`, or scalar `return` edges.
 Each arm removes exactly its branch locals on ordinary fallthrough, the full
 iteration frame on a loop-control edge, or the full callee frame on return;
 untaken conditions continue through sibling arms and nonterminal arms join the
-later loop operations. Nested loops remain outside this bounded subset.
+later loop operations. Loop blocks nested inside those conditional arms remain
+outside this bounded subset.
+One nested condition-headed `while` is also lowered from the parser's bounded
+nested-loop representation. Its ordered scalar actions and conditional or
+unconditional controls preserve distinct inner and outer checkpoints: an inner
+control removes only inner iteration locals, a labeled outer control also
+removes the outer iteration frame, and a nested return removes the complete
+callee frame before joining caller execution. Inner and outer `break` and
+`continue`, zero-entry inner loops, and normal inner fallthrough are supported;
+unconditional nested loops and nesting beyond this parser representation still
+fail closed.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2612,9 +2622,9 @@ skipping the remaining body, while a fallthrough tail performs the same cleanup
 once on its normal edge.
 Calls may nest to eight levels and are inlined into the selected exported
 function, so the object still contains one symbol and no call relocations.
-Forward calls, caller-local capture, unsafe or foreign-ABI callees, cross-loop
-labeled controls, unconditional and nested loops, aggregates, references, and
-recursion fail closed. An original nested
+Forward calls, caller-local capture, unsafe or foreign-ABI callees,
+unconditional loops, deeper loop nesting, aggregates, references, and recursion
+fail closed. An original nested
 statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
 object. A separate multi-return probe produced a 334-byte COFF object and a
 728-byte ELF64 object. A conditional-action probe produced 402-byte COFF and
@@ -2630,7 +2640,11 @@ an `else if` chain whose sibling arms continue, break, return, and mutate, all
 three mutation arms, scoped-local cleanup, persistent outer mutation,
 normal-tail and both early-return edges, caller-side result composition,
 Boolean branches, and inputs at narrow-width boundaries on Windows and Arch
-Linux WSL.
+Linux WSL. A nested condition-headed loop probe produced an 819-byte COFF
+object and a 1208-byte ELF64 object; pinned-nightly callers matched an
+independent Rust reference across 128 combinations of loop bounds and inner
+continue, inner break, labeled outer continue, labeled outer break, nested
+return, and normal-completion choices on both hosts.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
