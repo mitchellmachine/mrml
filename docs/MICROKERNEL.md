@@ -86,13 +86,16 @@ the actual created thread count through it. These transitions are implemented
 and malformed-state tested; an MRML enclave PE has not yet passed the load gate.
 
 `experiments/mrml-vbs-enclave` is the first standalone enclave image source. It
-is original dependency-free `no_std` Rust, builds as a PE DLL with the Windows
-GNU/LLVM toolchain, exports `DllMain` and a non-dereferencing call-boundary
-probe, and embeds an 80-byte x86_64 enclave configuration. The configuration is
-non-debug, uses strict containing-process memory isolation, declares one
-thread, a 2 MiB private range, explicit family/image identities, security
-version one, no imports, and primary-image status. Its Windows and Linux source
-tests pass and the resulting DLL passes MRML's Authenticode PE parser.
+is original `no_std` Rust using only MRML crates and `core`, builds as a PE DLL
+with the Windows GNU/LLVM toolchain, and embeds an 80-byte x86_64 enclave
+configuration. The configuration is non-debug, uses strict containing-process
+memory isolation, declares one thread, a 2 MiB private range, explicit
+family/image identities, security version one, and primary-image status. A
+custom Rust target omits MinGW CRT startup and ordinary Windows imports; the
+release PE import audit contains only Microsoft's enclave platform DLL,
+`vertdll.dll`. Its boundary-copy and memory primitives are imported from that
+DLL. Its Windows and Linux source tests pass and the resulting DLL passes
+MRML's Authenticode PE parser.
 
 The bundled LLVM GNU linker does not implement Microsoft's `/ENCLAVE` linker
 switch (while LLVM's MSVC-flavor linker is incompatible with the installed GNU
@@ -103,9 +106,12 @@ finalized bytes carry a Windows-accepted enclave signature.
 The GNU/LLVM image now supplies the reserved `_load_config_used` symbol as an
 exact 256-byte x86_64 load configuration. Its relocated enclave pointer resolves
 to the 80-byte strict configuration in the built DLL. An image-relative CFG
-table contains the sorted RVAs of `DllMain` and the authority entry point; the
-load configuration binds its VA, exact count, instrumentation/table flags, and
-unused-security-cookie declaration. Rust is built with Windows CFG checks.
+table contains the sorted RVAs of `DllMain`, the boundary probe, and the
+authority entry point. The load configuration binds its VA, exact count,
+valid-target-table flag, and unused-security-cookie declaration. It does not
+claim compiler CFG instrumentation because no nonzero CFG check/dispatch
+pointers have yet been wired; the finalizer rejects metadata that claims more
+than the image implements.
 
 `mrml-sign finalize-vbs-enclave` is the original post-link validation gate. It
 accepts only unsigned PE32+ x86_64 images with one canonical 256-byte load
@@ -140,6 +146,18 @@ trusted verifier. Copying it into an ordinary WHP guest would let a compromised
 host forge receipts. A receipt authenticates the authority's decision, not the
 subsequent execution or GPU result, and policy admission still independently
 rejects replay, debug mode, rollback, and insufficient claims.
+
+The enclave now implements that authority entry rather than only a boundary
+probe. It copies the fixed-size call context and request into strict enclave
+memory with `EnclaveCopyIntoEnclave`, never directly dereferences a host
+pointer, requires the compiled workload measurement, constructs a non-debug
+VBS report, seals the canonical receipt, and copies it out with
+`EnclaveCopyOutOfEnclave`. Pure tests cover a correctly bound receipt, malformed
+requests, and unapproved measurements. The current constant development MAC
+key is intentionally not a production secret: anyone who can read the image
+can forge it, so the report does not claim sealed keys or attestation. Production
+admission remains blocked on an accepted image plus protected key provisioning
+and sealing inside VTL1.
 
 WHP now provides a fixed-capacity untrusted launch broker for that protocol.
 Generational tickets prevent a canceled or completed request from acquiring a

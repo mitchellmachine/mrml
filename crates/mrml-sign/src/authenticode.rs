@@ -18,7 +18,10 @@ pub enum AuthenticodeError {
 
 const FORCE_INTEGRITY: u16 = 0x0080;
 const GUARD_CF: u16 = 0x4000;
-const REQUIRED_GUARD_FLAGS: u32 = 0x0000_0100 | 0x0000_0400 | 0x0000_0800;
+// The enclave currently supplies an explicit valid-call-target table without
+// compiler-inserted dispatch checks. Do not certify IMAGE_GUARD_CF_INSTRUMENTED
+// until the load-config check and dispatch pointers are nonzero and validated.
+const REQUIRED_GUARD_FLAGS: u32 = 0x0000_0400 | 0x0000_0800;
 
 pub fn finalize_vbs_enclave(image: &[u8]) -> Result<Vector<u8>, AuthenticodeError> {
     let pe = pe_offset(image)?;

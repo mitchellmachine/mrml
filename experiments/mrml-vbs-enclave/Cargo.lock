@@ -3,5 +3,19 @@
 version = 4
 
 [[package]]
+name = "mrml-crypto"
+version = "0.4.0"
+
+[[package]]
+name = "mrml-kernel"
+version = "0.4.0"
+dependencies = [
+ "mrml-crypto",
+]
+
+[[package]]
 name = "mrml-vbs-enclave"
 version = "0.1.0"
+dependencies = [
+ "mrml-kernel",
+]

@@ -1,6 +1,47 @@
 #![no_std]
 
 use core::ffi::c_void;
+#[cfg(any(target_os = "windows", test))]
+use mrml_kernel::{
+    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
+    ProtectionBackend, ProtectionClaims, ProtectionReport,
+};
+
+#[cfg(any(target_os = "windows", test))]
+const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
+#[cfg(any(target_os = "windows", test))]
+const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
+#[cfg(any(target_os = "windows", test))]
+const AUTHORITY_SECURITY_VERSION: u64 = 1;
+
+#[cfg(target_os = "windows")]
+#[link(name = "vertdll", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn EnclaveCopyIntoEnclave(
+        enclave_address: *mut c_void,
+        untrusted_address: *const c_void,
+        bytes: usize,
+    ) -> i32;
+    fn EnclaveCopyOutOfEnclave(
+        untrusted_address: *mut c_void,
+        enclave_address: *const c_void,
+        bytes: usize,
+    ) -> i32;
+
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "vertdll", kind = "raw-dylib")]
+#[allow(dead_code)]
+unsafe extern "C" {
+    #[link_name = "memcpy"]
+    fn vertdll_memcpy(destination: *mut c_void, source: *const c_void, bytes: usize)
+    -> *mut c_void;
+    #[link_name = "memset"]
+    fn vertdll_memset(destination: *mut c_void, value: i32, bytes: usize) -> *mut c_void;
+    #[link_name = "memcmp"]
+    fn vertdll_memcmp(left: *const c_void, right: *const c_void, bytes: usize) -> i32;
+}
 
 #[cfg(target_os = "windows")]
 core::arch::global_asm!(
@@ -11,6 +52,7 @@ core::arch::global_asm!(
 mrml_guard_function_table:
     .rva DllMain
     .rva mrml_authority_probe
+    .rva mrml_launch_authority
 "#
 );
 
@@ -151,8 +193,11 @@ static _load_config_used: ImageLoadConfigDirectory64 = ImageLoadConfigDirectory6
     guard_cf_function_table: core::ptr::addr_of!(mrml_guard_function_table),
     #[cfg(not(target_os = "windows"))]
     guard_cf_function_table: core::ptr::null(),
-    guard_cf_function_count: 2,
-    guard_flags: 0x0000_0100 | 0x0000_0400 | 0x0000_0800,
+    guard_cf_function_count: 3,
+    // The image publishes a sorted valid-call-target table and deliberately
+    // does not claim compiler CFG instrumentation while the dispatch/check
+    // pointers above remain absent.
+    guard_flags: 0x0000_0400 | 0x0000_0800,
     code_integrity: ImageLoadConfigCodeIntegrity {
         flags: 0,
         catalog: 0,
@@ -188,6 +233,116 @@ pub extern "system" fn mrml_authority_probe(context: *mut c_void) -> *mut c_void
     ((context as usize) ^ 0x4d52_4d4c) as *mut c_void
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+#[cfg(target_os = "windows")]
+pub struct AuthorityCall {
+    magic: u64,
+    request: *const u8,
+    request_bytes: usize,
+    receipt: *mut u8,
+    receipt_bytes: usize,
+}
+
+#[cfg(target_os = "windows")]
+const AUTHORITY_CALL_MAGIC: u64 = u64::from_le_bytes(*b"MRMLAC01");
+#[cfg(target_os = "windows")]
+const _: () = assert!(core::mem::size_of::<AuthorityCall>() == 40);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+#[cfg(target_os = "windows")]
+enum AuthorityStatus {
+    Success = 0,
+    ContextCopyFailed = 1,
+    InvalidContext = 2,
+    RequestCopyFailed = 3,
+    RequestRejected = 4,
+    ReceiptCopyFailed = 5,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn process_authority_request(
+    encoded_request: &[u8; LAUNCH_REQUEST_BYTES],
+) -> Result<[u8; AUTHORITY_RECEIPT_BYTES], ()> {
+    let request = LaunchRequest::decode(encoded_request).map_err(|_| ())?;
+    if request.image_measurement() != AUTHORITY_MEASUREMENT {
+        return Err(());
+    }
+    let claims = ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED);
+    let report = ProtectionReport::new(
+        ProtectionBackend::VbsEnclave,
+        claims,
+        false,
+        AUTHORITY_SECURITY_VERSION,
+        request.sequence(),
+        request.image_measurement(),
+        request.nonce(),
+    )
+    .map_err(|_| ())?;
+    AuthorityReceipt::seal(&AUTHORITY_KEY, request, report).map_err(|_| ())
+}
+
+/// Strict-memory VTL1 authority entry. The host context and its buffers are
+/// never dereferenced directly; Vertdll performs both boundary copies.
+#[cfg(target_os = "windows")]
+#[unsafe(no_mangle)]
+pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_void {
+    let mut call = AuthorityCall {
+        magic: 0,
+        request: core::ptr::null(),
+        request_bytes: 0,
+        receipt: core::ptr::null_mut(),
+        receipt_bytes: 0,
+    };
+    // SAFETY: `call` is enclave-local writable memory. Vertdll validates and
+    // copies from the untrusted pointer without direct enclave dereference.
+    if unsafe {
+        EnclaveCopyIntoEnclave(
+            core::ptr::from_mut(&mut call).cast(),
+            context.cast_const(),
+            core::mem::size_of::<AuthorityCall>(),
+        )
+    } != 0
+    {
+        return AuthorityStatus::ContextCopyFailed as usize as *mut c_void;
+    }
+    if call.magic != AUTHORITY_CALL_MAGIC
+        || call.request.is_null()
+        || call.request_bytes != LAUNCH_REQUEST_BYTES
+        || call.receipt.is_null()
+        || call.receipt_bytes != AUTHORITY_RECEIPT_BYTES
+    {
+        return AuthorityStatus::InvalidContext as usize as *mut c_void;
+    }
+    let mut request = [0; LAUNCH_REQUEST_BYTES];
+    // SAFETY: destination is enclave-local and exact-sized; source remains an
+    // untrusted address handled exclusively by the Vertdll copy primitive.
+    if unsafe {
+        EnclaveCopyIntoEnclave(
+            request.as_mut_ptr().cast(),
+            call.request.cast(),
+            request.len(),
+        )
+    } != 0
+    {
+        return AuthorityStatus::RequestCopyFailed as usize as *mut c_void;
+    }
+    let receipt = match process_authority_request(&request) {
+        Ok(receipt) => receipt,
+        Err(()) => return AuthorityStatus::RequestRejected as usize as *mut c_void,
+    };
+    // SAFETY: source is enclave-local and exact-sized; destination remains an
+    // untrusted address handled exclusively by the Vertdll copy primitive.
+    if unsafe {
+        EnclaveCopyOutOfEnclave(call.receipt.cast(), receipt.as_ptr().cast(), receipt.len())
+    } != 0
+    {
+        return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
+    }
+    AuthorityStatus::Success as usize as *mut c_void
+}
+
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
@@ -195,6 +350,10 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
         core::hint::spin_loop();
     }
 }
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}
 
 #[cfg(test)]
 mod tests {
@@ -227,5 +386,26 @@ mod tests {
             mrml_authority_probe(context) as usize,
             0x1234usize ^ 0x4d52_4d4c
         );
+    }
+
+    #[test]
+    fn authority_emits_bound_non_debug_vbs_receipt() {
+        let request = LaunchRequest::new(9, [0xa2; 32], AUTHORITY_MEASUREMENT, [0x72; 64]).unwrap();
+        let receipt = process_authority_request(&request.encode()).unwrap();
+        let verified = AuthorityReceipt::verify(&AUTHORITY_KEY, request, &receipt).unwrap();
+        assert_eq!(verified.report().backend(), ProtectionBackend::VbsEnclave);
+        assert_eq!(
+            verified.report().claims(),
+            ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED)
+        );
+    }
+
+    #[test]
+    fn authority_rejects_unapproved_measurement_and_malformed_request() {
+        let wrong = LaunchRequest::new(9, [0xa2; 32], [0x52; 64], [0x72; 64]).unwrap();
+        assert_eq!(process_authority_request(&wrong.encode()), Err(()));
+        let mut malformed = wrong.encode();
+        malformed[0] ^= 1;
+        assert_eq!(process_authority_request(&malformed), Err(()));
     }
 }
