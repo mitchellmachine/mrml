@@ -2786,11 +2786,15 @@ records in physical order, bounds every range to the volume, excludes the volume
 header and both superblocks, and rejects overlap across every owner. Exact
 ownership queries connect a data extent or metadata pointer only when object,
 generation, start, length, and kind all agree. This closes the earlier
-intra-file-only overlap gap in the in-memory model, but allocation/free mutation,
-serialization of a complete allocation image, durable publication, and full
-reachable-tree traversal remain unimplemented.
+intra-file-only overlap gap in the in-memory model. The canonical block-aligned
+allocation image header binds the exact volume, publication generation, record
+width/count, and a SHA3-256 digest over its header, records, and zero-filled
+unused capacity. Decode requires the exact metadata allocation length, rejects
+nonzero padding even under a recomputed digest, parses every record, and rebuilds
+the index invariants. Allocation/free mutation, concrete durable publication,
+and full reachable-tree traversal remain unimplemented.
 
-Forty-nine focused unit tests and strict crate-local clippy pass on Windows
+Fifty focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2803,7 +2807,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 49 tests, and both strict crate-local clippy
+Both current unit-test runs pass 50 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

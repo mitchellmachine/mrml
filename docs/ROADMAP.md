@@ -263,8 +263,12 @@ authority; unrelated domains continue.
    Records bind one exact object generation, range, and data/metadata kind; the
    index requires physical ordering, volume bounds, reserved-block exclusion,
    and cross-object nonoverlap. Exact extent and metadata ownership queries do
-   not accept containment, wrong generations, or kind substitution. Persistence,
-   allocation/free mutation, and complete graph traversal remain pending.
+   not accept containment, wrong generations, or kind substitution. A canonical
+   block-aligned allocation image now binds its exact volume and publication
+   generation, fixed record width/count, complete-image SHA3-256 digest, and
+   zero-filled unused capacity. Decoding rebuilds all ownership invariants.
+   Concrete block persistence, allocation/free mutation, and complete graph
+   traversal remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

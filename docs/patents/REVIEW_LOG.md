@@ -751,3 +751,15 @@ kind lookups. This adds no novel allocator, free-space structure, filesystem
 tree, recovery method, cryptographic construction, or storage optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional allocation ownership bookkeeping.
+
+## 2026-08-23 — canonical allocation metadata image
+
+MRML source: `crates/mrml-storage/src/allocation.rs`.
+
+The service uses a conventional versioned image header, fixed-width allocation
+records, whole-image SHA3-256 corruption detection, zero padding, and bounded
+decode that reconstructs the allocation index. This adds no novel persistent
+format, allocator, recovery method, cryptographic construction, or storage
+optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional checksummed allocation metadata.

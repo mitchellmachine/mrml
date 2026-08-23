@@ -3,11 +3,14 @@ use mrml_crypto::Sha3_256;
 use crate::{ExtentKind, ExtentRecord, MetadataPointer, StorageObjectId, VolumeHeader, VolumeId};
 
 pub const ALLOCATION_RECORD_BYTES: usize = 112;
+pub const ALLOCATION_IMAGE_HEADER_BYTES: usize = 96;
 pub const MAX_ALLOCATION_BLOCKS: u32 = 1 << 20;
 
 const ALLOCATION_MAGIC: [u8; 8] = *b"MRALC001";
 const ALLOCATION_VERSION: u16 = 1;
 const DIGEST_OFFSET: usize = 80;
+const IMAGE_MAGIC: [u8; 8] = *b"MRALI001";
+const IMAGE_DIGEST_OFFSET: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -136,7 +139,22 @@ impl<const N: usize> AllocationIndex<N> {
             return Err(AllocationError::Capacity);
         }
         let mut stored = [None; N];
-        for (index, record) in records.iter().copied().enumerate() {
+        for (slot, record) in stored.iter_mut().zip(records.iter().copied()) {
+            *slot = Some(record);
+        }
+        Self::from_stored(header, stored, records.len())
+    }
+
+    fn from_stored(
+        header: VolumeHeader,
+        stored: [Option<AllocationRecord>; N],
+        count: usize,
+    ) -> Result<Self, AllocationError> {
+        if count > N || stored[..count].iter().any(Option::is_none) {
+            return Err(AllocationError::Capacity);
+        }
+        for index in 0..count {
+            let record = stored[index].ok_or(AllocationError::Capacity)?;
             let end = record
                 .block
                 .checked_add(u64::from(record.block_count))
@@ -149,21 +167,23 @@ impl<const N: usize> AllocationIndex<N> {
             {
                 return Err(AllocationError::InvalidRecord);
             }
-            if index != 0 && records[index - 1].block >= record.block {
+            if index != 0
+                && stored[index - 1].ok_or(AllocationError::Capacity)?.block >= record.block
+            {
                 return Err(AllocationError::Unordered);
             }
-            if records[..index]
+            if stored[..index]
                 .iter()
+                .flatten()
                 .copied()
                 .any(|prior| overlaps(prior, record))
             {
                 return Err(AllocationError::Overlap);
             }
-            stored[index] = Some(record);
         }
         Ok(Self {
             records: stored,
-            count: records.len(),
+            count,
         })
     }
 
@@ -173,6 +193,14 @@ impl<const N: usize> AllocationIndex<N> {
 
     pub const fn is_empty(&self) -> bool {
         self.count == 0
+    }
+
+    pub const fn record(&self, index: usize) -> Option<AllocationRecord> {
+        if index < self.count {
+            self.records[index]
+        } else {
+            None
+        }
     }
 
     pub fn owns_extent(&self, extent: ExtentRecord) -> bool {
@@ -224,6 +252,148 @@ impl<const N: usize> AllocationIndex<N> {
     }
 }
 
+pub struct AllocationImage<const N: usize> {
+    volume: VolumeId,
+    generation: u64,
+    pointer: MetadataPointer,
+    encoded_len: usize,
+    index: AllocationIndex<N>,
+}
+
+impl<const N: usize> AllocationImage<N> {
+    pub fn build(
+        header: VolumeHeader,
+        generation: u64,
+        pointer: MetadataPointer,
+        records: &[AllocationRecord],
+    ) -> Result<Self, AllocationError> {
+        if generation == 0 || !pointer_fits(header, pointer) {
+            return Err(AllocationError::InvalidImage);
+        }
+        let image_bytes = image_bytes(header, pointer)?;
+        let records_bytes = records
+            .len()
+            .checked_mul(ALLOCATION_RECORD_BYTES)
+            .and_then(|bytes| bytes.checked_add(ALLOCATION_IMAGE_HEADER_BYTES))
+            .ok_or(AllocationError::Arithmetic)?;
+        if records_bytes > image_bytes {
+            return Err(AllocationError::Capacity);
+        }
+        Ok(Self {
+            volume: header.volume(),
+            generation,
+            pointer,
+            encoded_len: image_bytes,
+            index: AllocationIndex::build(header, records)?,
+        })
+    }
+
+    pub fn decode(
+        header: VolumeHeader,
+        generation: u64,
+        pointer: MetadataPointer,
+        input: &[u8],
+    ) -> Result<Self, AllocationError> {
+        if generation == 0
+            || !pointer_fits(header, pointer)
+            || input.len() != image_bytes(header, pointer)?
+        {
+            return Err(AllocationError::InvalidImage);
+        }
+        if input[..8] != IMAGE_MAGIC
+            || get_u16(input, 8)? != ALLOCATION_VERSION
+            || get_u16(input, 10)? != ALLOCATION_IMAGE_HEADER_BYTES as u16
+            || get_u16(input, 12)? != ALLOCATION_RECORD_BYTES as u16
+            || input[14..16].iter().any(|byte| *byte != 0)
+            || input[44..IMAGE_DIGEST_OFFSET].iter().any(|byte| *byte != 0)
+        {
+            return Err(AllocationError::NonCanonical);
+        }
+        let mut encoded_volume = [0; 16];
+        encoded_volume.copy_from_slice(&input[16..32]);
+        if VolumeId::new(encoded_volume).map_err(|_| AllocationError::InvalidImage)?
+            != header.volume()
+        {
+            return Err(AllocationError::WrongVolume);
+        }
+        if get_u64(input, 32)? != generation {
+            return Err(AllocationError::InvalidImage);
+        }
+        if input[IMAGE_DIGEST_OFFSET..ALLOCATION_IMAGE_HEADER_BYTES] != image_digest(input) {
+            return Err(AllocationError::Corrupt);
+        }
+        let count = usize::try_from(get_u32(input, 40)?).map_err(|_| AllocationError::Capacity)?;
+        if count > N {
+            return Err(AllocationError::Capacity);
+        }
+        let used = count
+            .checked_mul(ALLOCATION_RECORD_BYTES)
+            .and_then(|bytes| bytes.checked_add(ALLOCATION_IMAGE_HEADER_BYTES))
+            .ok_or(AllocationError::Arithmetic)?;
+        if used > input.len() || input[used..].iter().any(|byte| *byte != 0) {
+            return Err(AllocationError::NonCanonical);
+        }
+        let mut records = [None; N];
+        for (index, slot) in records[..count].iter_mut().enumerate() {
+            let start = ALLOCATION_IMAGE_HEADER_BYTES + index * ALLOCATION_RECORD_BYTES;
+            *slot = Some(AllocationRecord::decode(
+                &input[start..start + ALLOCATION_RECORD_BYTES],
+                header.volume(),
+            )?);
+        }
+        Ok(Self {
+            volume: header.volume(),
+            generation,
+            pointer,
+            encoded_len: input.len(),
+            index: AllocationIndex::from_stored(header, records, count)?,
+        })
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub const fn pointer(&self) -> MetadataPointer {
+        self.pointer
+    }
+
+    pub const fn index(&self) -> &AllocationIndex<N> {
+        &self.index
+    }
+
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), AllocationError> {
+        if output.len() != self.encoded_len {
+            return Err(AllocationError::Truncated);
+        }
+        output.fill(0);
+        output[..8].copy_from_slice(&IMAGE_MAGIC);
+        put_u16(output, 8, ALLOCATION_VERSION);
+        put_u16(output, 10, ALLOCATION_IMAGE_HEADER_BYTES as u16);
+        put_u16(output, 12, ALLOCATION_RECORD_BYTES as u16);
+        output[16..32].copy_from_slice(&self.volume.bytes());
+        put_u64(output, 32, self.generation);
+        put_u32(output, 40, self.index.len() as u32);
+        for index in 0..self.index.len() {
+            let start = ALLOCATION_IMAGE_HEADER_BYTES + index * ALLOCATION_RECORD_BYTES;
+            let end = start + ALLOCATION_RECORD_BYTES;
+            if end > output.len() {
+                return Err(AllocationError::Truncated);
+            }
+            let encoded: &mut [u8; ALLOCATION_RECORD_BYTES] = (&mut output[start..end])
+                .try_into()
+                .map_err(|_| AllocationError::Truncated)?;
+            self.index
+                .record(index)
+                .ok_or(AllocationError::Capacity)?
+                .encode(encoded);
+        }
+        let digest = image_digest(output);
+        output[IMAGE_DIGEST_OFFSET..ALLOCATION_IMAGE_HEADER_BYTES].copy_from_slice(&digest);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocationError {
     Truncated,
@@ -236,6 +406,7 @@ pub enum AllocationError {
     Unordered,
     Overlap,
     Arithmetic,
+    InvalidImage,
 }
 
 fn contains(record: AllocationRecord, block: u64) -> bool {
@@ -251,6 +422,37 @@ fn record_digest(input: &[u8]) -> [u8; 32] {
     let mut hasher = Sha3_256::new();
     hasher.update(&input[..DIGEST_OFFSET]);
     hasher.finalize()
+}
+
+fn image_digest(input: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha3_256::new();
+    hasher.update(&input[..IMAGE_DIGEST_OFFSET]);
+    hasher.update(&[0; 32]);
+    hasher.update(&input[ALLOCATION_IMAGE_HEADER_BYTES..]);
+    hasher.finalize()
+}
+
+fn image_bytes(header: VolumeHeader, pointer: MetadataPointer) -> Result<usize, AllocationError> {
+    usize::try_from(
+        u64::from(header.block_size())
+            .checked_mul(u64::from(pointer.blocks()))
+            .ok_or(AllocationError::Arithmetic)?,
+    )
+    .map_err(|_| AllocationError::Arithmetic)
+}
+
+fn pointer_fits(header: VolumeHeader, pointer: MetadataPointer) -> bool {
+    pointer
+        .block()
+        .checked_add(u64::from(pointer.blocks()))
+        .is_some_and(|end| end <= header.block_count())
+        && !pointer_contains(pointer, 0)
+        && !pointer_contains(pointer, header.primary_superblock())
+        && !pointer_contains(pointer, header.secondary_superblock())
+}
+
+fn pointer_contains(pointer: MetadataPointer, block: u64) -> bool {
+    block >= pointer.block() && block < pointer.block() + u64::from(pointer.blocks())
 }
 
 fn put_u16(output: &mut [u8], offset: usize, value: u16) {
@@ -362,5 +564,38 @@ mod tests {
         assert!(!index.owns_extent(ExtentRecord::data(object(7), 5, 0, 3, 20, [1; 32]).unwrap()));
         assert!(index.owns_metadata(object(7), 4, MetadataPointer::new(30, 1).unwrap()));
         assert!(!index.owns_metadata(object(7), 4, MetadataPointer::new(30, 2).unwrap()));
+    }
+
+    #[test]
+    fn allocation_image_round_trip_binds_complete_zero_padded_generation() {
+        let pointer = MetadataPointer::new(10, 1).unwrap();
+        let records = [
+            AllocationRecord::new(object(1), 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+            AllocationRecord::new(object(7), 4, 20, 3, AllocationKind::FileData).unwrap(),
+        ];
+        let image = AllocationImage::<2>::build(header(), 5, pointer, &records).unwrap();
+        let mut encoded = [0; 4096];
+        image.encode(&mut encoded).unwrap();
+        let decoded = AllocationImage::<2>::decode(header(), 5, pointer, &encoded).unwrap();
+        assert_eq!(decoded.generation(), 5);
+        assert_eq!(decoded.pointer(), pointer);
+        assert_eq!(decoded.index().len(), 2);
+        assert!(
+            decoded
+                .index()
+                .owns_extent(ExtentRecord::data(object(7), 4, 0, 3, 20, [1; 32]).unwrap())
+        );
+
+        assert!(matches!(
+            AllocationImage::<2>::decode(header(), 4, pointer, &encoded),
+            Err(AllocationError::InvalidImage)
+        ));
+        encoded[4095] = 1;
+        let digest = image_digest(&encoded);
+        encoded[IMAGE_DIGEST_OFFSET..ALLOCATION_IMAGE_HEADER_BYTES].copy_from_slice(&digest);
+        assert!(matches!(
+            AllocationImage::<2>::decode(header(), 5, pointer, &encoded),
+            Err(AllocationError::NonCanonical)
+        ));
     }
 }

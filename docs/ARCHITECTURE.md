@@ -259,6 +259,10 @@ fail-closed backend contract, selects only identical or adjacent valid
 generations, and permits fallback only when the other candidate is proven
 invalid. The allocation index provides the ownership proof needed by that
 validator but is not yet loaded from or published to a concrete block backend.
+The allocation index now has a canonical block-aligned image whose header binds
+the volume, publication generation, record width/count, complete-image digest,
+and zero padding; decoding reconstructs and revalidates the index rather than
+trusting serialized ownership. It is still not connected to a block backend.
 The complete validator, block backend, directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
