@@ -2762,8 +2762,16 @@ and then consumes the allocation receipt. Missing ownership, omitted writes,
 receipt mismatch, duplicate batch entries, and replay fail closed without
 partial receipt consumption; publishing only source, destination, and child
 would be rejected by reachable-tree validation.
-The object-ID allocator is volatile simulation state and must be
-persisted in the same future transaction before create becomes crash-safe.
+The object-ID allocator now has a canonical volume-scoped COW image. Its exact
+volume, nonzero generation, next local ID or exhausted state, metadata pointer,
+embedded checksum, full-image COW digest, and zero padding are all bound.
+Reservation advances a disjoint unreachable successor without mutating active
+state, admits a distinct allocator resource to the transaction, and returns the
+reserved stable ID and successor only after consuming its exact one-use receipt.
+Zero cannot alias exhaustion, the maximum ID is reservable exactly once, and
+generation/identity exhaustion fail before staging. Allocation-record ownership,
+recovery validation, and directory-create integration remain pending, so create
+is not yet crash-safe.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and
@@ -2915,8 +2923,10 @@ prepared update exists. Transaction admission binds the directory object and
 both images to one volume publication generation, and only the participant's
 one-use receipt exposes the immutable successor. A focused simulation publishes
 the root directory metadata, entry image, and allocation image in one COW plan.
-The allocation image in that test is a plan write rather than a prepared
-allocator participant; persistent object-ID allocation remains unimplemented.
+The earlier allocation image in that focused test was a plan write rather than
+a prepared allocator participant. A separate canonical object-ID allocator now
+has staging and transaction participation, but it is not yet coupled to
+directory creation or allocation ownership.
 
 The `DIGITAL-RIGHTS REVIEW` found no new collection, retention, correlation,
 remote disclosure, tracking identity, publisher control, DRM, accessibility
@@ -2925,14 +2935,16 @@ remains non-authorizing. The `HOSTILE SECURITY REVIEW` treats pointers, lengths,
 generations, canonical bytes, transaction membership, backend outcomes, and
 recovery images as hostile; exact binding, checked ranges, disjoint COW storage,
 complete-image digests, capacity preflight, and one-use receipts fail closed on
-stale, missing, duplicate, or substituted state. This agent review does not
+stale, missing, duplicate, or substituted state. Allocator review additionally
+requires distinct exhausted encoding, checked monotonic advance, disjoint COW
+state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Sixty focused unit tests and strict crate-local clippy pass on Windows
+Sixty-six focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
-complete directory hierarchy/lifetime handling, allocator transaction
-participation, complete crash recovery, snapshots, a block-device service, and
+complete directory hierarchy/lifetime handling, allocator/create integration,
+complete crash recovery, snapshots, a block-device service, and
 configuration-checkpoint persistence remain unimplemented.
 
 ```text
@@ -2942,7 +2954,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 63 tests, and both strict crate-local clippy
+Both current unit-test runs pass 66 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -2952,19 +2964,23 @@ successor-state construction, metadata staging, and transactional COW
 publication; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
-The ancestry and successor-construction increments also passed the two
+The ancestry, successor-construction, and object-ID allocator increments also passed the two
 repository reviews. The
 `DIGITAL-RIGHTS REVIEW` found no new data collection, retention, disclosure,
 publisher veto, DRM, owner-control or owner-attestation restriction,
 accessibility exclusion, first-party bypass, AI authority, or persistence;
-object IDs remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
+the local monotonic allocator adds no tracking or remote identity, and object IDs
+remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
 metadata record and parent link as hostile and requires exact immutable-
 generation binding for every closure entry, exact predecessor-state reload,
 bounded source/destination traversal, duplicate/cycle rejection, checked
 generation advance, exact parent-entry replacement, whole-plan layout preflight,
 pairwise range disjointness, exact allocation ownership, complete COW-plan
 membership, atomic batch receipt consumption, replay rejection, and fail-closed
-backend uncertainty. This agent review is not independent human audit.
+backend uncertainty. Allocator images additionally require canonical exhaustion,
+checked identity/generation advance, zero padding, distinct embedded and
+complete-image digests, and one-use activation. This agent review is not
+independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte

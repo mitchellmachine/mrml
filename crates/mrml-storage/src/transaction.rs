@@ -1,7 +1,7 @@
 use crate::{
     CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, CowPublishError,
-    PreparedAllocationUpdate, PreparedDirectoryUpdate, PreparedFileWrite, StorageObjectId,
-    StorageObjectKind, VolumeId,
+    PreparedAllocationUpdate, PreparedDirectoryUpdate, PreparedFileWrite,
+    PreparedObjectIdReservation, StorageObjectId, StorageObjectKind, VolumeId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +31,7 @@ pub enum TransactionResource {
         kind: StorageObjectKind,
     },
     Allocation(VolumeId),
+    ObjectIdAllocator(VolumeId),
 }
 
 impl TransactionParticipant {
@@ -66,6 +67,24 @@ impl TransactionParticipant {
         }
         Ok(Self {
             resource: TransactionResource::Allocation(volume),
+            old_generation,
+            new_generation,
+        })
+    }
+
+    pub fn object_id_allocator(
+        volume: VolumeId,
+        old_generation: u64,
+        new_generation: u64,
+    ) -> Result<Self, TransactionError> {
+        if old_generation == 0
+            || new_generation == 0
+            || old_generation.checked_add(1) != Some(new_generation)
+        {
+            return Err(TransactionError::InvalidGeneration);
+        }
+        Ok(Self {
+            resource: TransactionResource::ObjectIdAllocator(volume),
             old_generation,
             new_generation,
         })
@@ -130,6 +149,16 @@ impl<const P: usize, const W: usize> StorageTransaction<P, W> {
     pub fn admit_directory<const N: usize>(
         &mut self,
         prepared: &PreparedDirectoryUpdate<N>,
+    ) -> Result<(), TransactionError> {
+        self.admit_parts(
+            prepared.transaction_participant()?,
+            prepared.metadata_images(),
+        )
+    }
+
+    pub fn admit_object_id_allocator(
+        &mut self,
+        prepared: &PreparedObjectIdReservation,
     ) -> Result<(), TransactionError> {
         self.admit_parts(
             prepared.transaction_participant()?,

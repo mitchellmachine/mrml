@@ -889,6 +889,19 @@ transaction protocol, cryptographic construction, or storage optimization.
 Patent review: `NOT_TRIGGERED` — conventional bounded filesystem ancestry
 validation.
 
+## 2026-08-23 — transactional stable object-ID allocator image
+
+MRML source: `crates/mrml-storage/src/object_id_allocator.rs` and
+`transaction.rs`.
+
+The service uses a conventional monotonic integer allocator, canonical
+checksummed COW image, disjoint successor staging, typed transaction resource,
+and one-use activation receipt. This adds no novel identity-allocation,
+persistence, transaction, cryptographic, or storage technique.
+
+Patent review: `NOT_TRIGGERED` — conventional persistent monotonic allocator
+metadata.
+
 ## 2026-08-23 — scalar initializer and expression-statement read planning
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

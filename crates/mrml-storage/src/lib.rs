@@ -14,6 +14,7 @@ mod extent;
 mod file;
 mod format;
 mod identity;
+mod object_id_allocator;
 mod recovery;
 mod transaction;
 
@@ -54,6 +55,10 @@ pub use format::{
     MetadataPointer, SUPERBLOCK_BYTES, StorageName, Superblock, VOLUME_HEADER_BYTES, VolumeHeader,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
+pub use object_id_allocator::{
+    OBJECT_ID_ALLOCATOR_HEADER_BYTES, ObjectIdAllocatorError, ObjectIdAllocatorImage,
+    ObjectIdAllocatorUpdateError, ObjectIdAllocatorWriteBackend, PreparedObjectIdReservation,
+};
 pub use recovery::{
     CandidateValidationError, CowRecoveryValidator, ReachableRecoveryValidator,
     RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend, recover_reachable_superblock,

@@ -277,7 +277,13 @@ participant and image plus every directory participant and image into one
 transaction and one COW-root plan. Successful publication returns a one-use
 receipt whose directory participants are consumed atomically before their
 successors are exposed. Concrete block integration, power-loss evidence, and
-crash-safe identity allocation remain pending.
+crash-safe creation remain pending. A canonical volume-scoped object-ID
+allocator image now binds its nonzero generation, exact next stable ID or
+exhausted state, COW pointer, full-image checksum, and zero padding. Reservation
+stages an unreachable successor without changing the active allocator, admits
+one distinct allocator transaction resource, and exposes the allocated ID and
+successor only after its one-use receipt. Allocation-record ownership, recovery
+validation, and directory-create integration remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

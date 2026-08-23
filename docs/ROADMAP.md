@@ -250,8 +250,13 @@ authority; unrelated domains continue.
    includes all directory and allocation participants/images in one COW plan,
    and atomically consumes the directory receipt set before exposing successors.
    This remains in-memory simulation: concrete block integration, power-loss
-   evidence, persistent object-ID allocation, and full recovery validation are
-   pending, so directory operations are not yet complete or crash-safe.
+   evidence, and full recovery validation are pending. A canonical COW
+   object-ID allocator image now persists its volume, generation, exact next ID
+   or exhaustion, pointer, digest, and zero padding. Reservation leaves active
+   state unchanged, stages and flushes one successor, participates as a distinct
+   volume transaction resource, and activates once from an exact receipt.
+   Allocation ownership and directory-create integration remain pending, so
+   directory operations are not yet complete or crash-safe.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

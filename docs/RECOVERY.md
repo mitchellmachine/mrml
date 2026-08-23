@@ -152,8 +152,11 @@ explicitly and downgrade the status rather than guessing.
   successors under one independently generated COW root publication and return
   one-use activation receipts. Directory successors now stage canonical object
   metadata and entry-list images and activate only through a directory
-  transaction receipt; the object-ID allocator remains volatile and concrete
-  block integration is not yet implemented. Redundant-root
+  transaction receipt. A canonical volume-scoped object-ID allocator image now
+  stages a generation-bound successor and activates a reserved stable ID only
+  through its distinct one-use transaction participant. Allocation ownership,
+  directory-create integration, recovery traversal, and concrete block I/O are
+  not yet implemented. Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming
