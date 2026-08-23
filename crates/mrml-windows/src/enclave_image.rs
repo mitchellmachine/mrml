@@ -20,11 +20,19 @@ pub enum VbsEnclaveImageError {
 /// An image-relative address proven to name an executable, non-forwarded
 /// export in a bounded x86_64 PE image.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VbsEnclaveRoutineRva(u32);
+pub struct VbsEnclaveRoutineRva {
+    rva: u32,
+    name: [u8; MAX_EXPORT_NAME],
+    name_len: u8,
+}
 
 impl VbsEnclaveRoutineRva {
     pub const fn get(self) -> u32 {
-        self.0
+        self.rva
+    }
+
+    pub fn matches_name(self, name: &[u8]) -> bool {
+        usize::from(self.name_len) == name.len() && self.name[..name.len()] == *name
     }
 }
 
@@ -149,7 +157,13 @@ pub fn vbs_enclave_export_rva(
         {
             return Err(VbsEnclaveImageError::ExportNotExecutable);
         }
-        return Ok(VbsEnclaveRoutineRva(routine_rva));
+        let mut name = [0; MAX_EXPORT_NAME];
+        name[..export_name.len()].copy_from_slice(export_name);
+        return Ok(VbsEnclaveRoutineRva {
+            rva: routine_rva,
+            name,
+            name_len: export_name.len() as u8,
+        });
     }
     Err(VbsEnclaveImageError::ExportNotFound)
 }
@@ -311,8 +325,19 @@ mod tests {
         let image = export_image();
         assert_eq!(
             vbs_enclave_export_rva(&image, b"mrml_launch_authority"),
-            Ok(VbsEnclaveRoutineRva(0x1000))
+            Ok(VbsEnclaveRoutineRva {
+                rva: 0x1000,
+                name: {
+                    let mut name = [0; MAX_EXPORT_NAME];
+                    name[..21].copy_from_slice(b"mrml_launch_authority");
+                    name
+                },
+                name_len: 21,
+            })
         );
+        let routine = vbs_enclave_export_rva(&image, b"mrml_launch_authority").unwrap();
+        assert!(routine.matches_name(b"mrml_launch_authority"));
+        assert!(!routine.matches_name(b"mrml_authority_probe"));
         assert_eq!(
             vbs_enclave_export_rva(&image, b"mrml_launch"),
             Err(VbsEnclaveImageError::ExportNotFound)

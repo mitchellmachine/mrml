@@ -108,17 +108,16 @@ The Windows GNU/LLVM path dynamically resolves the documented
 delete enclave lifecycle from `kernel32.dll`. This avoids an MSVC SDK or import
 crate dependency and distinguishes missing ABI from unsupported VBS. Discovery
 does not create an enclave and does not upgrade a WHP launch's protection
-claims; signed enclave image construction, loading, and evidence verification
-remain incomplete.
+claims; capability discovery alone is not evidence verification.
 
 The feasibility backend now performs a real reservation test on supported
-Windows systems: it creates a non-debug, explicitly owned 2 MiB VBS enclave and
+Windows systems: it creates a non-debug, explicitly owned 256 MiB VBS enclave and
 deletes it through an owning RAII handle. ABI layout is asserted as the
 documented 36-byte create-information structure. Lifecycle symbols resolve
 from the enclave API-set DLL with a Kernel32 fallback, which is required on
-systems where forwarded exports are not directly visible. This proves enclave
-reservation on the tested Windows host, but no code has yet been loaded or
-initialized inside that enclave.
+systems where forwarded exports are not directly visible. Reservation alone
+still proves no code execution; the separate signed-image probe is described
+below.
 
 The owning Windows handle now models `Reserved -> ImageLoaded -> Initialized`
 as an explicit one-way state machine. It dynamically resolves
@@ -126,14 +125,14 @@ as an explicit one-way state machine. It dynamically resolves
 `InitializeEnclave`, rejects unterminated or embedded-NUL UTF-16 paths, rejects
 initialization before an accepted image, requires a nonzero thread count, and
 preserves the VBS initialization structure as mutable because Windows returns
-the actual created thread count through it. These transitions are implemented
-and malformed-state tested; an MRML enclave PE has not yet passed the load gate.
+the actual created thread count through it. These transitions are implemented,
+malformed-state tested, and exercised by the signed-image probe below.
 
 `experiments/mrml-vbs-enclave` is the first standalone enclave image source. It
 is original `no_std` Rust using only MRML crates and `core`, builds as a PE DLL
 with the Windows GNU/LLVM toolchain, and embeds an 80-byte x86_64 enclave
 configuration. The configuration is non-debug, uses strict containing-process
-memory isolation, declares one thread, a 2 MiB private range, explicit
+memory isolation, declares one thread, a 256 MiB private range, explicit
 family/image identities, security version one, and primary-image status. A
 custom Rust target omits MinGW CRT startup and ordinary Windows imports; the
 release PE imports only Microsoft's enclave-supported platform DLLs,
@@ -153,10 +152,10 @@ exact 256-byte x86_64 load configuration. Its relocated enclave pointer resolves
 to the 80-byte strict configuration in the built DLL. An image-relative CFG
 table contains the sorted RVAs of `DllMain`, the boundary probe, and the
 authority entry point. The load configuration binds its VA, exact count,
-valid-target-table flag, and unused-security-cookie declaration. It does not
-claim compiler CFG instrumentation because no nonzero CFG check/dispatch
-pointers have yet been wired; the finalizer rejects metadata that claims more
-than the image implements.
+valid-target-table flag, and unused-security-cookie declaration. LLVM now
+instruments indirect calls and the image supplies a nonzero x64 CFG dispatch
+pointer to an executable dispatch thunk. The finalizer resolves and validates
+that pointer and rejects metadata that claims more than the image implements.
 
 `mrml-sign finalize-vbs-enclave` is the original post-link validation gate. It
 accepts only unsigned PE32+ x86_64 images with one canonical 256-byte load
@@ -176,8 +175,11 @@ image, initializes one enclave thread, and then invokes the authority with
 `mrml_launch_authority` export using MRML's allocation-free PE parser. That
 parser caps section/export counts, checks every RVA translation, rejects
 forwarders and unterminated names, and accepts only an RVA inside an executable
-section. The owning lifecycle accepts that opaque validated-RVA type only after
-the `Initialized` state, keeps the call context mutably borrowed for the
+section. The opaque token also retains and rechecks the exact bounded export
+name. After initialization the lifecycle resolves that name with
+`GetProcAddress` on the enclave handle, rejects a null result or an address
+outside the checked reservation, and does not assume the primary DLL was loaded
+at the reservation base. It keeps the call context mutably borrowed for the
 synchronous wait-for-thread call, and returns either the enclave status or the
 exact Windows failure. The probe generates a fresh OS-cryptographic nonce,
 submits the canonical request, requires zero authority status, and verifies the
@@ -201,6 +203,22 @@ later PE/load-configuration gate than the earlier error 577; it still does not
 prove Windows initialization, VTL1 entry, receipt verification, attestation
 verification, or secret consumption. The temporary certificate and private key
 were removed after the test.
+Later on 2026-08-23, Windows 11 build 26200.9168 in test-signing mode accepted a
+fresh page-hash-signed, CFG-instrumented image and initialized separate
+non-debug authority and verifier enclaves with one thread each. A 2 MiB
+reservation initialized with error 8; matching the image and reservation at
+the bounded 256 MiB size succeeded. An initial call using reservation-base plus
+export RVA failed with error 127. Resolving the independently validated exact
+export through `GetProcAddress`, as required by Microsoft's host sample, showed
+that Windows had placed the primary module near the end of the reservation.
+With the returned address bounded to that reservation, the import-free probe
+entered VTL1 and returned its exact context-bound value. The next protected
+operation failed closed with enclave status 6 because
+`EnclaveUsesAttestedKeys` reported false on this test-mode system. This is
+controlled evidence of signed non-debug image load, initialization, and VTL1
+execution. It is not evidence of safe TPM-provisioned attested keys,
+authenticated receipts, verified local attestation, secret release, remote
+attestation, or resistance to VTL1/Hyper-V compromise.
 Enabling global test-signing or trusting a development code-signing root weakens
 the host policy and is never performed automatically by the build.
 

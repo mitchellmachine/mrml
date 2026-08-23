@@ -35,6 +35,8 @@ fn application_main() -> Result<()> {
         .map_err(|_| anyhow!("failed to read bounded enclave image"))?;
     let authority = mrml_windows::vbs_enclave_export_rva(&image, b"mrml_launch_authority")
         .map_err(|error| anyhow!("invalid authority export: {:?}", error))?;
+    let boundary_probe = mrml_windows::vbs_enclave_export_rva(&image, b"mrml_authority_probe")
+        .map_err(|error| anyhow!("invalid boundary-probe export: {:?}", error))?;
     let mut wide = Vector::with_capacity(path.len() + 1)
         .map_err(|_| anyhow!("failed to allocate bounded UTF-16 path"))?;
     for unit in path.encode_utf16() {
@@ -73,6 +75,17 @@ fn application_main() -> Result<()> {
         "initialized independent verifier VBS enclave with {} thread(s)",
         verifier_threads
     );
+    let mut probe_context = [0; VBS_AUTHORITY_CONTEXT_BYTES];
+    let probe_input = probe_context.as_mut_ptr() as usize;
+    let probe_result = verifier
+        .call_authority(boundary_probe, c"mrml_authority_probe", &mut probe_context)
+        .map_err(|error| anyhow!("boundary-probe CallEnclave failed: {:?}", error))?;
+    if probe_result != (probe_input ^ 0x4d52_4d4c) {
+        return Err(anyhow!(
+            "boundary-probe result was not bound to its context"
+        ));
+    }
+    mrml_println!("VTL1 boundary probe returned the exact context-bound result");
 
     let mut host_nonce = [0; 32];
     mrml_runtime::fill_random(&mut host_nonce)
@@ -99,7 +112,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("challenge context rejected: {:?}", error))?;
     let mut challenge_call = challenge_context.encode();
     let challenge_status = verifier
-        .call_authority(authority, &mut challenge_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut challenge_call)
         .map_err(|error| anyhow!("verifier challenge CallEnclave failed: {:?}", error))?;
     if challenge_status != 0 || nonce == [0; VBS_ATTESTATION_CHALLENGE_BYTES] {
         return Err(anyhow!(
@@ -125,7 +138,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("workload-secret context rejected: {:?}", error))?;
     let mut workload_key_call = workload_key_context.encode();
     let workload_key_status = enclave
-        .call_authority(authority, &mut workload_key_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut workload_key_call)
         .map_err(|error| anyhow!("workload-secret CallEnclave failed: {:?}", error))?;
     if workload_key_status != 0 || VbsSealedKeyEnvelope::decode(&workload_secret).is_err() {
         return Err(anyhow!(
@@ -144,7 +157,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("sealed-key context rejected: {:?}", error))?;
     let mut key_call = key_context.encode();
     let key_status = enclave
-        .call_authority(authority, &mut key_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut key_call)
         .map_err(|error| anyhow!("sealed-key CallEnclave failed: {:?}", error))?;
     if key_status != 0 || VbsSealedKeyEnvelope::decode(&sealed_key).is_err() {
         return Err(anyhow!(
@@ -163,7 +176,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("sealed-key load context rejected: {:?}", error))?;
     let mut load_call = load_context.encode();
     let load_status = verifier
-        .call_authority(authority, &mut load_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut load_call)
         .map_err(|error| anyhow!("sealed-key load CallEnclave failed: {:?}", error))?;
     if load_status != 0 || key_confirmation != [0xa5; VBS_SEALED_KEY_CONFIRMATION_BYTES] {
         return Err(anyhow!(
@@ -187,7 +200,7 @@ fn application_main() -> Result<()> {
     };
     let mut call = context.encode();
     let authority_status = enclave
-        .call_authority(authority, &mut call)
+        .call_authority(authority, c"mrml_launch_authority", &mut call)
         .map_err(|error| anyhow!("CallEnclave failed: {:?}", error))?;
     if authority_status != 0 {
         return Err(anyhow!(
@@ -217,7 +230,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("receipt verifier context rejected: {:?}", error))?;
     let mut receipt_call = receipt_context.encode();
     let receipt_status = verifier
-        .call_authority(authority, &mut receipt_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut receipt_call)
         .map_err(|error| anyhow!("receipt verifier CallEnclave failed: {:?}", error))?;
     if receipt_status != 0 || receipt_confirmation != [0x5a; VBS_SEALED_KEY_CONFIRMATION_BYTES] {
         return Err(anyhow!(
@@ -242,7 +255,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("attestation context rejected: {:?}", error))?;
     let mut call = context.encode();
     let attestation_status = enclave
-        .call_authority(authority, &mut call)
+        .call_authority(authority, c"mrml_launch_authority", &mut call)
         .map_err(|error| anyhow!("attestation CallEnclave failed: {:?}", error))?;
     if attestation_status != 0 {
         return Err(anyhow!(
@@ -267,7 +280,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("verifier context rejected: {:?}", error))?;
     let mut verify_call = verify_context.encode();
     let verify_status = verifier
-        .call_authority(authority, &mut verify_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut verify_call)
         .map_err(|error| anyhow!("verifier CallEnclave failed: {:?}", error))?;
     if verify_status != 0 {
         return Err(anyhow!(
@@ -304,7 +317,7 @@ fn application_main() -> Result<()> {
     .map_err(|error| anyhow!("workload consumption context rejected: {:?}", error))?;
     let mut consume_call = consume_context.encode();
     let consume_status = verifier
-        .call_authority(authority, &mut consume_call)
+        .call_authority(authority, c"mrml_launch_authority", &mut consume_call)
         .map_err(|error| anyhow!("workload consumption CallEnclave failed: {:?}", error))?;
     if consume_status != 0 || workload_result == [0; VBS_WORKLOAD_RESULT_BYTES] {
         return Err(anyhow!(
