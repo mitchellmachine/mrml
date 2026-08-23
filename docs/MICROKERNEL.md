@@ -2827,7 +2827,17 @@ its fallback marker. Injecting an I/O failure at the same newer validation point
 returns `Backend` and never falls back. These are deterministic in-memory image
 and fault-injection tests, not storage-device or physical power-loss evidence.
 
-Fifty-five focused unit tests and strict crate-local clippy pass on Windows
+A second crash model keeps volatile and durable metadata and superblock state
+separate, injects failure after each publication operation, and discards all
+volatile state on crash. Failures through the metadata flush recover only the
+old root. Because replacement and final-flush failure are explicitly uncertain,
+both modeled persistence outcomes recover either the old root or the new root
+whose metadata is already durable. A completed final flush always recovers the
+new root. The validator never selects a superblock without its durable metadata.
+This models ordering and allowed outcomes only; it does not model a particular
+drive cache, atomic-write unit, torn sector, controller, or physical power cut.
+
+Fifty-six focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2840,7 +2850,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 55 tests, and both strict crate-local clippy
+Both current unit-test runs pass 56 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

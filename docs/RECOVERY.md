@@ -145,7 +145,11 @@ explicitly and downgrade the status rather than guessing.
   integrated recovery entry point falls back from a checksum-valid newer root
   only when its mismatched/unpublished metadata is definitively invalid; an
   injected validation I/O error aborts instead of becoming rollback. The backend
-  and power-loss behavior remain simulated. UEFI
+  remains simulated. A volatile/durable cut-point model crashes after every COW
+  publication operation: pre-replacement failures recover the old root;
+  uncertain replacement/flush failures allow only old or fully metadata-durable
+  new state; successful flush recovers new state. Physical power-loss behavior
+  is not verified. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

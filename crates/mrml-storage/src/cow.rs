@@ -249,7 +249,9 @@ fn pointers_overlap(left: MetadataPointer, right: MetadataPointer) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VolumeId;
+    use crate::{
+        CandidateValidationError, CowRecoveryValidator, RecoveryError, VolumeId, recover_superblock,
+    };
 
     fn volume() -> VolumeId {
         VolumeId::new([3; 16]).unwrap()
@@ -401,6 +403,173 @@ mod tests {
                 Err(CowPublishError::FailStop(failure))
             );
         }
+    }
+
+    struct DurabilityBackend {
+        durable_primary: [u8; crate::SUPERBLOCK_BYTES],
+        durable_secondary: [u8; crate::SUPERBLOCK_BYTES],
+        volatile_secondary: Option<[u8; crate::SUPERBLOCK_BYTES]>,
+        durable_metadata: bool,
+        event: usize,
+        fail_at: Option<usize>,
+        persist_on_replace: bool,
+        persist_on_failed_flush: bool,
+    }
+
+    impl DurabilityBackend {
+        fn new(
+            fail_at: Option<usize>,
+            persist_on_replace: bool,
+            persist_on_failed_flush: bool,
+        ) -> Self {
+            let mut durable_primary = [0; crate::SUPERBLOCK_BYTES];
+            active().encode(&mut durable_primary);
+            let mut durable_secondary = [0; crate::SUPERBLOCK_BYTES];
+            Superblock::new(header(), 3, 2, object(1), pointer(50, 1), pointer(60, 1))
+                .unwrap()
+                .encode(&mut durable_secondary);
+            Self {
+                durable_primary,
+                durable_secondary,
+                volatile_secondary: None,
+                durable_metadata: false,
+                event: 0,
+                fail_at,
+                persist_on_replace,
+                persist_on_failed_flush,
+            }
+        }
+
+        fn fails_now(&mut self) -> bool {
+            let fails = self.fail_at == Some(self.event);
+            self.event += 1;
+            fails
+        }
+
+        fn crash(&mut self) {
+            self.volatile_secondary = None;
+        }
+
+        fn recovered_generation(&mut self) -> Result<u64, RecoveryError<()>> {
+            struct Validator {
+                durable_metadata: bool,
+            }
+            unsafe impl CowRecoveryValidator for Validator {
+                type Error = ();
+
+                fn validate_candidate(
+                    &mut self,
+                    _block: u64,
+                    candidate: Superblock,
+                ) -> Result<(), CandidateValidationError<Self::Error>> {
+                    if candidate.generation() == 5 && !self.durable_metadata {
+                        Err(CandidateValidationError::Invalid)
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+            let recovered = recover_superblock(
+                header(),
+                &self.durable_primary,
+                &self.durable_secondary,
+                &mut Validator {
+                    durable_metadata: self.durable_metadata,
+                },
+            )?;
+            Ok(recovered.superblock().generation())
+        }
+    }
+
+    unsafe impl CowPublicationBackend for DurabilityBackend {
+        type Error = usize;
+
+        fn verify_new_metadata(&mut self, _write: CowMetadataWrite) -> Result<(), Self::Error> {
+            if self.fails_now() {
+                Err(self.event - 1)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            if self.fails_now() {
+                Err(self.event - 1)
+            } else {
+                self.durable_metadata = true;
+                Ok(())
+            }
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            encoded: &[u8; crate::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            assert_eq!(block, header().secondary_superblock());
+            self.volatile_secondary = Some(*encoded);
+            if self.persist_on_replace {
+                self.durable_secondary = *encoded;
+            }
+            if self.fails_now() {
+                Err(self.event - 1)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            let fails = self.fails_now();
+            if !fails || self.persist_on_failed_flush {
+                self.durable_secondary =
+                    self.volatile_secondary.expect("replacement precedes flush");
+            }
+            if fails { Err(self.event - 1) } else { Ok(()) }
+        }
+    }
+
+    #[test]
+    fn crash_cut_points_recover_only_old_or_fully_durable_new_root() {
+        for failure in 0..3 {
+            let mut backend = DurabilityBackend::new(Some(failure), false, false);
+            assert!(matches!(
+                plan().publish(&mut backend),
+                Err(CowPublishError::Rejected(_))
+            ));
+            backend.crash();
+            assert_eq!(backend.recovered_generation(), Ok(4));
+        }
+
+        for persists in [false, true] {
+            let mut backend = DurabilityBackend::new(Some(3), persists, false);
+            assert!(matches!(
+                plan().publish(&mut backend),
+                Err(CowPublishError::FailStop(_))
+            ));
+            backend.crash();
+            assert_eq!(
+                backend.recovered_generation(),
+                Ok(if persists { 5 } else { 4 })
+            );
+        }
+
+        for persists in [false, true] {
+            let mut backend = DurabilityBackend::new(Some(4), false, persists);
+            assert!(matches!(
+                plan().publish(&mut backend),
+                Err(CowPublishError::FailStop(_))
+            ));
+            backend.crash();
+            assert_eq!(
+                backend.recovered_generation(),
+                Ok(if persists { 5 } else { 4 })
+            );
+        }
+
+        let mut backend = DurabilityBackend::new(None, false, false);
+        assert!(plan().publish(&mut backend).is_ok());
+        backend.crash();
+        assert_eq!(backend.recovered_generation(), Ok(5));
     }
 
     #[test]

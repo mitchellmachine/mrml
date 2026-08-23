@@ -794,10 +794,13 @@ Patent review: `NOT_TRIGGERED` — conventional filesystem consistency traversal
 MRML source: `crates/mrml-storage/src/recovery.rs`.
 
 The service composes conventional redundant-root selection with bounded
-filesystem consistency validation and deterministic fault injection. It falls
-back from proven-invalid unpublished metadata and aborts on indeterminate I/O.
-This adds no novel recovery algorithm, persistence protocol, fault-injection
-method, cryptographic construction, or storage optimization.
+filesystem consistency validation, deterministic fault injection, and a
+volatile/durable cut-point model of metadata flush, root replacement, and final
+flush. It falls back from proven-invalid unpublished metadata, aborts on
+indeterminate I/O, and admits only old or fully metadata-durable new state after
+uncertain publication. This adds no novel recovery algorithm, persistence
+protocol, fault-injection method, cryptographic construction, or storage
+optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional recovery fault simulation.
 

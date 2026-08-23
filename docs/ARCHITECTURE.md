@@ -280,7 +280,13 @@ and reachable validator are exposed as one bounded recovery entry
 point. Simulation rejects a checksum-valid newer superblock whose referenced
 allocation generation was not published and explicitly falls back to the fully
 validated adjacent root; an indeterminate read of the newer candidate aborts
-instead of becoming rollback. The concrete block backend, directory/allocator
+instead of becoming rollback. Publication is also exercised with separate
+volatile and durable simulated
+state at every COW persistence boundary. Pre-replacement crashes retain the old
+root; the uncertain replacement/final-flush window admits either old or fully
+metadata-durable new state; completed flush selects the new root. No partial
+metadata generation is selectable. This remains a deterministic model, not
+physical power-loss evidence. The concrete block backend, directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

@@ -292,6 +292,14 @@ authority; unrelated domains continue.
    newer validation aborts recovery rather than being treated as corruption or
    permission to roll back. This is deterministic in-memory fault injection,
    not physical power-loss or device durability evidence.
+   A separate deterministic durability model now splits volatile and durable
+   metadata/superblock state and crashes after every publication operation.
+   Verification or metadata-flush failures recover the old generation. Atomic
+   replacement and final-flush failures exercise both permitted device outcomes:
+   either the old root or the new root whose metadata was already durable.
+   Successful final flush always recovers the new root, and no partial metadata
+   generation is selectable. Physical-device cache, torn-write, and power-cut
+   testing remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features
