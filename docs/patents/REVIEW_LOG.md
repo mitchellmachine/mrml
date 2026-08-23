@@ -314,6 +314,22 @@ cryptographic construction, or optimization.
 Patent review: `NOT_TRIGGERED` — conventional transactional configuration and
 service-control message handling.
 
+## 2026-08-23 — IPC-derived configuration and supervision dispatch
+
+MRML source: `crates/mrml-config/src/lib.rs` and
+`crates/mrml-kernel/src/ipc.rs`.
+
+Configuration and supervision dispatch now separates payload data from
+authority by resolving operations from the receiver-space capabilities that
+ordinary kernel IPC derives in message order. It rejects mismatched envelopes
+and composes existing configuration transactions and service restart checks.
+This is conventional capability-message dispatch and lifecycle orchestration;
+it introduces no novel algorithm, ABI, protocol, cryptographic construction,
+or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional capability-envelope validation
+and service dispatch.
+
 ## 2026-08-23 — lazy tuple-valued compiler control flow
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

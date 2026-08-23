@@ -2598,19 +2598,29 @@ rather than silently hiding overwrite gaps. Secrets are not a configuration
 value class.
 
 The version-1 configuration protocol has strict fixed headers and at most four
-inline updates. It binds nonzero request identity, expected revision, opaque
-capability tokens, setting identity, canonical value kind/length/tail bytes,
-and exact encoded length; unknown versions, operations, nonzero reserved bytes,
-truncation, and hidden tail data fail closed. A separate fixed supervision
-protocol binds request identity, opaque generational `ServiceId`, capability
-token, operation, and restart time. Reconstructing either token grants no
-authority. `ServiceSupervisor::state_authorized` now requires exact READ
-authority for the service object, while restart continues to require exact
-CONTROL authority and all existing cleanup, backoff, and fresh-context gates.
-Windows gnullvm tests cover eight configuration/protocol cases and the kernel's
-authorized introspection case. This is **PARTIALLY IMPLEMENTED** Phase 2
-foundation: it has not yet run as a signed CPL3 service, admitted a signed
-schema, or persisted/exported state through native storage.
+inline updates. It binds nonzero request identity, expected revision, setting
+identity, canonical value kind/length/tail bytes, and exact encoded length;
+unknown versions, operations, nonzero reserved bytes, truncation, and hidden
+tail data fail closed. For kernel-message dispatch, authority fields are
+canonical zero placeholders. The dispatcher accepts authority only from the
+message's exact receiver-space capability sequence, which the kernel derives
+and attenuates during IPC; missing, extra, or nonzero payload authority is
+rejected before service state changes. A `TaskRuntime::send_ipc` test proves
+that receiver generations replace different sender handles before an atomic
+two-setting commit. An authorized read can canonically return an unset value.
+
+The fixed supervision protocol binds request identity, opaque generational
+`ServiceId`, operation, and restart time while likewise resolving authority
+only from the kernel message. `ServiceSupervisor::state_authorized` requires
+exact READ authority. The adapter supplies priority and fresh launch context
+from trusted state rather than request bytes, and successful restart still
+passes exact CONTROL, completed cleanup, backoff, restart-limit, and fresh-task
+gates. Windows gnullvm tests cover eleven configuration/protocol/dispatch cases
+and the kernel suite covers authorized introspection. This is **PARTIALLY
+IMPLEMENTED** Phase 2 foundation: the current CPL3 register ABI carries only 24
+inline bytes, so these 48--368-byte requests have not yet crossed a bounded
+user-buffer syscall or run as a signed CPL3 service. Signed schema admission and
+native-storage persistence/export also remain incomplete.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,
 optimistic transactional revision checks, bounded audit rings, and capability

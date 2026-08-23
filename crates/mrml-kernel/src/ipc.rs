@@ -96,6 +96,10 @@ impl Message {
             .copied()
     }
 
+    pub const fn capability_count(&self) -> usize {
+        self.capability_count as usize
+    }
+
     /// Encodes without allocation. Tokens only have meaning in a
     /// kernel-created capability space and are never authority by themselves.
     pub fn encode(&self, sequence: u64, output: &mut [u8]) -> Result<usize, IpcError> {

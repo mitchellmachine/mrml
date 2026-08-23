@@ -9,7 +9,11 @@
 
 use core::array;
 
-use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights, ServiceId};
+use mrml_kernel::arch::x86_64::UserContext;
+use mrml_kernel::{
+    Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, Rights, ServiceId,
+    ServiceState, ServiceSupervisor, TaskRuntime,
+};
 
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
 pub const MAX_WIRE_UPDATES: usize = 4;
@@ -266,6 +270,7 @@ pub enum ConfigError {
     UnsupportedVersion,
     Truncated,
     NonCanonical,
+    InvalidAuthorityEnvelope,
 }
 
 #[derive(Clone, Copy)]
@@ -364,6 +369,9 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
             return Err(ConfigError::Capacity);
         }
         for (index, schema) in schemas.iter().enumerate() {
+            if schema.object == root {
+                return Err(ConfigError::DuplicateObject);
+            }
             if schemas[index + 1..]
                 .iter()
                 .any(|other| other.setting == schema.setting)
@@ -627,6 +635,82 @@ impl ConfigurationRequest {
             _ => Err(ConfigError::NonCanonical),
         }
     }
+
+    /// Resolves authority exclusively from capabilities derived by kernel IPC.
+    /// Capability-token fields in the payload must be zero placeholders: a
+    /// sender cannot predict the receiver-space generations created during
+    /// transfer, and payload bytes never carry authority.
+    pub fn decode_message(message: &Message) -> Result<Self, ConfigError> {
+        let payload = message.payload();
+        let mut request = Self::decode(payload)?;
+        match &mut request {
+            Self::Read { capability, .. } => {
+                if payload[32..40].iter().any(|byte| *byte != 0) || message.capability_count() != 1
+                {
+                    return Err(ConfigError::InvalidAuthorityEnvelope);
+                }
+                *capability = message
+                    .capabilities()
+                    .next()
+                    .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+            }
+            Self::Commit {
+                root, transaction, ..
+            } => {
+                if payload[32..40].iter().any(|byte| *byte != 0)
+                    || message.capability_count() != transaction.count + 1
+                {
+                    return Err(ConfigError::InvalidAuthorityEnvelope);
+                }
+                let mut authorities = message.capabilities();
+                *root = authorities
+                    .next()
+                    .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+                for (index, update) in transaction.updates[..transaction.count]
+                    .iter_mut()
+                    .flatten()
+                    .enumerate()
+                {
+                    let authority_offset =
+                        CONFIG_REQUEST_HEADER_BYTES + index * CONFIG_UPDATE_BYTES + 8;
+                    if payload[authority_offset..authority_offset + 8]
+                        .iter()
+                        .any(|byte| *byte != 0)
+                    {
+                        return Err(ConfigError::InvalidAuthorityEnvelope);
+                    }
+                    update.capability = authorities
+                        .next()
+                        .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+                }
+                if authorities.next().is_some() {
+                    return Err(ConfigError::InvalidAuthorityEnvelope);
+                }
+            }
+        }
+        Ok(request)
+    }
+}
+
+pub fn encode_read_message_request(
+    request_id: u64,
+    setting: SettingId,
+    output: &mut [u8; CONFIG_REQUEST_HEADER_BYTES],
+) -> Result<(), ConfigError> {
+    encode_read_request(request_id, setting, Capability::from_token(0), output)
+}
+
+pub fn encode_commit_message_request<const UPDATES: usize>(
+    request_id: u64,
+    transaction: &ConfigTransaction<UPDATES>,
+    output: &mut [u8],
+) -> Result<usize, ConfigError> {
+    let length = encode_commit_request(request_id, Capability::from_token(0), transaction, output)?;
+    for index in 0..transaction.count {
+        let authority_offset = CONFIG_REQUEST_HEADER_BYTES + index * CONFIG_UPDATE_BYTES + 8;
+        output[authority_offset..authority_offset + 8].fill(0);
+    }
+    Ok(length)
 }
 
 pub fn encode_read_request(
@@ -705,8 +789,9 @@ pub struct ConfigurationResponse {
 impl ConfigurationResponse {
     pub fn encode(self, output: &mut [u8; CONFIG_RESPONSE_BYTES]) -> Result<(), ConfigError> {
         if self.request_id == 0
-            || self.setting.is_some() != self.value.is_some()
-            || (self.status == ResponseStatus::Rejected && self.setting.is_some())
+            || (self.value.is_some() && self.setting.is_none())
+            || (self.status == ResponseStatus::Rejected
+                && (self.setting.is_some() || self.value.is_some()))
         {
             return Err(ConfigError::NonCanonical);
         }
@@ -717,11 +802,13 @@ impl ConfigurationResponse {
         write_u16(output, 8, CONFIG_RESPONSE_BYTES as u16)?;
         write_u64(output, 16, self.request_id)?;
         write_u64(output, 24, self.revision)?;
-        if let (Some(setting), Some(value)) = (self.setting, self.value) {
+        if let Some(setting) = self.setting {
             write_u32(output, 32, setting.get())?;
-            output[36] = value.kind as u8;
-            output[37] = value.length;
-            output[40..104].copy_from_slice(&value.bytes);
+            if let Some(value) = self.value {
+                output[36] = value.kind as u8;
+                output[37] = value.length;
+                output[40..104].copy_from_slice(&value.bytes);
+            }
         }
         Ok(())
     }
@@ -763,12 +850,17 @@ impl ConfigurationResponse {
             if status == ResponseStatus::Rejected {
                 return Err(ConfigError::NonCanonical);
             }
-            let mut bytes = [0; MAX_CONFIG_VALUE_BYTES];
-            bytes.copy_from_slice(&input[40..104]);
-            (
-                Some(SettingId::new(setting)?),
-                Some(ConfigValue::decode(kind, length, &bytes)?),
-            )
+            let value = if kind == 0 {
+                if length != 0 || input[40..104].iter().any(|byte| *byte != 0) {
+                    return Err(ConfigError::NonCanonical);
+                }
+                None
+            } else {
+                let mut bytes = [0; MAX_CONFIG_VALUE_BYTES];
+                bytes.copy_from_slice(&input[40..104]);
+                Some(ConfigValue::decode(kind, length, &bytes)?)
+            };
+            (Some(SettingId::new(setting)?), value)
         };
         Ok(Self {
             request_id,
@@ -778,6 +870,66 @@ impl ConfigurationResponse {
             value,
         })
     }
+}
+
+/// Dispatches one kernel-delivered configuration request. Malformed authority
+/// envelopes fail without a response; well-formed requests receive either an
+/// `Ok` result or a deliberately detail-free rejection so authorization errors
+/// do not become an object-discovery oracle.
+pub fn dispatch_configuration_message<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CAPS: usize,
+>(
+    service: &mut ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &CapabilitySpace<CAPS>,
+    message: &Message,
+    output: &mut [u8; CONFIG_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let request = ConfigurationRequest::decode_message(message)?;
+    let response = match request {
+        ConfigurationRequest::Read {
+            request_id,
+            setting,
+            capability,
+        } => match service.read(capabilities, capability, setting) {
+            Ok(record) => ConfigurationResponse {
+                request_id,
+                status: ResponseStatus::Ok,
+                revision: record.revision,
+                setting: Some(record.setting),
+                value: record.value,
+            },
+            Err(_) => ConfigurationResponse {
+                request_id,
+                status: ResponseStatus::Rejected,
+                revision: service.revision(),
+                setting: None,
+                value: None,
+            },
+        },
+        ConfigurationRequest::Commit {
+            request_id,
+            root,
+            transaction,
+        } => match service.commit(capabilities, root, &transaction) {
+            Ok(revision) => ConfigurationResponse {
+                request_id,
+                status: ResponseStatus::Ok,
+                revision,
+                setting: None,
+                value: None,
+            },
+            Err(_) => ConfigurationResponse {
+                request_id,
+                status: ResponseStatus::Rejected,
+                revision: service.revision(),
+                setting: None,
+                value: None,
+            },
+        },
+    };
+    response.encode(output)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -843,6 +995,30 @@ impl SupervisionRequest {
             capability: Capability::from_token(read_u64(input, 32)?),
             now,
         })
+    }
+
+    pub fn encode_message(
+        self,
+        output: &mut [u8; SUPERVISION_REQUEST_BYTES],
+    ) -> Result<(), ConfigError> {
+        let mut request = self;
+        request.capability = Capability::from_token(0);
+        request.encode(output)
+    }
+
+    pub fn decode_message(message: &Message) -> Result<Self, ConfigError> {
+        if message.payload().len() != SUPERVISION_REQUEST_BYTES
+            || message.payload()[32..40].iter().any(|byte| *byte != 0)
+            || message.capability_count() != 1
+        {
+            return Err(ConfigError::InvalidAuthorityEnvelope);
+        }
+        let mut request = Self::decode(message.payload())?;
+        request.capability = message
+            .capabilities()
+            .next()
+            .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+        Ok(request)
     }
 }
 
@@ -915,6 +1091,73 @@ impl SupervisionResponse {
             state,
             detail: read_u64(input, 32)?,
         })
+    }
+}
+
+/// Composes a kernel-derived management capability with the existing bounded
+/// supervisor. The caller supplies a trusted fresh launch context; no address,
+/// priority, or executable choice is accepted from the untrusted request.
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_supervision_message<
+    const SERVICES: usize,
+    const TASKS: usize,
+    const TASK_CAPS: usize,
+    const MANAGEMENT_CAPS: usize,
+>(
+    supervisor: &mut ServiceSupervisor<SERVICES>,
+    management: &CapabilitySpace<MANAGEMENT_CAPS>,
+    runtime: &mut TaskRuntime<TASKS, TASK_CAPS>,
+    message: &Message,
+    priority: Priority,
+    fresh_context: UserContext,
+    output: &mut [u8; SUPERVISION_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let request = SupervisionRequest::decode_message(message)?;
+    let (status, service, state) = match request.operation {
+        SupervisionOperation::Query => {
+            match supervisor.state_authorized(request.service, management, request.capability) {
+                Ok(state) => (ResponseStatus::Ok, request.service, state.into()),
+                Err(_) => (
+                    ResponseStatus::Rejected,
+                    request.service,
+                    SupervisionState::Exited,
+                ),
+            }
+        }
+        SupervisionOperation::Restart => match supervisor.restart_at(
+            request.service,
+            management,
+            request.capability,
+            runtime,
+            priority,
+            fresh_context,
+            request.now,
+        ) {
+            Ok(replacement) => (ResponseStatus::Ok, replacement, SupervisionState::Running),
+            Err(_) => (
+                ResponseStatus::Rejected,
+                request.service,
+                SupervisionState::Exited,
+            ),
+        },
+    };
+    SupervisionResponse {
+        request_id: request.request_id,
+        status,
+        service,
+        state,
+        detail: 0,
+    }
+    .encode(output)
+}
+
+impl From<ServiceState> for SupervisionState {
+    fn from(value: ServiceState) -> Self {
+        match value {
+            ServiceState::Running => Self::Running,
+            ServiceState::Exited => Self::Exited,
+            ServiceState::Faulted => Self::Faulted,
+        }
     }
 }
 
@@ -1192,6 +1435,140 @@ mod tests {
     }
 
     #[test]
+    fn kernel_message_authorities_replace_payload_tokens_and_dispatch_atomically() {
+        let schemas = [
+            SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap(),
+            SettingSchema::unsigned(SettingId::new(2).unwrap(), ObjectId(12), 1, 100).unwrap(),
+        ];
+        let mut service = ConfigurationService::<2, 2>::new(ObjectId(10), &schemas).unwrap();
+        let context = |root, entry| {
+            UserContext::new(
+                mrml_kernel::PhysAddr::new(root).unwrap(),
+                entry,
+                0x7000_0000,
+            )
+            .unwrap()
+        };
+        let mut runtime = TaskRuntime::<2, 8>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(99);
+        let sender_space = runtime.capabilities_mut(sender).unwrap();
+        let endpoint_capability = sender_space
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = sender_space
+            .insert(ObjectId(10), Rights::CONTROL.union(Rights::DELEGATE))
+            .unwrap();
+        let enabled = sender_space
+            .insert(ObjectId(11), Rights::WRITE.union(Rights::DELEGATE))
+            .unwrap();
+        let limit = sender_space
+            .insert(ObjectId(12), Rights::WRITE.union(Rights::DELEGATE))
+            .unwrap();
+        let mut transaction = ConfigTransaction::<2>::new(0);
+        transaction
+            .push(ConfigUpdate::new(
+                SettingId::new(1).unwrap(),
+                enabled,
+                ConfigValue::boolean(true),
+            ))
+            .unwrap();
+        transaction
+            .push(ConfigUpdate::new(
+                SettingId::new(2).unwrap(),
+                limit,
+                ConfigValue::unsigned(17),
+            ))
+            .unwrap();
+        let mut wire = [0; MAX_CONFIG_REQUEST_BYTES];
+        let length = encode_commit_message_request(21, &transaction, &mut wire).unwrap();
+        assert!(wire[32..40].iter().all(|byte| *byte == 0));
+        assert!(wire[56..64].iter().all(|byte| *byte == 0));
+        assert!(wire[136..144].iter().all(|byte| *byte == 0));
+        let mut endpoint = mrml_kernel::Endpoint::new(endpoint_object);
+        let (_, message) = runtime
+            .send_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                &wire[..length],
+                &[
+                    (root, Rights::CONTROL),
+                    (enabled, Rights::WRITE),
+                    (limit, Rights::WRITE),
+                ],
+            )
+            .unwrap();
+        let mut delivered_authorities = message.capabilities();
+        let delivered = [
+            delivered_authorities.next().unwrap(),
+            delivered_authorities.next().unwrap(),
+            delivered_authorities.next().unwrap(),
+        ];
+        assert!(delivered_authorities.next().is_none());
+        assert_ne!(delivered[0], root);
+        let mut response_wire = [0; CONFIG_RESPONSE_BYTES];
+        dispatch_configuration_message(
+            &mut service,
+            runtime.capabilities_mut(receiver).unwrap(),
+            &message,
+            &mut response_wire,
+        )
+        .unwrap();
+        assert_eq!(
+            ConfigurationResponse::decode(&response_wire)
+                .unwrap()
+                .status,
+            ResponseStatus::Ok
+        );
+        assert_eq!(service.revision(), 1);
+
+        let extra = Message::new(
+            &wire[..length],
+            &[delivered[0], delivered[1], delivered[2], delivered[0]],
+        )
+        .unwrap();
+        assert_eq!(
+            ConfigurationRequest::decode_message(&extra),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        let mut forged = wire;
+        forged[32] = 1;
+        let forged = Message::new(&forged[..length], &delivered).unwrap();
+        assert_eq!(
+            ConfigurationRequest::decode_message(&forged),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+    }
+
+    #[test]
+    fn message_dispatch_represents_an_authorized_unset_value() {
+        let (mut service, capabilities, _, enabled, _) = fixture();
+        let mut wire = [0; CONFIG_REQUEST_HEADER_BYTES];
+        encode_read_message_request(22, SettingId::new(1).unwrap(), &mut wire).unwrap();
+        let message = Message::new(&wire, &[enabled]).unwrap();
+        let mut response_wire = [0; CONFIG_RESPONSE_BYTES];
+        dispatch_configuration_message(&mut service, &capabilities, &message, &mut response_wire)
+            .unwrap();
+        assert_eq!(
+            ConfigurationResponse::decode(&response_wire),
+            Ok(ConfigurationResponse {
+                request_id: 22,
+                status: ResponseStatus::Ok,
+                revision: 0,
+                setting: Some(SettingId::new(1).unwrap()),
+                value: None,
+            })
+        );
+    }
+
+    #[test]
     fn supervision_wire_binds_generation_authority_time_and_version() {
         let (_, _, root, _, _) = fixture();
         let request = SupervisionRequest {
@@ -1230,6 +1607,83 @@ mod tests {
         assert_eq!(
             SupervisionResponse::decode(&response_wire),
             Err(ConfigError::NonCanonical)
+        );
+    }
+
+    #[test]
+    fn supervision_message_uses_derived_control_and_trusted_restart_context() {
+        struct Eraser;
+        impl mrml_kernel::ServiceAddressSpaceEraser for Eraser {
+            type Error = ();
+
+            fn erase(&mut self, _: mrml_kernel::TaskId, _: UserContext) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+
+        fn context(root: u64, entry: u64) -> UserContext {
+            UserContext::new(
+                mrml_kernel::PhysAddr::new(root).unwrap(),
+                entry,
+                0x7000_0000,
+            )
+            .unwrap()
+        }
+
+        let object = ObjectId(70);
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let retired_service = supervisor.register(object, task).unwrap();
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+        supervisor
+            .complete_cleanup(retirement.cleanup, &mut Eraser)
+            .unwrap();
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::Restart,
+            request_id: 31,
+            service: retired_service,
+            capability: control,
+            now: 0,
+        };
+        let mut request_wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode_message(&mut request_wire).unwrap();
+        assert!(request_wire[32..40].iter().all(|byte| *byte == 0));
+        let message = Message::new(&request_wire, &[control]).unwrap();
+        let fresh = context(0x30_0000, 0x50_0000);
+        let mut response_wire = [0; SUPERVISION_RESPONSE_BYTES];
+        dispatch_supervision_message(
+            &mut supervisor,
+            &management,
+            &mut runtime,
+            &message,
+            Priority::RESPONSIVE,
+            fresh,
+            &mut response_wire,
+        )
+        .unwrap();
+        let response = SupervisionResponse::decode(&response_wire).unwrap();
+        assert_eq!(response.status, ResponseStatus::Ok);
+        assert_eq!(response.state, SupervisionState::Running);
+        assert_ne!(response.service, retired_service);
+        assert_eq!(
+            supervisor.state(response.service),
+            Ok(ServiceState::Running)
+        );
+        assert_eq!(
+            runtime.context(supervisor.task(response.service).unwrap().unwrap()),
+            Ok(&fresh)
+        );
+
+        let forged = Message::new(&request_wire, &[]).unwrap();
+        assert_eq!(
+            SupervisionRequest::decode_message(&forged),
+            Err(ConfigError::InvalidAuthorityEnvelope)
         );
     }
 
@@ -1273,6 +1727,12 @@ mod tests {
         assert!(matches!(
             ConfigurationService::<2, 1>::new(ObjectId(9), &duplicate),
             Err(ConfigError::DuplicateSetting)
+        ));
+        let aliases_root =
+            [SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(9)).unwrap()];
+        assert!(matches!(
+            ConfigurationService::<1, 1>::new(ObjectId(9), &aliases_root),
+            Err(ConfigError::DuplicateObject)
         ));
     }
 }

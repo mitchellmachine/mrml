@@ -344,12 +344,15 @@ exit, expiry, policy change, or explicit action.
 
 **PARTIALLY IMPLEMENTED:** the configuration-service foundation is typed,
 schema-validated, transactional, capability-controlled, versioned, and
-bounded-auditable. Its fixed wire protocol also carries opaque generational
-service and capability handles for supervision requests; names and numeric
-setting IDs never authorize. CPL3 service execution, signed schema admission,
-persistent export/import, storage-backed recovery, and the complete
-supervision adapter remain planned. It is not a clone of the Windows Registry,
-and secrets remain separate.
+bounded-auditable. Kernel-message dispatch resolves authority only from exact
+receiver-space capabilities derived by IPC; payload authority fields are
+canonical zero placeholders, and extra, missing, or payload-forged authority
+fails closed. The supervision adapter composes query and restart with existing
+exact-object, cleanup, backoff, restart-limit, and trusted-context gates. Names,
+numeric setting IDs, and service handles never authorize. A bounded CPL3
+request-buffer syscall path, signed service execution, signed schema admission,
+persistent export/import, and storage-backed recovery remain planned. It is not
+a clone of the Windows Registry, and secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

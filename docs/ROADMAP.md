@@ -133,10 +133,14 @@ authority; unrelated domains continue.
    sequencing with explicit overwrite gaps, and strict version-1
    configuration/supervision request and response codecs. Kernel service-state
    introspection now requires exact READ authority rather than a service token.
-   The next gate is an authenticated CPL3 service image that dispatches this
-   protocol over kernel IPC and composes authorized supervision requests with
-   the existing cleanup/restart mechanism. Signed schema admission and
-   storage-backed export/recovery follow before this item is complete.
+   Message dispatch now takes authority only from kernel-derived receiver-space
+   capabilities, rejects missing/extra/payload-forged authority, and composes
+   authorized restart with existing cleanup, backoff, limit, and trusted fresh-
+   context gates. This path is unit-tested through actual `TaskRuntime` IPC
+   transfer, not yet signed CPL3 execution. The next gate is a bounded user-
+   buffer syscall boundary for these records and an authenticated signed CPL3
+   service image. Signed schema admission and storage-backed export/recovery
+   follow before this item is complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
 3. Implement extent mapping, checksummed COW metadata, directory operations,

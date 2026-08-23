@@ -12,9 +12,17 @@ Implemented boundaries:
 - bounded audit retention with explicit sequence-gap reporting;
 - canonical version-1 configuration request/response encoding; and
 - canonical version-1 service-supervision request/response encoding carrying
-  opaque generational handles.
+  opaque generational handles;
+- kernel-message decoders that require zero authority placeholders and resolve
+  every operation from the exact receiver-space capabilities derived by IPC;
+- bounded configuration dispatch with detail-free authorization rejection; and
+- a supervision adapter that composes query/restart requests with exact kernel
+  authority, cleanup, backoff, restart-limit, and trusted-context gates.
 
 Setting IDs and service tokens identify records but never grant authority.
-Secrets are intentionally outside this value model. Signed schema admission,
-CPL3 IPC dispatch, persistent export/import, native-storage recovery, and the
-kernel supervision adapter remain dependency-ordered follow-up work.
+Secrets are intentionally outside this value model. The dispatch adapters are
+simulation-tested through the kernel's real capability-transfer path, but the
+current 24-byte register syscall cannot carry these larger records. A bounded
+CPL3 request-buffer boundary and signed service-image execution therefore
+remain next, followed by signed schema admission, persistent export/import,
+and native-storage recovery.
