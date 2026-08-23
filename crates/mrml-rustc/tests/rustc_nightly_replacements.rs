@@ -2572,6 +2572,8 @@ fn rustc_unsigned_bit_introspection_reaches_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.isolate_lowest_one() }",
         "const VALUE: i8 = (-44i8).isolate_highest_one(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
         "const VALUE: i64 = (-96i64).isolate_lowest_one(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+        "const VALUE: i8 = 0i8.isolate_highest_one(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i64 = (-9223372036854775808i64).isolate_lowest_one(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
     ];
     for source in sources {
         assert_eq!(
