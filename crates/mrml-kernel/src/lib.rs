@@ -20,6 +20,7 @@ mod platform;
 mod policy;
 mod scheduler;
 mod service_lifecycle;
+mod shared_memory;
 mod syscall;
 mod task_runtime;
 mod virtual_gpu;
@@ -69,6 +70,10 @@ pub use scheduler::{
 pub use service_lifecycle::{
     RestartPolicy, ServiceError, ServiceFault, ServiceId, ServiceRetirement, ServiceState,
     ServiceSupervisor,
+};
+pub use shared_memory::{
+    HostResourceHandle, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,
+    SharedMemoryBindings,
 };
 pub use syscall::{
     MAX_SYSCALL_INLINE_PAYLOAD, SyscallError, SyscallRequest, UserCallFrame, X86_USER_CALL_VECTOR,

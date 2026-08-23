@@ -326,6 +326,18 @@ impl<const N: usize> GuestMemory<N> {
         Ok(region)
     }
 
+    /// Returns the exact region represented by a still-live mapping identity.
+    /// Mapping identities are never inferred from an address because doing so
+    /// could silently rebind an external resource after layout changes.
+    pub fn region(&self, id: GuestMappingId) -> Result<GuestRegion, VmError> {
+        self.mappings[..self.count]
+            .iter()
+            .flatten()
+            .find(|mapping| mapping.id == id)
+            .map(|mapping| mapping.region)
+            .ok_or(VmError::StaleMapping)
+    }
+
     pub fn protect(
         &mut self,
         id: GuestMappingId,

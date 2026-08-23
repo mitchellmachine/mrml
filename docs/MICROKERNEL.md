@@ -1632,8 +1632,13 @@ WHP/KVM proof.
 
 1. Capability model, explicit directory grants, IPC wire format, and property
    tests. The fixed-size policy model and stable, versioned cross-VM control
-   encoding are implemented. Shared-memory transport and host-handle binding
-   remain pending.
+   encoding are implemented. A fixed-capacity generational host-resource table
+   now binds an opaque nonzero host handle to exactly one live VM mapping and
+   capability object. Every use repeats object, `MAP`, read/write attenuation,
+   VM identity, mapping identity, and mapping-liveness checks; revocation
+   requires exact `CONTROL` authority, and stale generations cannot resolve a
+   replacement. The host token never enters guest memory. Multi-party
+   shared-memory transport and native KVM/WHP handle adapters remain pending.
 2. Original x86_64 UEFI loader, physical allocator, page tables, exceptions,
    timer, scheduler, and serial diagnostics under emulation.
 3. User address spaces and synchronous IPC; isolated storage, network, tool,
