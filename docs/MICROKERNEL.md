@@ -280,10 +280,19 @@ write draining requested. Invalid completion or timeout after the leaf write is
 `FailStop`; a pre-write busy condition is a clean rejection. The native MMIO
 constructor requires a unique uncached mapping, and the binding contract
 requires coverage of every remapping unit capable of reaching the granule.
-DMAR discovery, multi-unit assembly, fault-record handling, and real-hardware
-validation remain required before stronger claims are enabled. Register fields
-and ordering follow the Intel VT-d Architecture Specification rather than
-third-party implementation code.
+Firmware discovery now copies the unique DMAR through the same independently
+checksummed RSDP/XSDT walk used for MADT, with a bounded destination and a
+second checksum after copying. A no-allocation parser validates the declared
+host address width, every structure boundary, aligned nonzero DRHD register
+base, segment, include-all uniqueness, device-scope type and reserved bytes,
+and every PCI bridge-path device/function pair. Duplicate register blocks,
+duplicate PCI routes, multiple include-all units for one segment, missing DRHD
+units, excessive path depth, and capacity exhaustion are rejected. Unknown
+non-DRHD structures remain skipped only after their length is validated.
+Multi-unit runtime assembly, PCI bridge resolution, fault-record handling, and
+real-hardware validation remain required before stronger claims are enabled.
+Register fields and ordering follow the Intel VT-d Architecture Specification
+rather than third-party implementation code.
 
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context

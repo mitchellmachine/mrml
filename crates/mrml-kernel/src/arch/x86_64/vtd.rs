@@ -17,6 +17,10 @@ const IOTLB_OFFSET_DELTA: usize = 8;
 const VTD_PERMISSION_MASK: u64 = 0b11;
 const VTD_LARGE_PAGE: u64 = 1 << 7;
 const VTD_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
+const DMAR_HEADER_BYTES: usize = 48;
+const DRHD_HEADER_BYTES: usize = 16;
+const DEVICE_SCOPE_HEADER_BYTES: usize = 6;
+const MAX_PCI_PATH_DEPTH: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VtdError {
@@ -24,6 +28,256 @@ pub enum VtdError {
     InvalidLeaf,
     Busy,
     InvalidCompletion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DmarError {
+    Truncated,
+    WrongSignature,
+    InvalidLength,
+    BadChecksum,
+    InvalidHostAddressWidth,
+    UnitTableFull,
+    ScopeTableFull,
+    InvalidRegisterBase,
+    InvalidScope,
+    PathTooDeep,
+    AmbiguousUnit,
+    MissingUnit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PciPathElement {
+    pub device: u8,
+    pub function: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DmarDeviceScope {
+    pub scope_type: u8,
+    pub enumeration_id: u8,
+    pub start_bus: u8,
+    pub path: [PciPathElement; MAX_PCI_PATH_DEPTH],
+    pub path_len: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DmarUnit {
+    pub segment: u16,
+    pub register_base: PhysAddr,
+    pub include_all: bool,
+    scope_start: u16,
+    scope_len: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DmarTopology<const UNITS: usize, const SCOPES: usize> {
+    pub host_address_width: u8,
+    pub flags: u8,
+    units: [Option<DmarUnit>; UNITS],
+    scopes: [Option<DmarDeviceScope>; SCOPES],
+    unit_count: usize,
+    scope_count: usize,
+}
+
+impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
+    pub fn parse(table: &[u8]) -> Result<Self, DmarError> {
+        if table.len() < DMAR_HEADER_BYTES {
+            return Err(DmarError::Truncated);
+        }
+        if &table[..4] != b"DMAR" {
+            return Err(DmarError::WrongSignature);
+        }
+        let length = read_u32(table, 4)? as usize;
+        if length != table.len() || length < DMAR_HEADER_BYTES {
+            return Err(DmarError::InvalidLength);
+        }
+        if table.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0 {
+            return Err(DmarError::BadChecksum);
+        }
+        let host_address_width = table[36]
+            .checked_add(1)
+            .ok_or(DmarError::InvalidHostAddressWidth)?;
+        if !(32..=52).contains(&host_address_width) {
+            return Err(DmarError::InvalidHostAddressWidth);
+        }
+        let mut topology = Self {
+            host_address_width,
+            flags: table[37],
+            units: [None; UNITS],
+            scopes: [None; SCOPES],
+            unit_count: 0,
+            scope_count: 0,
+        };
+        let mut offset = DMAR_HEADER_BYTES;
+        while offset < length {
+            let header_end = offset.checked_add(4).ok_or(DmarError::InvalidLength)?;
+            if header_end > length {
+                return Err(DmarError::Truncated);
+            }
+            let structure_type = read_u16(table, offset)?;
+            let structure_len = read_u16(table, offset + 2)? as usize;
+            if structure_len < 4 {
+                return Err(DmarError::InvalidLength);
+            }
+            let end = offset
+                .checked_add(structure_len)
+                .ok_or(DmarError::InvalidLength)?;
+            if end > length {
+                return Err(DmarError::Truncated);
+            }
+            if structure_type == 0 {
+                topology.parse_drhd(&table[offset..end])?;
+            }
+            offset = end;
+        }
+        if topology.unit_count == 0 {
+            return Err(DmarError::MissingUnit);
+        }
+        Ok(topology)
+    }
+
+    pub fn units(&self) -> impl Iterator<Item = &DmarUnit> {
+        self.units[..self.unit_count].iter().flatten()
+    }
+
+    pub fn scopes(&self, unit: &DmarUnit) -> impl Iterator<Item = &DmarDeviceScope> {
+        let start = unit.scope_start as usize;
+        let end = start + unit.scope_len as usize;
+        self.scopes[start..end].iter().flatten()
+    }
+
+    fn parse_drhd(&mut self, bytes: &[u8]) -> Result<(), DmarError> {
+        if bytes.len() < DRHD_HEADER_BYTES {
+            return Err(DmarError::Truncated);
+        }
+        if self.unit_count == UNITS {
+            return Err(DmarError::UnitTableFull);
+        }
+        let include_all = bytes[4] & 1 != 0;
+        if bytes[4] & !1 != 0 || bytes[5] != 0 {
+            return Err(DmarError::InvalidLength);
+        }
+        let segment = read_u16(bytes, 6)?;
+        let register = read_u64(bytes, 8)?;
+        let register_base = PhysAddr::new(register).map_err(|_| DmarError::InvalidRegisterBase)?;
+        if register == 0 || !register.is_multiple_of(4096) {
+            return Err(DmarError::InvalidRegisterBase);
+        }
+        if self.units().any(|unit| {
+            unit.register_base == register_base
+                || (include_all && unit.include_all && unit.segment == segment)
+        }) {
+            return Err(DmarError::AmbiguousUnit);
+        }
+        let scope_start = self.scope_count;
+        let mut offset = DRHD_HEADER_BYTES;
+        while offset < bytes.len() {
+            if offset + 2 > bytes.len() {
+                return Err(DmarError::Truncated);
+            }
+            let scope_len = bytes[offset + 1] as usize;
+            if scope_len < DEVICE_SCOPE_HEADER_BYTES + 2 || !scope_len.is_multiple_of(2) {
+                return Err(DmarError::InvalidScope);
+            }
+            let end = offset
+                .checked_add(scope_len)
+                .ok_or(DmarError::InvalidLength)?;
+            if end > bytes.len() {
+                return Err(DmarError::Truncated);
+            }
+            let scope = parse_scope(&bytes[offset..end])?;
+            if self.scope_count == SCOPES {
+                return Err(DmarError::ScopeTableFull);
+            }
+            let duplicates_prior_unit = self.units().any(|unit| {
+                unit.segment == segment
+                    && self
+                        .scopes(unit)
+                        .any(|existing| same_pci_route(existing, &scope))
+            });
+            let duplicates_this_unit = self.scopes[scope_start..self.scope_count]
+                .iter()
+                .flatten()
+                .any(|existing| same_pci_route(existing, &scope));
+            if duplicates_prior_unit || duplicates_this_unit {
+                return Err(DmarError::AmbiguousUnit);
+            }
+            self.scopes[self.scope_count] = Some(scope);
+            self.scope_count += 1;
+            offset = end;
+        }
+        self.units[self.unit_count] = Some(DmarUnit {
+            segment,
+            register_base,
+            include_all,
+            scope_start: u16::try_from(scope_start).map_err(|_| DmarError::ScopeTableFull)?,
+            scope_len: u16::try_from(self.scope_count - scope_start)
+                .map_err(|_| DmarError::ScopeTableFull)?,
+        });
+        self.unit_count += 1;
+        Ok(())
+    }
+}
+
+fn same_pci_route(left: &DmarDeviceScope, right: &DmarDeviceScope) -> bool {
+    left.start_bus == right.start_bus
+        && left.path_len == right.path_len
+        && left.path[..left.path_len as usize] == right.path[..right.path_len as usize]
+}
+
+fn parse_scope(bytes: &[u8]) -> Result<DmarDeviceScope, DmarError> {
+    if !(1..=5).contains(&bytes[0]) || bytes[2] != 0 || bytes[3] != 0 {
+        return Err(DmarError::InvalidScope);
+    }
+    let path_len = (bytes.len() - DEVICE_SCOPE_HEADER_BYTES) / 2;
+    if path_len == 0 || path_len > MAX_PCI_PATH_DEPTH {
+        return Err(if path_len == 0 {
+            DmarError::InvalidScope
+        } else {
+            DmarError::PathTooDeep
+        });
+    }
+    let mut path = [PciPathElement {
+        device: 0,
+        function: 0,
+    }; MAX_PCI_PATH_DEPTH];
+    for (index, pair) in bytes[DEVICE_SCOPE_HEADER_BYTES..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .enumerate()
+    {
+        if pair[0] > 31 || pair[1] > 7 {
+            return Err(DmarError::InvalidScope);
+        }
+        path[index] = PciPathElement {
+            device: pair[0],
+            function: pair[1],
+        };
+    }
+    Ok(DmarDeviceScope {
+        scope_type: bytes[0],
+        enumeration_id: bytes[4],
+        start_bus: bytes[5],
+        path,
+        path_len: path_len as u8,
+    })
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, DmarError> {
+    let source = bytes.get(offset..offset + 2).ok_or(DmarError::Truncated)?;
+    Ok(u16::from_le_bytes([source[0], source[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, DmarError> {
+    let source = bytes.get(offset..offset + 4).ok_or(DmarError::Truncated)?;
+    Ok(u32::from_le_bytes(source.try_into().unwrap()))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, DmarError> {
+    let source = bytes.get(offset..offset + 8).ok_or(DmarError::Truncated)?;
+    Ok(u64::from_le_bytes(source.try_into().unwrap()))
 }
 
 /// Narrow register boundary for one VT-d remapping hardware unit.
@@ -229,6 +483,74 @@ mod tests {
         fn write64(&mut self, offset: usize, value: u64) {
             self.values[offset / 8] = value;
         }
+    }
+
+    fn finalize_table(table: &mut [u8]) {
+        table[9] = 0;
+        let sum = table.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte));
+        table[9] = 0u8.wrapping_sub(sum);
+    }
+
+    fn dmar() -> [u8; 72] {
+        let mut table = [0u8; 72];
+        table[..4].copy_from_slice(b"DMAR");
+        table[4..8].copy_from_slice(&72u32.to_le_bytes());
+        table[36] = 47;
+        table[48..50].copy_from_slice(&0u16.to_le_bytes());
+        table[50..52].copy_from_slice(&24u16.to_le_bytes());
+        table[52] = 1;
+        table[54..56].copy_from_slice(&0u16.to_le_bytes());
+        table[56..64].copy_from_slice(&0xfed9_0000u64.to_le_bytes());
+        table[64..72].copy_from_slice(&[1, 8, 0, 0, 0, 2, 3, 0]);
+        finalize_table(&mut table);
+        table
+    }
+
+    #[test]
+    fn parses_checked_drhd_and_complete_pci_path() {
+        let topology = DmarTopology::<2, 4>::parse(&dmar()).unwrap();
+        assert_eq!(topology.host_address_width, 48);
+        let unit = topology.units().next().unwrap();
+        assert!(unit.include_all);
+        assert_eq!(unit.register_base.get(), 0xfed9_0000);
+        let scope = topology.scopes(unit).next().unwrap();
+        assert_eq!(scope.start_bus, 2);
+        assert_eq!(scope.path_len, 1);
+        assert_eq!(
+            scope.path[0],
+            PciPathElement {
+                device: 3,
+                function: 0
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_corruption_truncation_and_ambiguous_units() {
+        let mut corrupt = dmar();
+        corrupt[56] ^= 1;
+        assert_eq!(
+            DmarTopology::<2, 4>::parse(&corrupt),
+            Err(DmarError::BadChecksum)
+        );
+        let mut truncated = dmar();
+        truncated[50..52].copy_from_slice(&25u16.to_le_bytes());
+        finalize_table(&mut truncated);
+        assert_eq!(
+            DmarTopology::<2, 4>::parse(&truncated),
+            Err(DmarError::Truncated)
+        );
+
+        let original = dmar();
+        let mut duplicate = [0u8; 96];
+        duplicate[..72].copy_from_slice(&original);
+        duplicate[4..8].copy_from_slice(&96u32.to_le_bytes());
+        duplicate[72..96].copy_from_slice(&original[48..72]);
+        finalize_table(&mut duplicate);
+        assert_eq!(
+            DmarTopology::<2, 4>::parse(&duplicate),
+            Err(DmarError::AmbiguousUnit)
+        );
     }
 
     #[test]

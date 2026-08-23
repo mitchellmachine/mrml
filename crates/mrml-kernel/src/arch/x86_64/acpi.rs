@@ -19,6 +19,9 @@ pub enum AcpiError {
     MissingMadt,
     DuplicateMadt,
     MadtTooLarge,
+    MissingDmar,
+    DuplicateDmar,
+    DmarTooLarge,
 }
 
 /// Read-only access to firmware-owned physical bytes. Implementations must
@@ -36,6 +39,44 @@ pub fn copy_madt<M: AcpiMemory>(
     memory: &mut M,
     rsdp_physical: u64,
     output: &mut [u8],
+) -> Result<usize, AcpiError> {
+    copy_unique_sdt(
+        memory,
+        rsdp_physical,
+        output,
+        *b"APIC",
+        AcpiError::MissingMadt,
+        AcpiError::DuplicateMadt,
+        AcpiError::MadtTooLarge,
+    )
+}
+
+/// Finds and copies the unique DMA Remapping Reporting table reachable from a
+/// validated RSDP. No firmware mapping needs to remain trusted after return.
+pub fn copy_dmar<M: AcpiMemory>(
+    memory: &mut M,
+    rsdp_physical: u64,
+    output: &mut [u8],
+) -> Result<usize, AcpiError> {
+    copy_unique_sdt(
+        memory,
+        rsdp_physical,
+        output,
+        *b"DMAR",
+        AcpiError::MissingDmar,
+        AcpiError::DuplicateDmar,
+        AcpiError::DmarTooLarge,
+    )
+}
+
+fn copy_unique_sdt<M: AcpiMemory>(
+    memory: &mut M,
+    rsdp_physical: u64,
+    output: &mut [u8],
+    wanted_signature: [u8; 4],
+    missing: AcpiError,
+    duplicate: AcpiError,
+    too_large: AcpiError,
 ) -> Result<usize, AcpiError> {
     let mut rsdp = [0u8; RSDP_V2_BYTES];
     read(memory, rsdp_physical, &mut rsdp[..RSDP_V1_BYTES])?;
@@ -102,18 +143,18 @@ pub fn copy_madt<M: AcpiMemory>(
         }
         let mut header = [0u8; SDT_HEADER_BYTES];
         read(memory, table, &mut header)?;
-        if &header[..4] != b"APIC" {
+        if header[..4] != wanted_signature {
             continue;
         }
         if found.is_some() {
-            return Err(AcpiError::DuplicateMadt);
+            return Err(duplicate);
         }
         let length = validated_header_and_checksum(memory, table, &header)?;
         if length > output.len() {
-            return Err(AcpiError::MadtTooLarge);
+            return Err(too_large);
         }
         read(memory, table, &mut output[..length])?;
-        if &output[..4] != b"APIC"
+        if output[..4] != wanted_signature
             || read_u32(output, 4) as usize != length
             || checksum(&output[..length]) != 0
         {
@@ -127,7 +168,7 @@ pub fn copy_madt<M: AcpiMemory>(
     if physical_checksum(memory, root, root_length)? != 0 {
         return Err(AcpiError::BadChecksum);
     }
-    found.ok_or(AcpiError::MissingMadt)
+    found.ok_or(missing)
 }
 
 fn validated_sdt<M: AcpiMemory>(
@@ -306,5 +347,21 @@ mod tests {
             copy_madt(&mut bad_rsdp, 0x100, &mut [0; 64]),
             Err(AcpiError::BadRsdpSignature)
         );
+    }
+
+    #[test]
+    fn copies_unique_dmar_through_the_same_validated_root() {
+        let mut memory = memory();
+        memory.0[0x200 + 4..0x200 + 8].copy_from_slice(&52u32.to_le_bytes());
+        memory.0[0x22c..0x234].copy_from_slice(&0x380u64.to_le_bytes());
+        finalize(&mut memory.0[0x200..0x234], 9);
+        let dmar = &mut memory.0[0x380..0x3b0];
+        dmar[..4].copy_from_slice(b"DMAR");
+        dmar[4..8].copy_from_slice(&48u32.to_le_bytes());
+        dmar[36] = 47;
+        finalize(dmar, 9);
+        let mut output = [0u8; 64];
+        assert_eq!(copy_dmar(&mut memory, 0x100, &mut output), Ok(48));
+        assert_eq!(&output[..4], b"DMAR");
     }
 }

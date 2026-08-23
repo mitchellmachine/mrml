@@ -16,7 +16,7 @@ mod topology;
 mod trap;
 mod vmx;
 mod vtd;
-pub use acpi::{AcpiError, AcpiMemory, copy_madt};
+pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt};
 pub use address_space::{AddressSpace, AddressSpaceError, Mapping, MappingId};
 pub use ap_online::{ApOnlineError, ApOnlineTable};
 pub use ap_trampoline::{
@@ -58,7 +58,10 @@ pub use vmx::{
     EptPointer, NativeVmx, VmxCapabilities, VmxControl, VmxControlMask, VmxController, VmxError,
     VmxInstructionError, VmxInstructions, VmxPrerequisites, VmxState,
 };
-pub use vtd::{NativeVtdMmio, VtdDmaIsolation, VtdError, VtdInvalidator, VtdRegisterIo};
+pub use vtd::{
+    DmarDeviceScope, DmarError, DmarTopology, DmarUnit, NativeVtdMmio, PciPathElement,
+    VtdDmaIsolation, VtdError, VtdInvalidator, VtdRegisterIo,
+};
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
