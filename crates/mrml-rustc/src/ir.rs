@@ -359,6 +359,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::CheckedIntegerOption { .. }
             | ExprKind::IntegerOptionUnwrapOr { .. }
             | ExprKind::IntegerOptionPredicate { .. }
+            | ExprKind::IntegerOptionMapOr { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }

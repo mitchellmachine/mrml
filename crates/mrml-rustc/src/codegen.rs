@@ -2343,6 +2343,15 @@ fn validate_runtime_inline_const<
                 recurse(closure)?;
             }
         }
+        ExprKind::IntegerOptionMapOr {
+            option,
+            default,
+            closure,
+        } => {
+            recurse(option)?;
+            recurse(default)?;
+            recurse(closure)?;
+        }
         ExprKind::Closure { body, .. } => recurse(body)?,
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base)?;
@@ -3804,6 +3813,130 @@ fn runtime_expression_type_with_locals<
                 }
             }
             Ok(RuntimeExpressionType::Bool)
+        }
+        ExprKind::IntegerOptionMapOr {
+            option,
+            default,
+            closure,
+        } => {
+            let mut producer_tree = *tree;
+            producer_tree
+                .replace_kind(
+                    id,
+                    ExprKind::IntegerOptionPredicate {
+                        option,
+                        some: true,
+                        closure: None,
+                    },
+                )
+                .map_err(CodegenErrorKind::Expression)?;
+            runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                &producer_tree,
+                id,
+                depth + 1,
+            )?;
+            let option_expression = tree
+                .expression(option)
+                .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+            let ExprKind::CheckedIntegerOption {
+                base, operation, ..
+            } = option_expression.kind
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let input_type = match operation {
+                crate::expression::CheckedIntegerOptionOperation::Cast(target)
+                | crate::expression::CheckedIntegerOptionOperation::Truncate(target) => {
+                    RuntimeExpressionType::Integer(Some(target))
+                }
+                crate::expression::CheckedIntegerOptionOperation::SignedDifference => {
+                    let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    };
+                    RuntimeExpressionType::Integer(Some(
+                        source
+                            .signed_counterpart()
+                            .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?,
+                    ))
+                }
+                crate::expression::CheckedIntegerOptionOperation::Logarithm { .. } => {
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                }
+                crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
+                    let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    };
+                    RuntimeExpressionType::Integer(Some(
+                        if signed {
+                            source.signed_counterpart()
+                        } else {
+                            source.unsigned_counterpart()
+                        }
+                        .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?,
+                    ))
+                }
+                _ => base_type,
+            };
+            let RuntimeExpressionType::Integer(Some(input_type)) = input_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let closure_expression = tree
+                .expression(closure)
+                .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+            let ExprKind::Closure {
+                parameter: Some(parameter),
+                body,
+            } = closure_expression.kind
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let mut closure_tree = *tree;
+            closure_tree
+                .bind_closure_parameter(parameter, input_type)
+                .map_err(CodegenErrorKind::Expression)?;
+            let default_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                default,
+                depth + 1,
+            )?;
+            let mapped_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                &closure_tree,
+                body,
+                depth + 1,
+            )?;
+            if !runtime_types_compatible(default_type, mapped_type) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            let output_type = match (default_type, mapped_type) {
+                (RuntimeExpressionType::Integer(None), typed)
+                | (typed, RuntimeExpressionType::Integer(None)) => typed,
+                (typed, _) => typed,
+            };
+            if matches!(
+                output_type,
+                RuntimeExpressionType::Default | RuntimeExpressionType::Array { .. }
+            ) || runtime_type_stack_slots(output_type) != 1
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(output_type)
         }
         ExprKind::SaturatingArithmetic {
             base,
@@ -6379,6 +6512,92 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.width = runtime_width("u64")
                     .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
                 self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerOptionMapOr {
+                option,
+                default,
+                closure,
+            } => {
+                let (_, previous_width) =
+                    self.emit_checked_integer_option(tree, option, depth + 1)?;
+                let option_expression = tree
+                    .expression(option)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                let ExprKind::CheckedIntegerOption {
+                    base, operation, ..
+                } = option_expression.kind
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let input_type = match operation {
+                    crate::expression::CheckedIntegerOptionOperation::Cast(target)
+                    | crate::expression::CheckedIntegerOptionOperation::Truncate(target) => target,
+                    crate::expression::CheckedIntegerOptionOperation::SignedDifference => {
+                        let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                        };
+                        source
+                            .signed_counterpart()
+                            .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?
+                    }
+                    crate::expression::CheckedIntegerOptionOperation::Logarithm { .. } => {
+                        crate::IntegerType::U32
+                    }
+                    crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
+                        let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                        };
+                        if signed {
+                            source.signed_counterpart()
+                        } else {
+                            source.unsigned_counterpart()
+                        }
+                        .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?
+                    }
+                    _ => {
+                        let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                        };
+                        source
+                    }
+                };
+                let closure_expression = tree
+                    .expression(closure)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                let ExprKind::Closure {
+                    parameter: Some(parameter),
+                    body,
+                } = closure_expression.kind
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let mut closure_tree = *tree;
+                closure_tree
+                    .bind_closure_parameter(parameter, input_type)
+                    .map_err(|kind| self.error(CodegenErrorKind::Expression(kind)))?;
+                self.emit(&[0x50, 0x41, 0x50])?;
+                self.evaluation_depth += 2;
+                self.emit_expression(tree, default, depth + 1)?;
+                self.emit(&[0x49, 0x89, 0xc1, 0x41, 0x58, 0x59, 0x4c, 0x89, 0xc8])?;
+                self.evaluation_depth -= 2;
+                self.emit(&[0x4d, 0x85, 0xc0])?;
+                let none = self.emit_forward_branch(0x84)?;
+                self.emit(&[0x48, 0x89, 0xc8, 0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(&closure_tree, body, depth + 1)?;
+                self.emit(&[0x48, 0x83, 0xc4, 0x08])?;
+                self.evaluation_depth -= 1;
+                self.patch_forward_branch(none)?;
                 self.width = previous_width;
             }
             ExprKind::SaturatingArithmetic {
@@ -17288,6 +17507,47 @@ mod tests {
             };
             assert!(
                 compile_x86_64_function::<_, 2048, 4, 128>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn maps_checked_integer_options_with_eager_defaults_and_lazy_closures() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64, threshold: i64) -> bool { a.checked_signed_diff(b).map_or(false, |value| value < threshold) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, fallback: i64) -> i64 { input.checked_truncate::<i16>().map_or(fallback, |value| value as i64 * 2) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> char { input.checked_ilog2().map_or('x', |value| if value > 3 { 'y' } else { 'z' }) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 3072, 4, 160>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or(0u32, || 1u32) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or(0u32, |value| value > 0) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map_or(0u32) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, mapper: u32) -> u32 { a.checked_add(b).map_or(0u32, mapper) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 3072, 4, 160>(
                     &function,
                     &NoConstants,
                     X86_64Abi::SystemV,

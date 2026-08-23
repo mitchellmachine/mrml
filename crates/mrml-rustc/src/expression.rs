@@ -548,6 +548,11 @@ pub enum ExprKind<'source> {
         some: bool,
         closure: Option<ExprId>,
     },
+    IntegerOptionMapOr {
+        option: ExprId,
+        default: ExprId,
+        closure: ExprId,
+    },
     IntegerClampMagnitude {
         base: ExprId,
         limit: ExprId,
@@ -877,6 +882,20 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
         Ok(())
     }
 
+    pub(crate) fn replace_kind(
+        &mut self,
+        id: ExprId,
+        kind: ExprKind<'source>,
+    ) -> Result<(), ExpressionErrorKind> {
+        let expression = self
+            .nodes
+            .get_mut(id.0)
+            .and_then(Option::as_mut)
+            .ok_or(ExpressionErrorKind::InvalidExpressionTree)?;
+        expression.kind = kind;
+        Ok(())
+    }
+
     pub(crate) fn range_validations(&self) -> &[Option<RangeValidation>] {
         &self.range_validations[..self.range_validation_count]
     }
@@ -932,6 +951,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::CheckedIntegerOption { .. }
             | ExprKind::IntegerOptionUnwrapOr { .. }
             | ExprKind::IntegerOptionPredicate { .. }
+            | ExprKind::IntegerOptionMapOr { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1219,6 +1239,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::CheckedIntegerOption { .. }
             | ExprKind::IntegerOptionUnwrapOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionPredicate { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerOptionMapOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2810,6 +2831,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 if let Some(closure) = closure {
                     self.substitute_identifier(closure, name, replacement, depth + 1)?;
                 }
+            }
+            ExprKind::IntegerOptionMapOr {
+                option,
+                default,
+                closure,
+            } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
+                self.substitute_identifier(default, name, replacement, depth + 1)?;
+                self.substitute_identifier(closure, name, replacement, depth + 1)?;
             }
             ExprKind::Closure { body, .. } => {
                 self.substitute_identifier(body, name, replacement, depth + 1)?;
@@ -4606,6 +4636,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "is_none"
                         | "is_some_and"
                         | "is_none_or"
+                        | "map_or"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4793,6 +4824,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "expect"
                     | "is_some_and"
                     | "is_none_or"
+                    | "map_or"
                     | "unwrap_or"
                     | "unwrap_or_else"
                     | "strict_add"
@@ -4890,6 +4922,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "copy_to_nonoverlapping"
                     | "copy_from"
                     | "copy_from_nonoverlapping"
+                    | "map_or"
                     | "clamp"
             ) {
                 let comma = self.take()?;
@@ -5272,6 +5305,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     closure: Some(argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?),
+                },
+                "map_or" => ExprKind::IntegerOptionMapOr {
+                    option: base,
+                    default: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    closure: second_argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
                 },
                 "clamp_magnitude" => ExprKind::IntegerClampMagnitude {
                     base,

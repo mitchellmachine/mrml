@@ -2367,7 +2367,8 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `Option::unwrap_or_default`, extract them with `Option::unwrap` or
 `Option::expect`, or extract them in an unsafe function with
 `Option::unwrap_unchecked`; callers can observe them with `Option::is_some` and
-`Option::is_none`, `Option::is_some_and`, and `Option::is_none_or`.
+`Option::is_none`, `Option::is_some_and`, and `Option::is_none_or`, or map them
+with `Option::map_or`.
 Non-overflowing arithmetic, valid divisions and remainders,
 exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
@@ -2431,6 +2432,13 @@ candidate-stack node, preserving exact cast, logarithm, signed-difference, and
 ordinary producer result types without extending its function-local lifetime.
 Captured parameters and locals remain available. Predicate bodies execute only
 for `Some`; `None` returns `false` for `is_some_and` and `true` for `is_none_or`.
+
+Checked-option `map_or` evaluates its default eagerly, then executes its
+bounded one-argument mapping closure only for `Some`. The closure may capture
+parameters and locals, and its mapped result has an independent compatible
+one-word scalar type rather than being forced to the checked producer's type.
+Closures remain compiler-internal expression nodes rather than first-class
+runtime values.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
