@@ -642,6 +642,25 @@ mod tests {
         let result = compile_wide(tuple_sequence, "answer", ObjectFormat::Coff);
         assert!(result.is_ok(), "{result:?}");
 
+        let tuple_field_assignment = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, flag: bool) -> u64 { let mut selected: (u16, bool, char) = (first, flag, 'x'); selected.0 += second; selected.1 ^= true; selected.2 = 'z'; selected.0 as u64 + if selected.1 { 100 } else { 0 } + if selected.2 == 'z' { 1 } else { 0 } }";
+        let result = compile_wide(tuple_field_assignment, "answer", ObjectFormat::Elf64);
+        assert!(result.is_ok(), "{result:?}");
+
+        let immutable_tuple_field = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> u16 { let selected: (u16, bool) = (value, false); selected.0 = 1; selected.0 }";
+        let error = compile_wide(immutable_tuple_field, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::ImmutableAssignment)
+        );
+
+        let tuple_assignment_out_of_range = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> u16 { let mut selected: (u16, bool) = (value, false); selected.2 = true; selected.0 }";
+        let error =
+            compile_wide(tuple_assignment_out_of_range, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::ValueOutOfRange)
+        );
+
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
         let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

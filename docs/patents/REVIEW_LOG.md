@@ -347,4 +347,7 @@ their existing fixed stack slots. This reuses conventional place parsing,
 scalar compound assignment, and aggregate layout; it introduces no novel
 algorithm, ABI, protocol, cryptographic construction, or optimization.
 
+Verification used independent 398-byte COFF and 792-byte ELF64 objects across
+Windows and Arch Linux callers.
+
 Patent review: `NOT_TRIGGERED` — ordinary aggregate-place assignment.

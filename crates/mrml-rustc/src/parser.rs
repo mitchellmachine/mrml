@@ -539,14 +539,13 @@ impl<'source> WhileLoop<'source> {
 
 impl<'source> Assignment<'source> {
     pub fn binding_name(&self) -> &'source str {
-        self.name
-            .trim_start_matches('*')
-            .trim_start()
-            .split_once('[')
-            .map_or_else(
-                || self.name.trim_start_matches('*').trim(),
-                |(name, _)| name.trim(),
-            )
+        let name = self.name.trim_start_matches('*').trim_start();
+        let end = [name.find('['), name.find('.')]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(name.len());
+        name[..end].trim()
     }
 
     pub fn index(&self) -> Option<&'source str> {
@@ -554,6 +553,11 @@ impl<'source> Assignment<'source> {
             .split_once('[')
             .and_then(|(_, rest)| rest.rsplit_once(']'))
             .map(|(index, _)| index.trim())
+    }
+
+    pub fn tuple_field(&self) -> Option<usize> {
+        let (_, field) = self.name.split_once('.')?;
+        field.trim().parse().ok()
     }
 
     pub fn index_span(&self) -> Option<Span> {
@@ -1089,6 +1093,13 @@ impl<'source> BodyParser<'source> {
     }
 
     fn assignment_target_end(&mut self, name_end: usize) -> Result<usize, ParseError> {
+        if self.peek()?.is_some_and(|token| token.text == ".") {
+            self.take()?;
+            let Some(field) = self.take()? else {
+                return Ok(name_end);
+            };
+            return Ok(field.span.end);
+        }
         if !self
             .peek()?
             .is_some_and(|token| token.kind == TokenKind::OpenBracket)
@@ -3260,6 +3271,24 @@ mod tests {
         let assignment = body.assignments()[0].unwrap();
         assert_eq!(assignment.binding_name(), "values");
         assert_eq!(assignment.index(), Some("index + 1"));
+        assert_eq!(assignment.operator, AssignmentOperator::Add);
+        assert_eq!(assignment.value, "3");
+    }
+
+    #[test]
+    fn parses_tuple_field_assignment_targets() {
+        let module = Parser::new(
+            "fn mutate(value: u16) -> u16 { let mut pair = (value, false); pair.0 += 3; pair.0 }",
+        )
+        .parse_module::<2, 2>()
+        .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let assignment = body.assignments()[0].unwrap();
+        assert_eq!(assignment.binding_name(), "pair");
+        assert_eq!(assignment.tuple_field(), Some(0));
         assert_eq!(assignment.operator, AssignmentOperator::Add);
         assert_eq!(assignment.value, "3");
     }

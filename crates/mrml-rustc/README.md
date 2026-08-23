@@ -2781,6 +2781,14 @@ that each ordered statement ran exactly once before its tuple consumer. This
 slice covers scalar statement prefixes and inline-constant wrappers; tuple
 destructuring, field mutation, nesting, and general aggregate statement values
 remain outside it.
+A mutable tuple-place probe produced a 398-byte COFF object and a 792-byte ELF64
+object. Independent callers matched four paths on Windows and Arch Linux,
+including zero and `u16::MAX` inputs. Direct integer and character stores plus a
+Boolean compound store preserved a later scalar stack local and the other tuple
+fields. The compiler rejects immutable tuple places, out-of-range fields, wrong
+value types, and invalid Boolean compound operators. This remains limited to
+numeric fields of mutable bounded scalar-tuple locals; tuple references, nested
+places, destructuring, and public tuple ABI transport are not claimed.
 A diverging `-> !` helper produced a 172-byte COFF object and a 568-byte ELF64
 object. Independent pinned-nightly callers matched six reachable non-diverging
 branch cases on Windows and Arch Linux, including zero and integer-width
