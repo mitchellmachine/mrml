@@ -2813,6 +2813,37 @@ fn preanalyze_runtime_expression_statement_reads<
     preanalyze_runtime_expression_reads(facts, locals, function, resolver, &tree, statement.span)
 }
 
+fn preanalyze_runtime_source_expression_reads<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    expression: &'source str,
+    expression_span: Span,
+    body_start: usize,
+) -> Result<(), CodegenError> {
+    let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(expression)
+        .parse()
+        .map_err(|error| CodegenError {
+            kind: CodegenErrorKind::Expression(error.kind),
+            span: translate_span(body_start + expression_span.start, error.span),
+        })?;
+    let ty = runtime_expression_type_with_locals(function, resolver, locals, &tree, tree.root(), 0)
+        .map_err(|kind| CodegenError {
+            kind,
+            span: translate_span(body_start, expression_span),
+        })?;
+    if runtime_type_stack_slots(ty) != 1 {
+        return Ok(());
+    }
+    preanalyze_runtime_expression_reads(facts, locals, function, resolver, &tree, expression_span)
+}
+
 fn preanalyze_runtime_assignment_access<
     'source,
     R: ConstantResolver,
@@ -2917,7 +2948,21 @@ fn preanalyze_runtime_conditional_actions<
                     body_start,
                 )?;
             }
-            crate::ConditionalAssignmentAction::Return(_) => {}
+            crate::ConditionalAssignmentAction::Return(value) => {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    value.value,
+                    value.value_span,
+                    body_start,
+                )?;
+            }
         }
     }
     Ok(())
@@ -2938,7 +2983,7 @@ fn preanalyze_runtime_loop_actions<
     facts: &mut RuntimeBodyFacts<'source>,
     outer_locals: &[Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
     outer_local_count: usize,
-) -> Result<(), CodegenError> {
+) -> Result<([Option<RuntimeLocal<'source>>; MAX_PARAMETERS], usize), CodegenError> {
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
     for action in actions.iter().flatten() {
@@ -2980,7 +3025,7 @@ fn preanalyze_runtime_loop_actions<
             }
         }
     }
-    Ok(())
+    Ok((locals, local_count))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3001,6 +3046,17 @@ fn preanalyze_runtime_loop_declarations<
 ) -> Result<(), CodegenError> {
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
+    if let Some(condition) = loop_statement.condition {
+        preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            facts,
+            &locals[..local_count],
+            function,
+            resolver,
+            condition,
+            loop_statement.condition_span,
+            body_start,
+        )?;
+    }
     for operation in loop_statement.operations().iter().flatten() {
         match *operation {
             crate::LoopOperation::Local(local) => {
@@ -3029,7 +3085,7 @@ fn preanalyze_runtime_loop_declarations<
                     kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                     span: function.name_span,
                 })?;
-                preanalyze_runtime_loop_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                let _ = preanalyze_runtime_loop_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     function,
                     resolver,
                     block.actions(),
@@ -3045,23 +3101,71 @@ fn preanalyze_runtime_loop_declarations<
                     kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                     span: function.name_span,
                 })?;
-                preanalyze_runtime_loop_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
                     function,
                     resolver,
-                    block.actions(),
-                    operand_type,
+                    block.condition,
+                    block.condition_span,
                     body_start,
-                    facts,
-                    &locals,
-                    local_count,
                 )?;
+                let (block_locals, block_local_count) =
+                    preanalyze_runtime_loop_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                        function,
+                        resolver,
+                        block.actions(),
+                        operand_type,
+                        body_start,
+                        facts,
+                        &locals,
+                        local_count,
+                    )?;
+                if let Some(crate::ConditionalLoopTerminal::Return(value)) = block.terminal {
+                    preanalyze_runtime_source_expression_reads::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        facts,
+                        &block_locals[..block_local_count],
+                        function,
+                        resolver,
+                        value.value,
+                        value.value_span,
+                        body_start,
+                    )?;
+                }
                 if let Some(else_index) = block.else_arm {
                     for arm in loop_statement.conditional_else_arms()
                         [else_index..else_index + block.else_arm_count]
                         .iter()
                         .flatten()
                     {
-                        preanalyze_runtime_loop_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                        if let Some(condition) = arm.condition {
+                            preanalyze_runtime_source_expression_reads::<
+                                R,
+                                MAX_PARAMETERS,
+                                MAX_EXPRESSION_NODES,
+                            >(
+                                facts,
+                                &locals[..local_count],
+                                function,
+                                resolver,
+                                condition,
+                                arm.condition_span,
+                                body_start,
+                            )?;
+                        }
+                        let (arm_locals, arm_local_count) = preanalyze_runtime_loop_actions::<
+                            R,
+                            MAX_PARAMETERS,
+                            MAX_EXPRESSION_NODES,
+                        >(
                             function,
                             resolver,
                             arm.actions(),
@@ -3071,6 +3175,21 @@ fn preanalyze_runtime_loop_declarations<
                             &locals,
                             local_count,
                         )?;
+                        if let Some(crate::ConditionalLoopTerminal::Return(value)) = arm.terminal {
+                            preanalyze_runtime_source_expression_reads::<
+                                R,
+                                MAX_PARAMETERS,
+                                MAX_EXPRESSION_NODES,
+                            >(
+                                facts,
+                                &arm_locals[..arm_local_count],
+                                function,
+                                resolver,
+                                value.value,
+                                value.value_span,
+                                body_start,
+                            )?;
+                        }
                     }
                 }
             }
@@ -3088,12 +3207,67 @@ fn preanalyze_runtime_loop_declarations<
                     body_start,
                 )?;
             }
+            crate::LoopOperation::ConditionalBreak(control)
+            | crate::LoopOperation::ConditionalContinue(control) => {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    control.condition,
+                    control.condition_span,
+                    body_start,
+                )?;
+            }
+            crate::LoopOperation::ConditionalReturn(control) => {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    control.condition,
+                    control.condition_span,
+                    body_start,
+                )?;
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    control.value,
+                    control.value_span,
+                    body_start,
+                )?;
+            }
+            crate::LoopOperation::Return(value) => {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    value.value,
+                    value.value_span,
+                    body_start,
+                )?;
+            }
             crate::LoopOperation::Break
             | crate::LoopOperation::Continue
-            | crate::LoopOperation::ConditionalBreak(_)
-            | crate::LoopOperation::ConditionalContinue(_)
-            | crate::LoopOperation::ConditionalReturn(_)
-            | crate::LoopOperation::Return(_)
             | crate::LoopOperation::NestedUnitLoop => {}
         }
     }
@@ -3140,6 +3314,19 @@ fn preanalyze_runtime_top_level_statement<
                 span: function.name_span,
             })?;
             for branch in conditional.branches().iter().flatten() {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..*local_count],
+                    function,
+                    resolver,
+                    branch.condition,
+                    branch.condition_span,
+                    body_start,
+                )?;
                 preanalyze_runtime_conditional_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     function,
                     resolver,
@@ -3189,10 +3376,87 @@ fn preanalyze_runtime_top_level_statement<
                 body_start,
             )?;
         }
-        crate::BodyStatement::ConditionalReturn(_)
-        | crate::BodyStatement::ConditionalReturnElse(_)
-        | crate::BodyStatement::Return(_)
-        | crate::BodyStatement::Loop(_) => {}
+        crate::BodyStatement::ConditionalReturn(index) => {
+            let conditional = body.conditional_returns()[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: function.name_span,
+            })?;
+            for (expression, span) in [
+                (conditional.condition, conditional.condition_span),
+                (conditional.value, conditional.value_span),
+            ] {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..*local_count],
+                    function,
+                    resolver,
+                    expression,
+                    span,
+                    body_start,
+                )?;
+            }
+        }
+        crate::BodyStatement::ConditionalReturnElse(index) => {
+            let conditional = body.conditional_return_elses()[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: function.name_span,
+            })?;
+            for branch in conditional.branches().iter().flatten() {
+                for (expression, span) in [
+                    (branch.condition, branch.condition_span),
+                    (branch.value, branch.value_span),
+                ] {
+                    preanalyze_runtime_source_expression_reads::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        facts,
+                        &locals[..*local_count],
+                        function,
+                        resolver,
+                        expression,
+                        span,
+                        body_start,
+                    )?;
+                }
+            }
+            if let Some(value) = conditional.else_value {
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..*local_count],
+                    function,
+                    resolver,
+                    value.value,
+                    value.value_span,
+                    body_start,
+                )?;
+            }
+        }
+        crate::BodyStatement::Return(index) => {
+            let value = body.returns()[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: function.name_span,
+            })?;
+            preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                facts,
+                &locals[..*local_count],
+                function,
+                resolver,
+                value.value,
+                value.value_span,
+                body_start,
+            )?;
+        }
+        crate::BodyStatement::Loop(_) => {}
     }
     Ok(())
 }
@@ -3263,6 +3527,17 @@ fn preanalyze_runtime_body_declarations<
                 )?;
             }
         }
+    }
+    if !body.tail_diverges && !body.tail_expression.is_empty() {
+        preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            facts,
+            &locals[..local_count],
+            function,
+            resolver,
+            body.tail_expression,
+            body.tail_span,
+            body_start,
+        )?;
     }
     Ok(facts.local_count)
 }
@@ -17720,19 +17995,22 @@ mod tests {
             facts.assignment_accesses[3].unwrap().access,
             RuntimePlaceAccess::ReadModifyWrite
         );
-        assert_eq!(facts.assignment_read_count, 11);
-        for (fact, id) in facts.assignment_reads[..11].iter().zip([
+        assert_eq!(facts.assignment_read_count, 14);
+        for (fact, id) in facts.assignment_reads[..14].iter().zip([
             RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(4)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(5)),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(6)),
         ]) {
             assert_eq!(fact.unwrap().base, id);
         }
@@ -17764,8 +18042,8 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 2);
-        assert_eq!(facts.assignment_read_count, 7);
-        for (fact, identity) in facts.assignment_reads[..7].iter().zip([
+        assert_eq!(facts.assignment_read_count, 8);
+        for (fact, identity) in facts.assignment_reads[..8].iter().zip([
             RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
@@ -17773,6 +18051,7 @@ mod tests {
             RuntimePlaceIdentity::Parameter(3),
             RuntimePlaceIdentity::Parameter(2),
             RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().access, RuntimePlaceAccess::Read);
@@ -17781,7 +18060,7 @@ mod tests {
             facts.assignment_reads[2].unwrap().projections,
             RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(0))
         );
-        for index in [0, 1, 3, 4, 5, 6] {
+        for index in [0, 1, 3, 4, 5, 6, 7] {
             assert_eq!(
                 facts.assignment_reads[index].unwrap().projections,
                 RuntimePlaceProjections::EMPTY
@@ -17815,8 +18094,8 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 2);
-        assert_eq!(facts.assignment_read_count, 8);
-        for (fact, (identity, projections)) in facts.assignment_reads[..8].iter().zip([
+        assert_eq!(facts.assignment_read_count, 9);
+        for (fact, (identity, projections)) in facts.assignment_reads[..9].iter().zip([
             (
                 RuntimePlaceIdentity::Parameter(0),
                 RuntimePlaceProjections::EMPTY,
@@ -17847,6 +18126,10 @@ mod tests {
             ),
             (
                 RuntimePlaceIdentity::Parameter(3),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
                 RuntimePlaceProjections::EMPTY,
             ),
         ]) {
@@ -17881,8 +18164,8 @@ mod tests {
 
         assert_eq!(count, 3);
         assert_eq!(facts.assignment_access_count, 0);
-        assert_eq!(facts.assignment_read_count, 9);
-        for (fact, identity) in facts.assignment_reads[..9].iter().zip([
+        assert_eq!(facts.assignment_read_count, 10);
+        for (fact, identity) in facts.assignment_reads[..10].iter().zip([
             RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
@@ -17892,6 +18175,7 @@ mod tests {
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
@@ -17924,20 +18208,71 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 0);
-        assert_eq!(facts.assignment_read_count, 12);
-        for (fact, identity) in facts.assignment_reads[..12].iter().zip([
+        assert_eq!(facts.assignment_read_count, 15);
+        for (fact, identity) in facts.assignment_reads[..15].iter().zip([
             RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(3),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
             RuntimePlaceIdentity::Parameter(2),
             RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
             RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(3),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
             RuntimePlaceIdentity::Parameter(2),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
             RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_conditions_returns_and_scalar_tail() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16, choose: bool, limit: u16) -> u16 { let first: u16 = input + 1; if choose { return first + input; } while first < limit { if first == input { let returned: u16 = first + limit; return returned + input; } break; } first + limit }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_access_count, 0);
+        assert_eq!(facts.assignment_read_count, 14);
+        for (fact, identity) in facts.assignment_reads[..14].iter().zip([
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(2),
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
@@ -18000,21 +18335,24 @@ mod tests {
             facts.assignment_accesses[3].unwrap().access,
             RuntimePlaceAccess::Write
         );
-        assert_eq!(facts.assignment_read_count, 9);
-        for (fact, id) in facts.assignment_reads[..9].iter().zip([
-            RuntimeLocalId(0),
-            RuntimeLocalId(2),
-            RuntimeLocalId(3),
-            RuntimeLocalId(2),
-            RuntimeLocalId(4),
-            RuntimeLocalId(2),
-            RuntimeLocalId(5),
-            RuntimeLocalId(2),
-            RuntimeLocalId(1),
+        assert_eq!(facts.assignment_read_count, 13);
+        for (fact, identity) in facts.assignment_reads[..13].iter().zip([
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(4)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(5)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(6)),
         ]) {
-            assert_eq!(fact.unwrap().base, RuntimePlaceIdentity::Local(id));
+            assert_eq!(fact.unwrap().base, identity);
         }
-
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
         }

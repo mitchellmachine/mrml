@@ -1112,6 +1112,24 @@ fn rustc_scoped_expression_statement_reads_reach_native_objects() {
 }
 
 #[test]
+fn rustc_condition_return_and_scalar_tail_reads_reach_native_objects() {
+    // Original bounded replacement for source-ordered branch/loop conditions,
+    // conditional return values, and a final scalar tail.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, choose: bool, limit: u16) -> u16 { let first: u16 = input + 1; if choose { return first + input; } while first < limit { if first == input { let returned: u16 = first + limit; return returned + input; } break; } first + limit }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<3072, 2048, 8, 8, 8, 96>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.
