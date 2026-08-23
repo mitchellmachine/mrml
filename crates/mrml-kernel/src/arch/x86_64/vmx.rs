@@ -152,6 +152,41 @@ impl VmxControl {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxControlPolicy {
+    pin: VmxControlMask,
+    primary: VmxControlMask,
+    exit: VmxControlMask,
+    entry: VmxControlMask,
+    secondary: VmxControlMask,
+}
+
+impl VmxControlPolicy {
+    pub fn from_msrs(
+        pin: u64,
+        primary: u64,
+        exit: u64,
+        entry: u64,
+        secondary: u64,
+    ) -> Result<Self, VmxError> {
+        Ok(Self {
+            pin: VmxControlMask::new(pin)?,
+            primary: VmxControlMask::new(primary)?,
+            exit: VmxControlMask::new(exit)?,
+            entry: VmxControlMask::new(entry)?,
+            secondary: VmxControlMask::new(secondary)?,
+        })
+    }
+
+    const fn accepts(self, pin: u32, primary: u32, exit: u32, entry: u32, secondary: u32) -> bool {
+        self.pin.accepts(pin)
+            && self.primary.accepts(primary)
+            && self.exit.accepts(exit)
+            && self.entry.accepts(entry)
+            && self.secondary.accepts(secondary)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VmxCapabilities {
     revision_id: u32,
     region_bytes: u16,
@@ -323,6 +358,140 @@ pub enum VmxState {
     VmcsClear,
     VmcsLoaded,
     GuestRunning,
+    Poisoned,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmcsWrite {
+    field: VmcsField,
+    value: u64,
+}
+
+impl VmcsWrite {
+    pub const fn new(field: VmcsField, value: u64) -> Result<Self, VmxError> {
+        let width = (field.encoding() >> 13) & 3;
+        if width == 0 && value > u16::MAX as u64 || width == 2 && value > u32::MAX as u64 {
+            return Err(VmxError::InvalidControl);
+        }
+        Ok(Self { field, value })
+    }
+
+    pub const fn field(self) -> VmcsField {
+        self.field
+    }
+
+    pub const fn value(self) -> u64 {
+        self.value
+    }
+}
+
+pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 47;
+
+/// Complete fixed field set for MRML's minimal unrestricted long-mode guest.
+/// Optional bitmap, MSR-list, CR3-target, and posted-interrupt fields remain
+/// disabled by the corresponding controls and therefore are deliberately not
+/// part of this canonical launch format.
+const MINIMAL_LAUNCH_FIELD_ENCODINGS: [u32; VMCS_MINIMAL_LAUNCH_FIELDS] = [
+    0x0800, 0x0802, 0x0804, 0x0806, 0x0808, 0x080a, 0x080c, 0x080e, // guest selectors
+    0x0c00, 0x0c02, 0x0c04, 0x0c06, 0x0c08, 0x0c0a, 0x0c0c, // host selectors
+    0x201a, // EPT pointer
+    0x2800, 0x2806, 0x2c02, // guest link, guest EFER, host EFER
+    0x4000, 0x4002, 0x4004, 0x400c, 0x4012, 0x401e, // execution controls
+    0x4814, 0x4816, 0x4818, 0x481a, 0x481c, 0x481e, 0x4820, 0x4822, // guest access rights
+    0x6800, 0x6802, 0x6804, // guest CR0/CR3/CR4
+    0x681c, 0x681e, 0x6820, // guest RSP/RIP/RFLAGS
+    0x6c00, 0x6c02, 0x6c04, // host CR0/CR3/CR4
+    0x6c0a, 0x6c0c, 0x6c0e, // host TR/GDTR/IDTR bases
+    0x6c14, 0x6c16, // host RSP/RIP
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MinimalVmcsLaunch {
+    writes: [VmcsWrite; VMCS_MINIMAL_LAUNCH_FIELDS],
+}
+
+impl MinimalVmcsLaunch {
+    pub fn new(
+        values: [u64; VMCS_MINIMAL_LAUNCH_FIELDS],
+        controls: VmxControlPolicy,
+    ) -> Result<Self, VmxError> {
+        let mut writes = [VmcsWrite {
+            field: VmcsField(0),
+            value: 0,
+        }; VMCS_MINIMAL_LAUNCH_FIELDS];
+        let mut index = 0;
+        while index < writes.len() {
+            let field = VmcsField::new(MINIMAL_LAUNCH_FIELD_ENCODINGS[index])?;
+            writes[index] = VmcsWrite::new(field, values[index])?;
+            index += 1;
+        }
+        let launch = Self { writes };
+        launch.validate(controls)?;
+        Ok(launch)
+    }
+
+    fn validate(&self, controls: VmxControlPolicy) -> Result<(), VmxError> {
+        let value = |encoding| {
+            self.writes
+                .iter()
+                .find(|write| write.field.encoding() == encoding)
+                .map(|write| write.value)
+                .ok_or(VmxError::InvalidControl)
+        };
+        let pin = value(0x4000)? as u32;
+        let primary = value(0x4002)? as u32;
+        let exit = value(0x400c)? as u32;
+        let entry = value(0x4012)? as u32;
+        let secondary = value(0x401e)? as u32;
+        let ept = value(0x201a)?;
+        let guest_rflags = value(0x6820)?;
+        let guest_rip = value(0x681e)?;
+        let host_rsp = value(0x6c14)?;
+        let host_rip = value(0x6c16)?;
+        const ACTIVATE_SECONDARY: u32 = 1 << 31;
+        const ENABLE_EPT: u32 = 1 << 1;
+        const UNRESTRICTED_GUEST: u32 = 1 << 7;
+        const HOST_ADDRESS_SPACE_SIZE: u32 = 1 << 9;
+        const IA32E_GUEST: u32 = 1 << 9;
+        if !controls.accepts(pin, primary, exit, entry, secondary)
+            || primary & ACTIVATE_SECONDARY == 0
+            || secondary & (ENABLE_EPT | UNRESTRICTED_GUEST) != ENABLE_EPT | UNRESTRICTED_GUEST
+            || exit & HOST_ADDRESS_SPACE_SIZE == 0
+            || entry & IA32E_GUEST == 0
+            || EptPointer(ept).root().is_err()
+            || guest_rflags & 2 == 0
+            || !canonical(guest_rip)
+            || host_rsp == 0
+            || !canonical(host_rsp)
+            || host_rip == 0
+            || !canonical(host_rip)
+            || value(0x2800)? != u64::MAX
+        {
+            return Err(VmxError::InvalidControl);
+        }
+        for selector in [0x0c00, 0x0c02, 0x0c04, 0x0c06, 0x0c08] {
+            if value(selector)? & 7 != 0 {
+                return Err(VmxError::InvalidControl);
+            }
+        }
+        if value(0x0c0c)? & 7 != 0 || value(0x0c0c)? == 0 {
+            return Err(VmxError::InvalidControl);
+        }
+        Ok(())
+    }
+
+    pub fn writes(&self) -> &[VmcsWrite; VMCS_MINIMAL_LAUNCH_FIELDS] {
+        &self.writes
+    }
+
+    pub fn ept_pointer(&self) -> EptPointer {
+        EptPointer(self.writes[15].value)
+    }
+}
+
+const fn canonical(address: u64) -> bool {
+    let upper = address >> 48;
+    upper == 0 || upper == 0xffff
 }
 
 /// Narrow unsafe-instruction boundary. A bare-metal adapter implements these
@@ -626,6 +795,19 @@ impl<I: VmxInstructions> VmxController<I> {
         Ok(())
     }
 
+    pub fn program_minimal_vmcs(&mut self, launch: &MinimalVmcsLaunch) -> Result<(), VmxError> {
+        if self.state != VmxState::VmcsLoaded || self.active_ept != Some(launch.ept_pointer()) {
+            return Err(VmxError::InvalidState);
+        }
+        for write in launch.writes() {
+            if self.instructions.vmwrite(write.field, write.value).is_err() {
+                self.state = VmxState::Poisoned;
+                return Err(VmxError::InstructionFailed);
+            }
+        }
+        Ok(())
+    }
+
     /// Records a VM exit before exit handling reads guest-controlled state.
     pub fn record_vm_exit(&mut self) -> Result<(), VmxError> {
         if self.state != VmxState::GuestRunning {
@@ -766,6 +948,47 @@ mod tests {
 
     fn capabilities() -> VmxCapabilities {
         VmxCapabilities::new(7, 4096, 6, true, true, true).unwrap()
+    }
+
+    fn permissive_control_policy() -> VmxControlPolicy {
+        VmxControlPolicy::from_msrs(u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX).unwrap()
+    }
+
+    fn minimal_launch(ept: EptPointer) -> MinimalVmcsLaunch {
+        let mut values = [0u64; VMCS_MINIMAL_LAUNCH_FIELDS];
+        values[..8].copy_from_slice(&[16, 8, 16, 16, 16, 16, 0, 24]);
+        values[8..15].copy_from_slice(&[16, 8, 16, 16, 0, 0, 24]);
+        values[15] = ept.bits();
+        values[16] = u64::MAX;
+        values[17] = 0x500;
+        values[18] = 0xd00;
+        values[19] = 0;
+        values[20] = 1 << 31;
+        values[21] = 0;
+        values[22] = 1 << 9;
+        values[23] = 1 << 9;
+        values[24] = (1 << 1) | (1 << 7);
+        values[25..33].copy_from_slice(&[
+            0xc093,
+            0xa09b,
+            0xc093,
+            0xc093,
+            0xc093,
+            0xc093,
+            1 << 16,
+            0x008b,
+        ]);
+        values[33..36].copy_from_slice(&[0x8001_0033, 0x30_0000, 0x20]);
+        values[36..39].copy_from_slice(&[0x40_1000, 0x40_0000, 2]);
+        values[39..42].copy_from_slice(&[0x8001_0033, 0x10_0000, 0x2020]);
+        values[42..47].copy_from_slice(&[
+            0xffff_8000_0000_3000,
+            0xffff_8000_0000_4000,
+            0xffff_8000_0000_5000,
+            0xffff_8000_0000_6000,
+            0xffff_8000_0000_7000,
+        ]);
+        MinimalVmcsLaunch::new(values, permissive_control_policy()).unwrap()
     }
 
     #[test]
@@ -919,5 +1142,40 @@ mod tests {
             Err(VmxError::InvalidVmExit)
         );
         assert_eq!(controller.state(), VmxState::VmcsLoaded);
+    }
+
+    #[test]
+    fn complete_vmcs_is_prevalidated_and_partial_programming_poisoned() {
+        let vmxon = PhysAddr::new(0x10_0000).unwrap();
+        let vmcs = PhysAddr::new(0x11_0000).unwrap();
+        let ept = EptPointer::new(PhysAddr::new(0x12_0000).unwrap(), true).unwrap();
+        let launch = minimal_launch(ept);
+        assert_eq!(launch.writes().len(), VMCS_MINIMAL_LAUNCH_FIELDS);
+
+        let mut controller = VmxController::new(EmulatedVmx::default(), capabilities());
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        controller.program_minimal_vmcs(&launch).unwrap();
+        assert_eq!(controller.state(), VmxState::VmcsLoaded);
+
+        let mut controller = VmxController::new(
+            EmulatedVmx {
+                fail_at: 8,
+                ..EmulatedVmx::default()
+            },
+            capabilities(),
+        );
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        assert_eq!(
+            controller.program_minimal_vmcs(&launch),
+            Err(VmxError::InstructionFailed)
+        );
+        assert_eq!(controller.state(), VmxState::Poisoned);
+        assert_eq!(controller.resume(), Err(VmxError::InvalidState));
+        controller.leave_root().unwrap();
+        assert_eq!(controller.state(), VmxState::Disabled);
     }
 }

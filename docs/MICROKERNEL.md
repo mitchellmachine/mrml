@@ -657,6 +657,13 @@ failure EPT violation with a hardware-valid guest-physical address inside the
 exact expected 4 KiB monitor-private page. VMREAD failure, malformed access
 qualification, another exit reason, or an adjacent-page access leaves the
 controller outside `GuestRunning` and cannot resume uncertain state.
+Minimal launch programming is now one fixed 47-field VMCS specification. It
+preflights field widths, exact EPT identity, all five hardware control masks,
+long-mode entry/exit state, segment selectors and access rights, canonical
+entry/stack pointers, and the invalid guest-link sentinel before the first
+write. Callers cannot append optional fields or omit a required field. A
+partial `VMWRITE` poisons the controller; guest launch and resume remain denied
+while fail-closed `VMXOFF` teardown is still available.
 Both Windows and Linux LLVM assemblers accept the implementation. The
 instructions have not yet been executed by a bare-metal MRML boot, so this is
 not evidence of a successful hardware VM launch.
