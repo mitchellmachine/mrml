@@ -1,0 +1,8 @@
+name: MRML CodeQL configuration
+
+queries:
+  - uses: security-and-quality
+
+paths-ignore:
+  - target
+  - "**/target/**"
