@@ -7,7 +7,10 @@ use mrml_kernel::{
     ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport,
 };
 #[cfg(target_os = "windows")]
-use mrml_kernel::{VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthorityOperation};
+use mrml_kernel::{
+    VBS_ATTESTATION_ENVELOPE_BYTES, VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
+    VbsAttestationData, VbsAuthorityContext, VbsAuthorityOperation,
+};
 
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
@@ -41,6 +44,12 @@ unsafe extern "system" {
         bytes: usize,
     ) -> i32;
     fn EnclaveUsesAttestedKeys() -> u8;
+    fn EnclaveGetAttestationReport(
+        enclave_data: *const u8,
+        report: *mut c_void,
+        buffer_size: u32,
+        output_size: *mut u32,
+    ) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -257,6 +266,19 @@ enum AuthorityStatus {
     RequestRejected = 4,
     ReceiptCopyFailed = 5,
     UnsafeKeyPlatform = 6,
+    AttestationFailed = 7,
+    AttestationCopyFailed = 8,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn approved_request(encoded_request: &[u8; LAUNCH_REQUEST_BYTES]) -> Result<LaunchRequest, ()> {
+    let request = LaunchRequest::decode(encoded_request).map_err(|_| ())?;
+    if request.image_measurement() != AUTHORITY_MEASUREMENT
+        || request.policy_measurement() != authority_policy().commitment()
+    {
+        return Err(());
+    }
+    Ok(request)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -267,12 +289,7 @@ fn process_authority_request(
     if !uses_attested_keys {
         return Err(());
     }
-    let request = LaunchRequest::decode(encoded_request).map_err(|_| ())?;
-    if request.image_measurement() != AUTHORITY_MEASUREMENT
-        || request.policy_measurement() != authority_policy().commitment()
-    {
-        return Err(());
-    }
+    let request = approved_request(encoded_request)?;
     let claims = ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED);
     let report = ProtectionReport::new(
         ProtectionBackend::VbsEnclave,
@@ -308,11 +325,15 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     let Ok(call) = VbsAuthorityContext::decode(&encoded_context) else {
         return AuthorityStatus::InvalidContext as usize as *mut c_void;
     };
-    if call.operation() != VbsAuthorityOperation::IssueReceipt
-        || call.input_bytes() != LAUNCH_REQUEST_BYTES as u64
-        || call.output_bytes() != AUTHORITY_RECEIPT_BYTES as u64
-    {
+    if call.input_bytes() != LAUNCH_REQUEST_BYTES as u64 {
         return AuthorityStatus::InvalidContext as usize as *mut c_void;
+    }
+    match call.operation() {
+        VbsAuthorityOperation::IssueReceipt
+            if call.output_bytes() == AUTHORITY_RECEIPT_BYTES as u64 => {}
+        VbsAuthorityOperation::IssueAttestationReport
+            if call.output_bytes() == VBS_ATTESTATION_ENVELOPE_BYTES as u64 => {}
+        _ => return AuthorityStatus::InvalidContext as usize as *mut c_void,
     }
     let (Ok(request_address), Ok(receipt_address)) = (
         usize::try_from(call.input_address()),
@@ -339,21 +360,82 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     if unsafe { EnclaveUsesAttestedKeys() } == 0 {
         return AuthorityStatus::UnsafeKeyPlatform as usize as *mut c_void;
     }
-    let receipt = match process_authority_request(&request, true) {
-        Ok(receipt) => receipt,
-        Err(()) => return AuthorityStatus::RequestRejected as usize as *mut c_void,
-    };
-    // SAFETY: source is enclave-local and exact-sized; destination remains an
-    // untrusted address handled exclusively by the Vertdll copy primitive.
-    if unsafe {
-        EnclaveCopyOutOfEnclave(
-            (receipt_address as *mut u8).cast(),
-            receipt.as_ptr().cast(),
-            receipt.len(),
-        )
-    } != 0
-    {
-        return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
+    match call.operation() {
+        VbsAuthorityOperation::IssueReceipt => {
+            let receipt = match process_authority_request(&request, true) {
+                Ok(receipt) => receipt,
+                Err(()) => return AuthorityStatus::RequestRejected as usize as *mut c_void,
+            };
+            // SAFETY: source is enclave-local and exact-sized; destination remains an
+            // untrusted address handled exclusively by the Vertdll copy primitive.
+            if unsafe {
+                EnclaveCopyOutOfEnclave(
+                    (receipt_address as *mut u8).cast(),
+                    receipt.as_ptr().cast(),
+                    receipt.len(),
+                )
+            } != 0
+            {
+                return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
+            }
+        }
+        VbsAuthorityOperation::IssueAttestationReport => {
+            let Ok(launch) = approved_request(&request) else {
+                return AuthorityStatus::RequestRejected as usize as *mut c_void;
+            };
+            let Ok(binding) = VbsAttestationData::for_policy(launch.nonce(), authority_policy())
+            else {
+                return AuthorityStatus::RequestRejected as usize as *mut c_void;
+            };
+            let encoded_binding = binding.encode();
+            let mut report = [0; VBS_ATTESTATION_REPORT_MAX_BYTES];
+            let mut report_bytes = 0u32;
+            // SAFETY: binding, report, and output-size pointers are enclave-local and
+            // bounded. Vertdll produces the VBS-signed report into the fixed buffer.
+            if unsafe {
+                EnclaveGetAttestationReport(
+                    encoded_binding.as_ptr(),
+                    report.as_mut_ptr().cast(),
+                    report.len() as u32,
+                    &mut report_bytes,
+                )
+            } != 0
+                || report_bytes == 0
+                || report_bytes as usize > report.len()
+            {
+                return AuthorityStatus::AttestationFailed as usize as *mut c_void;
+            }
+            let Some(report_address) = receipt_address.checked_add(8) else {
+                return AuthorityStatus::InvalidContext as usize as *mut c_void;
+            };
+            if receipt_address
+                .checked_add(VBS_ATTESTATION_ENVELOPE_BYTES)
+                .is_none()
+            {
+                return AuthorityStatus::InvalidContext as usize as *mut c_void;
+            }
+            let encoded_size = u64::from(report_bytes).to_le_bytes();
+            // SAFETY: both sources are enclave-local and bounded; both destinations
+            // are untrusted addresses handled only by the explicit copy primitive.
+            if unsafe {
+                EnclaveCopyOutOfEnclave(
+                    (receipt_address as *mut u8).cast(),
+                    encoded_size.as_ptr().cast(),
+                    encoded_size.len(),
+                )
+            } != 0
+                || unsafe {
+                    EnclaveCopyOutOfEnclave(
+                        (report_address as *mut u8).cast(),
+                        report.as_ptr().cast(),
+                        report_bytes as usize,
+                    )
+                } != 0
+            {
+                return AuthorityStatus::AttestationCopyFailed as usize as *mut c_void;
+            }
+        }
+        _ => return AuthorityStatus::InvalidContext as usize as *mut c_void,
     }
     AuthorityStatus::Success as usize as *mut c_void
 }

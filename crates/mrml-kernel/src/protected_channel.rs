@@ -2,11 +2,14 @@ use crate::{
     PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionError, ProtectionPolicy,
     ProtectionReport, ProtectionSession,
 };
-use mrml_crypto::{Sha3_512, hmac_sha256};
+use mrml_crypto::{Sha3_256, Sha3_512, hmac_sha256};
 
 pub const LAUNCH_REQUEST_BYTES: usize = 184;
 pub const AUTHORITY_RECEIPT_BYTES: usize = 272;
 pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
+pub const VBS_ATTESTATION_DATA_BYTES: usize = 64;
+pub const VBS_ATTESTATION_REPORT_MAX_BYTES: usize = 64 * 1024;
+pub const VBS_ATTESTATION_ENVELOPE_BYTES: usize = 8 + VBS_ATTESTATION_REPORT_MAX_BYTES;
 const REQUEST_MAGIC: [u8; 8] = *b"MRMLLR01";
 const RECEIPT_MAGIC: [u8; 8] = *b"MRMLAR01";
 const VBS_CONTEXT_MAGIC: [u8; 8] = *b"MRMLVC01";
@@ -18,6 +21,7 @@ pub enum VbsAuthorityOperation {
     IssueReceipt = 1,
     GenerateSealedKey = 2,
     LoadSealedKey = 3,
+    IssueAttestationReport = 4,
 }
 
 impl VbsAuthorityOperation {
@@ -26,8 +30,104 @@ impl VbsAuthorityOperation {
             1 => Ok(Self::IssueReceipt),
             2 => Ok(Self::GenerateSealedKey),
             3 => Ok(Self::LoadSealedKey),
+            4 => Ok(Self::IssueAttestationReport),
             _ => Err(ProtectedChannelError::Malformed),
         }
+    }
+}
+
+/// Exact 64-byte enclave-controlled statement embedded in a Windows VBS
+/// attestation report. Windows authenticates the surrounding report; this type
+/// binds the verifier's challenge to the exact MRML admission policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VbsAttestationData {
+    verifier_nonce: [u8; 32],
+    policy_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VbsAttestationEnvelope<'a> {
+    report: &'a [u8],
+}
+
+impl<'a> VbsAttestationEnvelope<'a> {
+    pub fn decode(input: &'a [u8]) -> Result<Self, ProtectedChannelError> {
+        if input.len() != VBS_ATTESTATION_ENVELOPE_BYTES {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let report_bytes = u64::from_le_bytes(
+            input[..8]
+                .try_into()
+                .map_err(|_| ProtectedChannelError::Malformed)?,
+        );
+        let report_bytes =
+            usize::try_from(report_bytes).map_err(|_| ProtectedChannelError::Malformed)?;
+        if report_bytes == 0 || report_bytes > VBS_ATTESTATION_REPORT_MAX_BYTES {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let report_end = 8usize
+            .checked_add(report_bytes)
+            .ok_or(ProtectedChannelError::Malformed)?;
+        if input[report_end..].iter().any(|byte| *byte != 0) {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        Ok(Self {
+            report: &input[8..report_end],
+        })
+    }
+
+    pub const fn report(self) -> &'a [u8] {
+        self.report
+    }
+}
+
+impl VbsAttestationData {
+    pub fn for_policy(
+        verifier_nonce: [u8; 32],
+        policy: ProtectionPolicy,
+    ) -> Result<Self, ProtectedChannelError> {
+        if verifier_nonce == [0; 32] {
+            return Err(ProtectedChannelError::MissingNonce);
+        }
+        Ok(Self {
+            verifier_nonce,
+            policy_digest: Sha3_256::digest(&policy.encode()),
+        })
+    }
+
+    pub const fn verifier_nonce(self) -> [u8; 32] {
+        self.verifier_nonce
+    }
+
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    pub fn encode(self) -> [u8; VBS_ATTESTATION_DATA_BYTES] {
+        let mut output = [0; VBS_ATTESTATION_DATA_BYTES];
+        output[..32].copy_from_slice(&self.verifier_nonce);
+        output[32..].copy_from_slice(&self.policy_digest);
+        output
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, ProtectedChannelError> {
+        if input.len() != VBS_ATTESTATION_DATA_BYTES {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let mut verifier_nonce = [0; 32];
+        verifier_nonce.copy_from_slice(&input[..32]);
+        let mut policy_digest = [0; 32];
+        policy_digest.copy_from_slice(&input[32..]);
+        if verifier_nonce == [0; 32] {
+            return Err(ProtectedChannelError::MissingNonce);
+        }
+        if policy_digest == [0; 32] {
+            return Err(ProtectedChannelError::MissingMeasurement);
+        }
+        Ok(Self {
+            verifier_nonce,
+            policy_digest,
+        })
     }
 }
 
@@ -695,6 +795,45 @@ mod tests {
         malformed[10..12].copy_from_slice(&99u16.to_le_bytes());
         assert_eq!(
             VbsAuthorityContext::decode(&malformed),
+            Err(ProtectedChannelError::Malformed)
+        );
+    }
+
+    #[test]
+    fn vbs_attestation_data_binds_nonce_and_exact_policy() {
+        let approved = policy(false);
+        let data = VbsAttestationData::for_policy(NONCE, approved).unwrap();
+        assert_eq!(data.verifier_nonce(), NONCE);
+        assert_eq!(data.policy_digest(), Sha3_256::digest(&approved.encode()));
+        assert_eq!(VbsAttestationData::decode(&data.encode()), Ok(data));
+        assert_ne!(
+            data,
+            VbsAttestationData::for_policy(NONCE, policy(true)).unwrap()
+        );
+        assert_eq!(
+            VbsAttestationData::for_policy([0; 32], approved),
+            Err(ProtectedChannelError::MissingNonce)
+        );
+    }
+
+    #[test]
+    fn vbs_attestation_envelope_rejects_bad_length_and_nonzero_tail() {
+        let mut encoded = [0; VBS_ATTESTATION_ENVELOPE_BYTES];
+        encoded[..8].copy_from_slice(&3u64.to_le_bytes());
+        encoded[8..11].copy_from_slice(b"vbs");
+        assert_eq!(
+            VbsAttestationEnvelope::decode(&encoded).unwrap().report(),
+            b"vbs"
+        );
+        encoded[20] = 1;
+        assert_eq!(
+            VbsAttestationEnvelope::decode(&encoded),
+            Err(ProtectedChannelError::Malformed)
+        );
+        encoded[20] = 0;
+        encoded[..8].copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            VbsAttestationEnvelope::decode(&encoded),
             Err(ProtectedChannelError::Malformed)
         );
     }

@@ -130,6 +130,10 @@ The VBS authority also refuses receipt issuance unless Windows 11 24H2 reports
 safe TPM-provisioned attested keys with boot, kernel, and hypervisor debugging
 never enabled. This platform query does not make the embedded development MAC
 key secret or constitute remote attestation.
+The authority can emit a bounded Windows-signed local VBS report binding a fresh
+verifier nonce to the exact policy digest. Only another VBS enclave on the same
+machine can use Microsoft's verification API, so the ordinary host transports
+this report without treating it as verified evidence.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.

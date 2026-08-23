@@ -196,6 +196,16 @@ host forge receipts. A receipt authenticates the authority's decision, not the
 subsequent execution or GPU result, and policy admission still independently
 rejects replay, debug mode, rollback, and insufficient claims.
 
+The control plane also defines an exact 64-byte VBS attestation statement: the
+verifier contributes a fresh 32-byte nonce and VTL1 appends SHA3-256 of the
+canonical approved policy. `IssueAttestationReport` asks Windows to embed that
+statement in a VBS-signed local report, writes it into a fixed 64 KiB bounded
+envelope, and returns an explicit length. The host transports but does not
+validate this evidence. Microsoft's verifier works only inside another VBS
+enclave on the same machine, so this is a foundation for an enclave-to-enclave
+authority channel, not remote attestation and not protection from compromised
+Hyper-V or the secure kernel.
+
 The enclave now implements that authority entry rather than only a boundary
 probe. It copies the fixed-size call context and request into strict enclave
 memory with `EnclaveCopyIntoEnclave`, never directly dereferences a host
@@ -221,9 +231,9 @@ little-endian 64-bit address/length fields. Construction rejects null or empty
 buffers, decoding rejects unknown operations and noncanonical reserved bytes,
 the Windows call wrapper accepts only that exact buffer size, and the enclave
 converts addresses to its native width only after canonical decoding. Receipt
-issuance accepts only the `IssueReceipt` operation and exact request/receipt
-lengths; key-generation and key-loading operation numbers are reserved but
-currently fail closed at the enclave dispatcher.
+issuance and local-attestation reporting each require their exact operation and
+fixed input/output sizes; key-generation and key-loading operation numbers are
+reserved but currently fail closed at the enclave dispatcher.
 
 Windows exposes `EnclaveSealData`, `EnclaveUnsealData`, and
 `EnclaveUsesAttestedKeys` in Vertdll, so protected persistence is feasible on

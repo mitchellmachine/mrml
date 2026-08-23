@@ -5,8 +5,9 @@ use mrml_error::{Result, anyhow};
 #[cfg(windows)]
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectionBackend, ProtectionPolicy, ProtectionSession, VBS_AUTHORITY_CONTEXT_BYTES,
-    VbsAuthorityContext, VbsAuthorityOperation,
+    ProtectionBackend, ProtectionPolicy, ProtectionSession, VBS_ATTESTATION_ENVELOPE_BYTES,
+    VBS_AUTHORITY_CONTEXT_BYTES, VbsAttestationEnvelope, VbsAuthorityContext,
+    VbsAuthorityOperation,
 };
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
@@ -106,6 +107,36 @@ fn application_main() -> Result<()> {
         admitted.evidence_source(),
         admitted.backend(),
         admitted.claims()
+    );
+
+    let mut attestation = Vector::with_capacity(VBS_ATTESTATION_ENVELOPE_BYTES)
+        .map_err(|_| anyhow!("failed to allocate bounded attestation envelope"))?;
+    attestation
+        .try_resize(VBS_ATTESTATION_ENVELOPE_BYTES, 0)
+        .map_err(|_| anyhow!("failed to initialize bounded attestation envelope"))?;
+    let context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::IssueAttestationReport,
+        encoded_request.as_ptr() as usize as u64,
+        encoded_request.len() as u64,
+        attestation.as_mut_ptr() as usize as u64,
+        attestation.len() as u64,
+    )
+    .map_err(|error| anyhow!("attestation context rejected: {:?}", error))?;
+    let mut call = context.encode();
+    let attestation_status = enclave
+        .call_authority(authority, &mut call)
+        .map_err(|error| anyhow!("attestation CallEnclave failed: {:?}", error))?;
+    if attestation_status != 0 {
+        return Err(anyhow!(
+            "VTL1 authority rejected attestation request with status {}",
+            attestation_status
+        ));
+    }
+    let report = VbsAttestationEnvelope::decode(&attestation)
+        .map_err(|error| anyhow!("malformed attestation envelope: {:?}", error))?;
+    mrml_println!(
+        "transported {} byte local VBS attestation report for independent enclave verification",
+        report.report().len()
     );
     Ok(())
 }
