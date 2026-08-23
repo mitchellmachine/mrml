@@ -56,14 +56,17 @@ combined operation rather than treating MAC verification alone as launch
 admission.
 
 The launch request's separate policy measurement is not trusted merely because
-it is included in the authenticated request digest. The VBS authority compares
-it with an independently compiled approved-policy measurement before issuing a
-receipt. Final `verify_and_admit` takes the verifier's independently expected
-policy measurement and compares it again after authenticating the exact
-request. A mismatch has its own fail-closed error and does not advance replay
-state. Tests alter only the policy identity while retaining an otherwise valid
-request and receipt, then prove a correct same-sequence request is still
-admissible.
+it is included in the authenticated request digest. `ProtectionPolicy` has one
+fixed 88-byte encoding covering the exact backend, claim set, debug permission,
+minimum security version, and image measurement; its identity is SHA3-512 over
+that canonical encoding. The VBS authority recomputes the commitment from its
+independently compiled policy before issuing a receipt. Final
+`verify_and_admit` requires the request, verifier-owned expected commitment, and
+the actual `ProtectionPolicy` being enforced to agree after authenticating the
+exact request. A mismatch has its own fail-closed error and does not advance
+replay state. Tests alter both an identity and a security field while retaining
+an otherwise valid request and receipt, then prove a correct same-sequence
+request remains admissible.
 
 Policy success and evidence authenticity are separate types of facts. Direct
 `ProtectionSession::admit` calls return only a raw `ProtectionAdmission` marked
@@ -196,8 +199,9 @@ rejects replay, debug mode, rollback, and insufficient claims.
 The enclave now implements that authority entry rather than only a boundary
 probe. It copies the fixed-size call context and request into strict enclave
 memory with `EnclaveCopyIntoEnclave`, never directly dereferences a host
-pointer, requires the compiled workload and policy measurements, constructs a non-debug
-VBS report, seals the canonical receipt, and copies it out with
+pointer, requires the compiled workload measurement and recomputes the canonical
+compiled-policy commitment, constructs a non-debug VBS report, seals the
+canonical receipt, and copies it out with
 `EnclaveCopyOutOfEnclave`. Pure tests cover a correctly bound receipt, malformed
 requests, and unapproved measurements. The current constant development MAC
 key is intentionally not a production secret: anyone who can read the image

@@ -1,6 +1,9 @@
 pub const PROTECTION_REPORT_BYTES: usize = 160;
+pub const PROTECTION_POLICY_BYTES: usize = 88;
 const REPORT_MAGIC: [u8; 8] = *b"MRMLPX01";
 const REPORT_VERSION: u16 = 1;
+const POLICY_MAGIC: [u8; 8] = *b"MRMLPP01";
+const POLICY_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -230,6 +233,25 @@ impl ProtectionPolicy {
             expected_measurement,
         }
     }
+
+    /// Canonical policy bytes. Reserved bytes are zero so every semantic policy
+    /// has exactly one representation suitable for an authority commitment.
+    pub fn encode(self) -> [u8; PROTECTION_POLICY_BYTES] {
+        let mut output = [0; PROTECTION_POLICY_BYTES];
+        output[..8].copy_from_slice(&POLICY_MAGIC);
+        output[8..10].copy_from_slice(&POLICY_VERSION.to_le_bytes());
+        output[10] = self.required_backend as u8;
+        output[11] = u8::from(self.allow_debug);
+        output[12..14].copy_from_slice(&self.required_claims.bits().to_le_bytes());
+        output[16..24].copy_from_slice(&self.minimum_security_version.to_le_bytes());
+        output[24..88].copy_from_slice(&self.expected_measurement);
+        output
+    }
+
+    /// SHA3-512 commitment to the exact canonical policy enforced at admission.
+    pub fn commitment(self) -> [u8; 64] {
+        mrml_crypto::Sha3_512::digest(&self.encode())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -402,6 +424,60 @@ mod tests {
             ProtectionReport::decode(&encoded[..159]),
             Err(ProtectionError::Malformed)
         );
+    }
+
+    #[test]
+    fn policy_commitment_changes_with_every_security_field() {
+        let base = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            false,
+            7,
+            MEASUREMENT,
+        );
+        let encoded = base.encode();
+        assert_eq!(encoded.len(), PROTECTION_POLICY_BYTES);
+        assert_eq!(&encoded[..8], b"MRMLPP01");
+        assert_eq!(&encoded[14..16], &[0; 2]);
+        for changed in [
+            ProtectionPolicy::new(
+                ProtectionBackend::BareMetalMonitor,
+                ProtectionClaims::MEASURED,
+                false,
+                7,
+                MEASUREMENT,
+            ),
+            ProtectionPolicy::new(
+                ProtectionBackend::VbsEnclave,
+                ProtectionClaims::VTL0_ISOLATION,
+                false,
+                7,
+                MEASUREMENT,
+            ),
+            ProtectionPolicy::new(
+                ProtectionBackend::VbsEnclave,
+                ProtectionClaims::MEASURED,
+                true,
+                7,
+                MEASUREMENT,
+            ),
+            ProtectionPolicy::new(
+                ProtectionBackend::VbsEnclave,
+                ProtectionClaims::MEASURED,
+                false,
+                8,
+                MEASUREMENT,
+            ),
+            ProtectionPolicy::new(
+                ProtectionBackend::VbsEnclave,
+                ProtectionClaims::MEASURED,
+                false,
+                7,
+                [0x5b; 64],
+            ),
+        ] {
+            assert_ne!(changed.commitment(), base.commitment());
+        }
     }
 
     #[test]

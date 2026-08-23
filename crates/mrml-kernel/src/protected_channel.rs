@@ -383,6 +383,7 @@ impl AuthorityReceipt {
         let receipt = Self::verify(key, request, input)?;
         if expected_policy_measurement == [0; 64]
             || request.policy_measurement != expected_policy_measurement
+            || policy.commitment() != expected_policy_measurement
         {
             return Err(ProtectedChannelError::PolicyMeasurementMismatch);
         }
@@ -420,10 +421,23 @@ mod tests {
     const KEY: [u8; 32] = [0x39; 32];
     const NONCE: [u8; 32] = [0xa2; 32];
     const IMAGE: [u8; 64] = [0x51; 64];
-    const POLICY: [u8; 64] = [0x72; 64];
+
+    fn policy(allow_debug: bool) -> ProtectionPolicy {
+        ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            allow_debug,
+            1,
+            IMAGE,
+        )
+    }
+
+    fn request_for_policy(sequence: u64, policy: ProtectionPolicy) -> LaunchRequest {
+        LaunchRequest::new(sequence, NONCE, IMAGE, policy.commitment()).unwrap()
+    }
 
     fn request(sequence: u64) -> LaunchRequest {
-        LaunchRequest::new(sequence, NONCE, IMAGE, POLICY).unwrap()
+        request_for_policy(sequence, policy(false))
     }
 
     fn report(sequence: u64) -> ProtectionReport {
@@ -517,20 +531,15 @@ mod tests {
         )
         .unwrap();
         let bare_receipt = AuthorityReceipt::seal(&KEY, request(4), bare).unwrap();
-        let policy = ProtectionPolicy::new(
-            ProtectionBackend::VbsEnclave,
-            ProtectionClaims::MEASURED,
-            false,
-            1,
-            IMAGE,
-        );
+        let policy = policy(false);
+        let policy_measurement = policy.commitment();
         let mut session = ProtectionSession::new(NONCE).unwrap();
         assert_eq!(
             AuthorityReceipt::verify_and_admit(
                 &KEY,
                 request(4),
                 &bare_receipt,
-                POLICY,
+                policy_measurement,
                 &mut session,
                 policy,
             ),
@@ -544,7 +553,7 @@ mod tests {
             &KEY,
             request(4),
             &vbs_receipt,
-            POLICY,
+            policy_measurement,
             &mut session,
             policy,
         )
@@ -558,7 +567,7 @@ mod tests {
             admitted.request_digest(),
             Sha3_512::digest(&request(4).encode())
         );
-        assert_eq!(admitted.policy_measurement(), POLICY);
+        assert_eq!(admitted.policy_measurement(), policy_measurement);
         assert!(!admitted.debug_allowed());
         assert_eq!(admitted.security_version(), 1);
         assert!(!admitted.permits_secret_release());
@@ -567,13 +576,8 @@ mod tests {
     #[test]
     fn authenticated_receipt_requires_independently_expected_policy() {
         let encoded = AuthorityReceipt::seal(&KEY, request(4), report(4)).unwrap();
-        let policy = ProtectionPolicy::new(
-            ProtectionBackend::VbsEnclave,
-            ProtectionClaims::MEASURED,
-            false,
-            1,
-            IMAGE,
-        );
+        let policy = policy(false);
+        let policy_measurement = policy.commitment();
         let mut session = ProtectionSession::new(NONCE).unwrap();
         assert_eq!(
             AuthorityReceipt::verify_and_admit(
@@ -591,9 +595,48 @@ mod tests {
                 &KEY,
                 request(4),
                 &encoded,
-                POLICY,
+                policy_measurement,
                 &mut session,
                 policy,
+            )
+            .unwrap()
+            .sequence(),
+            4
+        );
+    }
+
+    #[test]
+    fn authenticated_policy_identity_binds_exact_enforced_policy() {
+        let approved = policy(false);
+        let request = request_for_policy(4, approved);
+        let encoded = AuthorityReceipt::seal(&KEY, request, report(4)).unwrap();
+        let different = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            false,
+            2,
+            IMAGE,
+        );
+        let mut session = ProtectionSession::new(NONCE).unwrap();
+        assert_eq!(
+            AuthorityReceipt::verify_and_admit(
+                &KEY,
+                request,
+                &encoded,
+                approved.commitment(),
+                &mut session,
+                different,
+            ),
+            Err(ProtectedChannelError::PolicyMeasurementMismatch)
+        );
+        assert_eq!(
+            AuthorityReceipt::verify_and_admit(
+                &KEY,
+                request,
+                &encoded,
+                approved.commitment(),
+                &mut session,
+                approved,
             )
             .unwrap()
             .sequence(),
@@ -613,20 +656,15 @@ mod tests {
             NONCE,
         )
         .unwrap();
-        let encoded = AuthorityReceipt::seal(&KEY, request(4), debug_report).unwrap();
-        let policy = ProtectionPolicy::new(
-            ProtectionBackend::VbsEnclave,
-            ProtectionClaims::MEASURED,
-            true,
-            1,
-            IMAGE,
-        );
+        let policy = policy(true);
+        let request = request_for_policy(4, policy);
+        let encoded = AuthorityReceipt::seal(&KEY, request, debug_report).unwrap();
         let mut session = ProtectionSession::new(NONCE).unwrap();
         let admitted = AuthorityReceipt::verify_and_admit(
             &KEY,
-            request(4),
+            request,
             &encoded,
-            POLICY,
+            policy.commitment(),
             &mut session,
             policy,
         )

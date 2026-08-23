@@ -4,7 +4,7 @@ use core::ffi::c_void;
 #[cfg(any(target_os = "windows", test))]
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectionBackend, ProtectionClaims, ProtectionReport,
+    ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport,
 };
 #[cfg(target_os = "windows")]
 use mrml_kernel::{VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthorityOperation};
@@ -13,9 +13,19 @@ use mrml_kernel::{VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthority
 const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
-const AUTHORITY_POLICY_MEASUREMENT: [u8; 64] = [0x72; 64];
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_SECURITY_VERSION: u64 = 1;
+
+#[cfg(any(target_os = "windows", test))]
+fn authority_policy() -> ProtectionPolicy {
+    ProtectionPolicy::new(
+        ProtectionBackend::VbsEnclave,
+        ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED),
+        false,
+        AUTHORITY_SECURITY_VERSION,
+        AUTHORITY_MEASUREMENT,
+    )
+}
 
 #[cfg(target_os = "windows")]
 #[link(name = "vertdll", kind = "raw-dylib")]
@@ -254,7 +264,7 @@ fn process_authority_request(
 ) -> Result<[u8; AUTHORITY_RECEIPT_BYTES], ()> {
     let request = LaunchRequest::decode(encoded_request).map_err(|_| ())?;
     if request.image_measurement() != AUTHORITY_MEASUREMENT
-        || request.policy_measurement() != AUTHORITY_POLICY_MEASUREMENT
+        || request.policy_measurement() != authority_policy().commitment()
     {
         return Err(());
     }
@@ -388,7 +398,7 @@ mod tests {
             9,
             [0xa2; 32],
             AUTHORITY_MEASUREMENT,
-            AUTHORITY_POLICY_MEASUREMENT,
+            authority_policy().commitment(),
         )
         .unwrap();
         let receipt = process_authority_request(&request.encode()).unwrap();
@@ -403,7 +413,7 @@ mod tests {
     #[test]
     fn authority_rejects_unapproved_measurement_and_malformed_request() {
         let wrong =
-            LaunchRequest::new(9, [0xa2; 32], [0x52; 64], AUTHORITY_POLICY_MEASUREMENT).unwrap();
+            LaunchRequest::new(9, [0xa2; 32], [0x52; 64], authority_policy().commitment()).unwrap();
         assert_eq!(process_authority_request(&wrong.encode()), Err(()));
         let wrong_policy =
             LaunchRequest::new(9, [0xa2; 32], AUTHORITY_MEASUREMENT, [0x73; 64]).unwrap();

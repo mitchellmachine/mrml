@@ -118,8 +118,10 @@ Admission policy requires the exact backend as well as claims, measurement,
 security version, nonce, sequence, and debug state. A valid receipt from another
 mode cannot satisfy a weaker overlapping claim set or consume replay state.
 VBS request admission also compares the request's policy measurement with a
-verifier-owned expected value; merely MAC-binding a broker-selected policy is
-not approval.
+verifier-owned SHA3-512 commitment to the exact backend, claims, debug rule,
+security version, and image measurement. Merely MAC-binding a broker-selected
+policy identifier is not approval, and the enforced policy must reproduce that
+same commitment before replay state advances.
 Raw and receipt-authenticated admissions are distinct public types. The latter
 carries the exact request digest and independently approved policy identity;
 only it can evaluate secret release, and then only for non-debug execution with

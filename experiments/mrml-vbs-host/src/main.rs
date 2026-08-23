@@ -18,9 +18,6 @@ const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 #[cfg(windows)]
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
 #[cfg(windows)]
-const AUTHORITY_POLICY_MEASUREMENT: [u8; 64] = [0x72; 64];
-
-#[cfg(windows)]
 const _: () = assert!(VBS_AUTHORITY_CONTEXT_BYTES == mrml_windows::VBS_AUTHORITY_CONTEXT_BYTES);
 
 #[cfg(windows)]
@@ -63,13 +60,16 @@ fn application_main() -> Result<()> {
     let mut nonce = [0; 32];
     mrml_runtime::fill_random(&mut nonce)
         .map_err(|_| anyhow!("cryptographic nonce generation failed"))?;
-    let request = LaunchRequest::new(
+    let policy = ProtectionPolicy::new(
+        ProtectionBackend::VbsEnclave,
+        ProtectionBackend::VbsEnclave.maximum_claims(),
+        false,
         1,
-        nonce,
         AUTHORITY_MEASUREMENT,
-        AUTHORITY_POLICY_MEASUREMENT,
-    )
-    .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
+    );
+    let policy_measurement = policy.commitment();
+    let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, policy_measurement)
+        .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
     let mut receipt = [0; AUTHORITY_RECEIPT_BYTES];
     let context = VbsAuthorityContext::new(
@@ -90,20 +90,13 @@ fn application_main() -> Result<()> {
             authority_status
         ));
     }
-    let policy = ProtectionPolicy::new(
-        ProtectionBackend::VbsEnclave,
-        ProtectionBackend::VbsEnclave.maximum_claims(),
-        false,
-        1,
-        AUTHORITY_MEASUREMENT,
-    );
     let mut session = ProtectionSession::new(nonce)
         .map_err(|error| anyhow!("protection session rejected: {:?}", error))?;
     let admitted = AuthorityReceipt::verify_and_admit(
         &AUTHORITY_KEY,
         request,
         &receipt,
-        AUTHORITY_POLICY_MEASUREMENT,
+        policy_measurement,
         &mut session,
         policy,
     )

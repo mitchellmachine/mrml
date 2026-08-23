@@ -70,9 +70,9 @@ pub use protected_channel::{
     VbsAuthorityContext, VbsAuthorityOperation,
 };
 pub use protected_execution::{
-    PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend, ProtectionClaims,
-    ProtectionError, ProtectionEvidenceSource, ProtectionPolicy, ProtectionReport,
-    ProtectionSession,
+    PROTECTION_POLICY_BYTES, PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend,
+    ProtectionClaims, ProtectionError, ProtectionEvidenceSource, ProtectionPolicy,
+    ProtectionReport, ProtectionSession,
 };
 pub use protected_monitor::{
     DomainId, DomainState, GranuleHardware, GranuleHardwareOutcome, GranuleId, GranuleState,
