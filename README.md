@@ -79,6 +79,9 @@ violates any rule must not be merged.
 - Review unsafe code, FFI, integer and buffer arithmetic, parsers, filesystem
   and process operations, network input, concurrency, and failure paths. Add
   adversarial and regression tests appropriate to the change.
+- When a workspace formatter changes otherwise unrelated tracked Rust files,
+  preserve those mechanical changes in a separate formatting-only commit so
+  the functional change remains independently reviewable.
 - Reject and rework security or measured performance regressions. Never waive
   a regression merely to make a feature pass.
 - Record Windows and Linux test commands, security checks, and relevant
