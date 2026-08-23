@@ -205,6 +205,19 @@ host forge receipts. A receipt authenticates the authority's decision, not the
 subsequent execution or GPU result, and policy admission still independently
 rejects replay, debug mode, rollback, and insufficient claims.
 
+The Windows lifecycle probe exercises that actual broker boundary. It submits
+the canonical request under a generation-tagged ticket, gives the authority only
+the broker-owned request bytes, publishes the returned opaque receipt, and
+atomically takes that exact request/receipt pair for delivery to the independent
+verifier enclave. Taking or cancelling an exchange wipes both fixed-size slot
+buffers before reuse, and stale generations cannot address a recycled slot.
+This prevents accidental cross-wiring in honest VTL0 code; it does not make the
+broker trusted. The broker contains no MAC or sealing key and performs no
+authentication. A compromised host can observe, mutate, suppress, reorder, or
+replay its memory, while VTL1's exact binding, receipt, policy, sequence, and
+attestation checks remain the fail-closed security boundary. Volatile slot
+wiping is residual-state hygiene only, not confidentiality from VTL0.
+
 The control plane also defines an exact 64-byte VBS attestation statement: the
 verifier contributes a fresh 32-byte nonce and VTL1 appends a domain-separated
 SHA3-256 commitment to the canonical approved policy and the complete canonical

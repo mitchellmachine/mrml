@@ -117,14 +117,44 @@ impl<const N: usize> UntrustedLaunchBroker<N> {
             return Err(BrokerError::WrongState);
         }
         output.copy_from_slice(&slot.receipt);
-        self.slots[ticket.index()] = None;
+        self.clear_slot(ticket.index());
+        Ok(())
+    }
+
+    /// Atomically returns the exact stored request and corresponding opaque
+    /// receipt. Authentication remains exclusively the trusted endpoint's job.
+    pub fn take_exchange(
+        &mut self,
+        ticket: BrokerTicket,
+        request: &mut [u8; LAUNCH_REQUEST_BYTES],
+        receipt: &mut [u8; AUTHORITY_RECEIPT_BYTES],
+    ) -> Result<(), BrokerError> {
+        let slot = self.slot(ticket)?;
+        if slot.state != SlotState::ReceiptReady {
+            return Err(BrokerError::WrongState);
+        }
+        request.copy_from_slice(&slot.request);
+        receipt.copy_from_slice(&slot.receipt);
+        self.clear_slot(ticket.index());
         Ok(())
     }
 
     pub fn cancel(&mut self, ticket: BrokerTicket) -> Result<(), BrokerError> {
         self.slot(ticket)?;
-        self.slots[ticket.index()] = None;
+        self.clear_slot(ticket.index());
         Ok(())
+    }
+
+    fn clear_slot(&mut self, index: usize) {
+        if let Some(slot) = self.slots.get_mut(index).and_then(Option::as_mut) {
+            for byte in slot.request.iter_mut().chain(slot.receipt.iter_mut()) {
+                // SAFETY: each byte is exclusively borrowed and valid. The
+                // volatile wipe prevents stale exchanges surviving slot reuse.
+                unsafe { core::ptr::write_volatile(byte, 0) };
+            }
+            core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        }
+        self.slots[index] = None;
     }
 
     fn slot(&self, ticket: BrokerTicket) -> Result<&Slot, BrokerError> {
@@ -176,6 +206,26 @@ mod tests {
         broker.take_receipt(ticket, &mut output).unwrap();
         assert_eq!(output, receipt);
         assert_eq!(broker.cancel(ticket), Err(BrokerError::StaleTicket));
+    }
+
+    #[test]
+    fn paired_exchange_returns_the_original_request_once() {
+        let mut broker = UntrustedLaunchBroker::<1>::new();
+        let expected_request = request(11);
+        let ticket = broker.submit(expected_request).unwrap();
+        let expected_receipt = [0x6b; AUTHORITY_RECEIPT_BYTES];
+        broker.publish_receipt(ticket, &expected_receipt).unwrap();
+        let mut request_output = [0; LAUNCH_REQUEST_BYTES];
+        let mut receipt_output = [0; AUTHORITY_RECEIPT_BYTES];
+        broker
+            .take_exchange(ticket, &mut request_output, &mut receipt_output)
+            .unwrap();
+        assert_eq!(LaunchRequest::decode(&request_output), Ok(expected_request));
+        assert_eq!(receipt_output, expected_receipt);
+        assert_eq!(
+            broker.take_exchange(ticket, &mut request_output, &mut receipt_output),
+            Err(BrokerError::StaleTicket)
+        );
     }
 
     #[test]

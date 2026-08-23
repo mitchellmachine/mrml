@@ -158,6 +158,15 @@ must match the exact request before a one-use sealed workload secret can be
 unsealed and consumed there. Only an HMAC result leaves the enclave; every
 VTL0-visible success value remains diagnostic and cannot itself authorize
 secret release.
+The live probe routes each canonical request and its opaque authority receipt
+through the same generational `UntrustedLaunchBroker` used by the WHP control
+plane. Its atomic paired take prevents honest host code from accidentally
+combining different exchanges, and consumed or cancelled slots are wiped before
+reuse. The broker never holds a receipt key, authenticates a claim, or releases
+a secret. A compromised VTL0 host can still inspect, alter, suppress, or replay
+broker memory; exact request, policy, sequence, receipt, and attestation checks
+inside VTL1 are what reject those attempts. Broker wiping is residual-state
+hygiene, not a confidentiality guarantee against the host.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.

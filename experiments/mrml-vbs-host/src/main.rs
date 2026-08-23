@@ -14,6 +14,8 @@ use mrml_kernel::{
 };
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
+#[cfg(windows)]
+use mrml_whp::UntrustedLaunchBroker;
 
 #[cfg(windows)]
 const MAX_ENCLAVE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -107,6 +109,10 @@ fn application_main() -> Result<()> {
     }
     let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, policy_measurement)
         .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
+    let mut broker = UntrustedLaunchBroker::<1>::new();
+    let ticket = broker
+        .submit(request)
+        .map_err(|error| anyhow!("WHP broker rejected request: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
     let mut workload_secret = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
     let workload_key_context = VbsAuthorityContext::new(
@@ -165,15 +171,20 @@ fn application_main() -> Result<()> {
             load_status
         ));
     }
-    let mut receipt = [0; AUTHORITY_RECEIPT_BYTES];
-    let context = VbsAuthorityContext::new(
-        VbsAuthorityOperation::IssueReceipt,
-        encoded_request.as_ptr() as usize as u64,
-        encoded_request.len() as u64,
-        receipt.as_mut_ptr() as usize as u64,
-        receipt.len() as u64,
-    )
-    .map_err(|error| anyhow!("authority context rejected: {:?}", error))?;
+    let mut broker_receipt = [0; AUTHORITY_RECEIPT_BYTES];
+    let context = {
+        let broker_request = broker
+            .authority_request(ticket)
+            .map_err(|error| anyhow!("WHP broker lost pending request: {:?}", error))?;
+        VbsAuthorityContext::new(
+            VbsAuthorityOperation::IssueReceipt,
+            broker_request.as_ptr() as usize as u64,
+            broker_request.len() as u64,
+            broker_receipt.as_mut_ptr() as usize as u64,
+            broker_receipt.len() as u64,
+        )
+        .map_err(|error| anyhow!("authority context rejected: {:?}", error))?
+    };
     let mut call = context.encode();
     let authority_status = enclave
         .call_authority(authority, &mut call)
@@ -184,9 +195,17 @@ fn application_main() -> Result<()> {
             authority_status
         ));
     }
+    broker
+        .publish_receipt(ticket, &broker_receipt)
+        .map_err(|error| anyhow!("WHP broker rejected receipt: {:?}", error))?;
+    let mut transported_request = [0; LAUNCH_REQUEST_BYTES];
+    let mut transported_receipt = [0; AUTHORITY_RECEIPT_BYTES];
+    broker
+        .take_exchange(ticket, &mut transported_request, &mut transported_receipt)
+        .map_err(|error| anyhow!("WHP broker exchange failed: {:?}", error))?;
     let mut verification_input = [0; VBS_RECEIPT_VERIFICATION_INPUT_BYTES];
-    verification_input[..LAUNCH_REQUEST_BYTES].copy_from_slice(&encoded_request);
-    verification_input[LAUNCH_REQUEST_BYTES..].copy_from_slice(&receipt);
+    verification_input[..LAUNCH_REQUEST_BYTES].copy_from_slice(&transported_request);
+    verification_input[LAUNCH_REQUEST_BYTES..].copy_from_slice(&transported_receipt);
     let mut receipt_confirmation = [0; VBS_SEALED_KEY_CONFIRMATION_BYTES];
     let receipt_context = VbsAuthorityContext::new(
         VbsAuthorityOperation::VerifyReceipt,
