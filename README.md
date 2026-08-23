@@ -175,7 +175,13 @@ before any domain or granule exists, mixing an opaque full-signed-chain boot
 capability with fresh post-entry CPU `RDSEED` entropy. Callers cannot inject or
 retrieve that key. It issues the same canonical authenticated receipt format
 directly from live ownership state. This launch-local key is not TPM sealing,
-persistent identity, or remote attestation.
+persistent identity, or remote attestation. After a measured domain owns at
+least one private granule and no shared granules, the monitor can also derive a
+domain-generation- and measurement-bound workload key from independent
+`RDSEED` entropy. Only an exact authenticated non-debug receipt carrying the
+implemented sealed-key claim can consume its sequence once and obtain a
+challenge-bound HMAC result; neither key leaves VMX root. This is launch-local
+key custody, not persistent hardware sealing or evidence of physical execution.
 
 ## Kernel state
 

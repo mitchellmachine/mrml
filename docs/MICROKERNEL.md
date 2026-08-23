@@ -382,9 +382,20 @@ persistent identity, nor remote attestation; a persistent verifier channel
 would require a separate protected provisioning design.
 
 The allowable claim sets now match implemented mechanisms. VBS may claim
-`SEALED_KEYS` because its exact-code sealed, dual-gated consumer is implemented;
-the bare-metal monitor still rejects that claim until its protected key lifecycle
-exists. Bare-metal also
+`SEALED_KEYS` because its exact-code sealed, dual-gated consumer is implemented.
+The bare-metal monitor may claim `SEALED_KEYS` only after a measured domain owns
+private granules, owns no shared granules, and has generated a launch-local
+workload key internally. Fresh `RDSEED` entropy is domain-separated with the
+verified-boot-bound authority key, complete generational domain identity, and
+sealed measurement. The key is never returned. Its only consumer authenticates
+and policy-admits the exact request/receipt pair, requires non-debug measured
+sealed-key admission in `BareMetalVmxRoot` mode, revalidates the current live
+claim set, consumes each receipt sequence once, and returns only a
+request-, policy-, and challenge-bound HMAC. Sharing a granule after receipt
+issuance therefore prevents release without consuming replay state. Key bytes
+are volatile-erased when the domain is destroyed. This is launch-local VMX-root
+custody, not TPM sealing, persistent identity, remote attestation, or physical
+hardware verification. Bare-metal also
 does not claim `PRIVATE_MEMORY`, `HOST_VMM_ISOLATION`, `TRUSTED_IO`, or
 `ATTESTED` merely because VMX or a domain record exists. These claims require
 hardware page-transition/IOMMU enforcement and an authenticated evidence path,

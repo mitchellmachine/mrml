@@ -29,9 +29,9 @@ impl ProtectionBackend {
             Self::VbsEnclave => ProtectionClaims::VTL0_ISOLATION
                 .union(ProtectionClaims::MEASURED)
                 .union(ProtectionClaims::SEALED_KEYS),
-            Self::BareMetalMonitor => {
-                ProtectionClaims::DOMAIN_ISOLATION.union(ProtectionClaims::MEASURED)
-            }
+            Self::BareMetalMonitor => ProtectionClaims::DOMAIN_ISOLATION
+                .union(ProtectionClaims::MEASURED)
+                .union(ProtectionClaims::SEALED_KEYS),
         }
     }
 }
@@ -626,25 +626,37 @@ mod tests {
     }
 
     #[test]
-    fn sealed_keys_are_supported_only_by_the_implemented_vbs_path() {
-        assert!(
-            ProtectionBackend::VbsEnclave
-                .maximum_claims()
-                .contains(ProtectionClaims::SEALED_KEYS)
-        );
-        assert_eq!(
-            ProtectionReport::new(
-                ProtectionBackend::BareMetalMonitor,
-                ProtectionBackend::BareMetalMonitor
+    fn sealed_keys_are_supported_only_by_backends_with_internal_consumers() {
+        for backend in [
+            ProtectionBackend::VbsEnclave,
+            ProtectionBackend::BareMetalMonitor,
+        ] {
+            assert!(
+                backend
                     .maximum_claims()
-                    .union(ProtectionClaims::SEALED_KEYS),
-                false,
-                1,
-                1,
-                MEASUREMENT,
-                NONCE,
-            ),
-            Err(ProtectionError::UnsupportedClaim)
-        );
+                    .contains(ProtectionClaims::SEALED_KEYS)
+            );
+        }
+        for forbidden in [
+            ProtectionClaims::HOST_VMM_ISOLATION,
+            ProtectionClaims::PRIVATE_MEMORY,
+            ProtectionClaims::ATTESTED,
+            ProtectionClaims::TRUSTED_IO,
+        ] {
+            assert_eq!(
+                ProtectionReport::new(
+                    ProtectionBackend::BareMetalMonitor,
+                    ProtectionBackend::BareMetalMonitor
+                        .maximum_claims()
+                        .union(forbidden),
+                    false,
+                    1,
+                    1,
+                    MEASUREMENT,
+                    NONCE,
+                ),
+                Err(ProtectionError::UnsupportedClaim)
+            );
+        }
     }
 }

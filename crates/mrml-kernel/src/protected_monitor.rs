@@ -3,7 +3,7 @@ use crate::{
     ProtectionBackend, ProtectionClaims, ProtectionError, ProtectionPolicy, ProtectionReport,
     ProtectionSession, ValidatedBoot,
 };
-use mrml_crypto::Sha3_256;
+use mrml_crypto::{Sha3_256, hmac_sha256};
 
 #[cfg(target_arch = "x86_64")]
 fn cpu_seed() -> Result<[u8; 32], MonitorError> {
@@ -211,6 +211,11 @@ pub enum MonitorError {
     AuthorityKeyAlreadyProvisioned,
     AuthorityKeyNotProvisioned,
     InvalidLaunchRequest,
+    WorkloadKeyAlreadyProvisioned,
+    WorkloadKeyNotProvisioned,
+    SecretReleaseDenied,
+    SecretAlreadyConsumed,
+    InvalidChallenge,
     Report(ProtectionError),
     Receipt(ProtectedChannelError),
 }
@@ -220,6 +225,9 @@ struct Domain {
     generation: u32,
     state: DomainState,
     measurement: [u8; 64],
+    workload_key: [u8; 32],
+    workload_key_provisioned: bool,
+    consumed_secret_sequence: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -293,6 +301,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             generation,
             state: DomainState::Building,
             measurement: [0; 64],
+            workload_key: [0; 32],
+            workload_key_provisioned: false,
+            consumed_secret_sequence: 0,
         });
         Ok(DomainId::new(index, generation))
     }
@@ -363,6 +374,76 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         Ok(())
     }
 
+    /// Generates a launch-local workload key inside the monitor after the
+    /// domain measurement and private ownership state are fixed. The key is
+    /// never returned through the public API and is not persistent sealing.
+    pub fn generate_domain_workload_key(&mut self, id: DomainId) -> Result<(), MonitorError> {
+        let key = cpu_seed()?;
+        self.install_domain_workload_key(id, key)
+    }
+
+    fn install_domain_workload_key(
+        &mut self,
+        id: DomainId,
+        entropy: [u8; 32],
+    ) -> Result<(), MonitorError> {
+        if !self.authority_key_provisioned {
+            return Err(MonitorError::AuthorityKeyNotProvisioned);
+        }
+        if entropy == [0; 32] {
+            return Err(MonitorError::HardwareEntropyUnavailable);
+        }
+        if self.domain_has_pending_transition(id) {
+            return Err(MonitorError::DomainHasPendingTransition);
+        }
+        if self.domain_has_uncertain_granule(id) {
+            return Err(MonitorError::DomainHasUncertainGranule);
+        }
+        let has_private = self
+            .granules
+            .iter()
+            .flatten()
+            .any(|granule| granule.owner == Some(id) && granule.state == GranuleState::Private);
+        let has_shared = self
+            .granules
+            .iter()
+            .flatten()
+            .any(|granule| granule.owner == Some(id) && granule.state == GranuleState::Shared);
+        if !has_private || has_shared {
+            return Err(MonitorError::SecretReleaseDenied);
+        }
+        let domain = *self.domain(id)?;
+        if domain.state != DomainState::Measured {
+            return Err(MonitorError::InvalidDomainState);
+        }
+        if domain.workload_key_provisioned {
+            return Err(MonitorError::WorkloadKeyAlreadyProvisioned);
+        }
+        let mut digest = Sha3_256::new();
+        digest.update(b"MRML-BARE-METAL-WORKLOAD-KEY-v1\0");
+        digest.update(&self.authority_key);
+        digest.update(&id.token().to_le_bytes());
+        digest.update(&domain.measurement);
+        digest.update(&entropy);
+        let key = digest.finalize();
+        if key == [0; 32] {
+            return Err(MonitorError::InvalidAuthorityKey);
+        }
+        let domain = self.domain_mut(id)?;
+        domain.workload_key = key;
+        domain.workload_key_provisioned = true;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn generate_domain_workload_key_for_test(
+        &mut self,
+        id: DomainId,
+        key: [u8; 32],
+    ) -> Result<(), MonitorError> {
+        self.install_domain_workload_key(id, key)
+    }
+
     pub fn start_domain(&mut self, id: DomainId) -> Result<(), MonitorError> {
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
@@ -411,6 +492,13 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             .any(|granule| granule.owner == Some(id))
         {
             return Err(MonitorError::DomainHasGranules);
+        }
+        if let Some(domain) = self.domains[id.index()].as_mut() {
+            for byte in &mut domain.workload_key {
+                // SAFETY: the pointer is derived from an exclusive reference;
+                // volatile writes prevent elision of secret erasure.
+                unsafe { core::ptr::write_volatile(byte, 0) };
+            }
         }
         self.domains[id.index()] = None;
         Ok(())
@@ -644,6 +732,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         let mut claims = ProtectionClaims::MEASURED;
         if owns_private && !owns_shared {
             claims = claims.union(ProtectionClaims::DOMAIN_ISOLATION);
+            if domain.workload_key_provisioned {
+                claims = claims.union(ProtectionClaims::SEALED_KEYS);
+            }
         }
         ProtectionReport::new(
             ProtectionBackend::BareMetalMonitor,
@@ -688,6 +779,69 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             .map_err(MonitorError::Receipt)?;
         self.report_sequence = next_sequence;
         Ok(receipt)
+    }
+
+    /// Authenticates and admits the exact authority receipt, revalidates the
+    /// live domain state, and consumes that sequence once before using the
+    /// monitor-custodied workload key. Only the HMAC result leaves the monitor.
+    pub fn consume_workload_secret(
+        &mut self,
+        id: DomainId,
+        request: LaunchRequest,
+        receipt: &[u8],
+        policy: ProtectionPolicy,
+        challenge: [u8; 32],
+    ) -> Result<[u8; 32], MonitorError> {
+        if challenge == [0; 32] {
+            return Err(MonitorError::InvalidChallenge);
+        }
+        if !self.authority_key_provisioned {
+            return Err(MonitorError::AuthorityKeyNotProvisioned);
+        }
+        let domain = *self.domain(id)?;
+        if !domain.workload_key_provisioned {
+            return Err(MonitorError::WorkloadKeyNotProvisioned);
+        }
+        if request.image_measurement() != domain.measurement
+            || request.policy_measurement() != policy.commitment()
+        {
+            return Err(MonitorError::InvalidLaunchRequest);
+        }
+        let mut session = ProtectionSession::new(request.nonce()).map_err(MonitorError::Report)?;
+        let admission = AuthorityReceipt::verify_and_admit(
+            &self.authority_key,
+            request,
+            receipt,
+            policy.commitment(),
+            &mut session,
+            policy,
+        )
+        .map_err(MonitorError::Receipt)?;
+        if !admission.mode().is_bare_metal_vmx_root() || !admission.permits_secret_release() {
+            return Err(MonitorError::SecretReleaseDenied);
+        }
+        let current = self.build_report(id, request.nonce(), request.sequence())?;
+        if current.claims() != admission.claims()
+            || current.measurement() != admission.measurement()
+            || current.security_version() != admission.security_version()
+            || current.debug_allowed()
+        {
+            return Err(MonitorError::SecretReleaseDenied);
+        }
+        let domain = self.domain_mut(id)?;
+        if request.sequence() <= domain.consumed_secret_sequence {
+            return Err(MonitorError::SecretAlreadyConsumed);
+        }
+        domain.consumed_secret_sequence = request.sequence();
+        Ok(hmac_sha256(
+            &domain.workload_key,
+            &[
+                b"MRML-BARE-METAL-WORKLOAD-SECRET-v1\0",
+                &admission.request_digest(),
+                &admission.policy_measurement(),
+                &challenge,
+            ],
+        ))
     }
 
     fn prepare_transition(
@@ -1010,6 +1164,135 @@ mod tests {
         assert!(admitted.mode().is_bare_metal_vmx_root());
         assert_eq!(admitted.claims(), claims);
         assert!(!admitted.permits_secret_release());
+    }
+
+    #[test]
+    fn monitor_releases_only_from_exact_authenticated_one_use_receipt() {
+        const MEASUREMENT: [u8; 64] = [0xd1; 64];
+        const NONCE: [u8; 32] = [0xd2; 32];
+        const CHALLENGE: [u8; 32] = [0xd3; 32];
+        const WORKLOAD_ENTROPY: [u8; 32] = [0xd4; 32];
+        let mut monitor = ProtectedMonitor::<1, 1>::with_security_version(11).unwrap();
+        monitor
+            .bootstrap_authority_key_for_test(&validated_boot([0x71; 32], [0x72; 64]), [0x73; 32])
+            .unwrap();
+        let domain = monitor.create_domain().unwrap();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0x80_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        let transition = monitor.prepare_assign_private(granule, domain).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        monitor.seal_domain(domain, MEASUREMENT).unwrap();
+        monitor
+            .generate_domain_workload_key_for_test(domain, WORKLOAD_ENTROPY)
+            .unwrap();
+        let claims = ProtectionClaims::MEASURED
+            .union(ProtectionClaims::DOMAIN_ISOLATION)
+            .union(ProtectionClaims::SEALED_KEYS);
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            claims,
+            false,
+            11,
+            MEASUREMENT,
+        );
+        let request = LaunchRequest::new(1, NONCE, MEASUREMENT, policy.commitment()).unwrap();
+        let receipt = monitor
+            .issue_authenticated_receipt(domain, request, policy)
+            .unwrap();
+        let mut key_digest = Sha3_256::new();
+        key_digest.update(b"MRML-BARE-METAL-WORKLOAD-KEY-v1\0");
+        key_digest.update(&monitor.authority_key);
+        key_digest.update(&domain.token().to_le_bytes());
+        key_digest.update(&MEASUREMENT);
+        key_digest.update(&WORKLOAD_ENTROPY);
+        let expected = hmac_sha256(
+            &key_digest.finalize(),
+            &[
+                b"MRML-BARE-METAL-WORKLOAD-SECRET-v1\0",
+                &mrml_crypto::Sha3_512::digest(&request.encode()),
+                &policy.commitment(),
+                &CHALLENGE,
+            ],
+        );
+        assert_eq!(
+            monitor
+                .consume_workload_secret(domain, request, &receipt, policy, CHALLENGE)
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            monitor.consume_workload_secret(domain, request, &receipt, policy, CHALLENGE),
+            Err(MonitorError::SecretAlreadyConsumed)
+        );
+    }
+
+    #[test]
+    fn secret_release_rejects_tampering_substitution_and_live_downgrade() {
+        const MEASUREMENT: [u8; 64] = [0xe1; 64];
+        let mut monitor = ProtectedMonitor::<1, 1>::new();
+        monitor
+            .bootstrap_authority_key_for_test(&validated_boot([0x81; 32], [0x82; 64]), [0x83; 32])
+            .unwrap();
+        let domain = monitor.create_domain().unwrap();
+        assert_eq!(
+            monitor.generate_domain_workload_key_for_test(domain, [0x84; 32]),
+            Err(MonitorError::SecretReleaseDenied)
+        );
+        let granule = monitor
+            .register_granule(PhysAddr::new(0x90_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        let transition = monitor.prepare_assign_private(granule, domain).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        monitor.seal_domain(domain, MEASUREMENT).unwrap();
+        monitor
+            .generate_domain_workload_key_for_test(domain, [0x84; 32])
+            .unwrap();
+        let claims = ProtectionClaims::MEASURED
+            .union(ProtectionClaims::DOMAIN_ISOLATION)
+            .union(ProtectionClaims::SEALED_KEYS);
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            claims,
+            false,
+            1,
+            MEASUREMENT,
+        );
+        let request = LaunchRequest::new(1, [0xe2; 32], MEASUREMENT, policy.commitment()).unwrap();
+        let receipt = monitor
+            .issue_authenticated_receipt(domain, request, policy)
+            .unwrap();
+        let mut tampered = receipt;
+        tampered[AUTHORITY_RECEIPT_BYTES - 1] ^= 1;
+        assert_eq!(
+            monitor.consume_workload_secret(domain, request, &tampered, policy, [0xe3; 32]),
+            Err(MonitorError::Receipt(ProtectedChannelError::InvalidTag))
+        );
+        let substituted = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            claims,
+            false,
+            2,
+            MEASUREMENT,
+        );
+        assert_eq!(
+            monitor.consume_workload_secret(domain, request, &receipt, substituted, [0xe3; 32]),
+            Err(MonitorError::InvalidLaunchRequest)
+        );
+        assert_eq!(
+            monitor.consume_workload_secret(domain, request, &receipt, policy, [0; 32]),
+            Err(MonitorError::InvalidChallenge)
+        );
+        let transition = monitor.prepare_share(granule, domain).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        assert_eq!(
+            monitor.consume_workload_secret(domain, request, &receipt, policy, [0xe3; 32]),
+            Err(MonitorError::SecretReleaseDenied)
+        );
     }
 
     #[test]
