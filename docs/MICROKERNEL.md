@@ -408,9 +408,16 @@ cannot silently affect neighboring memory. The final leaf must map the exact
 physical granule rather than an alias before the walker returns a lifetime-bound
 unique reference. A direct-map implementation exists behind an unsafe contract
 requiring pinned, supervisor-only, exclusively owned tables and serialized
-writers. The routed wrapper additionally requires RTADDR provenance from the
-same verified DRHD. Tests reject forged domains, pass-through contexts, aliases,
-and huge pages and prove mutation reaches only the resolved leaf.
+writers. Its constructor now binds the view immutably to one DRHD base and one
+root sampled after that unit reported the pointer active. Before walking, the
+coherent binder requires the view's DRHD to equal the topology-issued route and
+its root to equal the current RTADDR read through the one-shot verified MMIO
+unit. Reordered table views and stale-root views therefore fail before any table
+read or leaf mutation. Tests reject both substitutions in addition to forged
+domains, pass-through contexts, aliases, and huge pages, and prove mutation
+reaches only the resolved leaf. The provenance remains an unsafe assertion by
+the direct-map constructor; physical boot integration must establish exclusive
+ownership and serialize root changes.
 The coherent builder rejects a verified MMIO token whose physical DRHD base or
 segment differs from the checked requester route, and rejects a mapping shorter
 than the capability-derived register extent. It reads GSTS and proceeds only
@@ -419,9 +426,8 @@ pointer, then accepts only a nonzero, aligned legacy-mode RTADDR. That root is
 walked for the routed requester and coupled to the invalidator that controls the
 same unit. Tests exercise successful revoke-and-flush, MMIO-unit substitution,
 and an inactive root pointer. The unsafe boundary still requires boot code to
-preserve unique mapping ownership and the authorization-to-table ordering.
-Native exclusive-table collection and execution on physical hardware remain
-unverified.
+preserve unique mapping and table ownership. Execution on physical hardware
+remains unverified.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 

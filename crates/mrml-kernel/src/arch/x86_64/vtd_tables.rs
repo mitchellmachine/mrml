@@ -32,9 +32,26 @@ pub enum VtdTableError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VtdBindingError {
     UnitSubstitution,
+    TableSubstitution,
     InsufficientRegisterMapping,
     Unit(VtdError),
     Table(VtdTableError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VtdTableProvenance {
+    register_base: PhysAddr,
+    root_table: PhysAddr,
+}
+
+impl VtdTableProvenance {
+    pub const fn register_base(self) -> PhysAddr {
+        self.register_base
+    }
+
+    pub const fn root_table(self) -> PhysAddr {
+        self.root_table
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -275,10 +292,13 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
 ///
 /// # Safety
 ///
-/// An implementation must read and mutate the exact physical table entries
-/// named by each argument, keep every table pinned, serialize against all
-/// concurrent table writers, and return a unique leaf reference.
+/// An implementation must truthfully identify its sole DRHD and sampled active
+/// root, read and mutate the exact physical table entries named by each
+/// argument, keep every table pinned, serialize against all concurrent table
+/// writers, and return a unique leaf reference.
 pub unsafe trait VtdTableMemory {
+    /// Immutable unit/root identity for this exclusive table view.
+    fn provenance(&self) -> VtdTableProvenance;
     fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError>;
     fn read64(&self, table: PhysAddr, index: usize) -> Result<u64, VtdTableError>;
     /// # Safety
@@ -291,20 +311,34 @@ pub unsafe trait VtdTableMemory {
 
 /// Identity-mapped physical table access for the bare-metal monitor.
 pub struct DirectVtdTables {
-    _private: (),
+    provenance: VtdTableProvenance,
 }
 
 impl DirectVtdTables {
     /// # Safety
     ///
-    /// All reachable VT-d table frames must be identity mapped, pinned,
-    /// supervisor writable, and exclusively owned while this object exists.
-    pub const unsafe fn assume_exclusive_identity_mapping() -> Self {
-        Self { _private: () }
+    /// All table frames reachable from `root_table` must be identity mapped,
+    /// pinned, supervisor writable, and exclusively owned by `register_base`
+    /// while this object exists. The supplied root must have been sampled from
+    /// that unit after hardware reported the pointer active.
+    pub const unsafe fn assume_exclusive_identity_mapping(
+        register_base: PhysAddr,
+        root_table: PhysAddr,
+    ) -> Self {
+        Self {
+            provenance: VtdTableProvenance {
+                register_base,
+                root_table,
+            },
+        }
     }
 }
 
 unsafe impl VtdTableMemory for DirectVtdTables {
+    fn provenance(&self) -> VtdTableProvenance {
+        self.provenance
+    }
+
     fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError> {
         if index >= 256 {
             return Err(VtdTableError::Storage);
@@ -508,6 +542,12 @@ where
     let root = invalidator
         .active_legacy_root()
         .map_err(VtdBindingError::Unit)?;
+    let root_table = PhysAddr::new(root).map_err(|_| VtdBindingError::TableSubstitution)?;
+    let provenance = memory.provenance();
+    if provenance.register_base() != route.register_base() || provenance.root_table() != root_table
+    {
+        return Err(VtdBindingError::TableSubstitution);
+    }
     // SAFETY: this function's contract binds RTADDR provenance to the exact
     // verified unit represented by both the route and invalidator.
     let leaf =
@@ -597,6 +637,7 @@ mod tests {
     const LEVEL1: u64 = 0x15_0000;
 
     struct Tables {
+        provenance: VtdTableProvenance,
         root: [u64; 512],
         context: [u64; 512],
         level4: [u64; 512],
@@ -608,6 +649,10 @@ mod tests {
     impl Tables {
         fn identity(physical: PhysAddr, domain: u16) -> Self {
             let mut tables = Self {
+                provenance: VtdTableProvenance {
+                    register_base: PhysAddr::new(0xfed9_0000).unwrap(),
+                    root_table: PhysAddr::new(ROOT).unwrap(),
+                },
                 root: [0; 512],
                 context: [0; 512],
                 level4: [0; 512],
@@ -626,6 +671,16 @@ mod tests {
             tables
         }
 
+        fn for_unit(mut self, register_base: PhysAddr) -> Self {
+            self.provenance.register_base = register_base;
+            self
+        }
+
+        fn for_root(mut self, root_table: PhysAddr) -> Self {
+            self.provenance.root_table = root_table;
+            self
+        }
+
         fn table(&self, physical: PhysAddr) -> Option<&[u64; 512]> {
             match physical.get() {
                 ROOT => Some(&self.root),
@@ -640,6 +695,10 @@ mod tests {
     }
 
     unsafe impl VtdTableMemory for Tables {
+        fn provenance(&self) -> VtdTableProvenance {
+            self.provenance
+        }
+
         fn read128(&self, table: PhysAddr, index: usize) -> Result<[u64; 2], VtdTableError> {
             let entries = self.table(table).ok_or(VtdTableError::Storage)?;
             let start = index.checked_mul(2).ok_or(VtdTableError::Storage)?;
@@ -916,6 +975,21 @@ mod tests {
             },
             Err(VtdBindingError::Unit(VtdError::RootPointerInactive))
         ));
+
+        let stale_root = PhysAddr::new(ROOT + 0x1000).unwrap();
+        let mut stale_tables = Tables::identity(physical, 9).for_root(stale_root);
+        assert!(matches!(
+            unsafe {
+                bind_routed_dma_isolation(
+                    &mut stale_tables,
+                    route,
+                    verified_unit(register_base, UnitRegisters::active(ROOT)),
+                    physical,
+                    9,
+                )
+            },
+            Err(VtdBindingError::TableSubstitution)
+        ));
     }
 
     #[test]
@@ -931,7 +1005,10 @@ mod tests {
             verified_unit(first_base, UnitRegisters::active(ROOT)),
             verified_unit(second_base, UnitRegisters::active(ROOT)),
         ];
-        let mut tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+        let mut tables = [
+            Tables::identity(physical, 9).for_unit(first_base),
+            Tables::identity(physical, 9).for_unit(second_base),
+        ];
 
         {
             let mut set = unsafe {
@@ -983,7 +1060,10 @@ mod tests {
         assert!(matches!(duplicate, Err(VtdSetBindingError::DuplicateUnit)));
 
         let second_base = PhysAddr::new(0xfeda_0000).unwrap();
-        let mut swapped_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+        let mut swapped_tables = [
+            Tables::identity(physical, 9).for_unit(register_base),
+            Tables::identity(physical, 9).for_unit(second_base),
+        ];
         let swapped = unsafe {
             bind_routed_dma_set(
                 &mut swapped_tables,
@@ -1009,7 +1089,39 @@ mod tests {
         assert_eq!(swapped_tables[0].level1[0] & 0x3, 0x3);
         assert_eq!(swapped_tables[1].level1[0] & 0x3, 0x3);
 
-        let mut partial_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+        let mut reordered_tables = [
+            Tables::identity(physical, 9).for_unit(second_base),
+            Tables::identity(physical, 9).for_unit(register_base),
+        ];
+        let reordered = unsafe {
+            bind_routed_dma_set(
+                &mut reordered_tables,
+                VtdAuthorizedRoutes::for_test(
+                    test_owner(),
+                    [route, VtdRequesterRoute::for_test(requester(), second_base)],
+                    [9, 9],
+                ),
+                [
+                    verified_unit(register_base, UnitRegisters::active(ROOT)),
+                    verified_unit(second_base, UnitRegisters::active(ROOT)),
+                ],
+                physical,
+            )
+        };
+        assert!(matches!(
+            reordered,
+            Err(VtdSetBindingError::Unit {
+                index: 0,
+                error: VtdBindingError::TableSubstitution
+            })
+        ));
+        assert_eq!(reordered_tables[0].level1[0] & 0x3, 0x3);
+        assert_eq!(reordered_tables[1].level1[0] & 0x3, 0x3);
+
+        let mut partial_tables = [
+            Tables::identity(physical, 9).for_unit(register_base),
+            Tables::identity(physical, 9).for_unit(second_base),
+        ];
         let partial = unsafe {
             bind_routed_dma_set(
                 &mut partial_tables,
