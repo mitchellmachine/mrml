@@ -3353,14 +3353,6 @@ fn runtime_expression_type_with_locals<
             ) {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
-            if matches!(
-                transform,
-                crate::expression::IntegerPairTransform::DivideCeiling
-                    | crate::expression::IntegerPairTransform::NextMultiple
-            ) && integer_type.is_signed()
-            {
-                return Err(CodegenErrorKind::RuntimeTypeMismatch);
-            }
             let result_type =
                 if transform == crate::expression::IntegerPairTransform::AbsoluteDifference {
                     integer_type.unsigned_counterpart().unwrap_or(integer_type)
@@ -5654,21 +5646,50 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     crate::expression::IntegerPairTransform::DivideCeiling => {
                         self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x85, 0xc9])?;
                         self.emit_trap_branch(0x84)?;
-                        self.emit(&[
-                            0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1, 0x48, 0xf7, 0xda, 0x48, 0x83, 0xd0,
-                            0,
-                        ])?;
+                        if operand_width.signed {
+                            self.emit(&[0x49, 0x89, 0xc0, 0x49, 0x31, 0xc8, 0x48, 0x99])?;
+                            self.emit(&[0x48, 0xf7, 0xf9, 0x48, 0x85, 0xd2])?;
+                            let exact = self.emit_forward_branch(0x84)?;
+                            self.emit(&[0x4d, 0x85, 0xc0])?;
+                            let opposite_signs = self.emit_forward_branch(0x88)?;
+                            self.emit(&[0x48, 0x83, 0xc0, 1])?;
+                            self.patch_forward_branch(opposite_signs)?;
+                            self.patch_forward_branch(exact)?;
+                        } else {
+                            self.emit(&[
+                                0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1, 0x48, 0xf7, 0xda, 0x48, 0x83,
+                                0xd0, 0,
+                            ])?;
+                        }
                     }
                     crate::expression::IntegerPairTransform::NextMultiple => {
                         self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x85, 0xc9])?;
                         self.emit_trap_branch(0x84)?;
-                        self.emit(&[
-                            0x49, 0x89, 0xc0, 0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1, 0x48, 0x85, 0xd2,
-                        ])?;
+                        self.emit(&[0x49, 0x89, 0xc0])?;
+                        let negative_one = if operand_width.signed {
+                            self.emit(&[0x48, 0x83, 0xf9, 0xff])?;
+                            Some(self.emit_forward_branch(0x84)?)
+                        } else {
+                            None
+                        };
+                        if operand_width.signed {
+                            self.emit(&[
+                                0x49, 0x89, 0xc1, 0x49, 0x31, 0xc9, 0x48, 0x99, 0x48, 0xf7, 0xf9,
+                            ])?;
+                        } else {
+                            self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
+                        }
+                        self.emit(&[0x48, 0x85, 0xd2])?;
                         let exact = self.emit_forward_branch(0x84)?;
+                        if operand_width.signed {
+                            self.emit(&[0x4d, 0x85, 0xc9])?;
+                            let same_sign = self.emit_forward_branch(0x89)?;
+                            self.emit(&[0x48, 0x01, 0xca])?;
+                            self.patch_forward_branch(same_sign)?;
+                        }
                         self.emit(&[0x48, 0x29, 0xd1, 0x4c, 0x89, 0xc0, 0x48, 0x01, 0xc8])?;
                         if self.overflow_checks && operand_width.bits == 64 {
-                            self.emit_trap_branch(0x82)?;
+                            self.emit_trap_branch(if operand_width.signed { 0x80 } else { 0x82 })?;
                         } else if self.overflow_checks {
                             self.emit_range_check()?;
                         } else {
@@ -5678,6 +5699,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.patch_forward_branch(exact)?;
                         self.emit(&[0x4c, 0x89, 0xc0])?;
                         self.patch_forward_branch(end)?;
+                        if let Some(negative_one) = negative_one {
+                            self.patch_forward_branch(negative_one)?;
+                        }
                     }
                 }
                 self.emit_normalize_width(result_width)?;
@@ -13554,12 +13578,14 @@ mod tests {
     }
 
     #[test]
-    fn divides_unsigned_integers_toward_positive_infinity() {
+    fn divides_integers_toward_positive_infinity() {
         let sources = [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.div_ceil(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: u16) -> u16 { left.div_ceil(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: u64) -> u64 { left.div_ceil(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: usize, right: usize) -> usize { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: i64) -> i64 { left.div_ceil(right) }",
         ];
         for source in sources {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
@@ -13574,7 +13600,6 @@ mod tests {
         }
 
         for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.div_ceil(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.div_ceil(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.div_ceil(right) }",
         ] {
@@ -13596,12 +13621,14 @@ mod tests {
     }
 
     #[test]
-    fn rounds_unsigned_integers_to_next_multiples() {
+    fn rounds_integers_to_next_multiples() {
         let sources = [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.next_multiple_of(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: u16) -> u16 { left.next_multiple_of(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: u64) -> u64 { left.next_multiple_of(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: usize, right: usize) -> usize { left.next_multiple_of(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.next_multiple_of(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: i64) -> i64 { left.next_multiple_of(right) }",
         ];
         for source in sources {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
@@ -13622,7 +13649,6 @@ mod tests {
         }
 
         for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.next_multiple_of(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.next_multiple_of(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.next_multiple_of(right) }",
         ] {

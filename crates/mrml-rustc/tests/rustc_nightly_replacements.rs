@@ -2220,7 +2220,7 @@ fn rustc_integer_midpoints_reach_native_objects() {
 }
 
 #[test]
-fn rustc_unsigned_div_ceil_reaches_native_objects() {
+fn rustc_integer_div_ceil_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.div_ceil(right) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u16, right: u16) -> u16 { left.div_ceil(right) }",
@@ -2229,6 +2229,9 @@ fn rustc_unsigned_div_ceil_reaches_native_objects() {
         "const VALUE: u8 = 0u8.div_ceil(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
         "const VALUE: u16 = 7u16.div_ceil(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
         "const VALUE: u64 = 18446744073709551615u64.div_ceil(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: i8) -> i8 { left.div_ceil(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: i64) -> i64 { left.div_ceil(right) }",
+        "const VALUE: i8 = (-7i8).div_ceil(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
     ];
     for source in sources {
         assert_eq!(
@@ -2241,7 +2244,7 @@ fn rustc_unsigned_div_ceil_reaches_native_objects() {
 }
 
 #[test]
-fn rustc_unsigned_next_multiple_of_reaches_native_objects() {
+fn rustc_integer_next_multiple_of_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.next_multiple_of(right) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u16, right: u16) -> u16 { left.next_multiple_of(right) }",
@@ -2250,6 +2253,9 @@ fn rustc_unsigned_next_multiple_of_reaches_native_objects() {
         "const VALUE: u8 = 0u8.next_multiple_of(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
         "const VALUE: u16 = 23u16.next_multiple_of(8); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
         "const VALUE: u64 = 18446744073709551614u64.next_multiple_of(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: i8) -> i8 { left.next_multiple_of(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: i64) -> i64 { left.next_multiple_of(right) }",
+        "const VALUE: i8 = (-23i8).next_multiple_of(8); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
     ];
     for source in sources {
         assert_eq!(

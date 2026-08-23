@@ -2037,18 +2037,24 @@ toward zero for signed values, including odd negative sums, without widening
 or allocating. Four linked System V objects matched pinned Rust across operand
 orders, exact and fractional averages, mixed signs, and narrow/full-width
 extrema.
-Stable unsigned primitive `div_ceil` returns the quotient rounded toward
-positive infinity, requires a same-typed divisor, and traps on division by
-zero. Its native lowering derives the rounding increment from the hardware
-remainder without risking an overflowing numerator adjustment. Three linked
-System V objects matched pinned Rust across exact and inexact quotients, zero,
-narrow/full-width maxima, and large divisors; a zero-divisor probe trapped.
-Stable unsigned primitive `next_multiple_of` returns the smallest multiple of a
-same-typed nonzero divisor that is at least the receiver. Constant overflow is
+Primitive `div_ceil` supports stable unsigned integers and the pinned nightly's
+`int_roundings` signed form. It returns the quotient rounded toward positive
+infinity, requires a same-typed divisor, and traps on division by zero or signed
+minimum divided by negative one. Its native lowering derives the rounding
+increment from the hardware remainder and operand signs without risking an
+overflowing numerator adjustment. Signed 8- and 64-bit System V objects of 560
+and 552 bytes matched pinned Rust across all operand-sign pairings, zero, and a
+signed minimum with an ordinary divisor, in addition to the existing unsigned
+coverage.
+Primitive `next_multiple_of` supports stable unsigned integers and the pinned
+nightly's `int_roundings` signed form. Positive signed divisors round upward and
+negative divisors round downward to the corresponding multiple; negative one
+accepts the signed minimum without division overflow. Constant overflow is
 rejected; checked runtime objects trap, while `-C overflow-checks=no` objects
-wrap at receiver width. Linked System V objects matched pinned Rust across
-zero, exact and inexact multiples, narrow/full-width extrema, wrapping
-overflow, checked-overflow trapping, and divisor-zero trapping.
+wrap at receiver width. Signed 8- and 64-bit System V objects of 632 and 584
+bytes matched pinned Rust across every operand-sign pairing, zero, extrema, and
+the signed-minimum/negative-one exception, in addition to the existing
+unsigned overflow and divisor-zero coverage.
 Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and

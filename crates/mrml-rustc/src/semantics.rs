@@ -2660,11 +2660,6 @@ fn evaluate_call_aware_integer<
                 .unwrap_or(crate::IntegerType::I32);
             if integer_expression_type(context, symbol_count, tree, other, constants)
                 .is_some_and(|other_type| other_type != base_type)
-                || (matches!(
-                    transform,
-                    crate::expression::IntegerPairTransform::DivideCeiling
-                        | crate::expression::IntegerPairTransform::NextMultiple
-                ) && base_type.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
@@ -2706,10 +2701,12 @@ fn evaluate_call_aware_integer<
                     midpoint_integer_bits(left, right, base_bits, base_type.is_signed())
                 }
                 crate::expression::IntegerPairTransform::DivideCeiling => {
-                    unsigned_divide_ceiling(left, right).map_err(arithmetic_error)?
+                    divide_ceiling_integer_bits(left, right, base_bits, base_type.is_signed())
+                        .map_err(arithmetic_error)?
                 }
                 crate::expression::IntegerPairTransform::NextMultiple => {
-                    unsigned_next_multiple(left, right, base_bits).map_err(arithmetic_error)?
+                    next_multiple_integer_bits(left, right, base_bits, base_type.is_signed())
+                        .map_err(arithmetic_error)?
                 }
             }
         }
@@ -3878,16 +3875,70 @@ fn midpoint_integer_bits(left: u128, right: u128, bits: u8, signed: bool) -> u12
     midpoint
 }
 
-fn unsigned_divide_ceiling(left: u128, right: u128) -> Result<u128, ConstEvalError> {
+fn divide_ceiling_integer_bits(
+    left: u128,
+    right: u128,
+    bits: u8,
+    signed: bool,
+) -> Result<u128, ConstEvalError> {
     if right == 0 {
         return Err(ConstEvalError::DivisionByZero);
     }
-    Ok(left / right + u128::from(!left.is_multiple_of(right)))
+    if !signed {
+        return Ok(left / right + u128::from(!left.is_multiple_of(right)));
+    }
+    let left = decode_signed(left, bits);
+    let right = decode_signed(right, bits);
+    let quotient = left.checked_div(right).ok_or(ConstEvalError::Overflow)?;
+    let remainder = left.checked_rem(right).ok_or(ConstEvalError::Overflow)?;
+    let result = if remainder != 0 && (left < 0) == (right < 0) {
+        quotient.checked_add(1).ok_or(ConstEvalError::Overflow)?
+    } else {
+        quotient
+    };
+    encode_signed(result, bits).map_err(|error| match error {
+        ExecutionError::Arithmetic(error) => error,
+        _ => ConstEvalError::InvalidExpressionTree,
+    })
 }
 
-fn unsigned_next_multiple(left: u128, right: u128, bits: u8) -> Result<u128, ConstEvalError> {
+fn next_multiple_integer_bits(
+    left: u128,
+    right: u128,
+    bits: u8,
+    signed: bool,
+) -> Result<u128, ConstEvalError> {
     if right == 0 {
         return Err(ConstEvalError::DivisionByZero);
+    }
+    if signed {
+        let left = decode_signed(left, bits);
+        let right = decode_signed(right, bits);
+        if right == -1 {
+            return Ok(left as u128 & signed_mask(bits));
+        }
+        let remainder = left.checked_rem(right).ok_or(ConstEvalError::Overflow)?;
+        let adjusted = if (remainder > 0 && right < 0) || (remainder < 0 && right > 0) {
+            remainder
+                .checked_add(right)
+                .ok_or(ConstEvalError::Overflow)?
+        } else {
+            remainder
+        };
+        let result = if adjusted == 0 {
+            left
+        } else {
+            left.checked_add(
+                right
+                    .checked_sub(adjusted)
+                    .ok_or(ConstEvalError::Overflow)?,
+            )
+            .ok_or(ConstEvalError::Overflow)?
+        };
+        return encode_signed(result, bits).map_err(|error| match error {
+            ExecutionError::Arithmetic(error) => error,
+            _ => ConstEvalError::InvalidExpressionTree,
+        });
     }
     let remainder = left % right;
     if remainder == 0 {
