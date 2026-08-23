@@ -8,8 +8,6 @@ pub enum ProtectionBackend {
     Unprotected = 0,
     VbsEnclave = 1,
     BareMetalMonitor = 2,
-    AmdSnp = 3,
-    IntelTdx = 4,
 }
 
 impl ProtectionBackend {
@@ -18,8 +16,6 @@ impl ProtectionBackend {
             0 => Ok(Self::Unprotected),
             1 => Ok(Self::VbsEnclave),
             2 => Ok(Self::BareMetalMonitor),
-            3 => Ok(Self::AmdSnp),
-            4 => Ok(Self::IntelTdx),
             _ => Err(ProtectionError::UnknownBackend),
         }
     }
@@ -32,12 +28,6 @@ impl ProtectionBackend {
                 .union(ProtectionClaims::SEALED_KEYS),
             Self::BareMetalMonitor => ProtectionClaims::DOMAIN_ISOLATION
                 .union(ProtectionClaims::MEASURED)
-                .union(ProtectionClaims::SEALED_KEYS),
-            Self::AmdSnp | Self::IntelTdx => ProtectionClaims::VTL0_ISOLATION
-                .union(ProtectionClaims::HOST_VMM_ISOLATION)
-                .union(ProtectionClaims::PRIVATE_MEMORY)
-                .union(ProtectionClaims::MEASURED)
-                .union(ProtectionClaims::ATTESTED)
                 .union(ProtectionClaims::SEALED_KEYS),
         }
     }

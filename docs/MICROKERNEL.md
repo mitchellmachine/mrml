@@ -29,10 +29,8 @@ Windows/Linux host.
 The compartment model is also retained inside hosted MRML for defense in depth:
 it can contain a compromised tool or model service from peer domains when the
 host remains honest. It does not create a nested security boundary against a
-malicious outer host. Hardware confidential-VM facilities could optionally
-reduce that trust in the future, but MRML makes no such claim without measured
-launch attestation, encrypted/integrity-protected memory, protected interrupt
-and I/O paths, rollback protection, and an audited confidential-GPU channel.
+malicious outer host. MRML targets common home-computer virtualization
+facilities and does not depend on server confidential-computing extensions.
 
 ### Layered protected execution
 
@@ -54,8 +52,6 @@ The intended x86_64 layers are:
   firmware, and hardware;
 - bare-metal MRML places domain ownership, page-state transitions, interrupt
   routing, and IOMMU policy in a minimal VMX-root monitor;
-- AMD SEV-SNP and Intel TDX remain stronger optional future backends for
-  reducing trust in an outer VMM, conditional on verified platform evidence.
 
 None of these layers implies trusted GPU output. A claim set cannot include
 private memory, hostile-VMM isolation, attestation, or trusted I/O merely

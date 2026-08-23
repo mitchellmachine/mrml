@@ -19,6 +19,7 @@ mod pe;
 mod platform;
 mod policy;
 mod protected_execution;
+mod protected_monitor;
 mod scheduler;
 mod service_lifecycle;
 mod shared_memory;
@@ -65,6 +66,9 @@ pub use policy::{
 pub use protected_execution::{
     PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend, ProtectionClaims,
     ProtectionError, ProtectionPolicy, ProtectionReport, ProtectionSession,
+};
+pub use protected_monitor::{
+    DomainId, DomainState, GranuleId, GranuleState, MonitorError, ProtectedMonitor,
 };
 pub use scheduler::{
     BalanceOutcome, BalancePolicyError, BalanceTarget, DetachedTask, KernelScheduleError,
