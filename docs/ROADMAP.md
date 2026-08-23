@@ -255,8 +255,8 @@ authority; unrelated domains continue.
    adjacent generations, and only the newer is selected. A single usable
    candidate is explicitly reported as fallback. Proven-invalid candidates may
    be bypassed, but indeterminate backend failures abort instead of silently
-   rolling back. A concrete reachable-tree validator, block backend, power-loss
-   harness, repair, and authenticated anti-rollback state remain pending, so
+   rolling back. A concrete block backend, power-loss harness, repair, and
+   authenticated anti-rollback state remain pending, so
    crash recovery is still only partially implemented.
    Canonical checksummed allocation records and their fixed-capacity global
    ownership index are now implemented as the next validator prerequisite.
@@ -267,14 +267,23 @@ authority; unrelated domains continue.
    block-aligned allocation image now binds its exact volume and publication
    generation, fixed record width/count, complete-image SHA3-256 digest, and
    zero-filled unused capacity. Decoding rebuilds all ownership invariants.
-   Concrete block persistence, allocation/free mutation, and complete graph
-   traversal remain pending.
+   Concrete block persistence and allocation/free mutation remain pending.
    Allocation-image ranges now use a distinct ownership kind and can be checked
    against the selected root and publication generation. Canonical block-aligned
    extent-list images now bind file identity, object generation, logical length,
    record geometry, complete-image SHA3-256, and zero padding; decoding rebuilds
-   the exact-coverage extent map. These remove serialized-list ambiguity before
-   reachable-tree traversal, which remains pending.
+   the exact-coverage extent map. These remove serialized-list ambiguity for the
+   bounded reachable-tree traversal below.
+   Bounded reachable-tree traversal is now implemented over an immutable-
+   generation metadata-read contract. Canonical directory-entry images bind the
+   owning directory/generation and rebuild duplicate namespace checks. Recovery
+   walks the root and every directory/file child, validates exact parent and
+   generation links, checks purpose-specific metadata ownership, reconstructs
+   extent maps, requires exact ownership for every data extent, rejects repeated
+   object references and capacity overflow, and finally rejects any allocation
+   record not claimed by the reachable graph. The backend remains an emulated
+   immutable image; physical block integration, interrupted-write/power-loss
+   evidence, repair, and authenticated anti-rollback remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

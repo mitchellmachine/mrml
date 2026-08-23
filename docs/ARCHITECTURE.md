@@ -269,7 +269,14 @@ metadata. Extent lists likewise have a canonical block-aligned image binding
 file identity, object generation, logical length, fixed record geometry,
 complete-image digest, and zero padding; decoding rebuilds exact coverage and
 physical-range invariants.
-The complete validator, block backend, directory/allocator
+Directory-entry lists now have the same canonical image treatment and rebuild
+duplicate-name/object invariants. A fixed-capacity reachable-tree validator
+loads the selected allocation image through one immutable-generation backend,
+requires exact self-ownership, walks root and child directory/file metadata,
+checks parent and generation links, decodes entry and extent images, binds every
+data range to exact allocation ownership, and rejects every orphan allocation.
+Repeated object references and capacity overflow fail closed. The concrete block
+backend, directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

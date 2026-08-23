@@ -136,7 +136,13 @@ explicitly and downgrade the status rather than guessing.
   image ownership is now distinct and exactly root/publication-generation bound.
   Canonical extent-list images bind file identity, object generation, logical
   length, record geometry, full-image digest, and zero padding, then rebuild
-  exact extent coverage during decode. UEFI
+  exact extent coverage during decode. Canonical directory-entry images bind the
+  owner/generation and rebuild duplicate checks. A fixed-capacity validator now
+  walks the root directory and every referenced directory/file through one
+  immutable-generation read contract, validates parent/generation links and
+  purpose-specific metadata/data ownership, and rejects duplicate objects,
+  capacity exhaustion, ambiguity, missing ownership, or orphan allocations. The
+  backend and power-loss behavior remain simulated. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

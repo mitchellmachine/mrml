@@ -18,6 +18,8 @@ pub enum AllocationKind {
     FileData = 1,
     ObjectMetadata = 2,
     AllocationMetadata = 3,
+    DirectoryEntries = 4,
+    FileExtents = 5,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,6 +116,8 @@ impl AllocationRecord {
             1 => AllocationKind::FileData,
             2 => AllocationKind::ObjectMetadata,
             3 => AllocationKind::AllocationMetadata,
+            4 => AllocationKind::DirectoryEntries,
+            5 => AllocationKind::FileExtents,
             _ => return Err(AllocationError::InvalidRecord),
         };
         Self::new(
@@ -249,6 +253,107 @@ impl<const N: usize> AllocationIndex<N> {
             pointer.blocks(),
             AllocationKind::AllocationMetadata,
         )
+    }
+
+    pub fn owns_directory_entries(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+        pointer: MetadataPointer,
+    ) -> bool {
+        self.contains_exact(
+            owner,
+            owner_generation,
+            pointer.block(),
+            pointer.blocks(),
+            AllocationKind::DirectoryEntries,
+        )
+    }
+
+    pub fn owns_file_extents(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+        pointer: MetadataPointer,
+    ) -> bool {
+        self.contains_exact(
+            owner,
+            owner_generation,
+            pointer.block(),
+            pointer.blocks(),
+            AllocationKind::FileExtents,
+        )
+    }
+
+    pub fn object_metadata(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+    ) -> Option<MetadataPointer> {
+        self.object_metadata_record(owner, owner_generation)
+            .map(|(pointer, _)| pointer)
+    }
+
+    pub(crate) fn object_metadata_record(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+    ) -> Option<(MetadataPointer, usize)> {
+        let mut found = None;
+        for (index, record) in self.records[..self.count]
+            .iter()
+            .flatten()
+            .copied()
+            .enumerate()
+        {
+            if record.owner == owner
+                && record.owner_generation == owner_generation
+                && record.kind == AllocationKind::ObjectMetadata
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = MetadataPointer::new(record.block, record.block_count)
+                    .ok()
+                    .map(|pointer| (pointer, index));
+            }
+        }
+        found
+    }
+
+    pub(crate) fn exact_record_index(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+        pointer: MetadataPointer,
+        kind: AllocationKind,
+    ) -> Option<usize> {
+        self.exact_range_index(
+            owner,
+            owner_generation,
+            pointer.block(),
+            pointer.blocks(),
+            kind,
+        )
+    }
+
+    pub(crate) fn exact_range_index(
+        &self,
+        owner: StorageObjectId,
+        owner_generation: u64,
+        block: u64,
+        block_count: u32,
+        kind: AllocationKind,
+    ) -> Option<usize> {
+        self.records[..self.count].iter().position(|record| {
+            record.is_some_and(|record| {
+                record.owner == owner
+                    && record.owner_generation == owner_generation
+                    && record.block == block
+                    && record.block_count == block_count
+                    && record.kind == kind
+            })
+        })
     }
 
     fn contains_exact(
@@ -585,6 +690,10 @@ mod tests {
         assert!(index.owns_extent(extent));
         assert!(!index.owns_extent(ExtentRecord::data(object(7), 5, 0, 3, 20, [1; 32]).unwrap()));
         assert!(index.owns_metadata(object(7), 4, MetadataPointer::new(30, 1).unwrap()));
+        assert_eq!(
+            index.object_metadata(object(7), 4),
+            Some(MetadataPointer::new(30, 1).unwrap())
+        );
         assert!(!index.owns_metadata(object(7), 4, MetadataPointer::new(30, 2).unwrap()));
     }
 

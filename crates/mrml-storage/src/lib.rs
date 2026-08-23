@@ -29,7 +29,10 @@ pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
     CowPublishError,
 };
-pub use directory::{DirectoryError, DirectoryState, StorageObjectAllocator};
+pub use directory::{
+    DIRECTORY_IMAGE_HEADER_BYTES, DirectoryError, DirectoryImage, DirectoryImageError,
+    DirectoryState, StorageObjectAllocator,
+};
 pub use extent::{
     EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,
     ExtentLocation, ExtentMap, ExtentRecord, MAX_EXTENT_BLOCKS,
@@ -46,8 +49,8 @@ pub use format::{
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use recovery::{
-    CandidateValidationError, CowRecoveryValidator, RecoveredSuperblock, RecoveryError,
-    recover_superblock,
+    CandidateValidationError, CowRecoveryValidator, ReachableRecoveryValidator,
+    RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend, recover_superblock,
 };
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,

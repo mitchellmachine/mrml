@@ -2803,7 +2803,22 @@ Decode rejects wrong identity/generation/length, noncanonical padding even under
 a recomputed digest, malformed records, incomplete logical coverage, reserved
 physical ranges, and intra-file overlap while reconstructing the `ExtentMap`.
 
-Fifty-one focused unit tests and strict crate-local clippy pass on Windows
+Canonical directory-entry images now bind the owning directory and generation,
+fixed entry width/count, full-image digest, and zero padding, then reconstruct
+duplicate-name/object and self-reference checks. The fixed-capacity reachable
+validator uses caller-supplied scratch storage and an unsafe backend contract
+that must read every range from one immutable device generation. It validates
+allocation-image self-ownership, resolves each child only through its unique
+primary metadata allocation, checks directory parents and entry generations,
+checks purpose-specific entry/extent metadata allocations, rebuilds every extent
+map, and requires exact allocation ownership for every data extent. Duplicate
+object references, object-capacity exhaustion, ambiguous metadata, missing data
+ownership, and any allocation left unclaimed by the reachable graph fail closed.
+Tests exercise an emulated root-directory/file graph; file contents are not read
+during mount, and there is still no concrete block driver, physical atomicity,
+power-loss, repair, durability, or anti-rollback evidence.
+
+Fifty-three focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2816,7 +2831,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 51 tests, and both strict crate-local clippy
+Both current unit-test runs pass 53 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

@@ -1,8 +1,16 @@
+use mrml_crypto::Sha3_256;
+
 use crate::{
     DirectoryEntry, DirectoryMetadata, MetadataPointer, StorageAuthorityError,
     StorageAuthorityTable, StorageHandle, StorageName, StorageObjectId, StorageObjectKind,
     StoragePrincipal, StorageRights, VolumeHeader, VolumeId,
 };
+
+pub const DIRECTORY_IMAGE_HEADER_BYTES: usize = 96;
+
+const DIRECTORY_IMAGE_MAGIC: [u8; 8] = *b"MRDEI001";
+const DIRECTORY_IMAGE_VERSION: u16 = 1;
+const DIRECTORY_IMAGE_DIGEST_OFFSET: usize = 64;
 
 pub struct StorageObjectAllocator {
     volume: VolumeId,
@@ -48,26 +56,42 @@ impl<const N: usize> DirectoryState<N> {
         generation: u64,
         entries: &[DirectoryEntry],
     ) -> Result<Self, DirectoryError> {
-        if generation == 0 || entries.len() > N {
+        if entries.len() > N {
             return Err(DirectoryError::InvalidState);
         }
         let mut stored = [None; N];
-        for (index, entry) in entries.iter().copied().enumerate() {
+        for (slot, entry) in stored.iter_mut().zip(entries.iter().copied()) {
+            *slot = Some(entry);
+        }
+        Self::from_stored(object, generation, stored, entries.len())
+    }
+
+    fn from_stored(
+        object: StorageObjectId,
+        generation: u64,
+        stored: [Option<DirectoryEntry>; N],
+        count: usize,
+    ) -> Result<Self, DirectoryError> {
+        if generation == 0 || count > N || stored[..count].iter().any(Option::is_none) {
+            return Err(DirectoryError::InvalidState);
+        }
+        for index in 0..count {
+            let entry = stored[index].ok_or(DirectoryError::InvalidState)?;
             if entry.object().volume() != object.volume()
                 || entry.object() == object
-                || entries[..index]
+                || stored[..index]
                     .iter()
+                    .flatten()
                     .any(|prior| prior.name() == entry.name() || prior.object() == entry.object())
             {
                 return Err(DirectoryError::InvalidState);
             }
-            stored[index] = Some(entry);
         }
         Ok(Self {
             object,
             generation,
             entries: stored,
-            count: entries.len(),
+            count,
         })
     }
 
@@ -85,6 +109,14 @@ impl<const N: usize> DirectoryState<N> {
 
     pub const fn is_empty(&self) -> bool {
         self.count == 0
+    }
+
+    pub const fn entry(&self, index: usize) -> Option<DirectoryEntry> {
+        if index < self.count {
+            self.entries[index]
+        } else {
+            None
+        }
     }
 
     pub fn metadata(
@@ -315,6 +347,237 @@ impl<const N: usize> DirectoryState<N> {
             .checked_add(1)
             .ok_or(DirectoryError::GenerationExhausted)
     }
+}
+
+pub struct DirectoryImage<const N: usize> {
+    volume: VolumeId,
+    pointer: MetadataPointer,
+    encoded_len: usize,
+    state: DirectoryState<N>,
+}
+
+impl<const N: usize> DirectoryImage<N> {
+    pub fn build(
+        header: VolumeHeader,
+        object: StorageObjectId,
+        generation: u64,
+        pointer: MetadataPointer,
+        entries: &[DirectoryEntry],
+    ) -> Result<Self, DirectoryImageError> {
+        if !pointer_fits(header, pointer) {
+            return Err(DirectoryImageError::InvalidImage);
+        }
+        let encoded_len = image_bytes(header, pointer)?;
+        let used = entries
+            .len()
+            .checked_mul(crate::DIRECTORY_ENTRY_BYTES)
+            .and_then(|bytes| bytes.checked_add(DIRECTORY_IMAGE_HEADER_BYTES))
+            .ok_or(DirectoryImageError::Arithmetic)?;
+        if used > encoded_len {
+            return Err(DirectoryImageError::Capacity);
+        }
+        Ok(Self {
+            volume: header.volume(),
+            pointer,
+            encoded_len,
+            state: DirectoryState::new(object, generation, entries)
+                .map_err(|_| DirectoryImageError::InvalidImage)?,
+        })
+    }
+
+    pub fn decode(
+        header: VolumeHeader,
+        object: StorageObjectId,
+        generation: u64,
+        pointer: MetadataPointer,
+        input: &[u8],
+    ) -> Result<Self, DirectoryImageError> {
+        if !pointer_fits(header, pointer) || input.len() != image_bytes(header, pointer)? {
+            return Err(DirectoryImageError::InvalidImage);
+        }
+        if input[..8] != DIRECTORY_IMAGE_MAGIC
+            || get_u16(input, 10)? != DIRECTORY_IMAGE_HEADER_BYTES as u16
+            || get_u16(input, 12)? != crate::DIRECTORY_ENTRY_BYTES as u16
+            || input[14..16].iter().any(|byte| *byte != 0)
+            || input[52..DIRECTORY_IMAGE_DIGEST_OFFSET]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(DirectoryImageError::NonCanonical);
+        }
+        if get_u16(input, 8)? != DIRECTORY_IMAGE_VERSION {
+            return Err(DirectoryImageError::UnsupportedVersion);
+        }
+        if read_volume(input, 16)? != header.volume() {
+            return Err(DirectoryImageError::WrongVolume);
+        }
+        if get_u64(input, 32)? != object.local() || get_u64(input, 40)? != generation {
+            return Err(DirectoryImageError::InvalidImage);
+        }
+        if input[DIRECTORY_IMAGE_DIGEST_OFFSET..DIRECTORY_IMAGE_HEADER_BYTES] != image_digest(input)
+        {
+            return Err(DirectoryImageError::Corrupt);
+        }
+        let count =
+            usize::try_from(get_u32(input, 48)?).map_err(|_| DirectoryImageError::Capacity)?;
+        if count > N {
+            return Err(DirectoryImageError::Capacity);
+        }
+        let used = count
+            .checked_mul(crate::DIRECTORY_ENTRY_BYTES)
+            .and_then(|bytes| bytes.checked_add(DIRECTORY_IMAGE_HEADER_BYTES))
+            .ok_or(DirectoryImageError::Arithmetic)?;
+        if used > input.len() || input[used..].iter().any(|byte| *byte != 0) {
+            return Err(DirectoryImageError::NonCanonical);
+        }
+        let mut entries = [None; N];
+        for (index, slot) in entries[..count].iter_mut().enumerate() {
+            let start = DIRECTORY_IMAGE_HEADER_BYTES + index * crate::DIRECTORY_ENTRY_BYTES;
+            *slot = Some(
+                DirectoryEntry::decode(
+                    &input[start..start + crate::DIRECTORY_ENTRY_BYTES],
+                    header.volume(),
+                )
+                .map_err(|_| DirectoryImageError::InvalidEntry)?,
+            );
+        }
+        Ok(Self {
+            volume: header.volume(),
+            pointer,
+            encoded_len: input.len(),
+            state: DirectoryState::from_stored(object, generation, entries, count)
+                .map_err(|_| DirectoryImageError::InvalidEntry)?,
+        })
+    }
+
+    pub const fn pointer(&self) -> MetadataPointer {
+        self.pointer
+    }
+
+    pub const fn state(&self) -> &DirectoryState<N> {
+        &self.state
+    }
+
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), DirectoryImageError> {
+        if output.len() != self.encoded_len {
+            return Err(DirectoryImageError::Truncated);
+        }
+        output.fill(0);
+        output[..8].copy_from_slice(&DIRECTORY_IMAGE_MAGIC);
+        put_u16(output, 8, DIRECTORY_IMAGE_VERSION);
+        put_u16(output, 10, DIRECTORY_IMAGE_HEADER_BYTES as u16);
+        put_u16(output, 12, crate::DIRECTORY_ENTRY_BYTES as u16);
+        output[16..32].copy_from_slice(&self.volume.bytes());
+        put_u64(output, 32, self.state.object().local());
+        put_u64(output, 40, self.state.generation());
+        put_u32(output, 48, self.state.len() as u32);
+        for index in 0..self.state.len() {
+            let start = DIRECTORY_IMAGE_HEADER_BYTES + index * crate::DIRECTORY_ENTRY_BYTES;
+            let end = start + crate::DIRECTORY_ENTRY_BYTES;
+            let encoded: &mut [u8; crate::DIRECTORY_ENTRY_BYTES] = (&mut output[start..end])
+                .try_into()
+                .map_err(|_| DirectoryImageError::Truncated)?;
+            self.state
+                .entry(index)
+                .ok_or(DirectoryImageError::InvalidEntry)?
+                .encode(encoded);
+        }
+        let digest = image_digest(output);
+        output[DIRECTORY_IMAGE_DIGEST_OFFSET..DIRECTORY_IMAGE_HEADER_BYTES]
+            .copy_from_slice(&digest);
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryImageError {
+    Truncated,
+    UnsupportedVersion,
+    NonCanonical,
+    Corrupt,
+    WrongVolume,
+    InvalidImage,
+    InvalidEntry,
+    Capacity,
+    Arithmetic,
+}
+
+fn image_digest(input: &[u8]) -> [u8; 32] {
+    let mut digest = Sha3_256::new();
+    digest.update(&input[..DIRECTORY_IMAGE_DIGEST_OFFSET]);
+    digest.update(&[0; 32]);
+    digest.update(&input[DIRECTORY_IMAGE_HEADER_BYTES..]);
+    digest.finalize()
+}
+
+fn image_bytes(
+    header: VolumeHeader,
+    pointer: MetadataPointer,
+) -> Result<usize, DirectoryImageError> {
+    usize::try_from(
+        u64::from(header.block_size())
+            .checked_mul(u64::from(pointer.blocks()))
+            .ok_or(DirectoryImageError::Arithmetic)?,
+    )
+    .map_err(|_| DirectoryImageError::Arithmetic)
+}
+
+fn pointer_fits(header: VolumeHeader, pointer: MetadataPointer) -> bool {
+    pointer
+        .block()
+        .checked_add(u64::from(pointer.blocks()))
+        .is_some_and(|end| end <= header.block_count())
+        && !pointer_contains(pointer, 0)
+        && !pointer_contains(pointer, header.primary_superblock())
+        && !pointer_contains(pointer, header.secondary_superblock())
+}
+
+fn pointer_contains(pointer: MetadataPointer, block: u64) -> bool {
+    block >= pointer.block() && block < pointer.block() + u64::from(pointer.blocks())
+}
+
+fn put_u16(output: &mut [u8], offset: usize, value: u16) {
+    output[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(output: &mut [u8], offset: usize, value: u32) {
+    output[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(output: &mut [u8], offset: usize, value: u64) {
+    output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn get_u16(input: &[u8], offset: usize) -> Result<u16, DirectoryImageError> {
+    input
+        .get(offset..offset + 2)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u16::from_le_bytes)
+        .ok_or(DirectoryImageError::Truncated)
+}
+
+fn get_u32(input: &[u8], offset: usize) -> Result<u32, DirectoryImageError> {
+    input
+        .get(offset..offset + 4)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or(DirectoryImageError::Truncated)
+}
+
+fn get_u64(input: &[u8], offset: usize) -> Result<u64, DirectoryImageError> {
+    input
+        .get(offset..offset + 8)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or(DirectoryImageError::Truncated)
+}
+
+fn read_volume(input: &[u8], offset: usize) -> Result<VolumeId, DirectoryImageError> {
+    let bytes: [u8; 16] = input
+        .get(offset..offset + 16)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(DirectoryImageError::Truncated)?;
+    VolumeId::new(bytes).map_err(|_| DirectoryImageError::WrongVolume)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -699,5 +962,35 @@ mod tests {
         );
         assert_eq!((source.len(), source.generation()), (1, 1));
         assert_eq!((destination.len(), destination.generation()), (0, 1));
+    }
+
+    #[test]
+    fn directory_image_round_trip_binds_owner_generation_and_zero_padding() {
+        let pointer = MetadataPointer::new(30, 1).unwrap();
+        let entries = [
+            DirectoryEntry::new(name("child"), object(8), StorageObjectKind::Directory, 2).unwrap(),
+            DirectoryEntry::new(name("file"), object(9), StorageObjectKind::File, 3).unwrap(),
+        ];
+        let header = VolumeHeader::new(volume(), 4096, 100, 1, 2).unwrap();
+        let image = DirectoryImage::<2>::build(header, object(1), 4, pointer, &entries).unwrap();
+        let mut encoded = [0; 4096];
+        image.encode(&mut encoded).unwrap();
+        let decoded = DirectoryImage::<2>::decode(header, object(1), 4, pointer, &encoded).unwrap();
+        assert_eq!(decoded.pointer(), pointer);
+        assert_eq!(decoded.state().len(), 2);
+        assert_eq!(decoded.state().entry(1), Some(entries[1]));
+        assert!(matches!(
+            DirectoryImage::<2>::decode(header, object(1), 5, pointer, &encoded),
+            Err(DirectoryImageError::InvalidImage)
+        ));
+
+        encoded[4095] = 1;
+        let digest = image_digest(&encoded);
+        encoded[DIRECTORY_IMAGE_DIGEST_OFFSET..DIRECTORY_IMAGE_HEADER_BYTES]
+            .copy_from_slice(&digest);
+        assert!(matches!(
+            DirectoryImage::<2>::decode(header, object(1), 4, pointer, &encoded),
+            Err(DirectoryImageError::NonCanonical)
+        ));
     }
 }

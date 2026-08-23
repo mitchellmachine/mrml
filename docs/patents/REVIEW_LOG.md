@@ -776,6 +776,19 @@ allocator, recovery method, cryptographic construction, or storage optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional checksummed extent-list metadata.
 
+## 2026-08-23 — bounded reachable storage validation
+
+MRML source: `crates/mrml-storage/src/recovery.rs`, `directory.rs`, and the
+allocation/extent metadata modules.
+
+The service uses conventional fixed-capacity graph traversal, versioned
+checksummed directory-entry images, parent/generation consistency checks, exact
+allocation ownership, duplicate-reference rejection, and orphan-allocation
+rejection. This adds no novel filesystem graph, recovery algorithm, allocator,
+cryptographic construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional filesystem consistency traversal.
+
 ## 2026-08-23 — bounded assignment-expression read traversal
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.
