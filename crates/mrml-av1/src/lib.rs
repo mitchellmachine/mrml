@@ -3239,6 +3239,38 @@ pub fn frame_video_config(frame: &Frame) -> nvidia::NvidiaVideoConfig {
 }
 
 #[cfg(feature = "nvidia")]
+pub fn new_decoder_session_from_sequence<'backend>(
+    backend: &'backend nvidia::NvidiaBackend,
+    sequence: &Sequence,
+) -> Result<nvidia::NvdecSession<'backend>, Error> {
+    backend.create_decoder_session(sequence_video_config(sequence))
+}
+
+#[cfg(feature = "nvidia")]
+pub fn new_decoder_session_from_frame<'backend>(
+    backend: &'backend nvidia::NvidiaBackend,
+    frame: &Frame,
+) -> Result<nvidia::NvdecSession<'backend>, Error> {
+    backend.create_decoder_session(frame_video_config(frame))
+}
+
+#[cfg(feature = "nvidia")]
+pub fn new_encoder_session_from_sequence<'backend>(
+    backend: &'backend nvidia::NvidiaBackend,
+    sequence: &Sequence,
+) -> Result<nvidia::NvencSession<'backend>, Error> {
+    backend.create_encoder_session(sequence_video_config(sequence))
+}
+
+#[cfg(feature = "nvidia")]
+pub fn new_encoder_session_from_frame<'backend>(
+    backend: &'backend nvidia::NvidiaBackend,
+    frame: &Frame,
+) -> Result<nvidia::NvencSession<'backend>, Error> {
+    backend.create_encoder_session(frame_video_config(frame))
+}
+
+#[cfg(feature = "nvidia")]
 fn map_chroma_sampling(sampling: ChromaSampling) -> nvidia::NvPixelFormat {
     match sampling {
         ChromaSampling::Cs400 => nvidia::NvPixelFormat::I420,
@@ -4450,5 +4482,89 @@ mod tests {
             }))
         );
         assert_eq!(parse_metadata(&[4, 0xff, 0x80]), Err(Error::Truncated));
+    }
+}
+
+#[cfg(feature = "nvidia")]
+#[cfg(test)]
+mod nvidia_session_bridge_tests {
+    use super::*;
+    use mrml_runtime::Vector;
+
+    #[test]
+    fn can_derive_session_configs_from_av1_metadata() {
+        let sequence = Sequence {
+            profile: 0,
+            still_picture: false,
+            reduced_still_picture_header: false,
+            max_width: 1920,
+            max_height: 1080,
+            bit_depth: 8,
+            monochrome: false,
+            chroma_sampling: ChromaSampling::Cs420,
+            timing: None,
+            decoder_model: None,
+            initial_display_delay_present: false,
+            operating_points: Vector::new(),
+            frame_width_bits: 0,
+            frame_height_bits: 0,
+            frame_id_numbers_present: false,
+            delta_frame_id_length: 0,
+            frame_id_length: 0,
+            use_128x128_superblock: false,
+            enable_filter_intra: false,
+            enable_intra_edge_filter: false,
+            enable_interintra_compound: false,
+            enable_masked_compound: false,
+            enable_warped_motion: false,
+            enable_dual_filter: false,
+            enable_order_hint: false,
+            enable_jnt_comp: false,
+            enable_ref_frame_mvs: false,
+            seq_force_screen_content_tools: 2,
+            seq_force_integer_mv: 2,
+            order_hint_bits: 0,
+            enable_superres: false,
+            enable_cdef: false,
+            enable_restoration: false,
+            color_primaries: 2,
+            transfer_characteristics: 2,
+            matrix_coefficients: 2,
+            color_range: false,
+            chroma_sample_position: 0,
+            separate_uv_delta_q: false,
+            film_grain_params_present: false,
+        };
+        let frame = Frame {
+            width: 1920,
+            height: 1080,
+            bit_depth: 8,
+            chroma_sampling: ChromaSampling::Cs420,
+            y: Vector::new(),
+            u: Vector::new(),
+            v: Vector::new(),
+            presentation_time: None,
+            buffer_removal_times: Vector::new(),
+        };
+        let sequence_config = sequence_video_config(&sequence);
+        let frame_config = frame_video_config(&frame);
+        assert_eq!(sequence_config.width, 1920);
+        assert_eq!(frame_config.width, 1920);
+        assert_eq!(frame_config.color_format, nvidia::NvPixelFormat::I420);
+        let backend = nvidia::NvidiaBackend::probe();
+        match new_decoder_session_from_sequence(&backend, &sequence) {
+            Ok(session) => {
+                assert!(session.is_compatible(&sequence_config));
+            }
+            Err(Error::NvDecoderUnavailable) => {}
+            Err(error) => panic!("{error:?}"),
+        }
+        match new_encoder_session_from_frame(&backend, &frame) {
+            Ok(session) => {
+                assert!(session.is_compatible(&frame_config));
+            }
+            Err(Error::NvEncoderUnavailable) => {}
+            Err(error) => panic!("{error:?}"),
+        }
     }
 }

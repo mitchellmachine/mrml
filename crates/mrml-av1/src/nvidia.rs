@@ -154,6 +154,14 @@ impl NvidiaBackend {
 }
 
 impl<'backend> NvdecSession<'backend> {
+    pub fn config(&self) -> NvidiaVideoConfig {
+        self.config
+    }
+
+    pub fn is_compatible(&self, config: &NvidiaVideoConfig) -> bool {
+        &self.config == config
+    }
+
     pub fn width(&self) -> u16 {
         self.config.width
     }
@@ -183,6 +191,14 @@ impl<'backend> NvdecSession<'backend> {
 }
 
 impl<'backend> NvencSession<'backend> {
+    pub fn config(&self) -> NvidiaVideoConfig {
+        self.config
+    }
+
+    pub fn is_compatible(&self, config: &NvidiaVideoConfig) -> bool {
+        &self.config == config
+    }
+
     pub fn width(&self) -> u16 {
         self.config.width
     }
