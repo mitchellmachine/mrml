@@ -3672,6 +3672,13 @@ fn rustc_interleaved_nested_loop_controls_reach_native_objects() {
 }
 
 #[test]
+fn rustc_literal_aggregate_read_order_reaches_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: u16, second: u16, index: usize, choose: bool) -> u16 { let repeated: [u16; 3] = [first + second; 3]; let values: [u16; 3] = [first, repeated[index], if choose { second } else { first }]; let pair: (u16, u16) = (values[0], second + first); pair.0 }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",

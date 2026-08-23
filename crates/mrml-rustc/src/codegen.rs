@@ -2359,16 +2359,22 @@ fn preanalyze_runtime_local_binding<
         operand_type,
         body_start,
     )?;
-    if !runtime_type_is_array(ty)
+    let tree = local
+        .parse_initializer::<MAX_EXPRESSION_NODES>()
+        .map_err(|error| CodegenError {
+            kind: CodegenErrorKind::Expression(error.kind),
+            span: translate_span(body_start + local.initializer_span.start, error.span),
+        })?;
+    let literal_aggregate = matches!(
+        tree.expression(tree.root())
+            .map(|expression| expression.kind),
+        Some(ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } | ExprKind::Tuple { .. })
+    );
+    if (!runtime_type_is_array(ty)
         && !runtime_type_is_tuple(ty)
-        && !runtime_type_is_fat_reference(ty)
+        && !runtime_type_is_fat_reference(ty))
+        || literal_aggregate
     {
-        let tree = local
-            .parse_initializer::<MAX_EXPRESSION_NODES>()
-            .map_err(|error| CodegenError {
-                kind: CodegenErrorKind::Expression(error.kind),
-                span: translate_span(body_start + local.initializer_span.start, error.span),
-            })?;
         preanalyze_runtime_expression_reads(
             facts,
             &locals[..*local_count],
@@ -2741,6 +2747,23 @@ fn preanalyze_runtime_expression_reads<
                 visit!(then_branch)?;
                 visit!(else_branch)?;
             }
+            ExprKind::Array {
+                elements,
+                element_count,
+            } => {
+                for element in elements[..element_count].iter().flatten() {
+                    visit!(*element)?;
+                }
+            }
+            ExprKind::Tuple {
+                elements,
+                element_count,
+            } => {
+                for element in elements[..element_count].iter().flatten() {
+                    visit!(*element)?;
+                }
+            }
+            ExprKind::ArrayRepeat { element, .. } => visit!(element)?,
             // Inline const operands cannot capture runtime locals. Other compound
             // expression families remain outside this bounded preanalysis slice.
             _ => {}
@@ -18241,9 +18264,11 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 2);
-        assert_eq!(facts.assignment_read_count, 8);
-        for (fact, identity) in facts.assignment_reads[..8].iter().zip([
+        assert_eq!(facts.assignment_read_count, 10);
+        for (fact, identity) in facts.assignment_reads[..10].iter().zip([
             RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(3),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
             RuntimePlaceIdentity::Parameter(2),
@@ -18256,10 +18281,10 @@ mod tests {
             assert_eq!(fact.unwrap().access, RuntimePlaceAccess::Read);
         }
         assert_eq!(
-            facts.assignment_reads[2].unwrap().projections,
+            facts.assignment_reads[4].unwrap().projections,
             RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(0))
         );
-        for index in [0, 1, 3, 4, 5, 6, 7] {
+        for index in [0, 1, 2, 3, 5, 6, 7, 8, 9] {
             assert_eq!(
                 facts.assignment_reads[index].unwrap().projections,
                 RuntimePlaceProjections::EMPTY
@@ -18293,10 +18318,18 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 2);
-        assert_eq!(facts.assignment_read_count, 9);
-        for (fact, (identity, projections)) in facts.assignment_reads[..9].iter().zip([
+        assert_eq!(facts.assignment_read_count, 11);
+        for (fact, (identity, projections)) in facts.assignment_reads[..11].iter().zip([
             (
                 RuntimePlaceIdentity::Parameter(0),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Parameter(3),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Parameter(4),
                 RuntimePlaceProjections::EMPTY,
             ),
             (
@@ -18604,6 +18637,53 @@ mod tests {
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_literal_aggregate_materialization_order() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: u16, second: u16, index: usize, choose: bool) -> u16 { let repeated: [u16; 3] = [first + second; 3]; let values: [u16; 3] = [first, repeated[index], if choose { second } else { first }]; let pair: (u16, u16) = (values[0], second + first); pair.0 }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(facts.assignment_access_count, 0);
+        assert_eq!(facts.assignment_read_count, 14);
+        for (fact, identity) in facts.assignment_reads[..14].iter().zip([
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
