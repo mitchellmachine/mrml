@@ -2734,13 +2734,19 @@ closure planner inserts the moved directory first, merges both ancestor paths,
 deduplicates their shared suffix, orders deeper objects before shallower
 parents, leaves the root last, and rejects insufficient output capacity or a
 shared ancestor presented at inconsistent depths or generations. It produces
-generation-bound identities and order only; canonical successor construction
-and publication remain pending. Transactional publication must propagate every
-changed directory generation through its parent entry and continue through the
-complete affected ancestor closure to the root; publishing only source,
-destination, and child
-would be rejected by reachable-tree validation. That propagation remains
-pending. The object-ID allocator is volatile simulation state and must be
+generation-bound identities and order. A second unsafe backend contract loads
+the unique canonical state for every exact object/generation pair from that
+same immutable selected generation. Construction retains each predecessor and
+builds every successor before returning a plan: all generations advance once,
+the moved directory's parent becomes the destination, source removal remains
+canonical and compact, destination insertion names the moved successor
+generation, and parent entries are rewritten through each deduplicated shared
+ancestor to the root. Wrong objects or generations, missing or stale parent
+entries, name/object collisions, insufficient capacity, generation exhaustion,
+backend uncertainty, and inconsistent shared paths fail closed without exposing
+a partial plan. Staging and publishing the complete plan in one transaction
+remain pending; publishing only source, destination, and child would be rejected
+by reachable-tree validation. The object-ID allocator is volatile simulation state and must be
 persisted in the same future transaction before create becomes crash-safe.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
@@ -2920,23 +2926,27 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 60 tests, and both strict crate-local clippy
+Both current unit-test runs pass 62 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
-Patent review: `NOT_TRIGGERED` — conventional canonical directory metadata
-staging and transactional COW publication; see
+Patent review: `NOT_TRIGGERED` — conventional bounded directory ancestry,
+successor-state construction, metadata staging, and transactional COW
+publication; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
-The ancestry increment also passed the two repository reviews. The
+The ancestry and successor-construction increments also passed the two
+repository reviews. The
 `DIGITAL-RIGHTS REVIEW` found no new data collection, retention, disclosure,
-publisher veto, DRM, accessibility exclusion, or first-party bypass; object IDs
-remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
+publisher veto, DRM, owner-control or owner-attestation restriction,
+accessibility exclusion, first-party bypass, AI authority, or persistence;
+object IDs remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
 metadata record and parent link as hostile and requires exact immutable-
-generation binding for every closure entry, bounded source/destination
-traversal, duplicate/cycle rejection, and fail-
-closed backend uncertainty. This agent review is not independent human audit.
+generation binding for every closure entry, exact predecessor-state reload,
+bounded source/destination traversal, duplicate/cycle rejection, checked
+generation advance, exact parent-entry replacement, and fail-closed backend
+uncertainty. This agent review is not independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte

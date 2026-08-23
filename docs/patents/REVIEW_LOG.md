@@ -875,6 +875,9 @@ deduplicated child-before-parent worklist. Duplicate objects must agree on both
 generation and depth. It
 rejects cycles, repeated objects, stale state, broken
 links, backend uncertainty, and capacity exhaustion before a directory move.
+It then uses conventional immutable predecessor loading, fixed-capacity arrays,
+entry removal/insertion, and bottom-up generation replacement to construct the
+complete in-memory successor worklist through the root.
 This adds no novel namespace structure, graph algorithm,
 transaction protocol, cryptographic construction, or storage optimization.
 

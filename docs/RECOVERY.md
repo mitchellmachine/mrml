@@ -131,9 +131,11 @@ explicitly and downgrade the status rather than guessing.
   source parent. It retains both bounded source-to-root and destination-to-root
   paths with each ancestor's exact canonical generation; a bounded planner
   merges and deduplicates their affected object/generation pairs in
-  child-before-parent order and rejects inconsistent shared ancestors.
-  Transactional publication must still propagate exact generation
-  changes through every affected ancestor to the root. Capability-authorized
+  child-before-parent order and rejects inconsistent shared ancestors. An
+  immutable-state backend constructs exact next-generation states for that
+  complete closure and propagates child generations through every affected
+  ancestor to the root. Complete-plan staging and transactional publication
+  remain pending. Capability-authorized
   bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
   complete disjoint successor image, flush it, and remain unpublished until a

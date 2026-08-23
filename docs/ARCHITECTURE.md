@@ -261,9 +261,13 @@ source directory. The opaque proof retains both bounded source-to-root and
 destination-to-root object/generation paths. A fixed-capacity planner merges
 those paths with the moved directory, removes shared ancestors, rejects a
 shared object with inconsistent generation or depth, and orders the affected
-closure child-before-parent with the root last. This
-authorizes only the in-memory namespace transition;
-transactional successor propagation through every affected ancestor and
+closure child-before-parent with the root last. An immutable-state backend now
+loads every exact predecessor in that closure and constructs bounded canonical
+successors: the moved directory changes parent, source removal is compacted,
+destination insertion points at the moved successor, each affected directory
+advances once, and exact child-generation links propagate through deduplicated
+shared ancestors to the root. This is non-authorizing construction only;
+staging and publishing the complete successor plan in one transaction and
 crash-safe identity allocation remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to

@@ -139,6 +139,96 @@ impl<const N: usize> DirectoryAncestryProof<N> {
         }
         Ok(closure)
     }
+
+    pub fn construct_move_successors<
+        const C: usize,
+        const E: usize,
+        B: DirectorySuccessorBackend<E>,
+    >(
+        &self,
+        old_name: StorageName,
+        new_name: StorageName,
+        backend: &mut B,
+    ) -> Result<DirectoryMoveSuccessorPlan<C, E>, DirectorySuccessorError<B::Error>> {
+        let moved_successor_generation = self
+            .moved_generation
+            .checked_add(1)
+            .ok_or(DirectorySuccessorError::GenerationExhausted)?;
+        let closure = self.successor_closure::<C>().map_err(|error| match error {
+            DirectoryClosureError::InvalidProof => DirectorySuccessorError::InvalidProof,
+            DirectoryClosureError::Capacity => DirectorySuccessorError::Capacity,
+        })?;
+        let mut successors: [Option<DirectoryMoveSuccessor<E>>; C] = core::array::from_fn(|_| None);
+        for (index, slot) in successors.iter_mut().enumerate().take(closure.len()) {
+            let object = closure
+                .object(index)
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            let predecessor_generation = closure
+                .generation(index)
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            let parent = self.parent_of(object)?;
+            let predecessor = backend
+                .load_directory_state(object, predecessor_generation)
+                .map_err(DirectorySuccessorError::Backend)?;
+            if predecessor.object != object || predecessor.generation != predecessor_generation {
+                return Err(DirectorySuccessorError::InvalidProof);
+            }
+            let successor_generation = predecessor
+                .generation
+                .checked_add(1)
+                .ok_or(DirectorySuccessorError::GenerationExhausted)?;
+            let mut successor = predecessor.clone();
+            successor.generation = successor_generation;
+            *slot = Some(DirectoryMoveSuccessor {
+                predecessor,
+                parent,
+                state: successor,
+            });
+        }
+        let mut plan = DirectoryMoveSuccessorPlan {
+            successors,
+            count: closure.len(),
+        };
+        plan.remove_moved_from_source(self.source, old_name, self.moved, self.moved_generation)?;
+        plan.insert_moved_at_destination(
+            self.destination,
+            new_name,
+            self.moved,
+            moved_successor_generation,
+        )?;
+        plan.propagate_parent_links(self.moved)?;
+        Ok(plan)
+    }
+
+    fn parent_of<E>(
+        &self,
+        object: StorageObjectId,
+    ) -> Result<Option<StorageObjectId>, DirectorySuccessorError<E>> {
+        if object == self.moved {
+            return Ok(Some(self.destination));
+        }
+        let mut found = None;
+        for path in [&self.source_path, &self.destination_path] {
+            for index in 0..path.count {
+                if path.nodes[index].is_some_and(|node| node.object == object) {
+                    let parent = if index + 1 < path.count {
+                        Some(
+                            path.nodes[index + 1]
+                                .ok_or(DirectorySuccessorError::InvalidProof)?
+                                .object,
+                        )
+                    } else {
+                        None
+                    };
+                    if found.is_some() && found != Some(parent) {
+                        return Err(DirectorySuccessorError::InvalidProof);
+                    }
+                    found = Some(parent);
+                }
+            }
+        }
+        found.ok_or(DirectorySuccessorError::InvalidProof)
+    }
 }
 
 pub struct DirectorySuccessorClosure<const N: usize> {
@@ -208,6 +298,163 @@ impl<const N: usize> DirectorySuccessorClosure<N> {
     }
 }
 
+#[derive(Clone)]
+pub struct DirectoryMoveSuccessor<const N: usize> {
+    predecessor: DirectoryState<N>,
+    parent: Option<StorageObjectId>,
+    state: DirectoryState<N>,
+}
+
+impl<const N: usize> DirectoryMoveSuccessor<N> {
+    pub const fn predecessor_generation(&self) -> u64 {
+        self.predecessor.generation
+    }
+
+    pub const fn predecessor(&self) -> &DirectoryState<N> {
+        &self.predecessor
+    }
+
+    pub const fn parent(&self) -> Option<StorageObjectId> {
+        self.parent
+    }
+
+    pub const fn state(&self) -> &DirectoryState<N> {
+        &self.state
+    }
+}
+
+pub struct DirectoryMoveSuccessorPlan<const C: usize, const E: usize> {
+    successors: [Option<DirectoryMoveSuccessor<E>>; C],
+    count: usize,
+}
+
+impl<const C: usize, const E: usize> DirectoryMoveSuccessorPlan<C, E> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub const fn successor(&self, index: usize) -> Option<&DirectoryMoveSuccessor<E>> {
+        if index < self.count {
+            self.successors[index].as_ref()
+        } else {
+            None
+        }
+    }
+
+    fn find_mut(&mut self, object: StorageObjectId) -> Option<&mut DirectoryMoveSuccessor<E>> {
+        self.successors[..self.count]
+            .iter_mut()
+            .flatten()
+            .find(|successor| successor.state.object == object)
+    }
+
+    fn remove_moved_from_source<B>(
+        &mut self,
+        source: StorageObjectId,
+        old_name: StorageName,
+        moved: StorageObjectId,
+        moved_generation: u64,
+    ) -> Result<(), DirectorySuccessorError<B>> {
+        let source = self
+            .find_mut(source)
+            .ok_or(DirectorySuccessorError::InvalidProof)?;
+        let index = source.state.entries[..source.state.count]
+            .iter()
+            .position(|entry| {
+                entry.is_some_and(|entry| {
+                    entry.name() == old_name
+                        && entry.object() == moved
+                        && entry.kind() == StorageObjectKind::Directory
+                        && entry.metadata_generation() == moved_generation
+                })
+            })
+            .ok_or(DirectorySuccessorError::InvalidProof)?;
+        source
+            .state
+            .remove_at(index)
+            .map_err(|_| DirectorySuccessorError::InvalidProof)?;
+        Ok(())
+    }
+
+    fn insert_moved_at_destination<B>(
+        &mut self,
+        destination: StorageObjectId,
+        new_name: StorageName,
+        moved: StorageObjectId,
+        moved_generation: u64,
+    ) -> Result<(), DirectorySuccessorError<B>> {
+        let destination = self
+            .find_mut(destination)
+            .ok_or(DirectorySuccessorError::InvalidProof)?;
+        if destination.state.count == E {
+            return Err(DirectorySuccessorError::Capacity);
+        }
+        if destination.state.entries[..destination.state.count]
+            .iter()
+            .flatten()
+            .any(|entry| entry.name() == new_name || entry.object() == moved)
+        {
+            return Err(DirectorySuccessorError::InvalidProof);
+        }
+        destination.state.entries[destination.state.count] = Some(
+            DirectoryEntry::new(
+                new_name,
+                moved,
+                StorageObjectKind::Directory,
+                moved_generation,
+            )
+            .map_err(|_| DirectorySuccessorError::InvalidProof)?,
+        );
+        destination.state.count += 1;
+        Ok(())
+    }
+
+    fn propagate_parent_links<B>(
+        &mut self,
+        moved: StorageObjectId,
+    ) -> Result<(), DirectorySuccessorError<B>> {
+        for index in 0..self.count {
+            let child = self.successors[index]
+                .as_ref()
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            if child.state.object == moved {
+                continue;
+            }
+            let Some(parent_object) = child.parent else {
+                continue;
+            };
+            let child_object = child.state.object;
+            let child_predecessor_generation = child.predecessor.generation;
+            let child_successor_generation = child.state.generation;
+            let parent = self
+                .find_mut(parent_object)
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            let entry = parent.state.entries[..parent.state.count]
+                .iter_mut()
+                .flatten()
+                .find(|entry| entry.object() == child_object)
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            if entry.kind() != StorageObjectKind::Directory
+                || entry.metadata_generation() != child_predecessor_generation
+            {
+                return Err(DirectorySuccessorError::InvalidProof);
+            }
+            *entry = DirectoryEntry::new(
+                entry.name(),
+                child_object,
+                StorageObjectKind::Directory,
+                child_successor_generation,
+            )
+            .map_err(|_| DirectorySuccessorError::InvalidProof)?;
+        }
+        Ok(())
+    }
+}
+
 /// Immutable selected-generation directory metadata used for ancestry proof.
 ///
 /// # Safety
@@ -225,6 +472,25 @@ pub unsafe trait DirectoryAncestryBackend {
     ) -> Result<DirectoryMetadata, Self::Error>;
 }
 
+/// Immutable selected-generation directory-state backend used to construct a
+/// complete directory-move successor plan.
+///
+/// # Safety
+///
+/// Every returned state must be the unique canonical, completely validated
+/// state for the exact `object` and `generation` in the same immutable selected
+/// filesystem generation used by the ancestry proof. Implementations must not
+/// redirect objects, mix generations, or return mutable or uncommitted state.
+pub unsafe trait DirectorySuccessorBackend<const N: usize> {
+    type Error;
+
+    fn load_directory_state(
+        &mut self,
+        object: StorageObjectId,
+        generation: u64,
+    ) -> Result<DirectoryState<N>, Self::Error>;
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend>(
     root: StorageObjectId,
@@ -237,6 +503,7 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
     backend: &mut B,
 ) -> Result<DirectoryAncestryProof<N>, DirectoryAncestryError<B::Error>> {
     if N == 0
+        || source == destination
         || root.volume() != source.volume()
         || root.volume() != moved.volume()
         || root.volume() != destination.volume()
@@ -567,10 +834,7 @@ impl<const N: usize> DirectoryState<N> {
         self.authorize(authority, directory, principal, StorageRights::REMOVE_CHILD)?;
         let index = self.find_name(name).ok_or(DirectoryError::NotFound)?;
         self.next_generation()?;
-        let removed = self.entries[index]
-            .take()
-            .ok_or(DirectoryError::InvalidState)?;
-        self.count -= 1;
+        let removed = self.remove_at(index)?;
         self.generation += 1;
         Ok(removed)
     }
@@ -702,8 +966,7 @@ impl<const N: usize> DirectoryState<N> {
         )
         .map_err(|_| DirectoryError::InvalidState)?;
 
-        self.entries[source_index] = None;
-        self.count -= 1;
+        self.remove_at(source_index)?;
         self.generation += 1;
         destination.entries[destination_slot] = Some(moved);
         destination.count += 1;
@@ -759,6 +1022,21 @@ impl<const N: usize> DirectoryState<N> {
         self.generation
             .checked_add(1)
             .ok_or(DirectoryError::GenerationExhausted)
+    }
+
+    fn remove_at(&mut self, index: usize) -> Result<DirectoryEntry, DirectoryError> {
+        if index >= self.count {
+            return Err(DirectoryError::InvalidState);
+        }
+        let removed = self.entries[index]
+            .take()
+            .ok_or(DirectoryError::InvalidState)?;
+        for slot in index..self.count - 1 {
+            self.entries[slot] = self.entries[slot + 1];
+        }
+        self.count -= 1;
+        self.entries[self.count] = None;
+        Ok(removed)
     }
 }
 
@@ -1002,6 +1280,14 @@ pub enum DirectoryClosureError {
     Capacity,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectorySuccessorError<E> {
+    InvalidProof,
+    Capacity,
+    GenerationExhausted,
+    Backend(E),
+}
+
 /// Persistence boundary for an unreachable directory metadata successor.
 ///
 /// # Safety
@@ -1187,6 +1473,10 @@ mod tests {
         records: [Option<DirectoryMetadata>; 5],
     }
 
+    struct SuccessorBackend<const N: usize> {
+        records: [Option<DirectoryState<N>>; 5],
+    }
+
     unsafe impl DirectoryAncestryBackend for AncestryBackend {
         type Error = ();
 
@@ -1199,6 +1489,23 @@ mod tests {
                 .flatten()
                 .copied()
                 .find(|metadata| metadata.object() == object)
+                .ok_or(())
+        }
+    }
+
+    unsafe impl<const N: usize> DirectorySuccessorBackend<N> for SuccessorBackend<N> {
+        type Error = ();
+
+        fn load_directory_state(
+            &mut self,
+            object: StorageObjectId,
+            _generation: u64,
+        ) -> Result<DirectoryState<N>, Self::Error> {
+            self.records
+                .iter()
+                .flatten()
+                .find(|state| state.object() == object)
+                .cloned()
                 .ok_or(())
         }
     }
@@ -1775,7 +2082,263 @@ mod tests {
     }
 
     #[test]
+    fn directory_move_constructs_complete_generation_bound_successor_closure() {
+        let mut ancestry_backend = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
+                Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(3), 1, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+            ],
+        };
+        let proof = prove_directory_move_ancestry::<2, _>(
+            object(1),
+            object(3),
+            1,
+            object(9),
+            1,
+            object(2),
+            1,
+            &mut ancestry_backend,
+        )
+        .unwrap();
+        let moved_child =
+            DirectoryEntry::new(name("leaf"), object(10), StorageObjectKind::File, 4).unwrap();
+        let moved = DirectoryState::<4>::new(object(9), 1, &[moved_child]).unwrap();
+        let moved_entry =
+            DirectoryEntry::new(name("old"), object(9), StorageObjectKind::Directory, 1).unwrap();
+        let retained =
+            DirectoryEntry::new(name("keep"), object(8), StorageObjectKind::File, 7).unwrap();
+        let source = DirectoryState::<4>::new(object(3), 1, &[moved_entry, retained]).unwrap();
+        let destination = DirectoryState::<4>::new(object(2), 1, &[]).unwrap();
+        let source_entry =
+            DirectoryEntry::new(name("source"), object(3), StorageObjectKind::Directory, 1)
+                .unwrap();
+        let destination_entry = DirectoryEntry::new(
+            name("destination"),
+            object(2),
+            StorageObjectKind::Directory,
+            1,
+        )
+        .unwrap();
+        let root =
+            DirectoryState::<4>::new(object(1), 5, &[source_entry, destination_entry]).unwrap();
+        let mut successor_backend = SuccessorBackend {
+            records: [
+                Some(moved),
+                Some(source),
+                Some(destination),
+                Some(root),
+                None,
+            ],
+        };
+        let plan = proof
+            .construct_move_successors::<4, 4, _>(name("old"), name("new"), &mut successor_backend)
+            .unwrap();
+        assert_eq!(plan.len(), 4);
+
+        let moved = plan.successor(0).unwrap();
+        assert_eq!(moved.predecessor_generation(), 1);
+        assert_eq!(moved.predecessor().object(), object(9));
+        assert_eq!(moved.predecessor().generation(), 1);
+        assert_eq!(moved.parent(), Some(object(2)));
+        assert_eq!(
+            (moved.state().object(), moved.state().generation()),
+            (object(9), 2)
+        );
+        assert_eq!(moved.state().entry(0), Some(moved_child));
+
+        let source = plan.successor(1).unwrap();
+        assert_eq!(source.parent(), Some(object(1)));
+        assert_eq!(
+            (source.state().object(), source.state().generation()),
+            (object(3), 2)
+        );
+        assert_eq!(source.state().len(), 1);
+        assert_eq!(source.state().entry(0), Some(retained));
+        assert_eq!(source.state().entry(1), None);
+
+        let destination = plan.successor(2).unwrap();
+        assert_eq!(destination.parent(), Some(object(1)));
+        assert_eq!(
+            (
+                destination.state().object(),
+                destination.state().generation()
+            ),
+            (object(2), 2)
+        );
+        let inserted = destination.state().entry(0).unwrap();
+        assert_eq!(inserted.name(), name("new"));
+        assert_eq!(inserted.object(), object(9));
+        assert_eq!(inserted.metadata_generation(), 2);
+
+        let root = plan.successor(3).unwrap();
+        assert_eq!(root.parent(), None);
+        assert_eq!(
+            (root.state().object(), root.state().generation()),
+            (object(1), 6)
+        );
+        assert_eq!(root.state().entry(0).unwrap().metadata_generation(), 2);
+        assert_eq!(root.state().entry(1).unwrap().metadata_generation(), 2);
+        assert!(plan.successor(4).is_none());
+    }
+
+    #[test]
+    fn directory_successor_construction_deduplicates_shared_edges_and_rejects_stale_state() {
+        let mut ancestry_backend = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
+                Some(directory_metadata(object(2), 1, Some(object(4)))),
+                Some(directory_metadata(object(3), 1, Some(object(4)))),
+                Some(directory_metadata(object(4), 3, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+            ],
+        };
+        let proof = prove_directory_move_ancestry::<3, _>(
+            object(1),
+            object(3),
+            1,
+            object(9),
+            1,
+            object(2),
+            1,
+            &mut ancestry_backend,
+        )
+        .unwrap();
+        let moved = DirectoryState::<3>::new(object(9), 1, &[]).unwrap();
+        let moved_entry =
+            DirectoryEntry::new(name("old"), object(9), StorageObjectKind::Directory, 1).unwrap();
+        let source = DirectoryState::<3>::new(object(3), 1, &[moved_entry]).unwrap();
+        let destination = DirectoryState::<3>::new(object(2), 1, &[]).unwrap();
+        let source_entry =
+            DirectoryEntry::new(name("source"), object(3), StorageObjectKind::Directory, 1)
+                .unwrap();
+        let destination_entry = DirectoryEntry::new(
+            name("destination"),
+            object(2),
+            StorageObjectKind::Directory,
+            1,
+        )
+        .unwrap();
+        let common =
+            DirectoryState::<3>::new(object(4), 3, &[source_entry, destination_entry]).unwrap();
+        let common_entry =
+            DirectoryEntry::new(name("common"), object(4), StorageObjectKind::Directory, 3)
+                .unwrap();
+        let root = DirectoryState::<3>::new(object(1), 5, &[common_entry]).unwrap();
+        let mut backend = SuccessorBackend {
+            records: [
+                Some(moved.clone()),
+                Some(source.clone()),
+                Some(destination.clone()),
+                Some(common.clone()),
+                Some(root.clone()),
+            ],
+        };
+        let plan = proof
+            .construct_move_successors::<5, 3, _>(name("old"), name("new"), &mut backend)
+            .unwrap();
+        assert_eq!(plan.len(), 5);
+        let common = plan.successor(3).unwrap().state();
+        assert_eq!((common.object(), common.generation()), (object(4), 4));
+        assert_eq!(common.entry(0).unwrap().metadata_generation(), 2);
+        assert_eq!(common.entry(1).unwrap().metadata_generation(), 2);
+        let root = plan.successor(4).unwrap().state();
+        assert_eq!((root.object(), root.generation()), (object(1), 6));
+        assert_eq!(root.entry(0).unwrap().metadata_generation(), 4);
+
+        let mut stale_root = root.clone();
+        stale_root.generation = 7;
+        let mut stale = SuccessorBackend {
+            records: [
+                Some(moved),
+                Some(source),
+                Some(destination),
+                Some(
+                    DirectoryState::<3>::new(object(4), 3, &[source_entry, destination_entry])
+                        .unwrap(),
+                ),
+                Some(stale_root),
+            ],
+        };
+        assert!(matches!(
+            proof.construct_move_successors::<5, 3, _>(name("old"), name("new"), &mut stale),
+            Err(DirectorySuccessorError::InvalidProof)
+        ));
+
+        let mut exhausted_ancestry = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
+                Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(3), u64::MAX, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+            ],
+        };
+        let exhausted_proof = prove_directory_move_ancestry::<2, _>(
+            object(1),
+            object(3),
+            u64::MAX,
+            object(9),
+            1,
+            object(2),
+            1,
+            &mut exhausted_ancestry,
+        )
+        .unwrap();
+        let exhausted_source_entry = DirectoryEntry::new(
+            name("source"),
+            object(3),
+            StorageObjectKind::Directory,
+            u64::MAX,
+        )
+        .unwrap();
+        let mut exhausted_backend = SuccessorBackend {
+            records: [
+                Some(DirectoryState::<2>::new(object(9), 1, &[]).unwrap()),
+                Some(DirectoryState::<2>::new(object(3), u64::MAX, &[moved_entry]).unwrap()),
+                Some(DirectoryState::<2>::new(object(2), 1, &[]).unwrap()),
+                Some(
+                    DirectoryState::<2>::new(
+                        object(1),
+                        5,
+                        &[exhausted_source_entry, destination_entry],
+                    )
+                    .unwrap(),
+                ),
+                None,
+            ],
+        };
+        assert!(matches!(
+            exhausted_proof.construct_move_successors::<4, 2, _>(
+                name("old"),
+                name("new"),
+                &mut exhausted_backend
+            ),
+            Err(DirectorySuccessorError::GenerationExhausted)
+        ));
+    }
+
+    #[test]
     fn ancestry_proof_rejects_descendants_stale_state_and_capacity() {
+        let mut same_directory = AncestryBackend {
+            records: [None, None, None, None, None],
+        };
+        assert!(matches!(
+            prove_directory_move_ancestry::<2, _>(
+                object(1),
+                object(3),
+                1,
+                object(9),
+                1,
+                object(3),
+                1,
+                &mut same_directory,
+            ),
+            Err(DirectoryAncestryError::InvalidProof)
+        ));
+
         let mut descendant = AncestryBackend {
             records: [
                 Some(directory_metadata(object(9), 1, Some(object(3)))),

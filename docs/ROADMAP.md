@@ -236,12 +236,14 @@ authority; unrelated domains continue.
    orders children before parents with the root last. A duplicate ancestor at
    inconsistent depths or generations fails closed. Every closure entry binds
    the exact canonical generation loaded by the proof, preventing stale
-   ancestor substitution. Transactional publication must propagate each
-   changed child generation
-   through the complete affected ancestor closure to the root; a three-object
-   source/destination/child shortcut would fail recovery validation. That
-   propagation and allocator persistence remain pending, so directory operations
-   are not yet complete or crash-safe.
+   ancestor substitution. A bounded immutable-state backend now loads every
+   exact predecessor and constructs the complete successor closure. It changes
+   the moved directory's parent, compacts source removal, inserts the moved
+   successor generation at the destination, advances every affected directory
+   exactly once, and rewrites exact child-generation links through shared
+   ancestors to the root. Staging and publishing all of those successors in one
+   transaction and allocator persistence remain pending, so directory
+   operations are not yet complete or crash-safe.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
