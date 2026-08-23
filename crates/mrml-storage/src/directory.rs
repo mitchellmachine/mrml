@@ -3,8 +3,8 @@ use mrml_crypto::Sha3_256;
 use crate::{
     CowMetadataImage, DirectoryEntry, DirectoryMetadata, MetadataPointer, StorageAuthorityError,
     StorageAuthorityTable, StorageHandle, StorageName, StorageObjectId, StorageObjectKind,
-    StoragePrincipal, StorageRights, TransactionError, TransactionParticipant, TransactionReceipt,
-    VolumeHeader, VolumeId,
+    StoragePrincipal, StorageRights, StorageTransaction, StorageTransactionId, TransactionError,
+    TransactionParticipant, TransactionReceipt, VolumeHeader, VolumeId,
 };
 
 pub const DIRECTORY_IMAGE_HEADER_BYTES: usize = 96;
@@ -345,6 +345,62 @@ impl<const C: usize, const E: usize> DirectoryMoveSuccessorPlan<C, E> {
         }
     }
 
+    pub fn stage<const S: usize, B: DirectoryWriteBackend>(
+        &self,
+        header: VolumeHeader,
+        layouts: &[DirectorySuccessorLayout; C],
+        metadata_outputs: &mut [[u8; crate::DIRECTORY_METADATA_BYTES]; C],
+        entries_outputs: &mut [[u8; S]; C],
+        backend: &mut B,
+    ) -> Result<PreparedDirectoryMovePlan<C, E>, DirectoryMoveStageError<B::Error>> {
+        for index in 0..self.count {
+            let layout = layouts[index];
+            if !metadata_pointer_valid(header, layout.metadata)
+                || !metadata_pointer_valid(header, layout.entries)
+                || pointers_overlap(layout.metadata, layout.entries)
+                || image_bytes(header, layout.entries).ok() != Some(S)
+            {
+                return Err(DirectoryMoveStageError::InvalidLayout);
+            }
+            for prior in layouts[..index].iter().copied() {
+                if pointers_overlap(prior.metadata, layout.metadata)
+                    || pointers_overlap(prior.metadata, layout.entries)
+                    || pointers_overlap(prior.entries, layout.metadata)
+                    || pointers_overlap(prior.entries, layout.entries)
+                {
+                    return Err(DirectoryMoveStageError::InvalidLayout);
+                }
+            }
+        }
+
+        let mut updates: [Option<PreparedDirectoryUpdate<E>>; C] = core::array::from_fn(|_| None);
+        for (index, slot) in updates.iter_mut().enumerate().take(self.count) {
+            let successor = self.successors[index]
+                .as_ref()
+                .ok_or(DirectoryMoveStageError::InvalidPlan)?;
+            let layout = layouts[index];
+            *slot = Some(
+                successor
+                    .predecessor
+                    .prepare_successor(
+                        header,
+                        successor.parent,
+                        successor.state.clone(),
+                        layout.metadata,
+                        layout.entries,
+                        &mut metadata_outputs[index],
+                        &mut entries_outputs[index],
+                        backend,
+                    )
+                    .map_err(DirectoryMoveStageError::Update)?,
+            );
+        }
+        Ok(PreparedDirectoryMovePlan {
+            updates,
+            count: self.count,
+        })
+    }
+
     fn find_mut(&mut self, object: StorageObjectId) -> Option<&mut DirectoryMoveSuccessor<E>> {
         self.successors[..self.count]
             .iter_mut()
@@ -452,6 +508,61 @@ impl<const C: usize, const E: usize> DirectoryMoveSuccessorPlan<C, E> {
             .map_err(|_| DirectorySuccessorError::InvalidProof)?;
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectorySuccessorLayout {
+    metadata: MetadataPointer,
+    entries: MetadataPointer,
+}
+
+impl DirectorySuccessorLayout {
+    pub const fn new(metadata: MetadataPointer, entries: MetadataPointer) -> Self {
+        Self { metadata, entries }
+    }
+
+    pub const fn metadata(self) -> MetadataPointer {
+        self.metadata
+    }
+
+    pub const fn entries(self) -> MetadataPointer {
+        self.entries
+    }
+}
+
+pub struct PreparedDirectoryMovePlan<const C: usize, const E: usize> {
+    updates: [Option<PreparedDirectoryUpdate<E>>; C],
+    count: usize,
+}
+
+impl<const C: usize, const E: usize> PreparedDirectoryMovePlan<C, E> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub const fn update(&self, index: usize) -> Option<&PreparedDirectoryUpdate<E>> {
+        if index < self.count {
+            self.updates[index].as_ref()
+        } else {
+            None
+        }
+    }
+
+    pub fn transaction<const P: usize, const W: usize>(
+        &self,
+        identity: StorageTransactionId,
+        publication_generation: u64,
+    ) -> Result<StorageTransaction<P, W>, TransactionError> {
+        let mut transaction = StorageTransaction::new(identity, publication_generation)?;
+        for update in self.updates[..self.count].iter().flatten() {
+            transaction.admit_directory(update)?;
+        }
+        Ok(transaction)
     }
 }
 
@@ -1286,6 +1397,13 @@ pub enum DirectorySuccessorError<E> {
     Capacity,
     GenerationExhausted,
     Backend(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryMoveStageError<E> {
+    InvalidPlan,
+    InvalidLayout,
+    Update(DirectoryUpdateError<E>),
 }
 
 /// Persistence boundary for an unreachable directory metadata successor.
@@ -2182,6 +2300,73 @@ mod tests {
         assert_eq!(root.state().entry(0).unwrap().metadata_generation(), 2);
         assert_eq!(root.state().entry(1).unwrap().metadata_generation(), 2);
         assert!(plan.successor(4).is_none());
+
+        let header = VolumeHeader::new(volume(), 4096, 100, 1, 2).unwrap();
+        let layouts = [
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(50, 1).unwrap(),
+                MetadataPointer::new(51, 1).unwrap(),
+            ),
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(52, 1).unwrap(),
+                MetadataPointer::new(53, 1).unwrap(),
+            ),
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(54, 1).unwrap(),
+                MetadataPointer::new(55, 1).unwrap(),
+            ),
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(56, 1).unwrap(),
+                MetadataPointer::new(57, 1).unwrap(),
+            ),
+        ];
+        let mut metadata_outputs = [[0; crate::DIRECTORY_METADATA_BYTES]; 4];
+        let mut entries_outputs = [[0; 4096]; 4];
+        let mut update_backend = UpdateBackend {
+            staged: 0,
+            flushed: false,
+            verified: 0,
+        };
+        let prepared = plan
+            .stage(
+                header,
+                &layouts,
+                &mut metadata_outputs,
+                &mut entries_outputs,
+                &mut update_backend,
+            )
+            .unwrap();
+        assert_eq!((update_backend.staged, update_backend.flushed), (8, true));
+        assert_eq!(prepared.len(), 4);
+        assert_eq!(prepared.update(0).unwrap().object(), object(9));
+        assert_eq!(prepared.update(3).unwrap().object(), object(1));
+        assert!(prepared.update(4).is_none());
+        let transaction = prepared
+            .transaction::<4, 8>(StorageTransactionId::new(17).unwrap(), 6)
+            .unwrap();
+        assert_eq!(transaction.participant_count(), 4);
+        assert!(matches!(
+            prepared.transaction::<3, 8>(StorageTransactionId::new(18).unwrap(), 6),
+            Err(TransactionError::Capacity)
+        ));
+
+        let overlapping = [layouts[0], layouts[0], layouts[2], layouts[3]];
+        let mut rejected_backend = UpdateBackend {
+            staged: 0,
+            flushed: false,
+            verified: 0,
+        };
+        assert!(matches!(
+            plan.stage(
+                header,
+                &overlapping,
+                &mut metadata_outputs,
+                &mut entries_outputs,
+                &mut rejected_backend,
+            ),
+            Err(DirectoryMoveStageError::InvalidLayout)
+        ));
+        assert_eq!(rejected_backend.staged, 0);
     }
 
     #[test]

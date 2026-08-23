@@ -267,8 +267,11 @@ successors: the moved directory changes parent, source removal is compacted,
 destination insertion points at the moved successor, each affected directory
 advances once, and exact child-generation links propagate through deduplicated
 shared ancestors to the root. This is non-authorizing construction only;
-staging and publishing the complete successor plan in one transaction and
-crash-safe identity allocation remain pending.
+the complete plan now preflights distinct bounded metadata/entry layouts before
+any write, stages every unreachable canonical successor child-before-parent,
+and can build one directory-only transaction containing every participant and
+image. Allocation-successor integration, COW-root publication, receipt-driven
+activation, and crash-safe identity allocation remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

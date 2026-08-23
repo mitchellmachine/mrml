@@ -33,10 +33,11 @@ pub use cow::{
 pub use directory::{
     DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend, DirectoryAncestryError,
     DirectoryAncestryProof, DirectoryClosureError, DirectoryError, DirectoryImage,
-    DirectoryImageError, DirectoryMoveSuccessor, DirectoryMoveSuccessorPlan, DirectoryState,
-    DirectorySuccessorBackend, DirectorySuccessorClosure, DirectorySuccessorError,
-    DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryUpdate, StorageObjectAllocator,
-    prove_directory_move_ancestry,
+    DirectoryImageError, DirectoryMoveStageError, DirectoryMoveSuccessor,
+    DirectoryMoveSuccessorPlan, DirectoryState, DirectorySuccessorBackend,
+    DirectorySuccessorClosure, DirectorySuccessorError, DirectorySuccessorLayout,
+    DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryMovePlan,
+    PreparedDirectoryUpdate, StorageObjectAllocator, prove_directory_move_ancestry,
 };
 pub use extent::{
     EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,

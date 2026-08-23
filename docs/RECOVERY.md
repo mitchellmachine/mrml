@@ -134,8 +134,11 @@ explicitly and downgrade the status rather than guessing.
   child-before-parent order and rejects inconsistent shared ancestors. An
   immutable-state backend constructs exact next-generation states for that
   complete closure and propagates child generations through every affected
-  ancestor to the root. Complete-plan staging and transactional publication
-  remain pending. Capability-authorized
+  ancestor to the root. Complete-plan staging preflights disjoint output ranges,
+  durably stages every unreachable directory image, and admits the complete
+  directory set to a fresh transaction. Allocation-successor integration,
+  COW-root publication, and receipt-driven activation remain pending.
+  Capability-authorized
   bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
   complete disjoint successor image, flush it, and remain unpublished until a

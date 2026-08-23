@@ -878,6 +878,9 @@ links, backend uncertainty, and capacity exhaustion before a directory move.
 It then uses conventional immutable predecessor loading, fixed-capacity arrays,
 entry removal/insertion, and bottom-up generation replacement to construct the
 complete in-memory successor worklist through the root.
+It preflights conventional disjoint COW output ranges, stages canonical images
+in dependency order, and admits their typed participants to one bounded
+transaction.
 This adds no novel namespace structure, graph algorithm,
 transaction protocol, cryptographic construction, or storage optimization.
 

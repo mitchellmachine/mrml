@@ -241,8 +241,12 @@ authority; unrelated domains continue.
    the moved directory's parent, compacts source removal, inserts the moved
    successor generation at the destination, advances every affected directory
    exactly once, and rewrites exact child-generation links through shared
-   ancestors to the root. Staging and publishing all of those successors in one
-   transaction and allocator persistence remain pending, so directory
+   ancestors to the root. Complete-plan staging now preflights all metadata and
+   entry ranges for volume bounds, exact entry-image size, and pairwise
+   disjointness before writing; it stages every successor child-before-parent
+   and can admit every prepared directory and image to one new transaction.
+   Allocation-successor admission, COW-root publication, receipt-driven plan
+   activation, and allocator persistence remain pending, so directory
    operations are not yet complete or crash-safe.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map

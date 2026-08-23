@@ -2744,9 +2744,16 @@ generation, and parent entries are rewritten through each deduplicated shared
 ancestor to the root. Wrong objects or generations, missing or stale parent
 entries, name/object collisions, insufficient capacity, generation exhaustion,
 backend uncertainty, and inconsistent shared paths fail closed without exposing
-a partial plan. Staging and publishing the complete plan in one transaction
-remain pending; publishing only source, destination, and child would be rejected
-by reachable-tree validation. The object-ID allocator is volatile simulation state and must be
+a partial plan. Complete-plan staging preflights every metadata/entry pointer,
+requires each entry buffer to match its exact pointer extent, rejects every
+intra-plan overlap before the first write, and then stages and flushes all
+unreachable canonical successors child-before-parent. A prepared plan retains
+every typed directory update and can create a fresh transaction that admits all
+directory participants and their two images; transaction-capacity failure
+returns no partial transaction. Allocation-successor admission, COW-root
+publication, and receipt-driven activation remain pending; publishing only
+source, destination, and child would be rejected by reachable-tree validation.
+The object-ID allocator is volatile simulation state and must be
 persisted in the same future transaction before create becomes crash-safe.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
@@ -2945,8 +2952,9 @@ object IDs remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every lo
 metadata record and parent link as hostile and requires exact immutable-
 generation binding for every closure entry, exact predecessor-state reload,
 bounded source/destination traversal, duplicate/cycle rejection, checked
-generation advance, exact parent-entry replacement, and fail-closed backend
-uncertainty. This agent review is not independent human audit.
+generation advance, exact parent-entry replacement, whole-plan layout preflight,
+pairwise range disjointness, and fail-closed backend uncertainty. This agent
+review is not independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
