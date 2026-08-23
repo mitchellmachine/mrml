@@ -165,6 +165,7 @@ pub enum IntegerWidthCastMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CheckedIntegerOptionOperation {
     ExactDivision,
+    Arithmetic(BinaryOperator),
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4434,6 +4435,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unchecked_funnel_shr"
                         | "unchecked_disjoint_bitor"
                         | "checked_div_exact"
+                        | "checked_add"
+                        | "checked_sub"
+                        | "checked_mul"
                         | "unwrap_or"
                         | "unwrap_or_default"
                         | "is_some"
@@ -4605,6 +4609,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "unchecked_funnel_shr"
                     | "unchecked_disjoint_bitor"
                     | "checked_div_exact"
+                    | "checked_add"
+                    | "checked_sub"
+                    | "checked_mul"
                     | "unwrap_or"
                     | "strict_add"
                     | "strict_sub"
@@ -4913,6 +4920,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?),
                     operation: CheckedIntegerOptionOperation::ExactDivision,
+                },
+                "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    operation: CheckedIntegerOptionOperation::Arithmetic(match method.text {
+                        "checked_add" => BinaryOperator::Add,
+                        "checked_sub" => BinaryOperator::Subtract,
+                        "checked_mul" => BinaryOperator::Multiply,
+                        _ => unreachable!(),
+                    }),
                 },
                 "unwrap_or" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,

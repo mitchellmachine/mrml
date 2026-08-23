@@ -2883,6 +2883,24 @@ fn rustc_checked_exact_division_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_arithmetic_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, fallback: u8) -> u8 { a.checked_add(b).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i16, b: i16) -> i16 { a.checked_sub(b).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u32, b: u32) -> bool { a.checked_mul(b).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, b: i64) -> bool { a.checked_mul(b).is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_generic_checked_cast_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, fallback: u8) -> u8 { input.checked_cast::<u8>().unwrap_or(fallback) }",

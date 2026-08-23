@@ -3339,6 +3339,7 @@ fn runtime_expression_type_with_locals<
             )?;
             let result_type = match operation {
                 crate::expression::CheckedIntegerOptionOperation::ExactDivision
+                | crate::expression::CheckedIntegerOptionOperation::Arithmetic(_)
                     if argument.is_some_and(|argument| {
                         runtime_expression_type_with_locals(
                             function,
@@ -3419,6 +3420,17 @@ fn runtime_expression_type_with_locals<
             )?;
             let producer_valid = match operation {
                 crate::expression::CheckedIntegerOptionOperation::ExactDivision => argument
+                    .is_some_and(|argument| {
+                        runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            argument,
+                            depth + 1,
+                        ) == Ok(base_type)
+                    }),
+                crate::expression::CheckedIntegerOptionOperation::Arithmetic(_) => argument
                     .is_some_and(|argument| {
                         runtime_expression_type_with_locals(
                             function,
@@ -10700,6 +10712,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 )
             }
             crate::expression::CheckedIntegerOptionOperation::ExactDivision => None,
+            crate::expression::CheckedIntegerOptionOperation::Arithmetic(_) => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -10750,6 +10763,57 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.width = target_width;
             self.emit_normalize()?;
             return Ok((target_width, previous_width));
+        }
+        if let crate::expression::CheckedIntegerOptionOperation::Arithmetic(operator) = operation {
+            let argument =
+                argument.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+            self.emit_expression(tree, argument, depth + 1)?;
+            self.emit(&[0x59])?;
+            self.evaluation_depth -= 1;
+            match operator {
+                crate::BinaryOperator::Add => self.emit(&[0x48, 0x01, 0xc8])?,
+                crate::BinaryOperator::Subtract => {
+                    self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x29, 0xc8])?;
+                }
+                crate::BinaryOperator::Multiply => {
+                    if source_width.signed {
+                        self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
+                    } else {
+                        self.emit(&[0x48, 0x87, 0xc1, 0x48, 0xf7, 0xe1])?;
+                    }
+                }
+                _ => return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
+            }
+            if source_width.bits == 64 {
+                self.emit(if source_width.signed {
+                    &[0x41, 0x0f, 0x91, 0xc0]
+                } else {
+                    &[0x41, 0x0f, 0x93, 0xc0]
+                })?;
+            } else {
+                self.emit(&[0x45, 0x31, 0xc0])?;
+                let mut below_minimum = None;
+                if source_width.signed {
+                    self.emit(&[0x48, 0xba])?;
+                    self.emit(&(source_width.minimum as u64).to_le_bytes())?;
+                    self.emit(&[0x48, 0x39, 0xd0])?;
+                    below_minimum = Some(self.emit_forward_branch(0x8c)?);
+                }
+                self.emit(&[0x48, 0xba])?;
+                self.emit(&source_width.maximum.to_le_bytes())?;
+                self.emit(&[0x48, 0x39, 0xd0])?;
+                let above_maximum =
+                    self.emit_forward_branch(if source_width.signed { 0x8f } else { 0x87 })?;
+                self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
+                if let Some(below_minimum) = below_minimum {
+                    self.patch_forward_branch(below_minimum)?;
+                }
+                self.patch_forward_branch(above_maximum)?;
+            }
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
         }
         let crate::expression::CheckedIntegerOptionOperation::ExactDivision = operation else {
             return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
@@ -15444,6 +15508,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b).is_none() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_arithmetic_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, fallback: u8) -> u8 { a.checked_add(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16, b: i16) -> i16 { a.checked_sub(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, b: u32) -> bool { a.checked_mul(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: i64) -> bool { a.checked_mul(b).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_add(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_sub(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_mul(b) }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
