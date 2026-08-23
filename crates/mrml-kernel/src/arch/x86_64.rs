@@ -10,6 +10,7 @@ mod ept;
 mod local_apic;
 mod page_table;
 mod pe_mapping;
+mod platform_mmio;
 mod privilege_stack;
 mod service_space;
 mod topology;
@@ -45,6 +46,10 @@ pub use page_table::{
     PreallocatedPageTableStore,
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};
+pub use platform_mmio::{
+    PlatformMmioError, PlatformMmioManifest, PlatformMmioPurpose, PlatformMmioRequirement,
+    VerifiedPlatformMmio, verify_active_platform_mmio,
+};
 pub use privilege_stack::{
     CpuPrivilegeStacks, EARLY_STACK_PAGES, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
     PerCpuPrivilegeStacks, PrivilegeStackError, PrivilegeStackLayout,

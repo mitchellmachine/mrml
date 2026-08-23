@@ -337,6 +337,21 @@ as rollback. Tests cover both cases and verify that later-unit flushes are still
 attempted after an earlier timeout. Binding discovered units to their actual
 page-table leaves and mapped MMIO ranges remains a platform boot integration
 task, not an inferred protection claim.
+
+Boot binding now starts from a fixed-capacity platform-MMIO manifest derived
+only from the validated DMAR and MCFG copies. It requests one bootstrap page
+for each unique DRHD and the exact start-through-end physical span of every
+ECAM allocation. Cross-purpose physical overlap, arithmetic overflow, capacity
+exhaustion, or any range not wholly contained in a normalized firmware
+`Mmio` region aborts construction. Before native code receives a mapped pointer,
+the active page tables are checked page by page against the manifest: physical
+identity must be exact and every leaf must be supervisor-only, writable, and
+non-executable under the dedicated MMIO permission class. A returned mapping
+token therefore proves the current page-table state, not merely an intended
+address-space policy record. The initial DRHD page is deliberately described as
+bootstrap-only; capability-derived extension for fault-record arrays outside
+that page must be separately manifested and verified before the corresponding
+registers are accessed.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 
