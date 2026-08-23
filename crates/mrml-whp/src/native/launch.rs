@@ -6,7 +6,8 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE,
-    PeImage, PhysAddr, RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
+    PeImage, PhysAddr, RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
+    VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -106,7 +107,47 @@ struct ServiceInstance {
     stack_bytes: u64,
 }
 
-impl PreparedWhpGuest<'_> {
+pub struct WhpServiceEraser<'guest, 'artifact, 'system> {
+    guest: &'guest mut PreparedWhpGuest<'system>,
+    service: &'guest VerifiedExecutable<'artifact>,
+    slot: usize,
+    task: TaskId,
+}
+
+impl ServiceAddressSpaceEraser for WhpServiceEraser<'_, '_, '_> {
+    type Error = WhpError;
+
+    fn erase(
+        &mut self,
+        task: TaskId,
+        context: mrml_kernel::arch::x86_64::UserContext,
+    ) -> Result<(), Self::Error> {
+        if task != self.task
+            || self.guest.service_page_table_root_at(self.slot) != Some(context.page_table())
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.guest
+            .reprovision_isolated_service_at(self.slot, self.service)?;
+        Ok(())
+    }
+}
+
+impl<'system> PreparedWhpGuest<'system> {
+    pub fn service_eraser<'guest, 'artifact>(
+        &'guest mut self,
+        slot: usize,
+        task: TaskId,
+        service: &'guest VerifiedExecutable<'artifact>,
+    ) -> WhpServiceEraser<'guest, 'artifact, 'system> {
+        WhpServiceEraser {
+            guest: self,
+            service,
+            slot,
+            task,
+        }
+    }
+
     pub const fn entry(&self) -> u64 {
         self.entry
     }

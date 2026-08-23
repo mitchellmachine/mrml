@@ -10,7 +10,7 @@ use mrml_kernel::{MAX_PE_SECTIONS, PAGE_SIZE, PeImage, VmExit};
 use crate::{GuestRange, MapPermissions, WHP_EXIT_CONTEXT_BYTES, WhpError, decode_exit_context};
 
 mod launch;
-pub use launch::{PreparedWhpGuest, WhpLaunchLayout, WhpPageWalk};
+pub use launch::{PreparedWhpGuest, WhpLaunchLayout, WhpPageWalk, WhpServiceEraser};
 
 type Handle = *mut c_void;
 type Hresult = i32;

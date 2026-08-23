@@ -33,6 +33,10 @@ Backend-neutral revocation now removes the exact KVM memory slot or every WHP
 GPA submapping before retiring the common mapping identity. Any uncertain
 native teardown poisons subsequent vCPU execution. Live Linux KVM and Windows
 WHP revocation probes remain required before this gate is physically verified.
+Service retirement now preflights restart timing and publishes an exact one-use
+cleanup ticket. Restart remains blocked until the corresponding KVM/WHP eraser
+proves the retired task and page-table root and completes exact-artifact
+reprovisioning; failed erasure is retryable and ticket replay is rejected.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
@@ -55,6 +59,9 @@ confidentiality.
    **IMPLEMENTED** in code and focused simulation tests; live backend probes
    remain outstanding.
 7. Integrate fault cleanup, peer notification, erasure, and bounded restart.
+   **PARTIALLY IMPLEMENTED:** typed peer notification, task-domain revocation,
+   exact cleanup gating, hosted eraser binding, and bounded restart exist;
+   transitive external shared-resource cleanup remains incomplete.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
 

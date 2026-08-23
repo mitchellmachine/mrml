@@ -93,3 +93,18 @@ algorithm, device protocol, codec, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional capability/mapping lifecycle
 enforcement over existing hypervisor APIs.
+
+## 2026-08-23 — cleanup-gated service restart
+
+MRML source: `crates/mrml-kernel/src/{task_runtime,service_lifecycle}.rs` and
+`crates/mrml-{kvm,whp}/src/native/launch.rs`.
+
+Service retirement now preflights restart timing, retains an exact one-use
+cleanup ticket, and permits restart only after the existing backend-specific
+service memory reset succeeds for the bound task and page-table root. This uses
+ordinary lifecycle state, identity comparison, retry handling, memory clearing,
+and existing PE reprovisioning; it adds no novel algorithm, device protocol,
+codec, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional fail-closed lifecycle and
+zeroization gating over existing service reset mechanisms.

@@ -479,6 +479,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     /// exit before selecting a replacement. No context or authority from the
     /// removed domain is returned to its caller.
     pub fn terminate_current(&mut self) -> Result<TaskTermination, TaskRuntimeError> {
+        self.terminate_current_with_context()
+            .map(|(termination, _)| termination)
+    }
+
+    pub(crate) fn terminate_current_with_context(
+        &mut self,
+    ) -> Result<(TaskTermination, UserContext), TaskRuntimeError> {
         let current = self
             .scheduler
             .current()
@@ -496,10 +503,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .terminate_current()
             .map_err(TaskRuntimeError::Scheduler)?;
         self.publish_peer_death(&domain, PeerDeathReason::Exited)?;
-        Ok(TaskTermination {
-            task: current,
-            next,
-        })
+        Ok((
+            TaskTermination {
+                task: current,
+                next,
+            },
+            domain.context,
+        ))
     }
 
     /// Transfers a message and attenuated capabilities between two distinct

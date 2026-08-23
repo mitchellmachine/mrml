@@ -14,7 +14,7 @@ use mrml_kernel::{
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, decode_run_page};
 
 mod launch;
-pub use launch::{KvmLaunchLayout, KvmPageWalk, PreparedKvmGuest};
+pub use launch::{KvmLaunchLayout, KvmPageWalk, KvmServiceEraser, PreparedKvmGuest};
 
 const O_RDWR: c_int = 2;
 const O_CLOEXEC: c_int = 0x80000;

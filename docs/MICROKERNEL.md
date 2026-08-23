@@ -1550,12 +1550,18 @@ generational task identity. The signed exit syscall must resolve the current
 task through this table before `TaskRuntime` removes its context and capability
 space. Clean exit records `Exited`; checked user-fault retirement records
 `Faulted`. Restart accepts neither state without exact `CONTROL` authority for
-the recorded object and a newly supplied validated `UserContext`. It creates a
+the recorded object, completed cleanup of the exact retired task/address-space
+ticket, and a newly supplied validated `UserContext`. Retirement preflights the
+restart deadline before revoking the task, then publishes a one-use cleanup
+ticket containing the old service generation, task generation, and validated
+context. Cleanup failure retains the ticket and blocks restart; replay or
+substitution is rejected. It creates a
 new task first, then advances the service generation and publishes the
 replacement, so allocation failure leaves the stopped record unchanged and a
 stale service ID never regains control. Windows and Linux tests cover wrong
-object authority, clean and fault retirement, successful restart, and stale-ID
-rejection. The current signed probe exercises supervised clean exit.
+object authority, clean and fault retirement, cleanup failure/retry/replay,
+successful restart, and stale-ID rejection. The current signed probe exercises
+supervised clean exit.
 
 WHP and KVM now provide a platform reset primitive for the two isolated service
 slots. The launcher privately records the admitted `ServiceImage` digest, image
@@ -1566,7 +1572,9 @@ entry and root before mutation, zeroes the entire image and stack backing,
 rematerializes the verified PE (including initialized data and zeroed BSS), and
 republishes only after every step succeeds. The unchanged page tables remain
 safe for this operation because the exact image identity and mapping contract
-cannot change. Both signed live runners reject substitution with the valid
+cannot change. `KvmServiceEraser` and `WhpServiceEraser` bind the cleanup
+ticket's exact task and page-table root to the selected service slot before
+invoking this reprovisioning path. Both signed live runners reject substitution with the valid
 kernel executable before publication changes, contaminate the second service
 stack, reset it, and verify its bytes, entry, and root. The 2026-08-21 release
 runs now connect reset to kernel-supervised restart. The receiver fault is
@@ -1588,8 +1596,8 @@ next eligible scheduler tick with checked arithmetic; delay doubles after each
 completed restart and saturates at the configured maximum. Exact `CONTROL`
 authorization precedes budget/timing disclosure, an early attempt neither
 allocates a task nor advances a generation, and exhausting the count is
-permanent for that service record. Time overflow occurs only after the retiring
-domain has been revoked and fails closed. Windows and Linux tests cover invalid
+permanent for that service record. Time overflow is rejected before the retiring
+domain is revoked, preserving the live task and cleanup handoff. Windows and Linux tests cover invalid
 policies, unauthorized probes, early retry, saturation, exhaustion, and time
 overflow. The signed two-service policy permits one immediate restart and its
 terminal marker is emitted only after the kernel proves a second restart is

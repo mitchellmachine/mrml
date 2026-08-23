@@ -92,8 +92,8 @@ pub use scheduler::{
     SchedulerLoad, TaskAttachError, TaskId, TaskMigration, TaskState,
 };
 pub use service_lifecycle::{
-    RestartPolicy, ServiceError, ServiceFault, ServiceId, ServiceRetirement, ServiceState,
-    ServiceSupervisor,
+    RestartPolicy, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
+    ServiceError, ServiceFault, ServiceId, ServiceRetirement, ServiceState, ServiceSupervisor,
 };
 pub use shared_memory::{
     HostResourceHandle, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,

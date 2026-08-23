@@ -5,7 +5,7 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE, PhysAddr,
-    RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
+    RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable, VmBackend, VmExit,
 };
 
 use super::{KvmBackend, KvmError, KvmSystem, KvmVcpuSnapshot, map_loaded_handoff, map_loaded_pe};
@@ -101,7 +101,47 @@ struct ServiceInstance {
     stack_bytes: u64,
 }
 
+pub struct KvmServiceEraser<'guest, 'artifact, const N: usize> {
+    guest: &'guest mut PreparedKvmGuest<N>,
+    service: &'guest VerifiedExecutable<'artifact>,
+    slot: usize,
+    task: TaskId,
+}
+
+impl<const N: usize> ServiceAddressSpaceEraser for KvmServiceEraser<'_, '_, N> {
+    type Error = KvmError;
+
+    fn erase(
+        &mut self,
+        task: TaskId,
+        context: mrml_kernel::arch::x86_64::UserContext,
+    ) -> Result<(), Self::Error> {
+        if task != self.task
+            || self.guest.service_page_table_root_at(self.slot) != Some(context.page_table())
+        {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.guest
+            .reprovision_isolated_service_at(self.slot, self.service)?;
+        Ok(())
+    }
+}
+
 impl<const N: usize> PreparedKvmGuest<N> {
+    pub fn service_eraser<'guest, 'artifact>(
+        &'guest mut self,
+        slot: usize,
+        task: TaskId,
+        service: &'guest VerifiedExecutable<'artifact>,
+    ) -> KvmServiceEraser<'guest, 'artifact, N> {
+        KvmServiceEraser {
+            guest: self,
+            service,
+            slot,
+            task,
+        }
+    }
+
     pub fn run_smp(&mut self) -> Result<(VmExit, VmExit), KvmError> {
         self.backend.run_smp()
     }

@@ -37,6 +37,8 @@ pub enum ServiceError {
     RestartLimit,
     RestartBackoff { eligible_at: u64 },
     TimeExhausted,
+    CleanupRequired,
+    InvalidCleanupTicket,
     Unauthorized(CapabilityError),
     Runtime(TaskRuntimeError),
 }
@@ -83,12 +85,44 @@ pub struct ServiceRetirement {
     pub service: ServiceId,
     pub task: TaskId,
     pub next: ScheduleOutcome,
+    pub cleanup: ServiceCleanupTicket,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceFault {
     pub service: ServiceId,
     pub retirement: FaultRetirement,
+    pub cleanup: ServiceCleanupTicket,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceCleanupTicket {
+    service: ServiceId,
+    task: TaskId,
+    context: UserContext,
+}
+
+impl ServiceCleanupTicket {
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+    pub const fn context(self) -> UserContext {
+        self.context
+    }
+}
+
+pub trait ServiceAddressSpaceEraser {
+    type Error;
+    fn erase(&mut self, task: TaskId, context: UserContext) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceCleanupError<E> {
+    Service(ServiceError),
+    Eraser(E),
 }
 
 #[derive(Clone, Copy)]
@@ -101,6 +135,7 @@ struct ServiceSlot {
     restart_policy: RestartPolicy,
     completed_restarts: u32,
     next_restart_tick: u64,
+    cleanup: Option<ServiceCleanupTicket>,
 }
 
 impl ServiceSlot {
@@ -113,6 +148,7 @@ impl ServiceSlot {
         restart_policy: RestartPolicy::ONCE_IMMEDIATE,
         completed_restarts: 0,
         next_restart_tick: 0,
+        cleanup: None,
     };
 }
 
@@ -157,6 +193,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         entry.restart_policy = restart_policy;
         entry.completed_restarts = 0;
         entry.next_restart_tick = 0;
+        entry.cleanup = None;
         Ok(ServiceId {
             slot: slot as u32,
             generation: entry.generation,
@@ -188,18 +225,27 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
         let slot = self.running_task_slot(current)?;
         let service = self.id(slot);
-        let TaskTermination { task, next } =
-            runtime.terminate_current().map_err(ServiceError::Runtime)?;
+        let next_restart_tick = self.restart_deadline(slot, now)?;
+        let (TaskTermination { task, next }, context) = runtime
+            .terminate_current_with_context()
+            .map_err(ServiceError::Runtime)?;
         if task != current {
             return Err(ServiceError::TaskMismatch);
         }
         self.slots[slot].task = None;
         self.slots[slot].state = ServiceState::Exited;
-        self.arm_restart(slot, now)?;
+        let cleanup = ServiceCleanupTicket {
+            service,
+            task,
+            context,
+        };
+        self.slots[slot].cleanup = Some(cleanup);
+        self.slots[slot].next_restart_tick = next_restart_tick;
         Ok(ServiceRetirement {
             service,
             task,
             next,
+            cleanup,
         })
     }
 
@@ -222,6 +268,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
         let slot = self.running_task_slot(current)?;
         let service = self.id(slot);
+        let next_restart_tick = self.restart_deadline(slot, now)?;
         let retirement = runtime
             .terminate_current_fault(disposition)
             .map_err(ServiceError::Runtime)?;
@@ -230,11 +277,39 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         }
         self.slots[slot].task = None;
         self.slots[slot].state = ServiceState::Faulted;
-        self.arm_restart(slot, now)?;
+        let cleanup = ServiceCleanupTicket {
+            service,
+            task: retirement.task,
+            context: retirement.context,
+        };
+        self.slots[slot].cleanup = Some(cleanup);
+        self.slots[slot].next_restart_tick = next_restart_tick;
         Ok(ServiceFault {
             service,
             retirement,
+            cleanup,
         })
+    }
+
+    pub fn complete_cleanup<E: ServiceAddressSpaceEraser>(
+        &mut self,
+        ticket: ServiceCleanupTicket,
+        eraser: &mut E,
+    ) -> Result<(), ServiceCleanupError<E::Error>> {
+        let slot = ticket.service.slot as usize;
+        let entry = self
+            .slot(ticket.service)
+            .map_err(ServiceCleanupError::Service)?;
+        if entry.cleanup != Some(ticket) {
+            return Err(ServiceCleanupError::Service(
+                ServiceError::InvalidCleanupTicket,
+            ));
+        }
+        eraser
+            .erase(ticket.task, ticket.context)
+            .map_err(ServiceCleanupError::Eraser)?;
+        self.slots[slot].cleanup = None;
+        Ok(())
     }
 
     pub fn restart<const TASKS: usize, const CAPS: usize, const MANAGEMENT_CAPS: usize>(
@@ -281,6 +356,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
                 CapabilityError::PermissionDenied,
             ));
         }
+        if entry.cleanup.is_some() {
+            return Err(ServiceError::CleanupRequired);
+        }
         if entry.completed_restarts >= entry.restart_policy.maximum_restarts {
             return Err(ServiceError::RestartLimit);
         }
@@ -307,17 +385,14 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         })
     }
 
-    fn arm_restart(&mut self, slot: usize, now: u64) -> Result<(), ServiceError> {
+    fn restart_deadline(&self, slot: usize, now: u64) -> Result<u64, ServiceError> {
         if self.slots[slot].completed_restarts >= self.slots[slot].restart_policy.maximum_restarts {
-            self.slots[slot].next_restart_tick = u64::MAX;
-            return Ok(());
+            return Ok(u64::MAX);
         }
         let delay = self.slots[slot]
             .restart_policy
             .delay(self.slots[slot].completed_restarts);
-        self.slots[slot].next_restart_tick =
-            now.checked_add(delay).ok_or(ServiceError::TimeExhausted)?;
-        Ok(())
+        now.checked_add(delay).ok_or(ServiceError::TimeExhausted)
     }
 
     fn slot(&self, service: ServiceId) -> Result<&ServiceSlot, ServiceError> {
@@ -359,6 +434,32 @@ mod tests {
         UserContext::new(PhysAddr::new(root).unwrap(), entry, 0x7000_0000).unwrap()
     }
 
+    #[derive(Default)]
+    struct TestEraser {
+        fail: bool,
+        erased: Option<(TaskId, UserContext)>,
+    }
+
+    impl ServiceAddressSpaceEraser for TestEraser {
+        type Error = ();
+        fn erase(&mut self, task: TaskId, context: UserContext) -> Result<(), Self::Error> {
+            if self.fail {
+                return Err(());
+            }
+            self.erased = Some((task, context));
+            Ok(())
+        }
+    }
+
+    fn complete<const N: usize>(
+        supervisor: &mut ServiceSupervisor<N>,
+        ticket: ServiceCleanupTicket,
+    ) {
+        supervisor
+            .complete_cleanup(ticket, &mut TestEraser::default())
+            .unwrap();
+    }
+
     #[test]
     fn clean_exit_revokes_task_and_restart_requires_exact_control() {
         let object = ObjectId(0x51);
@@ -390,6 +491,18 @@ mod tests {
             ))
         );
         let control = management.insert(object, Rights::CONTROL).unwrap();
+        assert_eq!(
+            supervisor.restart(
+                old,
+                &management,
+                control,
+                &mut runtime,
+                Priority::RESPONSIVE,
+                context(0x30_0000, 0x50_0000),
+            ),
+            Err(ServiceError::CleanupRequired)
+        );
+        complete(&mut supervisor, retired.cleanup);
         let replacement = supervisor
             .restart(
                 old,
@@ -426,6 +539,7 @@ mod tests {
             .unwrap();
         assert_eq!(fault.service, service);
         assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
+        complete(&mut supervisor, fault.cleanup);
     }
 
     #[test]
@@ -455,7 +569,8 @@ mod tests {
         let first = supervisor
             .register_with_policy(object, task, policy)
             .unwrap();
-        supervisor.exit_current_at(&mut runtime, 100).unwrap();
+        let retirement = supervisor.exit_current_at(&mut runtime, 100).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
 
         let mut management = CapabilitySpace::<2>::new();
         let wrong = management.insert(ObjectId(0x62), Rights::CONTROL).unwrap();
@@ -498,7 +613,7 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { .. }));
-        supervisor
+        let fault = supervisor
             .fault_current_at(
                 &mut runtime,
                 TrapDisposition::TerminateUser {
@@ -508,6 +623,7 @@ mod tests {
                 200,
             )
             .unwrap();
+        complete(&mut supervisor, fault.cleanup);
         assert_eq!(
             supervisor.restart_at(
                 second,
@@ -532,7 +648,8 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { .. }));
-        supervisor.exit_current_at(&mut runtime, 300).unwrap();
+        let retirement = supervisor.exit_current_at(&mut runtime, 300).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
         assert_eq!(
             supervisor.restart_at(
                 third,
@@ -548,7 +665,54 @@ mod tests {
     }
 
     #[test]
-    fn retirement_time_overflow_fails_after_revocation() {
+    fn cleanup_is_exact_one_use_and_failure_keeps_restart_blocked() {
+        let object = ObjectId(0x71);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+
+        let mut eraser = TestEraser {
+            fail: true,
+            erased: None,
+        };
+        assert_eq!(
+            supervisor.complete_cleanup(retirement.cleanup, &mut eraser),
+            Err(ServiceCleanupError::Eraser(()))
+        );
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        assert_eq!(
+            supervisor.restart(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                context(0x30_0000, 0x50_0000),
+            ),
+            Err(ServiceError::CleanupRequired)
+        );
+
+        eraser.fail = false;
+        supervisor
+            .complete_cleanup(retirement.cleanup, &mut eraser)
+            .unwrap();
+        assert_eq!(eraser.erased, Some((task, retirement.cleanup.context())));
+        assert_eq!(
+            supervisor.complete_cleanup(retirement.cleanup, &mut eraser),
+            Err(ServiceCleanupError::Service(
+                ServiceError::InvalidCleanupTicket
+            ))
+        );
+    }
+
+    #[test]
+    fn retirement_time_overflow_is_rejected_before_revocation() {
         let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
         let task = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
@@ -562,7 +726,7 @@ mod tests {
             supervisor.exit_current_at(&mut runtime, u64::MAX - 5),
             Err(ServiceError::TimeExhausted)
         );
-        assert_eq!(runtime.context(task), Err(TaskRuntimeError::MissingTask));
-        assert_eq!(runtime.current(), None);
+        assert!(runtime.context(task).is_ok());
+        assert_eq!(runtime.current(), Some(task));
     }
 }
