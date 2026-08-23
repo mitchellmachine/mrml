@@ -268,6 +268,36 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             ExprKind::Unit | ExprKind::DefaultValue => {
                 self.push(Instruction::PushInteger(0), expression.span)?;
             }
+            ExprKind::IntegerAssociatedConstant {
+                integer_type,
+                constant,
+            } => {
+                let bits = integer_type.bits(self.pointer_bits).ok_or(IrError {
+                    kind: IrErrorKind::InvalidExpressionTree,
+                    span: expression.span,
+                })?;
+                let mask = if bits == 128 {
+                    u128::MAX
+                } else {
+                    (1u128 << bits) - 1
+                };
+                let value = match constant {
+                    crate::expression::IntegerAssociatedConstant::Minimum
+                        if integer_type.is_signed() =>
+                    {
+                        1u128 << (bits - 1)
+                    }
+                    crate::expression::IntegerAssociatedConstant::Minimum => 0,
+                    crate::expression::IntegerAssociatedConstant::Maximum
+                        if integer_type.is_signed() =>
+                    {
+                        mask >> 1
+                    }
+                    crate::expression::IntegerAssociatedConstant::Maximum => mask,
+                    crate::expression::IntegerAssociatedConstant::Bits => u128::from(bits),
+                };
+                self.push(Instruction::PushInteger(value), expression.span)?;
+            }
             ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,

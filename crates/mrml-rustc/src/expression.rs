@@ -441,6 +441,10 @@ pub enum ExprKind<'source> {
         integer_type: IntegerType,
         little: bool,
     },
+    IntegerAssociatedConstant {
+        integer_type: IntegerType,
+        constant: IntegerAssociatedConstant,
+    },
     IntegerWrappingShift {
         base: ExprId,
         distance: ExprId,
@@ -523,6 +527,13 @@ pub enum ExprKind<'source> {
         then_branch: ExprId,
         else_branch: ExprId,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerAssociatedConstant {
+    Minimum,
+    Maximum,
+    Bits,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -739,6 +750,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
+            | ExprKind::IntegerAssociatedConstant { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
@@ -1014,6 +1026,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerSignCast { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerAssociatedConstant { .. } => {
+                Err(ConstEvalError::InvalidExpressionTree)
+            }
             ExprKind::IntegerWrappingShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -1617,12 +1632,33 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         .is_some_and(|next| next.kind == TokenKind::PathSeparator)
                 {
                     self.take()?;
-                    let method = self.take()?;
-                    let Some(method) =
-                        method.filter(|method| matches!(method.text, "from_be" | "from_le"))
-                    else {
-                        return Err(self.error(ExpressionErrorKind::ExpectedExpression, method));
+                    let member = self.take()?;
+                    let Some(member) = member else {
+                        return Err(self.error(ExpressionErrorKind::ExpectedExpression, member));
                     };
+                    let constant = match member.text {
+                        "MIN" => Some(IntegerAssociatedConstant::Minimum),
+                        "MAX" => Some(IntegerAssociatedConstant::Maximum),
+                        "BITS" => Some(IntegerAssociatedConstant::Bits),
+                        _ => None,
+                    };
+                    if let Some(constant) = constant {
+                        return self.push(Expr {
+                            kind: ExprKind::IntegerAssociatedConstant {
+                                integer_type,
+                                constant,
+                            },
+                            span: Span {
+                                start: token.span.start,
+                                end: member.span.end,
+                            },
+                        });
+                    }
+                    if !matches!(member.text, "from_be" | "from_le") {
+                        return Err(
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(member))
+                        );
+                    }
                     let open = self.take()?;
                     if !open.is_some_and(|open| open.kind == TokenKind::OpenParen) {
                         return Err(self.error(ExpressionErrorKind::ExpectedExpression, open));
@@ -1637,7 +1673,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         kind: ExprKind::IntegerEndianFrom {
                             value,
                             integer_type,
-                            little: method.text == "from_le",
+                            little: member.text == "from_le",
                         },
                         span: Span {
                             start: token.span.start,
@@ -2374,6 +2410,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::IntegerEndianFrom { value, .. } => {
                 self.substitute_identifier(value, name, replacement, depth + 1)?;
             }
+            ExprKind::IntegerAssociatedConstant { .. } => {}
             ExprKind::IntegerWrappingShift { base, distance, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;

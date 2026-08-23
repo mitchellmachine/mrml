@@ -215,6 +215,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerSignCast { .. }
                         | ExprKind::IntegerClampMagnitude { .. }
                         | ExprKind::IntegerEndianFrom { .. }
+                        | ExprKind::IntegerAssociatedConstant { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
@@ -1922,6 +1923,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerSignCast { .. }
                 | ExprKind::IntegerClampMagnitude { .. }
                 | ExprKind::IntegerEndianFrom { .. }
+                | ExprKind::IntegerAssociatedConstant { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
@@ -2081,6 +2083,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const) || recurse(limit, inside_inline_const)
         }
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value, inside_inline_const),
+        ExprKind::IntegerAssociatedConstant { .. } => false,
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
@@ -2210,6 +2213,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerSignCast { base, .. } => recurse(base),
         ExprKind::IntegerClampMagnitude { base, limit } => recurse(base) || recurse(limit),
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value),
+        ExprKind::IntegerAssociatedConstant { .. } => false,
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
@@ -2701,6 +2705,11 @@ fn evaluate_call_aware_integer<
                 },
             )
         }
+        ExprKind::IntegerAssociatedConstant {
+            integer_type,
+            constant,
+        } => integer_associated_constant_value(integer_type, constant, ty, context.target)
+            .map_err(arithmetic_error)?,
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3695,6 +3704,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 },
             )
         }
+        ExprKind::IntegerAssociatedConstant {
+            integer_type,
+            constant,
+        } => integer_associated_constant_value(integer_type, constant, ty, target)
+            .map_err(ExecutionError::Arithmetic)?,
         ExprKind::IntegerWrappingShift {
             base,
             distance,
@@ -3916,6 +3930,16 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
             expression_integer_type(tree, base, constants)
         }
         ExprKind::IntegerEndianFrom { integer_type, .. } => Some(integer_type),
+        ExprKind::IntegerAssociatedConstant {
+            integer_type,
+            constant,
+        } => Some(
+            if constant == crate::expression::IntegerAssociatedConstant::Bits {
+                crate::IntegerType::U32
+            } else {
+                integer_type
+            },
+        ),
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
@@ -4591,6 +4615,37 @@ fn encode_signed(value: i128, bits: u8) -> Result<u128, ExecutionError> {
         return Err(ExecutionError::Arithmetic(ConstEvalError::Overflow));
     }
     Ok(value as u128 & signed_mask(bits))
+}
+
+fn integer_associated_constant_value(
+    integer_type: crate::IntegerType,
+    constant: crate::expression::IntegerAssociatedConstant,
+    expected_type: crate::IntegerType,
+    target: TargetLayout,
+) -> Result<u128, ConstEvalError> {
+    let bits = integer_type
+        .bits(target.pointer_bits())
+        .ok_or(ConstEvalError::InvalidCast)?;
+    let result_type = if constant == crate::expression::IntegerAssociatedConstant::Bits {
+        crate::IntegerType::U32
+    } else {
+        integer_type
+    };
+    if expected_type != result_type {
+        return Err(ConstEvalError::InvalidCast);
+    }
+    let mask = signed_mask(bits);
+    Ok(match constant {
+        crate::expression::IntegerAssociatedConstant::Minimum if integer_type.is_signed() => {
+            1u128 << (bits - 1)
+        }
+        crate::expression::IntegerAssociatedConstant::Minimum => 0,
+        crate::expression::IntegerAssociatedConstant::Maximum if integer_type.is_signed() => {
+            mask >> 1
+        }
+        crate::expression::IntegerAssociatedConstant::Maximum => mask,
+        crate::expression::IntegerAssociatedConstant::Bits => u128::from(bits),
+    })
 }
 
 fn maximum_unsigned_value(ty: &str, target: TargetLayout) -> u128 {

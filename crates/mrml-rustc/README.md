@@ -2120,6 +2120,12 @@ Signed and unsigned primitive `from_be` and `from_le` associated functions
 accept one exact-type integer in constants and runtime functions. On the
 supported little-endian targets, `from_be` reverses the primitive's bytes while
 `from_le` preserves them; both retain the declared signed representation.
+All twelve primitive integer types expose their stable `MIN`, `MAX`, and `BITS`
+associated constants. `MIN` and `MAX` retain the named primitive type, including
+the target pointer width and signed two's-complement boundary, while `BITS`
+produces `u32`. Values through 64 bits reach native functions directly; `u128`
+and `i128` boundaries participate in constant evaluation and may be explicitly
+cast into a supported x86-64 ABI result.
 Six 504- to 568-byte System V objects matched pinned Rust across zero, adjacent
 low bits, sparse patterns, both width boundaries, and unsigned maxima.
 Pinned-nightly unsigned `carryless_mul`, `extract_bits`, and `deposit_bits`

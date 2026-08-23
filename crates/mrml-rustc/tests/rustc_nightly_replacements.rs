@@ -2490,6 +2490,29 @@ fn rustc_integer_endian_constructors_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_associated_constants_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { u8::MIN }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { i16::MIN }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { u32::MAX }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { i64::MAX }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> usize { usize::MAX }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { isize::BITS }",
+        "const VALUE: u128 = u128::MAX; #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE as u64 }",
+        "const VALUE: i128 = i128::MIN; #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE as i64 }",
+        "const VALUE: u32 = usize::BITS; #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_next_power_of_two_methods_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.next_power_of_two() }",

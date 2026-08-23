@@ -407,13 +407,24 @@ pub fn compile_x86_64_constant_function<
             kind: CodegenErrorKind::Execution(error),
             span: function.body_expression_span,
         })?;
-    let trusted_typed_identifier = matches!(
-        tree.expression(tree.root()).map(|expression| expression.kind),
-        Some(ExprKind::Identifier(name))
-            if resolver.resolve_type(name) == Some(return_integer_type)
-    );
+    let trusted_typed_value = match tree
+        .expression(tree.root())
+        .map(|expression| expression.kind)
+    {
+        Some(ExprKind::Identifier(name)) => {
+            resolver.resolve_type(name) == Some(return_integer_type)
+        }
+        Some(ExprKind::IntegerAssociatedConstant {
+            integer_type,
+            constant,
+        }) => {
+            constant != crate::expression::IntegerAssociatedConstant::Bits
+                && integer_type == return_integer_type
+        }
+        _ => false,
+    };
     if crate::expression::cast_integer(value, return_integer_type, 64) != Ok(value)
-        && !trusted_typed_identifier
+        && !trusted_typed_value
     {
         return Err(CodegenError {
             kind: CodegenErrorKind::ValueOutOfRange,
@@ -2320,6 +2331,7 @@ fn validate_runtime_inline_const<
             recurse(limit)?;
         }
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value)?,
+        ExprKind::IntegerAssociatedConstant { .. } => {}
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
             recurse(distance)?;
@@ -3354,6 +3366,16 @@ fn runtime_expression_type_with_locals<
             }
             Ok(RuntimeExpressionType::Integer(Some(integer_type)))
         }
+        ExprKind::IntegerAssociatedConstant {
+            integer_type,
+            constant,
+        } => Ok(RuntimeExpressionType::Integer(Some(
+            if constant == crate::expression::IntegerAssociatedConstant::Bits {
+                crate::IntegerType::U32
+            } else {
+                integer_type
+            },
+        ))),
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -5605,6 +5627,36 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
                     }
                 }
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerAssociatedConstant {
+                integer_type,
+                constant,
+            } => {
+                let source_width = runtime_width(integer_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let value = match constant {
+                    crate::expression::IntegerAssociatedConstant::Minimum
+                        if source_width.signed =>
+                    {
+                        1u64 << (source_width.bits - 1)
+                    }
+                    crate::expression::IntegerAssociatedConstant::Minimum => 0,
+                    crate::expression::IntegerAssociatedConstant::Maximum => source_width.maximum,
+                    crate::expression::IntegerAssociatedConstant::Bits => {
+                        u64::from(source_width.bits)
+                    }
+                };
+                let previous_width = self.width;
+                self.width = if constant == crate::expression::IntegerAssociatedConstant::Bits {
+                    runtime_width("u32")
+                        .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?
+                } else {
+                    source_width
+                };
+                self.emit(&[0x48, 0xb8])?;
+                self.emit(&value.to_le_bytes())?;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -14585,6 +14637,39 @@ mod tests {
         assert!(
             compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn emits_primitive_integer_associated_constants() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::MIN }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> i16 { i16::MIN }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u32 { u32::MAX }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> i64 { i64::MAX }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> usize { usize::MAX }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u32 { isize::BITS }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result = compile_x86_64_function::<_, 768, 2, 80>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u16 { u8::MAX }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 768, 2, 80>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
         );
     }
 
