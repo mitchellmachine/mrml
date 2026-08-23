@@ -189,6 +189,13 @@ appending reads and writes to the existing true emission-order access ledger.
 This separation prevents precomputed writes from being reordered ahead of RHS
 reads. Missing, reordered, malformed, immutable, or identity-drifted expectations
 fail as `InvalidRuntimePlaceFacts`.
+Assignment RHS expressions whose root is a discoverable identifier, dereference,
+index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
+a separate fixed 256-entry read-expectation table. The pass resolves the root
+base against the exact active scope and retains its projection list and span.
+Emission consumes each expectation through the ordinary identifier-read recorder,
+so projected specialized paths and direct identifiers share the identity check.
+Non-root reads inside compound expressions are not yet covered.
 Emission must consume every preassigned declaration exactly once. Inlined helper
 parameters and later scoped locals append to a checked dynamic tail and cannot
 steal a preassigned source identity; mismatches fail as
@@ -205,8 +212,9 @@ emission consumes that discovery and records one projected read instead of an
 empty base read. Specialized direct aggregate paths reuse the same recorder.
 The discovery is not yet universally consumed by nested emission paths. The
 prepass now enumerates every declaration and assignment-target form represented
-by the supported runtime body and loop parsers, but it does not yet preanalyze
-expression reads or replace name lookup across the whole body. Expanded inlined-helper locals
+by the supported runtime body and loop parsers, plus root-place reads of
+assignment RHS expressions. It does not yet preanalyze nested expression reads
+or replace name lookup across the whole body. Expanded inlined-helper locals
 still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of
