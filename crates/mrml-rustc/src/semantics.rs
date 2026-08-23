@@ -2591,6 +2591,8 @@ fn evaluate_call_aware_integer<
                     transform,
                     crate::expression::IntegerBitTransform::NextPowerOfTwo
                         | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
+                        | crate::expression::IntegerBitTransform::IsolateHighestOne
+                        | crate::expression::IntegerBitTransform::IsolateLowestOne
                 ) && ty.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
@@ -2720,6 +2722,9 @@ fn evaluate_call_aware_integer<
             }
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants)
                 .unwrap_or(crate::IntegerType::I32);
+            if count == crate::expression::IntegerBitCount::Width && base_type.is_signed() {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
             let base_bits = base_type
                 .bits(context.target.pointer_bits())
                 .ok_or(SemanticErrorKind::UnsupportedConstCall)?;
@@ -4078,6 +4083,14 @@ fn transform_integer_bits(
     let mask = signed_mask(bits);
     let value = value & mask;
     match transform {
+        IntegerBitTransform::IsolateHighestOne => {
+            if value == 0 {
+                0
+            } else {
+                1_u128 << (127 - value.leading_zeros())
+            }
+        }
+        IntegerBitTransform::IsolateLowestOne => value & 0_u128.wrapping_sub(value),
         IntegerBitTransform::SwapBytes | IntegerBitTransform::ToBigEndian => {
             value.swap_bytes() >> (128 - bits)
         }
@@ -4164,6 +4177,7 @@ fn count_integer_bits(value: u128, bits: u8, count: crate::expression::IntegerBi
     use crate::expression::IntegerBitCount;
     let value = value & signed_mask(bits);
     match count {
+        IntegerBitCount::Width => u32::from(bits) - (value << (128 - bits)).leading_zeros(),
         IntegerBitCount::Ones => value.count_ones(),
         IntegerBitCount::Zeros => u32::from(bits) - value.count_ones(),
         IntegerBitCount::LeadingZeros => (value << (128 - bits)).leading_zeros(),

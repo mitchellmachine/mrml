@@ -521,6 +521,8 @@ pub enum AsciiPredicate {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IntegerBitTransform {
+    IsolateHighestOne,
+    IsolateLowestOne,
     SwapBytes,
     ReverseBits,
     ToBigEndian,
@@ -557,6 +559,7 @@ pub enum IntegerPowerMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IntegerBitCount {
+    Width,
     Ones,
     Zeros,
     LeadingZeros,
@@ -3911,6 +3914,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "ilog2"
                         | "ilog10"
                         | "signum"
+                        | "bit_width"
+                        | "isolate_highest_one"
+                        | "isolate_lowest_one"
                         | "is_positive"
                         | "is_negative"
                         | "swap_bytes"
@@ -4316,7 +4322,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         },
                     }
                 }
-                "swap_bytes"
+                "isolate_highest_one"
+                | "isolate_lowest_one"
+                | "swap_bytes"
                 | "reverse_bits"
                 | "to_be"
                 | "to_le"
@@ -4333,6 +4341,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 | "signum" => ExprKind::IntegerBitTransform {
                     base,
                     transform: match method.text {
+                        "isolate_highest_one" => IntegerBitTransform::IsolateHighestOne,
+                        "isolate_lowest_one" => IntegerBitTransform::IsolateLowestOne,
                         "swap_bytes" => IntegerBitTransform::SwapBytes,
                         "reverse_bits" => IntegerBitTransform::ReverseBits,
                         "to_be" => IntegerBitTransform::ToBigEndian,
@@ -4351,10 +4361,11 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         _ => unreachable!(),
                     },
                 },
-                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+                "bit_width" | "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
                 | "leading_ones" | "trailing_ones" => ExprKind::IntegerBitCount {
                     base,
                     count: match method.text {
+                        "bit_width" => IntegerBitCount::Width,
                         "count_ones" => IntegerBitCount::Ones,
                         "count_zeros" => IntegerBitCount::Zeros,
                         "leading_zeros" => IntegerBitCount::LeadingZeros,

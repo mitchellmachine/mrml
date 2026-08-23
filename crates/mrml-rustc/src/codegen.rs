@@ -3300,6 +3300,8 @@ fn runtime_expression_type_with_locals<
                     transform,
                     crate::expression::IntegerBitTransform::NextPowerOfTwo
                         | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
+                        | crate::expression::IntegerBitTransform::IsolateHighestOne
+                        | crate::expression::IntegerBitTransform::IsolateLowestOne
                 ) && integer_type.is_signed())
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -3361,18 +3363,19 @@ fn runtime_expression_type_with_locals<
                 };
             Ok(RuntimeExpressionType::Integer(Some(result_type)))
         }
-        ExprKind::IntegerBitCount { base, .. } => {
-            if !matches!(
-                runtime_expression_type_with_locals(
-                    function,
-                    resolver,
-                    locals,
-                    tree,
-                    base,
-                    depth + 1,
-                )?,
-                RuntimeExpressionType::Integer(Some(_))
-            ) {
+        ExprKind::IntegerBitCount { base, count } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if count == crate::expression::IntegerBitCount::Width && integer_type.is_signed() {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(RuntimeExpressionType::Integer(Some(
@@ -5417,6 +5420,20 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.width = operand_width;
                 self.emit_expression(tree, base, depth + 1)?;
                 match transform {
+                    IntegerBitTransform::IsolateHighestOne => {
+                        self.emit(&[0x48, 0x89, 0xc1])?;
+                        let mut shift = 1_u8;
+                        while shift < operand_width.bits {
+                            self.emit(&[
+                                0x48, 0x89, 0xca, 0x48, 0xc1, 0xea, shift, 0x48, 0x09, 0xd1,
+                            ])?;
+                            shift <<= 1;
+                        }
+                        self.emit(&[0x48, 0x89, 0xc8, 0x48, 0xd1, 0xe9, 0x48, 0x29, 0xc8])?;
+                    }
+                    IntegerBitTransform::IsolateLowestOne => {
+                        self.emit(&[0x48, 0x89, 0xc1, 0x48, 0xf7, 0xd8, 0x48, 0x21, 0xc8])?;
+                    }
                     IntegerBitTransform::ToLittleEndian => {}
                     IntegerBitTransform::SwapBytes | IntegerBitTransform::ToBigEndian => {
                         match operand_width.bits {
@@ -5740,6 +5757,12 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.width = operand_width;
                 self.emit_expression(tree, base, depth + 1)?;
                 match count {
+                    IntegerBitCount::Width => {
+                        self.emit(&[0x48, 0x85, 0xc0])?;
+                        let zero = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x48, 0x0f, 0xbd, 0xc0, 0x48, 0xff, 0xc0])?;
+                        self.patch_forward_branch(zero)?;
+                    }
                     IntegerBitCount::Ones | IntegerBitCount::Zeros => {
                         self.emit(&[0x31, 0xc9])?;
                         for _ in 0..operand_width.bits {
@@ -14057,6 +14080,47 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn isolates_and_measures_unsigned_integer_bits() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u32 { input.bit_width() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.bit_width() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.isolate_highest_one() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { input.isolate_lowest_one() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u32 { input.bit_width() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_highest_one() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_lowest_one() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
