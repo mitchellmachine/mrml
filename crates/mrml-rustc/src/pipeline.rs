@@ -368,8 +368,14 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
-        let early_return = "fn stop(value: u64) -> u64 { return value; } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { stop(value) }";
-        let error = compile(early_return, "answer", ObjectFormat::Elf64).unwrap_err();
+        let early_return = "fn stop(value: u64) -> u64 { let next: u64 = value + 1; if next > 10 { return next; } next * 2 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { stop(value) }";
+        assert!(compile(early_return, "answer", ObjectFormat::Elf64).is_ok());
+
+        let boolean_return = "fn large(value: u16) -> bool { if value > 10 { return true; } false } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> bool { large(value) }";
+        assert!(compile(boolean_return, "answer", ObjectFormat::Coff).is_ok());
+
+        let loop_body = "fn count(value: u64) -> u64 { let mut current: u64 = value; while current < 10 { current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
+        let error = compile(loop_body, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)

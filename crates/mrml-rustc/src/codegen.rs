@@ -6582,6 +6582,9 @@ impl<
         self.runtime_call_local_floor = Some(checkpoint);
         self.runtime_call_depth += 1;
         let body_start = self.function.body_expression_span.start;
+        let mut return_patches = [None; MAX_BYTES];
+        let mut return_count = 0usize;
+        let mut tail_unreachable = false;
         let emission = (|| {
             for statement in body.statements().iter().flatten() {
                 match statement {
@@ -6600,17 +6603,75 @@ impl<
                             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
                         self.emit_expression_statement::<MAX_NODES>(&statement, body_start)?;
                     }
+                    crate::BodyStatement::ConditionalReturn(index) => {
+                        let conditional = body.conditional_returns()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        *return_patches
+                            .get_mut(return_count)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
+                            Some(self.emit_inline_conditional_return::<MAX_NODES>(
+                                &conditional,
+                                return_type,
+                                checkpoint,
+                                body_start,
+                            )?);
+                        return_count += 1;
+                    }
+                    crate::BodyStatement::ConditionalReturnElse(index) => {
+                        let conditional = body.conditional_return_elses()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        for branch in conditional.branches().iter().flatten() {
+                            *return_patches
+                                .get_mut(return_count)
+                                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
+                                Some(self.emit_inline_conditional_return::<MAX_NODES>(
+                                    branch,
+                                    return_type,
+                                    checkpoint,
+                                    body_start,
+                                )?);
+                            return_count += 1;
+                        }
+                        if let Some(else_value) = conditional.else_value.as_ref() {
+                            *return_patches
+                                .get_mut(return_count)
+                                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
+                                Some(self.emit_inline_return::<MAX_NODES>(
+                                    else_value,
+                                    return_type,
+                                    checkpoint,
+                                    body_start,
+                                )?);
+                            return_count += 1;
+                            tail_unreachable = true;
+                        }
+                    }
+                    crate::BodyStatement::Return(index) => {
+                        let return_statement = body.returns()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        *return_patches
+                            .get_mut(return_count)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
+                            Some(self.emit_inline_return::<MAX_NODES>(
+                                &return_statement,
+                                return_type,
+                                checkpoint,
+                                body_start,
+                            )?);
+                        return_count += 1;
+                        tail_unreachable = true;
+                    }
                     crate::BodyStatement::Loop(_)
-                    | crate::BodyStatement::ConditionalReturn(_)
-                    | crate::BodyStatement::ConditionalReturnElse(_)
-                    | crate::BodyStatement::ConditionalAssignment(_)
-                    | crate::BodyStatement::Return(_) => {
+                    | crate::BodyStatement::ConditionalAssignment(_) => {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                     }
                 }
             }
-            if body.tail_diverges {
+            if body.tail_diverges && !tail_unreachable {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            if tail_unreachable {
+                return Ok(());
             }
             let tree = body
                 .parse_tail::<MAX_NODES>()
@@ -6635,9 +6696,87 @@ impl<
         if return_type == RuntimeExpressionType::Bool {
             self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
         }
-        self.emit_scoped_local_cleanup(checkpoint)?;
+        if !tail_unreachable {
+            self.emit_scoped_local_cleanup(checkpoint)?;
+        } else {
+            self.truncate_scoped_locals(checkpoint)?;
+        }
+        for patch in return_patches[..return_count].iter().flatten().copied() {
+            self.patch_forward_branch(patch)?;
+        }
         self.width = previous_width;
         Ok(())
+    }
+
+    fn emit_inline_return<const MAX_NODES: usize>(
+        &mut self,
+        return_statement: &crate::LoopReturn<'_>,
+        expected_type: RuntimeExpressionType,
+        checkpoint: usize,
+        body_start: usize,
+    ) -> Result<usize, CodegenError> {
+        let tree = return_statement
+            .parse_value::<MAX_NODES>()
+            .map_err(|error| CodegenError {
+                kind: CodegenErrorKind::Expression(error.kind),
+                span: translate_span(body_start + return_statement.value_span.start, error.span),
+            })?;
+        let actual = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            &tree,
+            tree.root(),
+            0,
+        )
+        .map_err(|kind| self.error(kind))?;
+        if !runtime_types_compatible(actual, expected_type) {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        }
+        self.emit_expression(&tree, tree.root(), 0)?;
+        if expected_type == RuntimeExpressionType::Bool {
+            self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
+        }
+        self.emit_stack_cleanup_to(checkpoint)?;
+        self.emit_unconditional_forward_branch()
+    }
+
+    fn emit_inline_conditional_return<const MAX_NODES: usize>(
+        &mut self,
+        conditional: &crate::ConditionalReturn<'_>,
+        expected_type: RuntimeExpressionType,
+        checkpoint: usize,
+        body_start: usize,
+    ) -> Result<usize, CodegenError> {
+        let condition = conditional
+            .parse_condition::<MAX_NODES>()
+            .map_err(|error| CodegenError {
+                kind: CodegenErrorKind::Expression(error.kind),
+                span: translate_span(body_start + conditional.condition_span.start, error.span),
+            })?;
+        let condition_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            &condition,
+            condition.root(),
+            0,
+        )
+        .map_err(|kind| self.error(kind))?;
+        if condition_type != RuntimeExpressionType::Bool {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        }
+        self.emit_expression(&condition, condition.root(), 0)?;
+        self.emit(&[0x48, 0x85, 0xc0])?;
+        let skip = self.emit_forward_branch(0x84)?;
+        let value = crate::LoopReturn {
+            value: conditional.value,
+            value_span: conditional.value_span,
+        };
+        let return_patch =
+            self.emit_inline_return::<MAX_NODES>(&value, expected_type, checkpoint, body_start)?;
+        self.patch_forward_branch(skip)?;
+        Ok(return_patch)
     }
 
     fn emit_expression_with_width<const MAX_NODES: usize>(
