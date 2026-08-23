@@ -789,6 +789,18 @@ cryptographic construction, or storage optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional filesystem consistency traversal.
 
+## 2026-08-23 — integrated redundant-root recovery simulation
+
+MRML source: `crates/mrml-storage/src/recovery.rs`.
+
+The service composes conventional redundant-root selection with bounded
+filesystem consistency validation and deterministic fault injection. It falls
+back from proven-invalid unpublished metadata and aborts on indeterminate I/O.
+This adds no novel recovery algorithm, persistence protocol, fault-injection
+method, cryptographic construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional recovery fault simulation.
+
 ## 2026-08-23 — bounded assignment-expression read traversal
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

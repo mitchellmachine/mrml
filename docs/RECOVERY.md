@@ -142,7 +142,10 @@ explicitly and downgrade the status rather than guessing.
   immutable-generation read contract, validates parent/generation links and
   purpose-specific metadata/data ownership, and rejects duplicate objects,
   capacity exhaustion, ambiguity, missing ownership, or orphan allocations. The
-  backend and power-loss behavior remain simulated. UEFI
+  integrated recovery entry point falls back from a checksum-valid newer root
+  only when its mismatched/unpublished metadata is definitively invalid; an
+  injected validation I/O error aborts instead of becoming rollback. The backend
+  and power-loss behavior remain simulated. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

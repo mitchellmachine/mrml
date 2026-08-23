@@ -387,6 +387,23 @@ pub fn recover_superblock<V: CowRecoveryValidator>(
     }
 }
 
+pub fn recover_reachable_superblock<
+    B: RecoveryMetadataBackend,
+    const A: usize,
+    const D: usize,
+    const E: usize,
+    const O: usize,
+>(
+    header: VolumeHeader,
+    primary: &[u8],
+    secondary: &[u8],
+    backend: B,
+    scratch: &mut [u8],
+) -> Result<RecoveredSuperblock, RecoveryError<B::Error>> {
+    let mut validator = ReachableRecoveryValidator::<B, A, D, E, O>::new(header, backend, scratch);
+    recover_superblock(header, primary, secondary, &mut validator)
+}
+
 fn decode_and_validate<V: CowRecoveryValidator>(
     header: VolumeHeader,
     block: u64,
@@ -628,6 +645,28 @@ mod tests {
         }
     }
 
+    struct FailAfter {
+        inner: MetadataBackend,
+        calls: usize,
+        successful_reads: usize,
+    }
+
+    unsafe impl RecoveryMetadataBackend for FailAfter {
+        type Error = u8;
+
+        fn read_metadata(
+            &mut self,
+            pointer: MetadataPointer,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            if self.calls == self.successful_reads {
+                return Err(9);
+            }
+            self.calls += 1;
+            self.inner.read_metadata(pointer, output).map_err(|_| 8)
+        }
+    }
+
     fn reachable_backend(
         include_data_owner: bool,
         include_orphan: bool,
@@ -740,6 +779,61 @@ mod tests {
         assert_eq!(
             validator.validate_candidate(1, candidate),
             Err(CandidateValidationError::Invalid)
+        );
+    }
+
+    #[test]
+    fn integrated_recovery_falls_back_from_newer_root_with_unpublished_metadata() {
+        let (older, backend) = reachable_backend(true, false);
+        let newer = Superblock::new(
+            header(),
+            6,
+            5,
+            older.root(),
+            older.root_metadata(),
+            older.allocation_metadata(),
+        )
+        .unwrap();
+        let mut scratch = [0; 4096];
+        let recovered = recover_reachable_superblock::<_, 7, 1, 1, 2>(
+            header(),
+            &encoded(older),
+            &encoded(newer),
+            backend,
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(recovered.superblock(), older);
+        assert_eq!(recovered.block(), header().primary_superblock());
+        assert!(recovered.used_fallback());
+    }
+
+    #[test]
+    fn integrated_recovery_never_turns_newer_validation_io_error_into_rollback() {
+        let (older, backend) = reachable_backend(true, false);
+        let newer = Superblock::new(
+            header(),
+            6,
+            5,
+            older.root(),
+            older.root_metadata(),
+            older.allocation_metadata(),
+        )
+        .unwrap();
+        let mut scratch = [0; 4096];
+        assert_eq!(
+            recover_reachable_superblock::<_, 7, 1, 1, 2>(
+                header(),
+                &encoded(older),
+                &encoded(newer),
+                FailAfter {
+                    inner: backend,
+                    calls: 0,
+                    successful_reads: 5,
+                },
+                &mut scratch,
+            ),
+            Err(RecoveryError::Backend(9))
         );
     }
 }

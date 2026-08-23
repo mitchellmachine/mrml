@@ -50,7 +50,8 @@ pub use format::{
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use recovery::{
     CandidateValidationError, CowRecoveryValidator, ReachableRecoveryValidator,
-    RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend, recover_superblock,
+    RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend, recover_reachable_superblock,
+    recover_superblock,
 };
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,

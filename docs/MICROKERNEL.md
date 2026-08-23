@@ -2818,7 +2818,16 @@ Tests exercise an emulated root-directory/file graph; file contents are not read
 during mount, and there is still no concrete block driver, physical atomicity,
 power-loss, repair, durability, or anti-rollback evidence.
 
-Fifty-three focused unit tests and strict crate-local clippy pass on Windows
+The public bounded recovery entry point composes redundant-root selection with
+the reachable validator. An interrupted-publication simulation supplies a
+checksum-valid generation-6 superblock while its referenced allocation image is
+still canonically bound to generation 5. The newer graph is therefore proven
+invalid and recovery returns the fully validated adjacent generation-5 root with
+its fallback marker. Injecting an I/O failure at the same newer validation point
+returns `Backend` and never falls back. These are deterministic in-memory image
+and fault-injection tests, not storage-device or physical power-loss evidence.
+
+Fifty-five focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2831,7 +2840,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 53 tests, and both strict crate-local clippy
+Both current unit-test runs pass 55 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

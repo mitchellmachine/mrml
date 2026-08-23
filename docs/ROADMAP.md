@@ -284,6 +284,14 @@ authority; unrelated domains continue.
    record not claimed by the reachable graph. The backend remains an emulated
    immutable image; physical block integration, interrupted-write/power-loss
    evidence, repair, and authenticated anti-rollback remain pending.
+   The selector and traversal now compose into one recovery entry point. A
+   controlled interrupted-publication simulation presents a checksum-valid
+   newer superblock whose allocation image remains bound to the prior generation:
+   complete validation proves the newer candidate invalid and explicitly falls
+   back to the adjacent valid root. A separate injected read failure during the
+   newer validation aborts recovery rather than being treated as corruption or
+   permission to roll back. This is deterministic in-memory fault injection,
+   not physical power-loss or device durability evidence.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

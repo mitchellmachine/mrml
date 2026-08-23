@@ -275,8 +275,12 @@ loads the selected allocation image through one immutable-generation backend,
 requires exact self-ownership, walks root and child directory/file metadata,
 checks parent and generation links, decodes entry and extent images, binds every
 data range to exact allocation ownership, and rejects every orphan allocation.
-Repeated object references and capacity overflow fail closed. The concrete block
-backend, directory/allocator
+Repeated object references and capacity overflow fail closed. The root selector
+and reachable validator are exposed as one bounded recovery entry
+point. Simulation rejects a checksum-valid newer superblock whose referenced
+allocation generation was not published and explicitly falls back to the fully
+validated adjacent root; an indeterminate read of the newer candidate aborts
+instead of becoming rollback. The concrete block backend, directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
