@@ -2109,10 +2109,13 @@ evaluate each signed or unsigned receiver in its own width and return `u32`, as
 Rust requires. Six native objects matched pinned Rust for zero, all-ones,
 sign-bit, and sparse-bit cases, including the full-width zero results and
 signed narrow representation masks.
-Stable unsigned `bit_width`, `isolate_highest_one`, and `isolate_lowest_one`
-work in constants and runtime functions from 8 through 64 bits. Zero remains
-zero for both isolation methods and has width zero; other values retain exactly
-their highest or lowest set bit or report the highest set-bit index plus one.
+Stable unsigned `bit_width` and signed or unsigned `isolate_highest_one` and
+`isolate_lowest_one` work in constants and runtime functions from 8 through 64
+bits. Zero remains zero for both isolation methods and has width zero; other
+values retain exactly their highest or lowest set bit or report the highest
+set-bit index plus one. Signed isolation operates on the primitive's raw
+two's-complement representation, so a negative value's highest isolated bit is
+its sign bit.
 Six 504- to 568-byte System V objects matched pinned Rust across zero, adjacent
 low bits, sparse patterns, both width boundaries, and unsigned maxima.
 Pinned-nightly unsigned `carryless_mul`, `extract_bits`, and `deposit_bits`

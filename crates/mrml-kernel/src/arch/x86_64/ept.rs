@@ -34,6 +34,12 @@ impl EptAccess {
 /// denies DMA for every protected granule; device assignment can later refine
 /// this behind an equally ordered IOMMU implementation.
 pub trait DmaIsolation {
+    /// Monitor domain whose device-translation context this adapter controls.
+    /// Host-only adapters return `None` and cannot authorize domain transitions.
+    fn bound_domain(&self) -> Option<DomainId> {
+        None
+    }
+
     /// Revokes DMA access and completes every required IOMMU invalidation.
     /// `Rejected` is only valid when no permissive change may remain pending;
     /// uncertainty after a table write must return `FailStop`.
@@ -153,6 +159,9 @@ unsafe impl<I: VmxInstructions, D: DmaIsolation, S: GranuleScrubber> GranuleHard
         if expected_domain.is_some() && expected_domain != self.binding.domain {
             return GranuleHardwareOutcome::Rejected;
         }
+        if expected_domain.is_some() && expected_domain != self.dma.bound_domain() {
+            return GranuleHardwareOutcome::Rejected;
+        }
         match self.dma.deny_and_invalidate(transition.physical()) {
             GranuleHardwareOutcome::Applied => {}
             outcome => return outcome,
@@ -252,12 +261,19 @@ mod tests {
 
     #[derive(Default)]
     struct TestDma {
+        domain: Option<DomainId>,
         denied: bool,
         invalidated: bool,
+        calls: u8,
         outcome: Option<GranuleHardwareOutcome>,
     }
     impl DmaIsolation for TestDma {
+        fn bound_domain(&self) -> Option<DomainId> {
+            self.domain
+        }
+
         fn deny_and_invalidate(&mut self, _: PhysAddr) -> GranuleHardwareOutcome {
+            self.calls += 1;
             self.denied = true;
             self.invalidated = true;
             self.outcome.unwrap_or(GranuleHardwareOutcome::Applied)
@@ -292,7 +308,10 @@ mod tests {
         let mut hardware = EptGranuleHardware::new(
             binding,
             TestVmx::default(),
-            TestDma::default(),
+            TestDma {
+                domain: Some(domain),
+                ..TestDma::default()
+            },
             TestScrubber(true),
         );
         let delegate = monitor.prepare_delegate(granule).unwrap();
@@ -334,7 +353,10 @@ mod tests {
                 invalidations: 0,
                 fail_at: 4,
             },
-            TestDma::default(),
+            TestDma {
+                domain: Some(domain),
+                ..TestDma::default()
+            },
             TestScrubber(true),
         );
         let delegate = monitor.prepare_delegate(granule).unwrap();
@@ -348,6 +370,46 @@ mod tests {
             monitor.granule_state(granule),
             Ok(crate::GranuleState::HardwareUncertain)
         );
+    }
+
+    #[test]
+    fn mismatched_dma_domain_is_rejected_before_dma_mutation() {
+        let physical = PhysAddr::new(0x58_0000).unwrap();
+        let host_ept = EptPointer::new(PhysAddr::new(0x59_0000).unwrap(), false).unwrap();
+        let domain_ept = EptPointer::new(PhysAddr::new(0x5a_0000).unwrap(), false).unwrap();
+        let mut monitor = ProtectedMonitor::<2, 1>::new();
+        let domain = monitor.create_domain().unwrap();
+        let other = monitor.create_domain().unwrap();
+        let granule = monitor.register_granule(physical).unwrap();
+        let mut host_leaf = physical.get() | EptAccess::READ_WRITE.bits();
+        let mut domain_leaf = physical.get();
+        let binding = unsafe {
+            EptGranuleBinding::new(
+                physical,
+                host_ept,
+                &mut host_leaf,
+                Some((domain, domain_ept, &mut domain_leaf)),
+            )
+            .unwrap()
+        };
+        let mut hardware = EptGranuleHardware::new(
+            binding,
+            TestVmx::default(),
+            TestDma {
+                domain: Some(other),
+                ..TestDma::default()
+            },
+            TestScrubber(true),
+        );
+        let delegate = monitor.prepare_delegate(granule).unwrap();
+        monitor.execute_transition(delegate, &mut hardware).unwrap();
+        let assign = monitor.prepare_assign_private(granule, domain).unwrap();
+        assert_eq!(
+            monitor.execute_transition(assign, &mut hardware),
+            Err(crate::MonitorError::HardwareTransitionFailed)
+        );
+        let (_, _, dma, _) = hardware.into_parts();
+        assert_eq!(dma.calls, 1);
     }
 
     #[test]

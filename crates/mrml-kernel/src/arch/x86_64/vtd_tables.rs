@@ -1,8 +1,10 @@
-use crate::{DeviceAddress, PhysAddr};
+use crate::{
+    DeviceAddress, DomainId, GranuleHardwareOutcome, MonitorError, PhysAddr, ProtectedMonitor,
+};
 
 use super::{
-    CompleteVtdRoutes, NativeVtdMmio, PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation,
-    VtdDmaSet, VtdError, VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
+    CompleteVtdRoutes, DmaIsolation, NativeVtdMmio, PlatformMmioPurpose, VerifiedPlatformMmio,
+    VtdDmaIsolation, VtdDmaSet, VtdError, VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
 };
 
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -43,6 +45,172 @@ pub enum VtdSetBindingError {
         index: usize,
         error: VtdBindingError,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VtdDomainError {
+    TableFull,
+    InvalidHardwareDomain,
+    DuplicateBinding,
+    HardwareDomainCollision,
+    MissingBinding,
+    Monitor(MonitorError),
+}
+
+#[derive(Clone, Copy)]
+struct VtdDomainEntry {
+    owner: DomainId,
+    register_base: PhysAddr,
+    hardware_domain: u16,
+}
+
+/// Fixed-capacity authority mapping generation-checked monitor domains to the
+/// hardware domain number installed in each distinct VT-d unit.
+pub struct VtdDomainAuthority<const ENTRIES: usize> {
+    entries: [Option<VtdDomainEntry>; ENTRIES],
+    count: usize,
+}
+
+impl<const ENTRIES: usize> VtdDomainAuthority<ENTRIES> {
+    pub const fn new() -> Self {
+        Self {
+            entries: [None; ENTRIES],
+            count: 0,
+        }
+    }
+
+    pub fn register<const DOMAINS: usize, const GRANULES: usize>(
+        &mut self,
+        monitor: &ProtectedMonitor<DOMAINS, GRANULES>,
+        owner: DomainId,
+        register_base: PhysAddr,
+        hardware_domain: u16,
+    ) -> Result<(), VtdDomainError> {
+        monitor
+            .domain_state(owner)
+            .map_err(VtdDomainError::Monitor)?;
+        if hardware_domain == 0 {
+            return Err(VtdDomainError::InvalidHardwareDomain);
+        }
+        if self
+            .entries()
+            .any(|entry| entry.owner == owner && entry.register_base == register_base)
+        {
+            return Err(VtdDomainError::DuplicateBinding);
+        }
+        if self.entries().any(|entry| {
+            entry.register_base == register_base && entry.hardware_domain == hardware_domain
+        }) {
+            return Err(VtdDomainError::HardwareDomainCollision);
+        }
+        if self.count == ENTRIES {
+            return Err(VtdDomainError::TableFull);
+        }
+        self.entries[self.count] = Some(VtdDomainEntry {
+            owner,
+            register_base,
+            hardware_domain,
+        });
+        self.count += 1;
+        Ok(())
+    }
+
+    pub fn authorize<const DOMAINS: usize, const GRANULES: usize, const UNITS: usize>(
+        &self,
+        monitor: &ProtectedMonitor<DOMAINS, GRANULES>,
+        owner: DomainId,
+        complete_routes: CompleteVtdRoutes<UNITS>,
+    ) -> Result<VtdAuthorizedRoutes<UNITS>, VtdDomainError> {
+        monitor
+            .domain_state(owner)
+            .map_err(VtdDomainError::Monitor)?;
+        let routes = complete_routes.into_routes();
+        let mut hardware_domains = [0; UNITS];
+        for (index, route) in routes.iter().enumerate() {
+            hardware_domains[index] = self
+                .entries()
+                .find(|entry| entry.owner == owner && entry.register_base == route.register_base())
+                .ok_or(VtdDomainError::MissingBinding)?
+                .hardware_domain;
+        }
+        Ok(VtdAuthorizedRoutes {
+            owner,
+            routes,
+            hardware_domains,
+        })
+    }
+
+    fn entries(&self) -> impl Iterator<Item = &VtdDomainEntry> {
+        self.entries[..self.count].iter().flatten()
+    }
+}
+
+impl<const ENTRIES: usize> Default for VtdDomainAuthority<ENTRIES> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Opaque, ordered authorization coupling complete live routes to one current
+/// monitor-domain generation and each unit's registered hardware-domain ID.
+pub struct VtdAuthorizedRoutes<const UNITS: usize> {
+    owner: DomainId,
+    routes: [VtdRequesterRoute; UNITS],
+    hardware_domains: [u16; UNITS],
+}
+
+/// Complete VT-d transaction carrying the monitor-domain generation authorized
+/// for every hardware-domain context in the set.
+pub struct VtdAuthorizedDmaSet<'a, R, const UNITS: usize> {
+    owner: DomainId,
+    set: VtdDmaSet<'a, R, UNITS>,
+}
+
+impl<R: VtdRegisterIo, const UNITS: usize> VtdAuthorizedDmaSet<'_, R, UNITS> {
+    pub const fn owner(&self) -> DomainId {
+        self.owner
+    }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.set.is_empty()
+    }
+}
+
+impl<R: VtdRegisterIo, const UNITS: usize> DmaIsolation for VtdAuthorizedDmaSet<'_, R, UNITS> {
+    fn bound_domain(&self) -> Option<DomainId> {
+        Some(self.owner)
+    }
+
+    fn deny_and_invalidate(&mut self, physical: PhysAddr) -> GranuleHardwareOutcome {
+        self.set.deny_and_invalidate(physical)
+    }
+}
+
+impl<const UNITS: usize> VtdAuthorizedRoutes<UNITS> {
+    pub const fn owner(&self) -> DomainId {
+        self.owner
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        owner: DomainId,
+        routes: [VtdRequesterRoute; UNITS],
+        hardware_domains: [u16; UNITS],
+    ) -> Self {
+        Self {
+            owner,
+            routes,
+            hardware_domains,
+        }
+    }
+
+    fn into_parts(self) -> ([VtdRequesterRoute; UNITS], [u16; UNITS]) {
+        (self.routes, self.hardware_domains)
+    }
 }
 
 /// A one-shot verified MMIO token coupled to the sole invalidator that may use
@@ -364,16 +532,16 @@ where
 /// it.
 pub unsafe fn bind_routed_dma_set<'a, M, R, const UNITS: usize>(
     memories: &'a mut [M; UNITS],
-    complete_routes: CompleteVtdRoutes<UNITS>,
+    authorized_routes: VtdAuthorizedRoutes<UNITS>,
     units: [VerifiedVtdUnit<R>; UNITS],
     physical: PhysAddr,
-    expected_domains: [u16; UNITS],
-) -> Result<VtdDmaSet<'a, R, UNITS>, VtdSetBindingError>
+) -> Result<VtdAuthorizedDmaSet<'a, R, UNITS>, VtdSetBindingError>
 where
     M: VtdTableMemory,
     R: VtdRegisterIo,
 {
-    let routes = complete_routes.into_routes();
+    let owner = authorized_routes.owner();
+    let (routes, expected_domains) = authorized_routes.into_parts();
     if UNITS == 0 {
         return Err(VtdSetBindingError::Empty);
     }
@@ -404,7 +572,7 @@ where
             .map_err(VtdBindingError::Unit)
             .map_err(|error| VtdSetBindingError::Unit { index, error })?;
     }
-    Ok(set)
+    Ok(VtdAuthorizedDmaSet { owner, set })
 }
 
 fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
@@ -420,7 +588,6 @@ mod tests {
     use super::super::VirtAddr;
     use super::super::platform_mmio::{verified_vtd_for_test, verified_vtd_mapping_for_test};
     use super::*;
-    use crate::GranuleHardwareOutcome;
 
     const ROOT: u64 = 0x10_0000;
     const CONTEXT: u64 = 0x11_0000;
@@ -503,6 +670,10 @@ mod tests {
 
     fn requester() -> DeviceAddress {
         DeviceAddress::new(0, 2, 3, 0).unwrap()
+    }
+
+    fn test_owner() -> DomainId {
+        ProtectedMonitor::<1, 0>::new().create_domain().unwrap()
     }
 
     struct UnitRegisters {
@@ -667,6 +838,52 @@ mod tests {
     }
 
     #[test]
+    fn domain_authority_rejects_collisions_missing_units_and_stale_owners() {
+        let first_base = PhysAddr::new(0xfed9_0000).unwrap();
+        let second_base = PhysAddr::new(0xfeda_0000).unwrap();
+        let routes = [
+            VtdRequesterRoute::for_test(requester(), first_base),
+            VtdRequesterRoute::for_test(requester(), second_base),
+        ];
+        let mut monitor = ProtectedMonitor::<2, 0>::new();
+        let owner = monitor.create_domain().unwrap();
+        let other = monitor.create_domain().unwrap();
+        let mut authority = VtdDomainAuthority::<2>::new();
+        assert_eq!(
+            authority.register(&monitor, owner, first_base, 0),
+            Err(VtdDomainError::InvalidHardwareDomain)
+        );
+        authority.register(&monitor, owner, first_base, 9).unwrap();
+        assert_eq!(
+            authority.register(&monitor, owner, first_base, 10),
+            Err(VtdDomainError::DuplicateBinding)
+        );
+        assert_eq!(
+            authority.register(&monitor, other, first_base, 9),
+            Err(VtdDomainError::HardwareDomainCollision)
+        );
+        assert!(matches!(
+            authority.authorize(&monitor, owner, CompleteVtdRoutes::for_test(routes),),
+            Err(VtdDomainError::MissingBinding)
+        ));
+        authority
+            .register(&monitor, owner, second_base, 10)
+            .unwrap();
+        let authorized = authority
+            .authorize(&monitor, owner, CompleteVtdRoutes::for_test(routes))
+            .unwrap();
+        assert_eq!(authorized.owner(), owner);
+        let (_, hardware_domains) = authorized.into_parts();
+        assert_eq!(hardware_domains, [9, 10]);
+
+        monitor.destroy_domain(owner).unwrap();
+        assert!(matches!(
+            authority.authorize(&monitor, owner, CompleteVtdRoutes::for_test(routes),),
+            Err(VtdDomainError::Monitor(MonitorError::StaleDomain))
+        ));
+    }
+
+    #[test]
     fn coherent_unit_binding_rejects_substitution_and_inactive_root() {
         let physical = PhysAddr::new(0x20_0000).unwrap();
         let register_base = PhysAddr::new(0xfed9_0000).unwrap();
@@ -720,10 +937,9 @@ mod tests {
             let mut set = unsafe {
                 bind_routed_dma_set(
                     &mut tables,
-                    CompleteVtdRoutes::for_test(routes),
+                    VtdAuthorizedRoutes::for_test(test_owner(), routes, [9, 9]),
                     units,
                     physical,
-                    [9, 9],
                 )
             }
             .unwrap();
@@ -743,10 +959,9 @@ mod tests {
         let empty = unsafe {
             bind_routed_dma_set::<Tables, UnitRegisters, 0>(
                 &mut [],
-                CompleteVtdRoutes::for_test([]),
+                VtdAuthorizedRoutes::for_test(test_owner(), [], []),
                 [],
                 physical,
-                [],
             )
         };
         assert!(matches!(empty, Err(VtdSetBindingError::Empty)));
@@ -757,13 +972,12 @@ mod tests {
         let duplicate = unsafe {
             bind_routed_dma_set(
                 &mut duplicate_tables,
-                CompleteVtdRoutes::for_test([route, route]),
+                VtdAuthorizedRoutes::for_test(test_owner(), [route, route], [9, 9]),
                 [
                     verified_unit(register_base, UnitRegisters::active(ROOT)),
                     verified_unit(register_base, UnitRegisters::active(ROOT)),
                 ],
                 physical,
-                [9, 9],
             )
         };
         assert!(matches!(duplicate, Err(VtdSetBindingError::DuplicateUnit)));
@@ -773,16 +987,16 @@ mod tests {
         let swapped = unsafe {
             bind_routed_dma_set(
                 &mut swapped_tables,
-                CompleteVtdRoutes::for_test([
-                    route,
-                    VtdRequesterRoute::for_test(requester(), second_base),
-                ]),
+                VtdAuthorizedRoutes::for_test(
+                    test_owner(),
+                    [route, VtdRequesterRoute::for_test(requester(), second_base)],
+                    [9, 9],
+                ),
                 [
                     verified_unit(second_base, UnitRegisters::active(ROOT)),
                     verified_unit(register_base, UnitRegisters::active(ROOT)),
                 ],
                 physical,
-                [9, 9],
             )
         };
         assert!(matches!(
@@ -799,16 +1013,16 @@ mod tests {
         let partial = unsafe {
             bind_routed_dma_set(
                 &mut partial_tables,
-                CompleteVtdRoutes::for_test([
-                    route,
-                    VtdRequesterRoute::for_test(requester(), second_base),
-                ]),
+                VtdAuthorizedRoutes::for_test(
+                    test_owner(),
+                    [route, VtdRequesterRoute::for_test(requester(), second_base)],
+                    [9, 10],
+                ),
                 [
                     verified_unit(register_base, UnitRegisters::active(ROOT)),
                     verified_unit(second_base, UnitRegisters::active(ROOT)),
                 ],
                 physical,
-                [9, 10],
             )
         };
         assert!(matches!(

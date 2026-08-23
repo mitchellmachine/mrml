@@ -3379,8 +3379,6 @@ fn runtime_expression_type_with_locals<
                     transform,
                     crate::expression::IntegerBitTransform::NextPowerOfTwo
                         | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
-                        | crate::expression::IntegerBitTransform::IsolateHighestOne
-                        | crate::expression::IntegerBitTransform::IsolateLowestOne
                 ) && integer_type.is_signed())
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -14441,12 +14439,14 @@ mod tests {
     }
 
     #[test]
-    fn isolates_and_measures_unsigned_integer_bits() {
+    fn isolates_integer_bits_and_measures_unsigned_widths() {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u32 { input.bit_width() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.bit_width() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.isolate_highest_one() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { input.isolate_lowest_one() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_highest_one() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.isolate_lowest_one() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -14459,26 +14459,17 @@ mod tests {
             }
         }
 
-        for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u32 { input.bit_width() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_highest_one() }",
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_lowest_one() }",
-        ] {
-            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
-            let Some(Item::Function(function)) = module.items()[0] else {
-                panic!("expected function")
-            };
-            assert_eq!(
-                compile_x86_64_function::<_, 1024, 4, 96>(
-                    &function,
-                    &NoConstants,
-                    X86_64Abi::Windows,
-                )
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u32 { input.bit_width() }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
                 .unwrap_err()
                 .kind,
-                CodegenErrorKind::RuntimeTypeMismatch,
-            );
-        }
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]

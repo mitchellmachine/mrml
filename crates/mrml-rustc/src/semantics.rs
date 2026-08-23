@@ -2676,8 +2676,6 @@ fn evaluate_call_aware_integer<
                     transform,
                     crate::expression::IntegerBitTransform::NextPowerOfTwo
                         | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
-                        | crate::expression::IntegerBitTransform::IsolateHighestOne
-                        | crate::expression::IntegerBitTransform::IsolateLowestOne
                 ) && ty.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));

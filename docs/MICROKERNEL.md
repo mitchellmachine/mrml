@@ -339,10 +339,10 @@ routed requester, verified MMIO identity, active hardware root, exact page-table
 leaf, and invalidator into one adapter. A fixed-size all-at-once builder now
 assembles those adapters into the transaction, rejects an empty set or duplicate
 DRHD base before binding, and identifies the exact unit whose binding failed.
-It consumes one route, verified mapping, invalidator, exclusive table view, and
-expected domain per unit. If any binding fails, construction returns no usable
-set and no leaf has been mutated. Tests prove both-unit revocation and rejection
-of empty, duplicate, and wrong-domain bundles without partial leaf mutation.
+It consumes one authorized route, coupled verified unit, and exclusive table
+view per unit. If any binding fails, construction returns no usable set and no
+leaf has been mutated. Tests prove both-unit revocation and rejection of empty,
+duplicate, and wrong-domain bundles without partial leaf mutation.
 Checked topology can now issue the route component as an opaque complete-route
 proof. Issuance requires exactly as many requesters as parsed DRHD units, verifies
 that every requester currently exists in PCI configuration space, resolves each
@@ -350,9 +350,18 @@ through checked DMAR and live bridge state, rejects duplicate unit coverage, and
 proves every discovered DRHD appears exactly once. The all-unit builder accepts
 this proof instead of an unchecked route array. This does not prove topology
 cannot change afterward; hot-plug and ownership changes invalidate the proof and
-require serialized reconstruction. Collecting the corresponding table-view and
-domain arrays remains platform boot integration, not an inferred protection
-claim.
+require serialized reconstruction. Hardware-domain collection no longer relies
+on a parallel raw-ID array. A fixed-capacity authority registers each `(monitor
+domain generation, DRHD base)` against its nonzero hardware-domain ID.
+Registration rejects duplicate owner/unit bindings and reuse of one hardware ID
+by different monitor domains in the same unit. Authorization revalidates the
+live `DomainId`, consumes the complete-route proof, and emits an opaque ordered
+bundle containing every route and its registered hardware-domain ID. Missing
+unit bindings and stale domain generations fail closed. Registry removal and
+dynamic hardware-domain reuse are not implemented; the current authority is
+boot/static and exhausts capacity rather than recycling an ID whose hardware
+invalidation is unproven. Collecting exclusive native table views remains
+platform boot integration, not an inferred protection claim.
 
 Boot binding now starts from a fixed-capacity platform-MMIO manifest derived
 only from the validated DMAR and MCFG copies. It requests one bootstrap page
@@ -410,10 +419,18 @@ pointer, then accepts only a nonzero, aligned legacy-mode RTADDR. That root is
 walked for the routed requester and coupled to the invalidator that controls the
 same unit. Tests exercise successful revoke-and-flush, MMIO-unit substitution,
 and an inactive root pointer. The unsafe boundary still requires boot code to
-preserve unique mapping ownership and the proof-to-array ordering. Native
-table/domain collection and execution on physical hardware remain unverified.
+preserve unique mapping ownership and the authorization-to-table ordering.
+Native exclusive-table collection and execution on physical hardware remain
+unverified.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
+
+The EPT transition boundary also requires its DMA adapter to identify the same
+generation-checked monitor domain as the transition and EPT binding before any
+DMA mutation. The authorized VT-d builder returns a domain-bound wrapper that
+carries this identity across the IOMMU/EPT seam. A host-only or mismatched DMA
+adapter is rejected before its revoke method is called for a domain transition.
+Tests prove a mismatch causes no additional DMA operation.
 
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context
