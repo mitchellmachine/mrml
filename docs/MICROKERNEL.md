@@ -65,6 +65,17 @@ state. Tests alter only the policy identity while retaining an otherwise valid
 request and receipt, then prove a correct same-sequence request is still
 admissible.
 
+Policy success and evidence authenticity are separate types of facts. Every
+`ProtectionAdmission` records either `SelfAssertedReport` or
+`AuthenticatedAuthorityReceipt`. Direct `ProtectionSession::admit` calls always
+produce the former; only the request-bound receipt verification path can produce
+the latter. Secret-release eligibility requires authenticated-receipt provenance
+in addition to `SEALED_KEYS | MEASURED`, preventing a future backend claim
+expansion from making an unauthenticated local report release-capable. This
+source marker says only that the configured receipt key authenticated the
+decision; it is not hardware attestation, and the current embedded development
+key remains forgeable by design.
+
 The intended x86_64 layers are:
 
 - ordinary WHP or KVM remains explicitly unprotected against its host;

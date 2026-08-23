@@ -109,7 +109,8 @@ fn application_main() -> Result<()> {
     )
     .map_err(|error| anyhow!("authority receipt admission failed: {:?}", error))?;
     mrml_println!(
-        "verified VTL1 authority receipt: backend={:?} claims={:?}",
+        "verified VTL1 authority receipt: source={:?} backend={:?} claims={:?}",
+        admitted.evidence_source(),
         admitted.backend(),
         admitted.claims()
     );

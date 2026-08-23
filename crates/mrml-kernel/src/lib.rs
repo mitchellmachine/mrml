@@ -70,7 +70,8 @@ pub use protected_channel::{
 };
 pub use protected_execution::{
     PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend, ProtectionClaims,
-    ProtectionError, ProtectionPolicy, ProtectionReport, ProtectionSession,
+    ProtectionError, ProtectionEvidenceSource, ProtectionPolicy, ProtectionReport,
+    ProtectionSession,
 };
 pub use protected_monitor::{
     DomainId, DomainState, GranuleHardware, GranuleHardwareOutcome, GranuleId, GranuleState,

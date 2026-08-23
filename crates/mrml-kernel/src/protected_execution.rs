@@ -234,6 +234,7 @@ impl ProtectionPolicy {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProtectionAdmission {
+    evidence_source: ProtectionEvidenceSource,
     backend: ProtectionBackend,
     claims: ProtectionClaims,
     measurement: [u8; 64],
@@ -241,7 +242,17 @@ pub struct ProtectionAdmission {
     sequence: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtectionEvidenceSource {
+    SelfAssertedReport,
+    AuthenticatedAuthorityReceipt,
+}
+
 impl ProtectionAdmission {
+    pub const fn evidence_source(self) -> ProtectionEvidenceSource {
+        self.evidence_source
+    }
+
     pub const fn backend(self) -> ProtectionBackend {
         self.backend
     }
@@ -263,7 +274,10 @@ impl ProtectionAdmission {
     }
 
     pub const fn permits_secret_release(self) -> bool {
-        self.claims.contains(ProtectionClaims::SEALED_KEYS)
+        matches!(
+            self.evidence_source,
+            ProtectionEvidenceSource::AuthenticatedAuthorityReceipt
+        ) && self.claims.contains(ProtectionClaims::SEALED_KEYS)
             && self.claims.contains(ProtectionClaims::MEASURED)
     }
 }
@@ -288,6 +302,27 @@ impl ProtectionSession {
         &mut self,
         report: ProtectionReport,
         policy: ProtectionPolicy,
+    ) -> Result<ProtectionAdmission, ProtectionError> {
+        self.admit_with_source(report, policy, ProtectionEvidenceSource::SelfAssertedReport)
+    }
+
+    pub(crate) fn admit_authority_receipt(
+        &mut self,
+        report: ProtectionReport,
+        policy: ProtectionPolicy,
+    ) -> Result<ProtectionAdmission, ProtectionError> {
+        self.admit_with_source(
+            report,
+            policy,
+            ProtectionEvidenceSource::AuthenticatedAuthorityReceipt,
+        )
+    }
+
+    fn admit_with_source(
+        &mut self,
+        report: ProtectionReport,
+        policy: ProtectionPolicy,
+        evidence_source: ProtectionEvidenceSource,
     ) -> Result<ProtectionAdmission, ProtectionError> {
         if report.nonce != self.nonce {
             return Err(ProtectionError::MissingNonce);
@@ -319,6 +354,7 @@ impl ProtectionSession {
             .ok_or(ProtectionError::SequenceExhausted)?;
         self.last_sequence = Some(next - 1);
         Ok(ProtectionAdmission {
+            evidence_source,
             backend: report.backend,
             claims: report.claims,
             measurement: report.measurement,
@@ -400,6 +436,10 @@ mod tests {
         );
         let mut session = ProtectionSession::new(NONCE).unwrap();
         let admitted = session.admit(vbs(4), policy).unwrap();
+        assert_eq!(
+            admitted.evidence_source(),
+            ProtectionEvidenceSource::SelfAssertedReport
+        );
         assert!(!admitted.permits_secret_release());
         assert_eq!(session.admit(vbs(4), policy), Err(ProtectionError::Replay));
 

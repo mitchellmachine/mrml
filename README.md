@@ -120,6 +120,9 @@ mode cannot satisfy a weaker overlapping claim set or consume replay state.
 VBS request admission also compares the request's policy measurement with a
 verifier-owned expected value; merely MAC-binding a broker-selected policy is
 not approval.
+Admissions preserve whether evidence came from a raw self-asserted report or an
+authenticated authority receipt. Secret-release eligibility can never be
+derived from the self-asserted path.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.

@@ -321,7 +321,7 @@ impl AuthorityReceipt {
             return Err(ProtectedChannelError::PolicyMeasurementMismatch);
         }
         session
-            .admit(receipt.report, policy)
+            .admit_authority_receipt(receipt.report, policy)
             .map_err(ProtectedChannelError::Report)
     }
 
@@ -469,18 +469,19 @@ mod tests {
         );
 
         let vbs_receipt = AuthorityReceipt::seal(&KEY, request(4), report(4)).unwrap();
+        let admitted = AuthorityReceipt::verify_and_admit(
+            &KEY,
+            request(4),
+            &vbs_receipt,
+            POLICY,
+            &mut session,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(admitted.backend(), ProtectionBackend::VbsEnclave);
         assert_eq!(
-            AuthorityReceipt::verify_and_admit(
-                &KEY,
-                request(4),
-                &vbs_receipt,
-                POLICY,
-                &mut session,
-                policy,
-            )
-            .unwrap()
-            .backend(),
-            ProtectionBackend::VbsEnclave
+            admitted.evidence_source(),
+            crate::ProtectionEvidenceSource::AuthenticatedAuthorityReceipt
         );
     }
 
