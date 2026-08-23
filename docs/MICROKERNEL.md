@@ -81,6 +81,13 @@ hardware attestation. A fixed key exists only in pure tests; the production VBS
 image now generates and shares its receipt key exclusively through exact-code
 Windows sealing.
 
+Explicit mode reporting follows the same type boundary. Only an
+`AuthenticatedProtectionAdmission` can produce an `AuthenticatedProtectionMode`
+(`VbsVtl1`, `BareMetalVmxRoot`, or `Unprotected`). A raw self-asserted admission
+has no verified-mode conversion. The VTL1 receipt verifier additionally requires
+the authenticated mode to be exactly `VbsVtl1` and requires secret-release
+eligibility before it records the receipt half of the one-use release gate.
+
 The intended x86_64 layers are:
 
 - ordinary WHP or KVM remains explicitly unprotected against its host;
@@ -252,11 +259,12 @@ issuing any receipt, the entry calls `EnclaveUsesAttestedKeys` and fails closed
 unless Windows reports that boot, kernel, and hypervisor debugging have never
 been enabled and that the TPM safely provisioned master and encryption keys.
 That query requires Windows 11 24H2 or newer and establishes only platform-key
-safety, not remote attestation. The current constant development MAC key is
-intentionally not a production secret: anyone who can read the image can forge
-it, so the report does not claim sealed keys or attestation. Production admission
-remains blocked on an accepted image plus protected key provisioning and sealing
-inside VTL1.
+safety, not remote attestation. Production builds contain no constant MAC key;
+the fixed key exists only in pure tests. Receipt and workload keys are generated,
+sealed, unsealed, and consumed inside VTL1 as described below, so VBS may claim
+the narrowly implemented `SEALED_KEYS` capability. Real-machine evidence remains
+blocked only on Windows accepting the signed image; `ATTESTATION` is still not
+claimed because the Windows report is local rather than remote evidence.
 
 Boundary-copy APIs alone are not treated as pointer provenance. On every entry,
 VTL1 calls `EnclaveGetEnclaveInformation`, validates the returned VBS type,

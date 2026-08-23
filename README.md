@@ -126,6 +126,10 @@ Raw and receipt-authenticated admissions are distinct public types. The latter
 carries the exact request digest and independently approved policy identity;
 only it can evaluate secret release, and then only for non-debug execution with
 measured sealed-key claims.
+It also exposes `AuthenticatedProtectionMode`, whose `VbsVtl1`,
+`BareMetalVmxRoot`, or `Unprotected` value can be obtained only after receipt
+authentication and exact policy admission. Raw self-asserted reports expose no
+equivalent verified-mode conversion.
 The VBS authority also refuses receipt issuance unless Windows 11 24H2 reports
 safe TPM-provisioned attested keys with boot, kernel, and hypervisor debugging
 never enabled. The production enclave image contains no fixed receipt key: its

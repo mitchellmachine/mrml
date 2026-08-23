@@ -643,7 +643,35 @@ pub struct AuthenticatedProtectionAdmission {
     policy_measurement: [u8; 64],
 }
 
+/// Downgrade-resistant execution mode derived only after authority-receipt
+/// authentication and exact policy admission. Raw/self-asserted reports cannot
+/// construct this type through the public API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedProtectionMode {
+    backend: crate::ProtectionBackend,
+}
+
+impl AuthenticatedProtectionMode {
+    pub const fn is_unprotected(self) -> bool {
+        matches!(self.backend, crate::ProtectionBackend::Unprotected)
+    }
+
+    pub const fn is_vbs_vtl1(self) -> bool {
+        matches!(self.backend, crate::ProtectionBackend::VbsEnclave)
+    }
+
+    pub const fn is_bare_metal_vmx_root(self) -> bool {
+        matches!(self.backend, crate::ProtectionBackend::BareMetalMonitor)
+    }
+}
+
 impl AuthenticatedProtectionAdmission {
+    pub const fn mode(self) -> AuthenticatedProtectionMode {
+        AuthenticatedProtectionMode {
+            backend: self.admission.backend(),
+        }
+    }
+
     pub const fn evidence_source(self) -> crate::ProtectionEvidenceSource {
         self.admission.evidence_source()
     }
@@ -974,6 +1002,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(admitted.backend(), ProtectionBackend::VbsEnclave);
+        assert!(admitted.mode().is_vbs_vtl1());
+        assert!(!admitted.mode().is_unprotected());
+        assert!(!admitted.mode().is_bare_metal_vmx_root());
         assert_eq!(
             admitted.evidence_source(),
             crate::ProtectionEvidenceSource::AuthenticatedAuthorityReceipt

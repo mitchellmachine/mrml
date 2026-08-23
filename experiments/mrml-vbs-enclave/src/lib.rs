@@ -7,10 +7,11 @@ use core::ffi::c_void;
 use mrml_crypto::hmac_sha256;
 #[cfg(any(target_os = "windows", test))]
 use mrml_kernel::{
-    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport, ProtectionSession,
-    VBS_ATTESTATION_DATA_BYTES, VBS_RECEIPT_VERIFICATION_INPUT_BYTES, VBS_WORKLOAD_CHALLENGE_BYTES,
-    VBS_WORKLOAD_RESULT_BYTES, VbsAttestationData,
+    AUTHORITY_RECEIPT_BYTES, AuthenticatedProtectionAdmission, AuthorityReceipt,
+    LAUNCH_REQUEST_BYTES, LaunchRequest, ProtectionBackend, ProtectionClaims, ProtectionPolicy,
+    ProtectionReport, ProtectionSession, VBS_ATTESTATION_DATA_BYTES,
+    VBS_RECEIPT_VERIFICATION_INPUT_BYTES, VBS_WORKLOAD_CHALLENGE_BYTES, VBS_WORKLOAD_RESULT_BYTES,
+    VbsAttestationData,
 };
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
@@ -689,7 +690,7 @@ fn process_authority_request(
 fn verify_authority_receipt(
     input: &[u8; VBS_RECEIPT_VERIFICATION_INPUT_BYTES],
     authority_key: &[u8; 32],
-) -> Result<(), ()> {
+) -> Result<AuthenticatedProtectionAdmission, ()> {
     let request = LaunchRequest::decode(&input[..LAUNCH_REQUEST_BYTES]).map_err(|_| ())?;
     approved_request(&request.encode())?;
     let mut session = ProtectionSession::new(request.nonce()).map_err(|_| ())?;
@@ -701,7 +702,6 @@ fn verify_authority_receipt(
         &mut session,
         authority_policy(),
     )
-    .map(|_| ())
     .map_err(|_| ())
 }
 
@@ -1011,8 +1011,12 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
         };
         let verified = verify_authority_receipt(&input, &key);
         erase_secret(&mut key);
-        if verified.is_err() {
-            return AuthorityStatus::RequestRejected as usize as *mut c_void;
+        let admission = match verified {
+            Ok(admission) if admission.mode().is_vbs_vtl1() => admission,
+            _ => return AuthorityStatus::RequestRejected as usize as *mut c_void,
+        };
+        if !admission.permits_secret_release() {
+            return AuthorityStatus::SecretReleaseDenied as usize as *mut c_void;
         }
         let request = match LaunchRequest::decode(&input[..LAUNCH_REQUEST_BYTES]) {
             Ok(request) => request,
@@ -1389,7 +1393,9 @@ mod tests {
         let mut input = [0; VBS_RECEIPT_VERIFICATION_INPUT_BYTES];
         input[..LAUNCH_REQUEST_BYTES].copy_from_slice(&request.encode());
         input[LAUNCH_REQUEST_BYTES..].copy_from_slice(&receipt);
-        assert_eq!(verify_authority_receipt(&input, &AUTHORITY_KEY), Ok(()));
+        let admitted = verify_authority_receipt(&input, &AUTHORITY_KEY).unwrap();
+        assert!(admitted.mode().is_vbs_vtl1());
+        assert!(admitted.permits_secret_release());
         input[LAUNCH_REQUEST_BYTES + AUTHORITY_RECEIPT_BYTES - 1] ^= 1;
         assert_eq!(verify_authority_receipt(&input, &AUTHORITY_KEY), Err(()));
         assert_eq!(verify_authority_receipt(&input, &[0x72; 32]), Err(()));
