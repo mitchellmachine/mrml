@@ -95,6 +95,7 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
         let return_type = function
             .return_type
             .map_or(Some(crate::ScalarType::Unit), |ty| scalar_type(ty.text))?;
+        let return_type_name = function.return_type.map_or("()", |ty| ty.text);
         let mut parameters = [None; CALL_PARAMETERS];
         for (index, parameter) in function.parameters().iter().flatten().enumerate() {
             parameters[index] = Some(crate::RuntimeCallParameter {
@@ -107,18 +108,14 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
             parameters,
             parameter_count: argument_count,
             return_type,
+            return_type_name,
             body_expression: function.body_expression,
         })
     }
 }
 
 fn scalar_type(name: &str) -> Option<crate::ScalarType> {
-    match name {
-        "bool" => Some(crate::ScalarType::Bool),
-        "char" => Some(crate::ScalarType::Char),
-        "()" => Some(crate::ScalarType::Unit),
-        _ => crate::IntegerType::from_name(name).map(crate::ScalarType::Integer),
-    }
+    crate::ScalarType::from_name(name)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -382,6 +379,23 @@ mod tests {
 
         let wrong_unit = "fn check(value: u64) { value; } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { check(value) + 1 }";
         let error = compile(wrong_unit, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let raw_pointer = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(input: *mut u16, fallback: usize, choose: bool) -> usize { let selected: *const u16 = select(input, fallback as *const u16, choose); selected.addr() } fn select(primary: *mut u16, fallback: *const u16, choose: bool) -> *const u16 { if choose { identity(primary) } else { identity(fallback) } } fn identity(value: *const u16) -> *const u16 { value }";
+        assert!(compile(raw_pointer, "answer", ObjectFormat::Coff).is_ok());
+
+        let wrong_pointee = "fn identity(value: *const u32) -> *const u32 { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: *const u16) -> *const u32 { identity(value) }";
+        let error = compile(wrong_pointee, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_mutability = "fn identity(value: *mut u16) -> *mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: *const u16) -> *mut u16 { identity(value) }";
+        let error = compile(wrong_mutability, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)

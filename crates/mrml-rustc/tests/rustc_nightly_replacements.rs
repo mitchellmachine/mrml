@@ -3479,6 +3479,7 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u64, choose: bool) -> u64 { route(value, choose) + 1 } fn route(value: u64, choose: bool) -> u64 { if choose { adjust(value, 3) } else { adjust(value, 5) } } fn adjust(value: u64, delta: u64) -> u64 { finish(value + delta) } fn finish(value: u64) -> u64 { if value > 20 { return value * 2; } value + 7 }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: char, choose: bool) -> char { select(value, choose) } fn select(value: char, choose: bool) -> char { if choose { identity(value) } else if value == '\0' { identity('\u{10ffff}') } else { identity('🦀') } } fn identity(value: char) -> char { value }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u64) -> u64 { forward(value); consume(()); 7 } fn forward(value: u64) { check(value); } fn check(value: u64) { if value == 0 { return; } value; } fn consume(unit: ()) { unit; }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u16, fallback: usize, choose: bool) -> usize { let selected: *const u16 = select(input, fallback as *const u16, choose); selected.addr() } fn select(primary: *mut u16, fallback: *const u16, choose: bool) -> *const u16 { if choose { identity(primary) } else { identity(fallback) } } fn identity(value: *const u16) -> *const u16 { value }",
     ];
     for source in sources {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

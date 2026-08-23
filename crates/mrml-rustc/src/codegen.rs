@@ -1995,6 +1995,14 @@ fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
         crate::ScalarType::Bool => RuntimeExpressionType::Bool,
         crate::ScalarType::Char => RuntimeExpressionType::Char,
         crate::ScalarType::Unit => RuntimeExpressionType::Unit,
+        crate::ScalarType::RawPointer { pointee, mutable } => RuntimeExpressionType::RawPointer {
+            pointee: match pointee {
+                crate::PointerPointee::Integer(ty) => RuntimeArrayElementType::Integer(Some(ty)),
+                crate::PointerPointee::Bool => RuntimeArrayElementType::Bool,
+                crate::PointerPointee::Char => RuntimeArrayElementType::Char,
+            },
+            mutable,
+        },
     }
 }
 
@@ -5495,46 +5503,20 @@ fn runtime_expression_type_with_locals<
             callee,
             argument_count,
             ..
-        } if resolver
-            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
-            .is_some_and(|target| target.return_type == crate::ScalarType::Bool)
-            || resolver.call_resolves_bool(callee, argument_count) =>
-        {
-            Ok(RuntimeExpressionType::Bool)
+        } => {
+            if let Some(target) =
+                resolver.resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+            {
+                Ok(runtime_type_from_scalar(target.return_type))
+            } else if resolver.call_resolves_bool(callee, argument_count) {
+                Ok(RuntimeExpressionType::Bool)
+            } else {
+                resolver
+                    .resolve_call_type(callee, argument_count)
+                    .map(|ty| RuntimeExpressionType::Integer(Some(ty)))
+                    .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)
+            }
         }
-        ExprKind::Call {
-            callee,
-            argument_count,
-            ..
-        } if resolver
-            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
-            .is_some_and(|target| target.return_type == crate::ScalarType::Char) =>
-        {
-            Ok(RuntimeExpressionType::Char)
-        }
-        ExprKind::Call {
-            callee,
-            argument_count,
-            ..
-        } if resolver
-            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
-            .is_some_and(|target| target.return_type == crate::ScalarType::Unit) =>
-        {
-            Ok(RuntimeExpressionType::Unit)
-        }
-        ExprKind::Call {
-            callee,
-            argument_count,
-            ..
-        } => resolver
-            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
-            .and_then(|target| match target.return_type {
-                crate::ScalarType::Integer(ty) => Some(ty),
-                crate::ScalarType::Bool | crate::ScalarType::Char | crate::ScalarType::Unit => None,
-            })
-            .or_else(|| resolver.resolve_call_type(callee, argument_count))
-            .map(|ty| RuntimeExpressionType::Integer(Some(ty)))
-            .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported),
         ExprKind::InlineConst { operand } => {
             validate_runtime_inline_const(function, resolver, locals, tree, operand, depth + 1)?;
             runtime_expression_type_with_locals(
@@ -5603,6 +5585,11 @@ fn runtime_expression_type_with_locals<
                 }
                 crate::ScalarType::Unit if operand_type == RuntimeExpressionType::Unit => {
                     Ok(RuntimeExpressionType::Unit)
+                }
+                crate::ScalarType::RawPointer { .. }
+                    if operand_type == runtime_type_from_scalar(target) =>
+                {
+                    Ok(operand_type)
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
@@ -6607,12 +6594,7 @@ impl<
         let body = crate::parser::parse_function_body::<MAX_PARAMETERS>(target.body_expression)
             .map_err(|error| self.error(CodegenErrorKind::Body(error.kind)))?;
         let return_type = runtime_type_from_scalar(target.return_type);
-        let return_type_name = match target.return_type {
-            crate::ScalarType::Integer(ty) => ty.name(),
-            crate::ScalarType::Bool => "bool",
-            crate::ScalarType::Char => "char",
-            crate::ScalarType::Unit => "()",
-        };
+        let return_type_name = target.return_type_name;
         let previous_width = self.width;
         if let Some(width) = runtime_expression_width(return_type) {
             self.width = width;
@@ -10098,7 +10080,9 @@ impl<
                     crate::ScalarType::Bool => {
                         self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
                     }
-                    crate::ScalarType::Char | crate::ScalarType::Unit => {}
+                    crate::ScalarType::Char
+                    | crate::ScalarType::Unit
+                    | crate::ScalarType::RawPointer { .. } => {}
                 }
             }
             ExprKind::Unary {

@@ -188,6 +188,10 @@ pub enum ScalarType {
     Bool,
     Char,
     Unit,
+    RawPointer {
+        pointee: PointerPointee,
+        mutable: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,6 +206,7 @@ pub struct RuntimeCallTarget<'source, const MAX_PARAMETERS: usize> {
     pub parameters: [Option<RuntimeCallParameter<'source>>; MAX_PARAMETERS],
     pub parameter_count: usize,
     pub return_type: ScalarType,
+    pub return_type_name: &'source str,
     pub body_expression: &'source str,
 }
 
@@ -222,12 +227,28 @@ pub enum CastType {
 }
 
 impl ScalarType {
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "bool" => Some(Self::Bool),
             "char" => Some(Self::Char),
             "()" => Some(Self::Unit),
-            _ => IntegerType::from_name(name).map(Self::Integer),
+            _ => {
+                if let Some(integer) = IntegerType::from_name(name) {
+                    return Some(Self::Integer(integer));
+                }
+                let target = name.trim().strip_prefix('*')?.trim();
+                let (target, mutable) = if let Some(target) = target.strip_prefix("const ") {
+                    (target.trim(), false)
+                } else {
+                    (target.strip_prefix("mut ")?.trim(), true)
+                };
+                let pointee = match target {
+                    "bool" => PointerPointee::Bool,
+                    "char" => PointerPointee::Char,
+                    name => PointerPointee::Integer(IntegerType::from_name(name)?),
+                };
+                Some(Self::RawPointer { pointee, mutable })
+            }
         }
     }
 }
@@ -1083,7 +1104,11 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 target: ScalarType::Bool,
             } => self.is_boolean_expression(operand, depth + 1),
             ExprKind::Ascribe {
-                target: ScalarType::Integer(_) | ScalarType::Char | ScalarType::Unit,
+                target:
+                    ScalarType::Integer(_)
+                    | ScalarType::Char
+                    | ScalarType::Unit
+                    | ScalarType::RawPointer { .. },
                 ..
             } => false,
             ExprKind::Sequence { then, .. } => self.is_boolean_expression(then, depth + 1),
@@ -1427,6 +1452,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                         Ok(0)
                     }
                     ScalarType::Unit => Err(ConstEvalError::InvalidCast),
+                    ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
                 }
             }
             ExprKind::Unary { operator, operand } => {
