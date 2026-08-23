@@ -392,7 +392,7 @@ impl VmcsWrite {
     }
 }
 
-pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 67;
+pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 85;
 
 /// Complete fixed field set for MRML's minimal unrestricted real-mode guest.
 /// Optional bitmap, MSR-list, CR3-target, and posted-interrupt fields remain
@@ -402,17 +402,22 @@ const MINIMAL_LAUNCH_FIELD_ENCODINGS: [u32; VMCS_MINIMAL_LAUNCH_FIELDS] = [
     0x0800, 0x0802, 0x0804, 0x0806, 0x0808, 0x080a, 0x080c, 0x080e, // guest selectors
     0x0c00, 0x0c02, 0x0c04, 0x0c06, 0x0c08, 0x0c0a, 0x0c0c, // host selectors
     0x201a, // EPT pointer
-    0x2800, 0x2806, 0x2c02, // guest link, guest EFER, host EFER
+    0x2800, 0x2802, 0x2804, 0x2806, 0x2808, // guest link/debug/PAT/EFER/perf
+    0x2c00, 0x2c02, 0x2c04, // host PAT/EFER/perf
     0x4000, 0x4002, 0x4004, 0x400c, 0x4012, 0x401e, // execution controls
     0x4800, 0x4802, 0x4804, 0x4806, 0x4808, 0x480a, 0x480c, 0x480e, // segment limits
     0x4810, 0x4812, // GDTR/IDTR limits
     0x4814, 0x4816, 0x4818, 0x481a, 0x481c, 0x481e, 0x4820, 0x4822, // guest access rights
+    0x4824, 0x4826, 0x4828, 0x482a, // interrupt/activity/SMBASE/SYSENTER CS
+    0x4c00, // host SYSENTER CS
     0x6800, 0x6802, 0x6804, // guest CR0/CR3/CR4
     0x6806, 0x6808, 0x680a, 0x680c, 0x680e, 0x6810, 0x6812, 0x6814, // segment bases
     0x6816, 0x6818, // GDTR/IDTR bases
-    0x681c, 0x681e, 0x6820, // guest RSP/RIP/RFLAGS
+    0x681a, 0x681c, 0x681e, 0x6820, // guest DR7/RSP/RIP/RFLAGS
+    0x6822, 0x6824, 0x6826, // pending debug/SYSENTER ESP/EIP
     0x6c00, 0x6c02, 0x6c04, // host CR0/CR3/CR4
-    0x6c0a, 0x6c0c, 0x6c0e, // host TR/GDTR/IDTR bases
+    0x6c06, 0x6c08, 0x6c0a, 0x6c0c, 0x6c0e, // host FS/GS/TR/GDTR/IDTR bases
+    0x6c10, 0x6c12, // host SYSENTER ESP/EIP
     0x6c14, 0x6c16, // host RSP/RIP
 ];
 
@@ -427,10 +432,17 @@ pub struct VmxHostState {
     pub cr3: u64,
     pub cr4: u64,
     pub efer: u64,
+    pub pat: u64,
+    pub perf_global_control: u64,
     pub selectors: [u16; 7],
+    pub fs_base: u64,
+    pub gs_base: u64,
     pub tr_base: u64,
     pub gdtr_base: u64,
     pub idtr_base: u64,
+    pub sysenter_cs: u32,
+    pub sysenter_esp: u64,
+    pub sysenter_eip: u64,
     pub stack_pointer: u64,
     pub instruction_pointer: u64,
 }
@@ -450,19 +462,20 @@ impl MinimalVmcsLaunch {
         }
         values[15] = ept.bits();
         values[16] = u64::MAX;
-        values[17] = 0;
-        values[18] = host.efer;
-        values[19] = u64::from(VmxControl::constrained(0, controls.pin).bits());
-        values[20] = u64::from(VmxControl::constrained(1 << 31, controls.primary).bits());
-        values[21] = 0;
-        values[22] = u64::from(VmxControl::constrained(1 << 9, controls.exit).bits());
-        values[23] = u64::from(VmxControl::constrained(0, controls.entry).bits());
-        values[24] =
+        values[17..20].copy_from_slice(&[0, host.pat, 0]);
+        values[20] = 0;
+        values[21..24].copy_from_slice(&[host.pat, host.efer, host.perf_global_control]);
+        values[24] = u64::from(VmxControl::constrained(0, controls.pin).bits());
+        values[25] = u64::from(VmxControl::constrained(1 << 31, controls.primary).bits());
+        values[26] = 0;
+        values[27] = u64::from(VmxControl::constrained(1 << 9, controls.exit).bits());
+        values[28] = u64::from(VmxControl::constrained(0, controls.entry).bits());
+        values[29] =
             u64::from(VmxControl::constrained((1 << 1) | (1 << 7), controls.secondary).bits());
-        values[25..35].copy_from_slice(&[
+        values[30..40].copy_from_slice(&[
             0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0, 0x67, 0xffff, 0xffff,
         ]);
-        values[35..43].copy_from_slice(&[
+        values[40..48].copy_from_slice(&[
             0x0093,
             0x009b,
             0x0093,
@@ -472,16 +485,30 @@ impl MinimalVmcsLaunch {
             1 << 16,
             0x008b,
         ]);
-        values[43..56].fill(0);
-        values[56..59].copy_from_slice(&[u64::from(guest_rsp), u64::from(guest_rip), 2]);
-        values[59..62].copy_from_slice(&[host.cr0, host.cr3, host.cr4]);
-        values[62..67].copy_from_slice(&[
+        values[48..53].fill(0);
+        values[53..66].fill(0);
+        values[66..73].copy_from_slice(&[
+            0x400,
+            u64::from(guest_rsp),
+            u64::from(guest_rip),
+            2,
+            0,
+            0,
+            0,
+        ]);
+        values[73..76].copy_from_slice(&[host.cr0, host.cr3, host.cr4]);
+        values[76..85].copy_from_slice(&[
+            host.fs_base,
+            host.gs_base,
             host.tr_base,
             host.gdtr_base,
             host.idtr_base,
+            host.sysenter_esp,
+            host.sysenter_eip,
             host.stack_pointer,
             host.instruction_pointer,
         ]);
+        values[52] = u64::from(host.sysenter_cs);
         Self::new(values, controls)
     }
 
@@ -536,6 +563,9 @@ impl MinimalVmcsLaunch {
             || value(0x6800)? & ((1 << 31) | 1) != 0
             || value(0x6804)? & (1 << 5) != 0
             || value(0x2806)? & ((1 << 10) | (1 << 8)) != 0
+            || value(0x2c02)? & ((1 << 10) | (1 << 8)) != (1 << 10) | (1 << 8)
+            || !valid_pat(value(0x2804)?)
+            || !valid_pat(value(0x2c00)?)
             || guest_rflags & 2 == 0
             || guest_rip > u16::MAX as u64
             || host_rsp == 0
@@ -546,13 +576,20 @@ impl MinimalVmcsLaunch {
         {
             return Err(VmxError::InvalidControl);
         }
-        for selector in [0x0c00, 0x0c02, 0x0c04, 0x0c06, 0x0c08] {
+        for selector in [0x0c00, 0x0c02, 0x0c04, 0x0c06, 0x0c08, 0x0c0a] {
             if value(selector)? & 7 != 0 {
                 return Err(VmxError::InvalidControl);
             }
         }
-        if value(0x0c0c)? & 7 != 0 || value(0x0c0c)? == 0 {
+        if value(0x0c02)? == 0 || value(0x0c0c)? & 7 != 0 || value(0x0c0c)? == 0 {
             return Err(VmxError::InvalidControl);
+        }
+        for address in [
+            0x6c06, 0x6c08, 0x6c0a, 0x6c0c, 0x6c0e, 0x6c10, 0x6c12, 0x6c14, 0x6c16,
+        ] {
+            if !canonical(value(address)?) {
+                return Err(VmxError::InvalidControl);
+            }
         }
         Ok(())
     }
@@ -569,6 +606,18 @@ impl MinimalVmcsLaunch {
 const fn canonical(address: u64) -> bool {
     let upper = address >> 48;
     upper == 0 || upper == 0xffff
+}
+
+const fn valid_pat(pat: u64) -> bool {
+    let mut index = 0;
+    while index < 8 {
+        let entry = ((pat >> (index * 8)) & 0xff) as u8;
+        if !matches!(entry, 0 | 1 | 4 | 5 | 6 | 7) {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }
 
 /// Narrow unsafe-instruction boundary. A bare-metal adapter implements these
@@ -1131,10 +1180,17 @@ mod tests {
                 cr3: 0x10_0000,
                 cr4: 0x2020,
                 efer: 0xd00,
+                pat: 0x0007_0406_0007_0406,
+                perf_global_control: 0,
                 selectors: [16, 8, 16, 16, 0, 0, 24],
+                fs_base: 0,
+                gs_base: 0,
                 tr_base: 0xffff_8000_0000_3000,
                 gdtr_base: 0xffff_8000_0000_4000,
                 idtr_base: 0xffff_8000_0000_5000,
+                sysenter_cs: 0,
+                sysenter_esp: 0,
+                sysenter_eip: 0,
                 stack_pointer: 0xffff_8000_0000_6000,
                 instruction_pointer: 0xffff_8000_0000_7000,
             },
@@ -1320,6 +1376,27 @@ mod tests {
         let ept = EptPointer::new(PhysAddr::new(0x12_0000).unwrap(), true).unwrap();
         let launch = minimal_launch(ept);
         assert_eq!(launch.writes().len(), VMCS_MINIMAL_LAUNCH_FIELDS);
+        let mut values = [0u64; VMCS_MINIMAL_LAUNCH_FIELDS];
+        for (destination, write) in values.iter_mut().zip(launch.writes()) {
+            *destination = write.value();
+        }
+        let field = |encoding| {
+            MINIMAL_LAUNCH_FIELD_ENCODINGS
+                .iter()
+                .position(|candidate| *candidate == encoding)
+                .unwrap()
+        };
+        values[field(0x6c06)] = 0x0001_0000_0000_0000;
+        assert_eq!(
+            MinimalVmcsLaunch::new(values, permissive_control_policy()),
+            Err(VmxError::InvalidControl)
+        );
+        values[field(0x6c06)] = 0;
+        values[field(0x2c00)] = 2;
+        assert_eq!(
+            MinimalVmcsLaunch::new(values, permissive_control_policy()),
+            Err(VmxError::InvalidControl)
+        );
 
         let mut controller = VmxController::new(EmulatedVmx::default(), capabilities());
         controller.enter_root(vmxon).unwrap();

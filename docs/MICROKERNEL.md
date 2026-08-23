@@ -657,7 +657,7 @@ failure EPT violation with a hardware-valid guest-physical address inside the
 exact expected 4 KiB monitor-private page. VMREAD failure, malformed access
 qualification, another exit reason, or an adjacent-page access leaves the
 controller outside `GuestRunning` and cannot resume uncertain state.
-Minimal launch programming is now one fixed 67-field VMCS specification. It
+Minimal launch programming is now one fixed 85-field VMCS specification. It
 preflights field widths, exact EPT identity, all five hardware control masks,
 long-mode entry/exit state, segment selectors and access rights, canonical
 entry/stack pointers, and the invalid guest-link sentinel before the first
@@ -673,7 +673,12 @@ only the latter creates the one-use `VmExitPending` state accepted by the exit
 decoder. The canonical guest state is now a fully specified unrestricted
 real-mode context, including all segment selectors, limits, bases, access
 rights, and descriptor-table state, so the isolation probe needs no guest page
-tables before touching the denied GPA.
+tables before touching the denied GPA. Guest debug, PAT, performance,
+interruptibility, activity, SMBASE, and SYSENTER state and host PAT,
+performance, FS/GS bases, and SYSENTER state are also written explicitly;
+launch no longer relies on unspecified post-`VMCLEAR` contents. Host-loaded
+addresses must be canonical, host CS/TR must be nonzero ring-zero selectors,
+and every PAT entry is validated before the first `VMWRITE`.
 The opt-in `vmx-root-probe` kernel image now provides eight statically owned,
 page-aligned pages and resolves their exact supervisor-writable physical
 backing through the active CR3. It rejects aliases and misalignment, builds a
@@ -686,7 +691,7 @@ the exact read-only EPT violation, requires successful `VMXOFF`, restores the
 original CR4, and emits a bounded debug-port stage trace. Any uncertain teardown
 state enters an interrupt-disabled halt loop instead of restoring or resuming.
 
-On 2026-08-23 the signed Windows WHP runner admitted the exact version-1 probe
+On 2026-08-23 the signed Windows WHP runner admitted the exact version-2 probe
 image and observed entry byte `d0`, followed by failure byte `e0`: WHP cleared
 CPUID.1 ECX VMX for this guest, so the kernel rejected the platform before any
 VMX MSR read or privileged VMX operation. QEMU 11.1 TCG also explicitly reported
