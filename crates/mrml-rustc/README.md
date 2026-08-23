@@ -2439,8 +2439,9 @@ immutable reference to the candidate rather than a copied value; the compiler
 backs that borrow with the candidate's temporary stack slot, limits it to the
 lazy predicate evaluation, and preserves exact producer integer types. An
 existing `None` skips the predicate, while a false result changes `Some` to
-`None`. Additional consumers of the filtered option remain tied to the broader
-internal Option-producer generalization.
+`None`. Filtered options, including multiple filters in source order, feed the
+same unwrap, expect, unsafe unchecked extraction, fallback, closure-predicate,
+and mapping consumers as direct checked producers.
 
 Checked-option `map_or` evaluates its default eagerly, then executes its
 bounded one-argument mapping closure only for `Some`. The closure may capture
