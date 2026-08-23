@@ -39,7 +39,11 @@ retaining the evidence needed for engineering work.
 The durable OS direction is split by purpose: [architecture](docs/ARCHITECTURE.md),
 [security boundaries](docs/SECURITY.md), [dependency-ordered roadmap](docs/ROADMAP.md),
 [application platform](docs/APPLICATION_PLATFORM.md), and
-[context-loss recovery](docs/RECOVERY.md). `docs/MICROKERNEL.md` remains the
+[context-loss recovery](docs/RECOVERY.md). The
+[Engineering Constitution](docs/ENGINEERING_CONSTITUTION.md) is normative for
+complexity, authority, dependencies, compatibility, and major design changes;
+[EULOGY.md](EULOGY.md) records historical inspiration without defining
+architecture. `docs/MICROKERNEL.md` remains the
 detailed implementation and evidence ledger. Architecture goals in those files
 are not completion claims.
 

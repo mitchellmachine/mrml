@@ -3,6 +3,13 @@
 Use this procedure when prior conversations, agent memory, local notes, signing
 artifacts, or development context are unavailable. Git is authoritative.
 
+Read `docs/ENGINEERING_CONSTITUTION.md` before proposing major architecture. It
+is normative project policy. `EULOGY.md` records Terry A. Davis and TempleOS as
+historical inspiration for whole-system understandability, but it does not
+override MRML's security architecture. Preserve MRML's independent technical
+identity, memory safety, capabilities, isolation, userspace services, VM
+compartments, and modern hardware protection.
+
 Patent research is also durable repository state. Before repeating a search,
 read `docs/patents/README.md`, its status registers, and `REVIEW_LOG.md`.
 Resume from recorded mechanisms, claims, families, jurisdictions, official

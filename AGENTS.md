@@ -8,12 +8,19 @@ Before changing kernel, VMM, boot, signing, protected-execution, capability,
 IPC, device, or security code, read completely:
 
 1. `README.md`
-2. `docs/ARCHITECTURE.md`
-3. `docs/SECURITY.md`
-4. `docs/APPLICATION_PLATFORM.md`
-5. `docs/ROADMAP.md`
-6. `docs/RECOVERY.md`
-7. `docs/MICROKERNEL.md`
+2. `docs/ENGINEERING_CONSTITUTION.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/SECURITY.md`
+5. `docs/APPLICATION_PLATFORM.md`
+6. `docs/ROADMAP.md`
+7. `docs/RECOVERY.md`
+8. `docs/MICROKERNEL.md`
+
+Treat `docs/ENGINEERING_CONSTITUTION.md` as normative before introducing major
+architecture. Apply its lightweight complexity score to major subsystem
+proposals, not routine work. If a proposal conflicts, identify the conflict and
+propose an explicit amendment rather than bypassing the rule. `EULOGY.md` is
+historical inspiration only and never overrides MRML's security architecture.
 
 Treat the README contribution, testing, provenance, dependency, formatting,
 and claims rules as hard acceptance gates. Inspect `git status`, recent

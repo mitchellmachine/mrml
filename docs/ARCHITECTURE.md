@@ -6,7 +6,10 @@ are normative in [SECURITY.md](SECURITY.md); dependency order is in
 [ROADMAP.md](ROADMAP.md); the application contract is in
 [APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md); context-loss recovery is in
 [RECOVERY.md](RECOVERY.md); compiler direction is in
-[COMPILER.md](COMPILER.md).
+[COMPILER.md](COMPILER.md). The normative cross-cutting engineering and
+complexity rules are in
+[ENGINEERING_CONSTITUTION.md](ENGINEERING_CONSTITUTION.md); historical
+inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy.
 
 ## Status vocabulary
 
