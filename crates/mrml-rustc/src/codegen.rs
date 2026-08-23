@@ -842,6 +842,7 @@ pub fn compile_x86_64_function_with_options<
         saved_parameter_slots,
         locals: [None; MAX_PARAMETERS],
         saved_locals: 0,
+        next_local_id: 0,
         evaluation_depth: 0,
         runtime_call_depth: 0,
         runtime_call_names: [None; 8],
@@ -1900,11 +1901,29 @@ fn runtime_type_from_array_element(element: RuntimeArrayElementType) -> RuntimeE
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeLocalId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeLocal<'source> {
+    id: RuntimeLocalId,
     name: &'source str,
     ty: RuntimeExpressionType,
     mutable: bool,
     stack_slots: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePlaceBase {
+    Local { id: RuntimeLocalId, index: usize },
+    Parameter { index: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimePlace<'source> {
+    base: RuntimePlaceBase,
+    projection: Option<crate::parser::AssignmentProjection<'source>>,
+    ty: RuntimeExpressionType,
+    mutable: bool,
 }
 
 fn runtime_array_type(text: &str) -> Option<RuntimeExpressionType> {
@@ -1973,6 +1992,21 @@ fn runtime_raw_pointer_type(text: &str) -> Option<RuntimeExpressionType> {
         name => RuntimeArrayElementType::Integer(Some(crate::IntegerType::from_name(name)?)),
     };
     Some(RuntimeExpressionType::RawPointer { pointee, mutable })
+}
+
+fn runtime_type_from_text(text: &str) -> Option<RuntimeExpressionType> {
+    runtime_array_type(text)
+        .or_else(|| runtime_tuple_type(text))
+        .or_else(|| runtime_reference_type(text))
+        .or_else(|| runtime_raw_pointer_type(text))
+        .or_else(|| match text {
+            "()" => Some(RuntimeExpressionType::Unit),
+            "bool" => Some(RuntimeExpressionType::Bool),
+            "char" => Some(RuntimeExpressionType::Char),
+            name => Some(RuntimeExpressionType::Integer(Some(
+                crate::IntegerType::from_name(name)?,
+            ))),
+        })
 }
 
 fn runtime_type_stack_slots(ty: RuntimeExpressionType) -> usize {
@@ -6278,6 +6312,7 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     saved_parameter_slots: usize,
     locals: [Option<RuntimeLocal<'tree>>; MAX_PARAMETERS],
     saved_locals: usize,
+    next_local_id: usize,
     evaluation_depth: usize,
     runtime_call_depth: usize,
     runtime_call_names: [Option<&'tree str>; 8],
@@ -6301,6 +6336,122 @@ impl<
                     .checked_add(local.stack_slots)
                     .ok_or(self.error(CodegenErrorKind::OutputTooSmall))
             })
+    }
+
+    fn push_runtime_local(
+        &mut self,
+        name: &'tree str,
+        ty: RuntimeExpressionType,
+        mutable: bool,
+        stack_slots: usize,
+    ) -> Result<(), CodegenError> {
+        if self.saved_locals == MAX_PARAMETERS {
+            return Err(self.error(CodegenErrorKind::TooManyRuntimeLocals));
+        }
+        let id = RuntimeLocalId(self.next_local_id);
+        self.next_local_id = self
+            .next_local_id
+            .checked_add(1)
+            .ok_or(self.error(CodegenErrorKind::TooManyRuntimeLocals))?;
+        self.locals[self.saved_locals] = Some(RuntimeLocal {
+            id,
+            name,
+            ty,
+            mutable,
+            stack_slots,
+        });
+        self.saved_locals += 1;
+        Ok(())
+    }
+
+    fn resolve_assignment_place<'assignment>(
+        &self,
+        assignment: &'assignment crate::Assignment<'assignment>,
+    ) -> Result<RuntimePlace<'assignment>, CodegenError> {
+        let name = assignment.binding_name();
+        let (base, ty, binding_mutable) = if let Some((index, local)) = self.locals
+            [..self.saved_locals]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, local)| {
+                local
+                    .filter(|local| local.name == name)
+                    .map(|local| (index, local))
+            }) {
+            (
+                RuntimePlaceBase::Local {
+                    id: local.id,
+                    index,
+                },
+                local.ty,
+                local.mutable,
+            )
+        } else if let Some((index, parameter)) = self
+            .function
+            .parameters()
+            .iter()
+            .flatten()
+            .enumerate()
+            .find(|(_, parameter)| parameter.name == name)
+        {
+            (
+                RuntimePlaceBase::Parameter { index },
+                runtime_type_from_text(parameter.ty.text)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?,
+                false,
+            )
+        } else {
+            return Err(self.error(CodegenErrorKind::UnknownRuntimeName));
+        };
+        let mutable = match assignment.projection {
+            Some(crate::parser::AssignmentProjection::Dereference { .. }) => match ty {
+                RuntimeExpressionType::Reference { mutable, .. }
+                | RuntimeExpressionType::RawPointer { mutable, .. } => mutable,
+                _ => binding_mutable,
+            },
+            Some(crate::parser::AssignmentProjection::Index { .. }) => match ty {
+                RuntimeExpressionType::Reference { mutable, .. } => mutable,
+                _ => binding_mutable,
+            },
+            _ => binding_mutable,
+        };
+        Ok(RuntimePlace {
+            base,
+            projection: assignment.projection,
+            ty,
+            mutable,
+        })
+    }
+
+    fn resolved_local(
+        &self,
+        place: RuntimePlace<'_>,
+    ) -> Result<(usize, RuntimeLocal<'tree>), CodegenError> {
+        let (id, index) = match place.base {
+            RuntimePlaceBase::Local { id, index } => (id, index),
+            RuntimePlaceBase::Parameter { index } => {
+                if self
+                    .function
+                    .parameters()
+                    .get(index)
+                    .and_then(|parameter| *parameter)
+                    .is_none()
+                {
+                    return Err(self.error(CodegenErrorKind::UnknownRuntimeName));
+                }
+                return Err(self.error(CodegenErrorKind::ImmutableAssignment));
+            }
+        };
+        let local = self
+            .locals
+            .get(index)
+            .and_then(|local| *local)
+            .ok_or(self.error(CodegenErrorKind::UnknownRuntimeName))?;
+        if local.id != id {
+            return Err(self.error(CodegenErrorKind::UnknownRuntimeName));
+        }
+        Ok((index, local))
     }
 
     fn local_stack_slots_from(&self, index: usize) -> Result<usize, CodegenError> {
@@ -6827,13 +6978,7 @@ impl<
         }
         for parameter in target.parameters[..target.parameter_count].iter().flatten() {
             let ty = runtime_type_from_scalar(parameter.ty);
-            self.locals[self.saved_locals] = Some(RuntimeLocal {
-                name: parameter.name,
-                ty,
-                mutable: false,
-                stack_slots: runtime_local_stack_slots(ty),
-            });
-            self.saved_locals += 1;
+            self.push_runtime_local(parameter.name, ty, false, runtime_local_stack_slots(ty))?;
         }
         self.evaluation_depth -= argument_slots;
         let body =
@@ -12186,14 +12331,7 @@ impl<
         })();
         self.width = previous_width;
         emission?;
-        self.locals[self.saved_locals] = Some(RuntimeLocal {
-            name: local.name,
-            ty: local_type,
-            mutable: local.mutable,
-            stack_slots,
-        });
-        self.saved_locals += 1;
-        Ok(())
+        self.push_runtime_local(local.name, local_type, local.mutable, stack_slots)
     }
 
     fn emit_scoped_local_cleanup(&mut self, checkpoint: usize) -> Result<(), CodegenError> {
@@ -12307,10 +12445,6 @@ impl<
         assignment: &crate::Assignment<'_>,
         body_start: usize,
     ) -> Result<(), CodegenError> {
-        if assignment.dereferences() {
-            return self
-                .emit_dereference_assignment::<MAX_EXPRESSION_NODES>(assignment, body_start);
-        }
         if assignment.binding_name() == "_" {
             if assignment.index().is_some()
                 || assignment.operator != crate::AssignmentOperator::Assign
@@ -12344,22 +12478,25 @@ impl<
             self.width = previous_width;
             return emission;
         }
-        if assignment.index().is_some() {
-            let target_type = self.locals[..self.saved_locals]
-                .iter()
-                .rev()
-                .flatten()
-                .find(|local| local.name == assignment.binding_name())
-                .map(|local| local.ty)
-                .or_else(|| {
-                    self.function
-                        .parameters()
-                        .iter()
-                        .flatten()
-                        .find(|parameter| parameter.name == assignment.binding_name())
-                        .and_then(|parameter| runtime_reference_type(parameter.ty.text))
-                });
-            if let Some(RuntimeExpressionType::Reference {
+        let place = self
+            .resolve_assignment_place(assignment)
+            .map_err(|error| CodegenError {
+                kind: error.kind,
+                span: translate_span(body_start, assignment.name_span),
+            })?;
+        if matches!(
+            place.projection,
+            Some(crate::parser::AssignmentProjection::Dereference { .. })
+        ) {
+            return self.emit_dereference_assignment::<MAX_EXPRESSION_NODES>(
+                assignment, body_start, place,
+            );
+        }
+        if matches!(
+            place.projection,
+            Some(crate::parser::AssignmentProjection::Index { .. })
+        ) {
+            if let RuntimeExpressionType::Reference {
                 target:
                     RuntimeReferenceTarget::Array {
                         element,
@@ -12367,46 +12504,36 @@ impl<
                         layout,
                     },
                 mutable,
-            }) = target_type
+            } = place.ty
             {
                 return self.emit_reference_array_assignment::<MAX_EXPRESSION_NODES>(
                     assignment, body_start, element, count, layout, mutable,
                 );
             }
-            if let Some(RuntimeExpressionType::Reference {
+            if let RuntimeExpressionType::Reference {
                 target: RuntimeReferenceTarget::Slice(element),
                 mutable,
-            }) = target_type
+            } = place.ty
             {
                 return self.emit_slice_assignment::<MAX_EXPRESSION_NODES>(
                     assignment, body_start, element, mutable,
                 );
             }
         }
-        let index = self.locals[..self.saved_locals]
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, local)| {
-                local
-                    .filter(|local| local.name == assignment.binding_name())
-                    .map(|_| index)
-            })
-            .ok_or(CodegenError {
-                kind: CodegenErrorKind::UnknownRuntimeName,
-                span: translate_span(body_start, assignment.name_span),
-            })?;
-        let target = self.locals[index].ok_or(CodegenError {
-            kind: CodegenErrorKind::UnknownRuntimeName,
-            span: translate_span(body_start, assignment.name_span),
-        })?;
-        if !target.mutable {
+        if !place.mutable {
             return Err(CodegenError {
                 kind: CodegenErrorKind::ImmutableAssignment,
                 span: translate_span(body_start, assignment.name_span),
             });
         }
-        if assignment.index().is_some() {
+        let (index, target) = self.resolved_local(place).map_err(|error| CodegenError {
+            kind: error.kind,
+            span: translate_span(body_start, assignment.name_span),
+        })?;
+        if matches!(
+            place.projection,
+            Some(crate::parser::AssignmentProjection::Index { .. })
+        ) {
             return self.emit_indexed_assignment::<MAX_EXPRESSION_NODES>(
                 assignment, body_start, index, target,
             );
@@ -12900,6 +13027,7 @@ impl<
         &mut self,
         assignment: &crate::Assignment<'_>,
         body_start: usize,
+        place: RuntimePlace<'_>,
     ) -> Result<(), CodegenError> {
         if assignment.index().is_some() {
             return Err(CodegenError {
@@ -12908,33 +13036,12 @@ impl<
             });
         }
         let name = assignment.binding_name();
-        let target_type = self.locals[..self.saved_locals]
-            .iter()
-            .rev()
-            .flatten()
-            .find(|local| local.name == name)
-            .map(|local| local.ty)
-            .or_else(|| {
-                self.function
-                    .parameters()
-                    .iter()
-                    .flatten()
-                    .find(|parameter| parameter.name == name)
-                    .and_then(|parameter| {
-                        runtime_reference_type(parameter.ty.text)
-                            .or_else(|| runtime_raw_pointer_type(parameter.ty.text))
-                    })
-            })
-            .ok_or(CodegenError {
-                kind: CodegenErrorKind::UnknownRuntimeName,
-                span: translate_span(body_start, assignment.name_span),
-            })?;
-        let (pointee, mutable) = match target_type {
+        let pointee = match place.ty {
             RuntimeExpressionType::Reference {
                 target: RuntimeReferenceTarget::Scalar(pointee),
-                mutable,
+                ..
             }
-            | RuntimeExpressionType::RawPointer { pointee, mutable } => (pointee, mutable),
+            | RuntimeExpressionType::RawPointer { pointee, .. } => pointee,
             _ => {
                 return Err(CodegenError {
                     kind: CodegenErrorKind::RuntimeTypeMismatch,
@@ -12942,7 +13049,7 @@ impl<
                 });
             }
         };
-        if !mutable {
+        if !place.mutable {
             return Err(CodegenError {
                 kind: CodegenErrorKind::ImmutableAssignment,
                 span: translate_span(body_start, assignment.name_span),
@@ -15573,6 +15680,84 @@ fn runtime_width(ty: &str) -> Option<RuntimeWidth> {
 mod tests {
     use super::*;
     use crate::{Item, NoConstants, Parser, TargetLayout, analyze_constants};
+
+    #[test]
+    fn runtime_place_ids_survive_shadowing_and_scope_cleanup() {
+        let module = Parser::new("fn value() -> u64 { 0 }")
+            .parse_module::<1, 4>()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let resolver = NoConstants;
+        let mut emitter = RuntimeEmitter::<_, 64, 4> {
+            bytes: [0; 64],
+            length: 0,
+            trap_patches: [0; 64],
+            trap_count: 0,
+            function: &function,
+            resolver: &resolver,
+            abi: X86_64Abi::Windows,
+            width: runtime_width("u64").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 0,
+            locals: [None; 4],
+            saved_locals: 0,
+            next_local_id: 0,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        emitter
+            .push_runtime_local(
+                "value",
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                true,
+                1,
+            )
+            .unwrap();
+        emitter
+            .push_runtime_local(
+                "value",
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                true,
+                1,
+            )
+            .unwrap();
+        let assignment = crate::Assignment {
+            name: "value",
+            name_span: Span { start: 0, end: 5 },
+            projection: None,
+            operator: crate::AssignmentOperator::Assign,
+            value: "1",
+            value_span: Span { start: 8, end: 9 },
+        };
+        assert_eq!(
+            emitter.resolve_assignment_place(&assignment).unwrap().base,
+            RuntimePlaceBase::Local {
+                id: RuntimeLocalId(1),
+                index: 1,
+            }
+        );
+        emitter.truncate_scoped_locals(1).unwrap();
+        emitter
+            .push_runtime_local(
+                "value",
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                true,
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            emitter.resolve_assignment_place(&assignment).unwrap().base,
+            RuntimePlaceBase::Local {
+                id: RuntimeLocalId(2),
+                index: 1,
+            }
+        );
+    }
 
     #[test]
     fn emits_a_windows_and_system_v_compatible_integer_return() {

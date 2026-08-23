@@ -144,9 +144,13 @@ blocks/edges. Assignment targets now retain a source-independent base binding
 plus one explicit direct, dereference, index, or numeric tuple-field projection;
 index source and spans are captured once, and ambiguous non-numeric tuple
 assignment projections fail closed. Runtime typing/emission still rediscovers
-local identity and type information and there is not yet a projection list,
-move path, loan, stable local ID, or CFG. The structured parser representation
-is therefore the first prerequisite, not a claim of ownership checking.
+type information recursively. Runtime locals now receive checked monotonic IDs
+that are not recycled after scope cleanup, and assignment writes resolve once
+to a typed local-ID/parameter base plus the parsed projection before emission.
+Expression reads and parser/semantic locals still resolve by name, and there is
+not yet a general projection list, typed body-wide place table, move path, loan,
+or CFG. This runtime write-place foundation is therefore an incremental
+prerequisite, not a claim of ownership checking.
 
 ## Modern trait-solver roadmap
 

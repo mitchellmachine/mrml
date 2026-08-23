@@ -2831,6 +2831,24 @@ typed place analysis only. Stable local/place IDs, arbitrary projection lists,
 explicit read/write/move/borrow accesses, CFG blocks, loans, regions, and a
 borrow checker remain unimplemented.
 
+Runtime write places now add a stable-identity layer above that syntax. Each
+active local and each inlined-helper parameter receives a checked monotonic
+`RuntimeLocalId`; popping scoped locals never rewinds the allocator, so a later
+binding cannot inherit the identity of an earlier binding merely by reusing its
+fixed-array or stack position. Non-wildcard assignments resolve once to a typed
+base (exact local ID plus current storage index, or parameter index), the parsed
+projection, and effective mutability. A local store validates the ID before
+using its storage index. An adversarial unit test covers same-name shadowing,
+scope cleanup, storage-index reuse, and monotonic identity. Expression reads,
+parser/semantic local IDs, arbitrary projection lists, body-wide access facts,
+CFGs, moves, loans, and regions remain outside this slice.
+
+The runtime-place-identity milestone passed all 563 compiler and driver tests
+on Windows gnullvm and all 563 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Existing native-object replacement tests
+continue to cover direct, indexed, tuple-field, dereference, scoped, shadowed,
+and inlined-helper assignment paths on COFF and ELF64.
+
 The structured-place milestone passed all 562 compiler and driver tests on
 Windows gnullvm and all 562 in release mode on native Arch Linux WSL, plus
 warnings-denied Clippy on both hosts. Verification temporarily used the last

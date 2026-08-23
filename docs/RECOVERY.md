@@ -131,6 +131,17 @@ remain parseable. The next dependency is stable bounded local/place identity
 and projection lists in a typed body IR, followed by explicit access kinds and
 CFG edges; move/loan/region claims remain unimplemented.
 
+Runtime assignment lowering has the first stable-identity slice. Every emitted
+local and inlined-helper parameter receives a checked monotonic `RuntimeLocalId`;
+scope cleanup clears active stack entries without rewinding that ID sequence.
+Each non-wildcard assignment resolves once to a typed `RuntimePlace` containing
+either the exact local ID and current storage index or a parameter index, plus
+the parsed projection and effective mutability. Resolution validates the ID
+again before a local store. Do not confuse the storage index with identity or
+reintroduce separate name searches in assignment families. Expression reads,
+parser-level IDs, general projection lists, body-wide access facts, and CFG
+analysis are still absent and are the next recovery boundary.
+
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains
 edition 2024 until a pinned toolchain and complete per-package migration are

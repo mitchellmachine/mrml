@@ -395,3 +395,16 @@ place representation; it introduces no novel algorithm, ABI, protocol,
 cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary compiler place representation.
+
+## 2026-08-23 — monotonic runtime local identities
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Runtime locals receive checked monotonic identities that remain distinct when
+scope cleanup permits a fixed storage index to be reused. Assignment lowering
+resolves a conventional typed base/projection record once and validates the
+identity before a local store. This is ordinary compiler symbol/place handling;
+it introduces no novel algorithm, ABI, protocol, cryptographic construction, or
+optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler local/place identity.
