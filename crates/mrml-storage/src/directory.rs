@@ -69,6 +69,83 @@ impl<const N: usize> DirectoryAncestryProof<N> {
             None
         }
     }
+
+    pub fn successor_closure<const M: usize>(
+        &self,
+    ) -> Result<DirectorySuccessorClosure<M>, DirectoryClosureError> {
+        let mut closure = DirectorySuccessorClosure {
+            objects: [None; M],
+            depths: [0; M],
+            count: 0,
+        };
+        closure.insert(self.moved, usize::MAX)?;
+        for index in 0..self.source_path.count {
+            let object =
+                self.source_path.objects[index].ok_or(DirectoryClosureError::InvalidProof)?;
+            closure.insert(object, self.source_path.count - index)?;
+        }
+        for index in 0..self.destination_path.count {
+            let object =
+                self.destination_path.objects[index].ok_or(DirectoryClosureError::InvalidProof)?;
+            closure.insert(object, self.destination_path.count - index)?;
+        }
+        Ok(closure)
+    }
+}
+
+pub struct DirectorySuccessorClosure<const N: usize> {
+    objects: [Option<StorageObjectId>; N],
+    depths: [usize; N],
+    count: usize,
+}
+
+impl<const N: usize> DirectorySuccessorClosure<N> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub const fn object(&self, index: usize) -> Option<StorageObjectId> {
+        if index < self.count {
+            self.objects[index]
+        } else {
+            None
+        }
+    }
+
+    fn insert(
+        &mut self,
+        object: StorageObjectId,
+        depth: usize,
+    ) -> Result<(), DirectoryClosureError> {
+        if let Some(index) = self.objects[..self.count]
+            .iter()
+            .position(|entry| *entry == Some(object))
+        {
+            if depth > self.depths[index] {
+                self.depths[index] = depth;
+            }
+            return Ok(());
+        }
+        if self.count == N {
+            return Err(DirectoryClosureError::Capacity);
+        }
+        let index = self.depths[..self.count]
+            .iter()
+            .position(|current| *current < depth)
+            .unwrap_or(self.count);
+        for slot in (index..self.count).rev() {
+            self.objects[slot + 1] = self.objects[slot];
+            self.depths[slot + 1] = self.depths[slot];
+        }
+        self.objects[index] = Some(object);
+        self.depths[index] = depth;
+        self.count += 1;
+        Ok(())
+    }
 }
 
 /// Immutable selected-generation directory metadata used for ancestry proof.
@@ -851,6 +928,12 @@ pub enum DirectoryAncestryError<E> {
     Backend(E),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryClosureError {
+    InvalidProof,
+    Capacity,
+}
+
 /// Persistence boundary for an unreachable directory metadata successor.
 ///
 /// # Safety
@@ -1557,6 +1640,17 @@ mod tests {
         assert_eq!(proof.destination_path_len(), 2);
         assert_eq!(proof.destination_ancestor(0), Some(object(2)));
         assert_eq!(proof.destination_ancestor(1), Some(object(1)));
+        let closure = proof.successor_closure::<4>().unwrap();
+        assert_eq!(closure.len(), 4);
+        assert_eq!(closure.object(0), Some(object(9)));
+        assert_eq!(closure.object(1), Some(object(3)));
+        assert_eq!(closure.object(2), Some(object(2)));
+        assert_eq!(closure.object(3), Some(object(1)));
+        assert_eq!(closure.object(4), None);
+        assert_eq!(
+            proof.successor_closure::<3>().err(),
+            Some(DirectoryClosureError::Capacity)
+        );
         assert!(matches!(
             prove_directory_move_ancestry::<2, _>(
                 object(1),

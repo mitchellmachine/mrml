@@ -2728,10 +2728,15 @@ to equal the source directory. Reusing a proof after either bound generation
 advances fails. The proof retains fixed-capacity source-to-root and destination-
 to-root object paths, and exposes only bounded indexed access to them. Both path
 starts bind their independently loaded exact generations. This makes only the
-bounded in-memory namespace transition
-cycle-safe. Transactional publication must propagate every changed directory
-generation through its parent entry and continue through the complete affected
-ancestor closure to the root; publishing only source, destination, and child
+bounded in-memory namespace transition cycle-safe. A separate fixed-capacity
+closure planner inserts the moved directory first, merges both ancestor paths,
+deduplicates their shared suffix, orders deeper objects before shallower
+parents, leaves the root last, and rejects insufficient output capacity. It
+produces identities and order only; canonical successor construction and
+publication remain pending. Transactional publication must propagate every
+changed directory generation through its parent entry and continue through the
+complete affected ancestor closure to the root; publishing only source,
+destination, and child
 would be rejected by reachable-tree validation. That propagation remains
 pending. The object-ID allocator is volatile simulation state and must be
 persisted in the same future transaction before create becomes crash-safe.

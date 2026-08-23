@@ -231,7 +231,10 @@ authority; unrelated domains continue.
    requires the moved directory's exact generation and current source-parent
    link. The proof retains the exact bounded source and destination paths to the
    root, including their independently checked starting generations.
-   Transactional publication must propagate each changed child generation
+   A fixed-capacity closure planner now merges both paths with the moved object,
+   deduplicates shared ancestors, rejects insufficient output capacity, and
+   orders children before parents with the root last. Transactional publication
+   must propagate each changed child generation
    through the complete affected ancestor closure to the root; a three-object
    source/destination/child shortcut would fail recovery validation. That
    propagation and allocator persistence remain pending, so directory operations

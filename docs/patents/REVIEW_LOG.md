@@ -870,6 +870,7 @@ MRML source: `crates/mrml-storage/src/directory.rs`.
 The service performs a conventional fixed-capacity parent-chain walk over one
 immutable filesystem generation, binds the moved directory's exact generation
 and source parent, retains bounded source and destination ancestor paths, and
+merges them into a conventional deduplicated child-before-parent worklist. It
 rejects cycles, repeated objects, stale state, broken
 links, backend uncertainty, and capacity exhaustion before a directory move.
 This adds no novel namespace structure, graph algorithm,

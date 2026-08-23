@@ -258,7 +258,9 @@ the moved object, repeated ancestors, stale destination state, broken parent
 links, backend uncertainty, and capacity exhaustion. The proof now also loads
 the moved directory's exact generation and requires its current parent to be the
 source directory. The opaque proof retains both bounded source-to-root and
-destination-to-root object paths for the later successor planner. This
+destination-to-root object paths. A fixed-capacity planner merges those paths
+with the moved directory, removes shared ancestors, and orders the affected
+closure child-before-parent with the root last. This
 authorizes only the in-memory namespace transition;
 transactional successor propagation through every affected ancestor and
 crash-safe identity allocation remain pending.

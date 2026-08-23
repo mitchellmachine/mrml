@@ -32,8 +32,9 @@ pub use cow::{
 };
 pub use directory::{
     DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend, DirectoryAncestryError,
-    DirectoryAncestryProof, DirectoryError, DirectoryImage, DirectoryImageError, DirectoryState,
-    DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryUpdate, StorageObjectAllocator,
+    DirectoryAncestryProof, DirectoryClosureError, DirectoryError, DirectoryImage,
+    DirectoryImageError, DirectoryState, DirectorySuccessorClosure, DirectoryUpdateError,
+    DirectoryWriteBackend, PreparedDirectoryUpdate, StorageObjectAllocator,
     prove_directory_move_ancestry,
 };
 pub use extent::{
