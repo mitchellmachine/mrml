@@ -19,6 +19,13 @@ filesystem, compositor, surface/buffer protocol, or desktop graphics stack. The
 mediated VGPU work below supplies experimental resource/compute mechanisms; it
 does not define GUI semantics or prove accelerated presentation.
 
+Likewise, QEMU `virtio-rng-pci` and debug-console devices in recorded boot
+commands belong to the external QEMU test machine. MRML does not currently
+implement or advertise a VirtIO device. The common VMM exit/interrupt mechanisms
+and MRML-specific mediated GPU queues are foundations, not a complete virtual
+device model. A future VirtIO-GPU-compatible presentation path must coexist with
+rather than replace the authenticated signed-kernel CUDA compute path.
+
 ## Security boundary
 
 MRML assumes a conventional Windows or Linux host and its VMM process may be

@@ -133,3 +133,27 @@ Backend takeover or fallback repeats capability validation and cannot weaken the
 GUI trust boundary. Semantic AI/accessibility state remains distinct from
 untrusted pixels. Fence identities, values, ownership, overflow, and reuse are
 bounded and generational.
+
+## Virtual-device invariants
+
+Virtual NIC or device presence never grants host network, raw device, USB,
+audio, microphone, HID, bridge, passthrough, or DMA authority. Host firewall and
+network policy remain outside guest control. Capture and playback are separate;
+microphone capture is explicit, revocable, audited, and indicated by trusted
+compositor UI. Composite USB interfaces are authorized independently. Exclusive
+passthrough revokes conflicting host ownership before assignment and requires
+completed reset, DMA isolation, cleanup, and reattachment transitions.
+
+All queue descriptors, feature bits, lengths, addresses, chains, indirect
+tables, indices, and device states are adversarial. Validation precedes host
+access; reset/removal invalidates stale generations; guests never receive host
+pointers. Unknown or uncertain lifecycle, interrupt, DMA, or cleanup state fails
+closed. A virtual-device parser flaw should be contained by narrow component
+capabilities rather than imply authority over the entire host. Secure attention
+and global input remain outside every ordinary guest.
+
+A VirtIO-GPU-compatible presentation device does not replace or implicitly
+authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
+are distinct capabilities. The MRML-specific compute path retains exact signed
+kernel admission, authenticated request/completion binding, bounds, quotas,
+reset/watchdog behavior, and fallback requirements.

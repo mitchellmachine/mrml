@@ -66,6 +66,18 @@ Architectural invariants:
   compositor and never render directly to GOP, VGPU, native GPU, or scanout;
   surfaces, buffers, render devices, display outputs, fences, rendering, and
   presentation remain distinct abstractions.
+- keep a small backend-neutral paravirtualized VMM device family; use actual
+  VirtIO specifications only where compatibility is intended and label every
+  device VirtIO-compatible, VirtIO-inspired, MRML-specific, or legacy-emulated;
+- preserve MRML's signed-kernel CUDA compute mediation alongside any future
+  VirtIO-GPU display path; do not distort VirtIO-GPU or remove stronger MRML
+  capability, authentication, queue, and CUDA semantics to claim compatibility;
+- treat every guest descriptor, queue, feature, interrupt, reset, removal, and
+  device-state transition as hostile; reset invalidates stale queue state, and
+  no guest-provided pointer, length, or host address is trusted;
+- virtual NIC, audio capture/playback, USB interface, HID routing, passthrough,
+  and raw-device authorities remain explicit and independently revocable;
+  secure attention terminates in the trusted host environment.
 
 Implement OS work in the dependency order in `docs/ROADMAP.md`. Determine the
 next milestone from current code, tests, documentation, TODOs, and Git history,

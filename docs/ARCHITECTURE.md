@@ -172,6 +172,93 @@ must be preserved. Backend-specific lifecycle, memory mapping, registers, and
 exit decoding remain behind their adapters. Shared semantics belong in common
 kernel/VMM policy. Hosted WHP and KVM do not protect a guest from their host.
 
+### VMM device model
+
+The shared VMM will expose a small explicit device family, preferring
+paravirtualization over broad legacy emulation. **IMPLEMENTED:** backend-neutral
+VM lifecycle, bounded guest memory, exit decoding, interrupt injection policy,
+allowlisted scalar I/O, and MRML hypercalls. **PARTIALLY IMPLEMENTED:** the
+MRML-specific mediated GPU has authenticated bounded command/completion and
+resource queues plus reset/watchdog behavior, but is not a VirtIO GPU or general
+display device. **PLANNED:** guest console, block, network, input, graphics, and
+sound devices; PCI transport; and any required compatibility emulation. No
+VirtIO-compatible MRML device currently exists.
+
+Each device is explicitly classified as **VirtIO-compatible**,
+**VirtIO-inspired**, **MRML-specific**, or **legacy-emulated**, with supported
+features, queue formats, reset semantics, backend coverage, QEMU comparison,
+known differences, and fuzzing status recorded before compatibility claims.
+Actual VirtIO specifications govern devices advertised as compatible. Stronger
+capability semantics use an MRML-specific protocol instead of distorting
+VirtIO. Guest-visible behavior stays common across KVM and WHP/WHPX; transport,
+PCI configuration, device core logic, and backend interrupt injection remain
+separate layers.
+
+QEMU is the primary interoperability and differential-test oracle for applicable
+devices, not the security specification. Equivalent guest workloads should
+compare feature negotiation, descriptor and queue behavior, completion,
+interrupts, reset/removal, errors, and boundary cases. Agreement with QEMU alone
+does not prove specification compliance or security.
+
+Selected UART, simple HID/PS2, PCI configuration, timer, framebuffer, or storage
+emulation may support firmware, bring-up, testing, and legacy compatibility.
+Normal MRML guests use paravirtualized devices. Large legacy-hardware emulation
+does not become a foundational dependency without a concrete requirement.
+
+Every device has explicit `create -> negotiate -> activate -> operate -> reset
+-> suspend/resume (when supported) -> remove -> destroy` transitions. Reset
+invalidates every descriptor and queue generation. Shared rings are preferred
+for block, network, audio, graphics, storage, and high-rate input, avoiding a VM
+exit per small operation while validating all guest metadata. Descriptor chains
+are bounded for length, cycles, indirect entries, arithmetic, GPA range,
+direction, alignment, queue size, and live device generation. Guests never
+supply trusted host pointers.
+
+Virtual devices are security boundaries. Long term, device implementations
+should be isolated components/services with only the capabilities required for
+their backend rather than one omnipotent VMM process. Device notifications use
+a common abstraction over legacy injection where required, MSI/MSI-X-style
+virtual interrupts, and event notifications.
+
+The future display/3D device may implement applicable VirtIO-GPU interfaces,
+but it must coexist with the existing MRML-specific CUDA compute path. VirtIO-
+GPU does not silently become the CUDA ABI. Signed kernel-bundle admission,
+authenticated queues, buffer capabilities, quotas, watchdog/reset, and CPU
+fallback remain available through a separate MRML compute protocol wherever
+VirtIO cannot express them. A VM may receive display and CUDA-compute devices
+under distinct capabilities and lifecycle state.
+
+### Network, audio, USB, and input services
+
+**PLANNED:** networking remains a userspace service for native applications,
+which request bounded connection objects instead of raw packets. A VM receives
+a VirtIO-net-compatible or MRML virtual NIC only with explicit authority such as
+none, isolated, outbound-only, specifically routed, bridged, or raw access.
+Guest NIC programming cannot bypass host firewall/policy. Baseline bounded
+TX/RX, deliberate feature/ring selection, validation, interrupts, and reset
+precede multiqueue and offloads.
+
+Audio is a userspace service exposing capability-bound `AudioDevice`,
+`PlaybackStream`, `CaptureStream`, `AudioRoute`, and `AudioSession` objects.
+Playback and microphone capture are independent; capture is explicitly granted,
+revocable, audited, policy-scoped, and shown through compositor-owned trusted
+UI. VMs use a VirtIO-sound-compatible or MRML device connected to the service,
+not physical hardware unless separately granted passthrough authority.
+
+USB is managed by userspace controller/class services where practical.
+Applications receive narrow class or interface objects rather than raw USB
+transactions. Composite-device interfaces are independently grantable—for
+example, webcam video without its microphone. VM passthrough revokes conflicting
+host access first and makes reset, cleanup, DMA isolation, and reattachment
+explicit. Dedicated paravirtualized input, storage, network, and audio devices
+are preferred over emulating a USB controller merely to expose those functions.
+
+Trusted input services route keyboard, pointer, touch, pen, and gamepad events
+only to authorized native surfaces or selected VMs, optionally through
+VirtIO-input or an MRML device. A focused VM receives ordinary routed events,
+not global HID. Secure-attention sequences terminate in the trusted host and
+cannot be intercepted by applications or guests.
+
 ## Planned system services
 
 The capability-native authority broker will evaluate narrow requests and may

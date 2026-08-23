@@ -67,6 +67,21 @@ explicitly and downgrade the status rather than guessing.
   bring-up/diagnostic mechanisms. `virtual_gpu.rs` is experimental mediated GPU
   machinery. None is a compositor, surface protocol, display backend, fence
   model, or accelerated desktop implementation.
+- VMM device inventory: inspect `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`,
+  `virtual_gpu.rs`, and both native backends. Currently the common lifecycle,
+  guest-memory, exit, I/O-policy, hypercall, and interrupt mechanisms are
+  implemented; the MRML-specific mediated GPU queues are partial. No MRML
+  VirtIO, PCI device transport, UART device, block, NIC, input, sound, USB, or
+  general display device is implemented. QEMU VirtIO devices appearing in boot
+  commands are external test infrastructure, not MRML VMM implementations.
+
+For every future device, recover and update its classification, exact feature
+bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU
+differential status, KVM/WHP status, incompatibilities, fuzzing, and hardware
+evidence. Critical device semantics must live in durable documentation, not
+only source comments or old probe logs. A future VirtIO-GPU display device must
+remain separate from and coexist with the MRML-specific signed-kernel CUDA
+compute protocol.
 
 Use `rg` to locate definitions, callers, tests, TODOs, probe modes, and feature
 gates. Inspect manifests and the pinned toolchain before assuming build targets.

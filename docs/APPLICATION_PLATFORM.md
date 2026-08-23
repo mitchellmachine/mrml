@@ -256,6 +256,14 @@ interaction, media access, network use, filesystem access, and raw input remain
 separate capabilities. Remote LLM transport additionally requires explicit
 disclosure policy so secrets and private UI state are not exported implicitly.
 
+Native applications obtain networking, audio, USB classes, and input through
+capability-bound userspace services, not VMM devices or raw hardware. Network
+connection objects are distinct from raw packet authority. Audio playback is
+distinct from microphone capture. USB composite interfaces are independently
+grantable. Input is routed by trusted host services and compositor focus; raw
+global HID and secure-attention handling are never ordinary application or VM
+capabilities.
+
 ### Browser semantic interface
 
 The browser exposes a sanitized interactive document tree combining document

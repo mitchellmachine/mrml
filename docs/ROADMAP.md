@@ -60,6 +60,37 @@ and IDs never authorize, rename preserves object identity, transactions are
 all-or-nothing, covered corruption is detected, inconsistent recovery fails
 safely, and snapshots require authority without implying anti-rollback.
 
+### Phase 2 virtual-device and service progression
+
+The VMM device family proceeds in this order: serial/console, block, network,
+input, graphics, audio, additional MRML-specific transports, then compatibility
+emulation only as required. Establish common queue, lifecycle/reset, interrupt,
+PCI-transport separation, and QEMU differential harnesses before broad device
+coverage. Every applicable device must behave consistently under KVM and WHP.
+
+Networking proceeds from capability-bound network objects and a basic native
+service to packet buffers/rings, a basic backend path, firewall integration,
+then a VirtIO-net-compatible device and QEMU comparison. Multiqueue, offloads,
+and tuning follow baseline correctness and measurement.
+
+Audio proceeds from capability-bound device/playback/capture/session objects and
+an explicit timing/format model to userspace mixing, basic output, capture,
+trusted capture indication, then VirtIO-sound or an MRML virtual-audio device
+connected to the host service. Latency/jitter measurement precedes advanced
+routing and multi-device work.
+
+USB proceeds from device/interface/endpoint capabilities and a host-controller
+abstraction through enumeration and bounded descriptor parsing, then HID and
+storage classes, other classes as needed, per-interface delegation, VM
+passthrough lifecycle, and physical IOMMU/DMA validation. Legacy controller
+emulation comes only with a demonstrated compatibility need.
+
+Security gate: device creation grants no implicit backend authority; descriptors
+and guest memory are bounded and directional; stale queue state dies on reset;
+host policy cannot be bypassed by a guest; capture and playback, composite USB
+interfaces, ordinary input and secure attention, and paravirtualization versus
+passthrough remain distinct authorities.
+
 ## Phase 3 — Safe applications and trusted GUI foundation
 
 Before trusted consent UI, establish the application-facing foundation:
@@ -85,6 +116,12 @@ Before trusted consent UI, establish the application-facing foundation:
    incremental subscriptions and resynchronization.
 12. Benchmark scene updates, input-to-action latency, composition, damage,
     synchronization, scaling, takeover, and recovery.
+
+The graphics device may add VirtIO-GPU compatibility for guest display and 3D
+interoperability, with QEMU differential tests. It must preserve the existing
+MRML-specific CUDA compute protocol as a separate capability surface carrying
+signed kernel admission, authenticated queues, quotas, watchdog/reset, and CPU
+fallback. Display compatibility must not regress CUDA capability or performance.
 
 Security gate: ordinary native apps cannot introduce unsafe native code or
 ambient authority; VM transport cannot widen capabilities; applications cannot
@@ -167,6 +204,13 @@ reproducible release review, and external audit. Investigate CET/IBT only as
 defense in depth for relevant trusted native boundaries; do not claim or depend
 on enforcement until implemented and exercised. Only then consider broad
 drivers, production claims, AArch64, and RISC-V64.
+
+Guest-device fuzzing prioritizes VirtIO descriptors and indirect/cyclic chains,
+virtual-network packets, audio control, USB descriptors, PCI configuration,
+VGPU/CUDA commands, block requests, interrupt delivery, and lifecycle/reset
+transitions using malformed, truncated, oversized, repeated, and stale inputs.
+Differential tests run the same guest workload against QEMU and MRML and explain
+every guest-visible difference; matching QEMU is not itself a security proof.
 
 Every milestone requires proportional Windows gnullvm and Linux testing,
 backend-specific signed probes where applicable, exact commands/results, and
