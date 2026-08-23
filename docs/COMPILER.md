@@ -152,6 +152,12 @@ parsed projection before emission and append an ordered fact to a separate
 fixed 256-entry table. Runtime identifier loads append `Read` facts to that
 same table, including specialized tuple, array, range, and address paths that
 bypass the scalar loader; constants do not acquire local/parameter identities.
+Facts store up to four source-independent `Dereference`, `Index`, `TupleField`,
+or `Subslice` projections. Assignment projections are translated once rather
+than retained as parser objects; specialized local tuple-field, element-index,
+and local-array range reads retain their actual projection. Validation walks
+the list against the type produced by each preceding projection and rejects
+holes, invalid type transitions, out-of-range fields, and capacity overflow.
 The resolved place also classifies access intent as `Write` or
 `ReadModifyWrite`; every supported direct, tuple-field, fixed-array,
 reference-array, slice, and dereference assignment family uses that fact to
@@ -163,11 +169,12 @@ Capacity exhaustion and inconsistent internal facts fail explicitly.
 These tables cover the current runtime emission, including expanded inlined
 helper bodies; they are ephemeral compiler state rather than serialized IR.
 Expression identifiers still resolve by name before their stable fact is
-recorded, and aggregate reads currently record only the base identity rather
-than a complete projection chain. Parser/semantic locals also still resolve by
-name, and there is not yet a general projection list, complete typed body table,
-move path, borrow, loan, or CFG. This runtime place foundation is therefore an
-incremental prerequisite, not a claim of ownership checking.
+recorded. General nested read-place discovery and dereference-read projection
+are not yet centralized, although the fact representation can retain their
+future projection chains. Parser/semantic locals also still resolve by name,
+and there is not yet a complete typed body table, move path, borrow, loan, or
+CFG. This runtime place foundation is therefore an incremental prerequisite,
+not a claim of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 

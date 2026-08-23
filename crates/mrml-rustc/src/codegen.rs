@@ -10,6 +10,7 @@ const X86_64_RETURN_CONSTANT_BYTES: usize = 11;
 const MAX_X86_64_ABI_PARAMETERS: usize = 16;
 const MAX_RUNTIME_LOCAL_FACTS: usize = 256;
 const MAX_RUNTIME_PLACE_ACCESS_FACTS: usize = 256;
+const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum X86_64Abi {
@@ -76,6 +77,7 @@ pub enum CodegenErrorKind {
     TooManyRuntimeLocals,
     TooManyRuntimeLocalFacts,
     TooManyRuntimePlaceAccessFacts,
+    TooManyRuntimePlaceProjections,
     InvalidRuntimePlaceFacts,
     DuplicateLocal,
     ImmutableAssignment,
@@ -1963,6 +1965,61 @@ struct RuntimePlace<'source> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePlaceProjection {
+    Dereference,
+    Index,
+    TupleField(usize),
+    Subslice,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimePlaceProjections {
+    items: [Option<RuntimePlaceProjection>; MAX_RUNTIME_PLACE_PROJECTIONS],
+    count: usize,
+}
+
+impl RuntimePlaceProjections {
+    const EMPTY: Self = Self {
+        items: [None; MAX_RUNTIME_PLACE_PROJECTIONS],
+        count: 0,
+    };
+
+    const fn single(projection: RuntimePlaceProjection) -> Self {
+        let mut items = [None; MAX_RUNTIME_PLACE_PROJECTIONS];
+        items[0] = Some(projection);
+        Self { items, count: 1 }
+    }
+
+    fn from_assignment(
+        projection: Option<crate::parser::AssignmentProjection<'_>>,
+    ) -> Result<Self, CodegenErrorKind> {
+        let mut projections = Self::EMPTY;
+        if let Some(projection) = projection {
+            projections.push(match projection {
+                crate::parser::AssignmentProjection::Dereference { .. } => {
+                    RuntimePlaceProjection::Dereference
+                }
+                crate::parser::AssignmentProjection::Index { .. } => RuntimePlaceProjection::Index,
+                crate::parser::AssignmentProjection::TupleField { field, .. } => {
+                    RuntimePlaceProjection::TupleField(field)
+                }
+            })?;
+        }
+        Ok(projections)
+    }
+
+    fn push(&mut self, projection: RuntimePlaceProjection) -> Result<(), CodegenErrorKind> {
+        let slot = self
+            .items
+            .get_mut(self.count)
+            .ok_or(CodegenErrorKind::TooManyRuntimePlaceProjections)?;
+        *slot = Some(projection);
+        self.count += 1;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeLocalFact<'source> {
     id: RuntimeLocalId,
     name: &'source str,
@@ -1971,9 +2028,9 @@ struct RuntimeLocalFact<'source> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RuntimePlaceAccessFact<'source> {
+struct RuntimePlaceAccessFact {
     base: RuntimePlaceIdentity,
-    projection: Option<crate::parser::AssignmentProjection<'source>>,
+    projections: RuntimePlaceProjections,
     ty: RuntimeExpressionType,
     access: RuntimePlaceAccess,
     span: Span,
@@ -2062,29 +2119,78 @@ fn runtime_type_from_text(text: &str) -> Option<RuntimeExpressionType> {
         })
 }
 
-fn runtime_assignment_projection_valid(
-    ty: RuntimeExpressionType,
-    projection: Option<crate::parser::AssignmentProjection<'_>>,
+fn runtime_place_projections_valid(
+    mut ty: RuntimeExpressionType,
+    projections: RuntimePlaceProjections,
 ) -> bool {
-    match projection {
-        None => true,
-        Some(crate::parser::AssignmentProjection::Dereference { .. }) => matches!(
-            ty,
-            RuntimeExpressionType::Reference { .. } | RuntimeExpressionType::RawPointer { .. }
-        ),
-        Some(crate::parser::AssignmentProjection::Index { .. }) => matches!(
-            ty,
-            RuntimeExpressionType::Array { .. }
-                | RuntimeExpressionType::Reference {
-                    target: RuntimeReferenceTarget::Array { .. } | RuntimeReferenceTarget::Slice(_),
-                    ..
-                }
-        ),
-        Some(crate::parser::AssignmentProjection::TupleField { field, .. }) => matches!(
-            ty,
-            RuntimeExpressionType::Tuple { element_count, .. } if field < element_count
-        ),
+    if projections.count > MAX_RUNTIME_PLACE_PROJECTIONS
+        || projections.items[..projections.count]
+            .iter()
+            .any(Option::is_none)
+        || projections.items[projections.count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return false;
     }
+    for projection in projections.items[..projections.count].iter().flatten() {
+        ty = match (*projection, ty) {
+            (
+                RuntimePlaceProjection::Dereference,
+                RuntimeExpressionType::Reference { target, .. },
+            ) => match target {
+                RuntimeReferenceTarget::Scalar(element) => runtime_type_from_array_element(element),
+                RuntimeReferenceTarget::Array { element, count, .. } => {
+                    RuntimeExpressionType::Array { element, count }
+                }
+                RuntimeReferenceTarget::Slice(_) | RuntimeReferenceTarget::Str => return false,
+            },
+            (
+                RuntimePlaceProjection::Dereference,
+                RuntimeExpressionType::RawPointer { pointee, .. },
+            ) => runtime_type_from_array_element(pointee),
+            (RuntimePlaceProjection::Index, RuntimeExpressionType::Array { element, .. }) => {
+                runtime_type_from_array_element(element)
+            }
+            (
+                RuntimePlaceProjection::Index,
+                RuntimeExpressionType::Reference {
+                    target:
+                        RuntimeReferenceTarget::Array { element, .. }
+                        | RuntimeReferenceTarget::Slice(element),
+                    ..
+                },
+            ) => runtime_type_from_array_element(element),
+            (
+                RuntimePlaceProjection::TupleField(field),
+                RuntimeExpressionType::Tuple {
+                    elements,
+                    element_count,
+                },
+            ) => {
+                if field >= element_count {
+                    return false;
+                }
+                let Some(element) = elements[field] else {
+                    return false;
+                };
+                runtime_type_from_array_element(element)
+            }
+            (
+                RuntimePlaceProjection::Subslice,
+                ty @ (RuntimeExpressionType::Array { .. }
+                | RuntimeExpressionType::Reference {
+                    target:
+                        RuntimeReferenceTarget::Array { .. }
+                        | RuntimeReferenceTarget::Slice(_)
+                        | RuntimeReferenceTarget::Str,
+                    ..
+                }),
+            ) => ty,
+            _ => return false,
+        };
+    }
+    true
 }
 
 fn runtime_type_stack_slots(ty: RuntimeExpressionType) -> usize {
@@ -6392,7 +6498,7 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     saved_locals: usize,
     local_facts: [Option<RuntimeLocalFact<'tree>>; MAX_RUNTIME_LOCAL_FACTS],
     local_fact_count: usize,
-    place_access_facts: [Option<RuntimePlaceAccessFact<'tree>>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
+    place_access_facts: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
     place_access_fact_count: usize,
     evaluation_depth: usize,
     runtime_call_depth: usize,
@@ -6523,13 +6629,15 @@ impl<
             RuntimePlaceBase::Local { id, .. } => RuntimePlaceIdentity::Local(id),
             RuntimePlaceBase::Parameter { index } => RuntimePlaceIdentity::Parameter(index),
         };
-        self.record_place_access_fact(base, place.projection, place.ty, place.access, span)
+        let projections = RuntimePlaceProjections::from_assignment(place.projection)
+            .map_err(|kind| self.error(kind))?;
+        self.record_place_access_fact(base, projections, place.ty, place.access, span)
     }
 
     fn record_place_access_fact(
         &mut self,
         base: RuntimePlaceIdentity,
-        projection: Option<crate::parser::AssignmentProjection<'tree>>,
+        projections: RuntimePlaceProjections,
         ty: RuntimeExpressionType,
         access: RuntimePlaceAccess,
         span: Span,
@@ -6541,7 +6649,7 @@ impl<
             .ok_or(capacity_error)?;
         *slot = Some(RuntimePlaceAccessFact {
             base,
-            projection,
+            projections,
             ty,
             access,
             span,
@@ -6550,7 +6658,12 @@ impl<
         Ok(())
     }
 
-    fn record_identifier_read(&mut self, name: &str, span: Span) -> Result<(), CodegenError> {
+    fn record_identifier_read(
+        &mut self,
+        name: &str,
+        projections: RuntimePlaceProjections,
+        span: Span,
+    ) -> Result<(), CodegenError> {
         let local_floor = self.runtime_call_local_floor.unwrap_or(0);
         if let Some(local) = self.locals[local_floor..self.saved_locals]
             .iter()
@@ -6561,7 +6674,7 @@ impl<
         {
             return self.record_place_access_fact(
                 RuntimePlaceIdentity::Local(local.id),
-                None,
+                projections,
                 local.ty,
                 RuntimePlaceAccess::Read,
                 span,
@@ -6580,7 +6693,7 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
             return self.record_place_access_fact(
                 RuntimePlaceIdentity::Parameter(index),
-                None,
+                projections,
                 ty,
                 RuntimePlaceAccess::Read,
                 span,
@@ -7021,7 +7134,7 @@ impl<
             .flatten()
         {
             if fact.span.end < fact.span.start
-                || !runtime_assignment_projection_valid(fact.ty, fact.projection)
+                || !runtime_place_projections_valid(fact.ty, fact.projections)
             {
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
             }
@@ -7041,13 +7154,13 @@ impl<
                         return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
                     }
                     let mutates_binding = !matches!(
-                        (fact.projection, fact.ty),
+                        (fact.projections.items[0], fact.ty),
                         (
-                            Some(crate::parser::AssignmentProjection::Dereference { .. }),
+                            Some(RuntimePlaceProjection::Dereference),
                             RuntimeExpressionType::Reference { .. }
                                 | RuntimeExpressionType::RawPointer { .. }
                         ) | (
-                            Some(crate::parser::AssignmentProjection::Index { .. }),
+                            Some(RuntimePlaceProjection::Index),
                             RuntimeExpressionType::Reference { .. }
                         )
                     );
@@ -10777,7 +10890,7 @@ impl<
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::Identifier(name) => {
-                self.record_identifier_read(name, expression.span)?;
+                self.record_identifier_read(name, RuntimePlaceProjections::EMPTY, expression.span)?;
                 self.emit_identifier(name)?;
             }
             ExprKind::Call {
@@ -10941,7 +11054,7 @@ impl<
                         .expression(operand)
                         .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
                         .span;
-                    self.record_identifier_read(name, span)?;
+                    self.record_identifier_read(name, RuntimePlaceProjections::EMPTY, span)?;
                     self.emit_identifier_address(name)?;
                 }
                 Some(ExprKind::Unary {
@@ -11238,7 +11351,11 @@ impl<
                 self.emit(&[0x25, 0xff, 0, 0, 0])
             }
             ExprKind::Identifier(name) => {
-                self.record_identifier_read(name, expression.span)?;
+                self.record_identifier_read(
+                    name,
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                    expression.span,
+                )?;
                 if let Some((local_index, local)) = self.locals[..self.saved_locals]
                     .iter()
                     .enumerate()
@@ -11419,7 +11536,11 @@ impl<
                 .expression(base)
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
                 .span;
-            self.record_identifier_read(name, span)?;
+            self.record_identifier_read(
+                name,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field)),
+                span,
+            )?;
             let slots = self
                 .local_stack_slots_from(index + 1)?
                 .checked_add(self.evaluation_depth)
@@ -11648,7 +11769,11 @@ impl<
                 .expression(base)
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
                 .span;
-            self.record_identifier_read(name, span)?;
+            self.record_identifier_read(
+                name,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                span,
+            )?;
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -11665,7 +11790,11 @@ impl<
                 .expression(base)
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
                 .span;
-            self.record_identifier_read(source, span)?;
+            self.record_identifier_read(
+                source,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                span,
+            )?;
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
             self.emit_slice_length(source)?;
@@ -12180,7 +12309,11 @@ impl<
                 .expression(base)
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
                 .span;
-            self.record_identifier_read(name, span)?;
+            self.record_identifier_read(
+                name,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice),
+                span,
+            )?;
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -16027,7 +16160,11 @@ mod tests {
             .record_place_access(first_place, assignment.name_span)
             .unwrap();
         emitter
-            .record_identifier_read("value", Span { start: 10, end: 15 })
+            .record_identifier_read(
+                "value",
+                RuntimePlaceProjections::EMPTY,
+                Span { start: 10, end: 15 },
+            )
             .unwrap();
         assert_eq!(first_place.access, RuntimePlaceAccess::Write);
         assert_eq!(
@@ -16057,10 +16194,18 @@ mod tests {
         assert_eq!(compound_place.access, RuntimePlaceAccess::ReadModifyWrite);
         let final_place = emitter.resolve_assignment_place(&assignment).unwrap();
         emitter
-            .record_identifier_read("value", Span { start: 20, end: 25 })
+            .record_identifier_read(
+                "value",
+                RuntimePlaceProjections::EMPTY,
+                Span { start: 20, end: 25 },
+            )
             .unwrap();
         emitter
-            .record_identifier_read("parameter", Span { start: 28, end: 37 })
+            .record_identifier_read(
+                "parameter",
+                RuntimePlaceProjections::EMPTY,
+                Span { start: 28, end: 37 },
+            )
             .unwrap();
         assert_eq!(
             final_place.base,
@@ -16097,6 +16242,46 @@ mod tests {
         assert_eq!(
             emitter.place_access_facts[4].unwrap().base,
             RuntimePlaceIdentity::Parameter(0)
+        );
+        let tuple_type = RuntimeExpressionType::Tuple {
+            elements: [
+                Some(RuntimeArrayElementType::Integer(Some(
+                    crate::IntegerType::U64,
+                ))),
+                Some(RuntimeArrayElementType::Bool),
+                None,
+                None,
+            ],
+            element_count: 2,
+        };
+        assert!(runtime_place_projections_valid(
+            tuple_type,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(1))
+        ));
+        assert!(!runtime_place_projections_valid(
+            tuple_type,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(2))
+        ));
+        let array_type = RuntimeExpressionType::Array {
+            element: RuntimeArrayElementType::Integer(Some(crate::IntegerType::U64)),
+            count: 2,
+        };
+        assert!(runtime_place_projections_valid(
+            array_type,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::Index)
+        ));
+        let mut malformed = RuntimePlaceProjections::EMPTY;
+        malformed.items[1] = Some(RuntimePlaceProjection::Index);
+        assert!(!runtime_place_projections_valid(array_type, malformed));
+        let mut bounded = RuntimePlaceProjections::EMPTY;
+        for _ in 0..MAX_RUNTIME_PLACE_PROJECTIONS {
+            bounded.push(RuntimePlaceProjection::Dereference).unwrap();
+        }
+        assert_eq!(
+            bounded
+                .push(RuntimePlaceProjection::Dereference)
+                .unwrap_err(),
+            CodegenErrorKind::TooManyRuntimePlaceProjections
         );
         emitter.validate_runtime_place_facts().unwrap();
 

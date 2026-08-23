@@ -65,11 +65,18 @@ source span, and whether the operation is a plain write or read-modify-write.
 Runtime identifier loads append `Read` facts for the same stable base identity,
 including specialized tuple, array, range, and address paths that do not use the
 ordinary scalar loader. Constants do not become local/parameter access facts.
+Persistent facts use a source-independent list of at most four `Dereference`,
+`Index`, `TupleField`, or `Subslice` projections rather than borrowing the
+assignment parser representation. Assignment facts translate their existing
+single projection into that list; specialized local tuple-field, array-element,
+and local-array range reads now retain their corresponding projection. Each
+projection is validated against the type produced by the preceding step, and
+overflow fails with `TooManyRuntimePlaceProjections`.
 Final emission validates their identity, projection/type, and mutability
 invariants and fails explicitly on capacity exhaustion or inconsistent facts.
 These ephemeral place-access tables are groundwork for typed ownership and CFG
-analysis. Read projections, moves, borrows, loans, and regions are not yet
-represented.
+analysis. General nested read-place discovery, dereference-read projection,
+moves, borrows, loans, and regions are not yet represented.
 
 Conditional action blocks retain up to four source-ordered local declarations,
 assignments, discarded scalar expressions, or value returns in each selected
@@ -2860,9 +2867,11 @@ facts and source-ordered assignment access facts in separate fixed 256-entry
 tables through final validation, even after active stack entries are removed.
 An adversarial unit test covers both access classes, same-name shadowing, scope
 cleanup, storage-index reuse, monotonic identity, corrupt fact rejection, and
-both exact capacity failures. Projected read facts, parser/semantic local IDs,
-arbitrary projection lists, complete typed body facts, CFGs, initialization,
-moves, borrows, loans, and regions remain outside this slice.
+both exact fact-table capacity failures. Projection tests cover valid and
+out-of-range tuple fields, valid indexes, malformed holes, and the exact four-
+step capacity failure. General nested read-place discovery, parser/semantic
+local IDs, complete typed body facts, CFGs, initialization, moves, borrows,
+loans, and regions remain outside this slice.
 
 The bounded runtime-read-fact milestone passed all 563 compiler and driver
 tests on Windows gnullvm and all 563 in release mode on native Arch Linux WSL,

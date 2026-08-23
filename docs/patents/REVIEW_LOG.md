@@ -461,3 +461,16 @@ novel algorithm, ABI, protocol, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary compiler use/definition bookkeeping
 within the existing Rust-subset compiler category.
+
+## 2026-08-23 — bounded source-independent place projections
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Runtime place facts now retain a four-step fixed-capacity list of conventional
+dereference, index, tuple-field, or subslice projections and validate each step
+against the preceding type. Assignment facts and specialized local aggregate
+reads reuse this representation. This adds no novel algorithm, ABI, protocol,
+cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary bounded compiler place representation
+and type validation within the existing Rust-subset compiler category.

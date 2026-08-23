@@ -159,19 +159,26 @@ and address paths append `Read` facts with the same stable base identities;
 constants do not enter this table. `finish` rejects holes, recycled/mismatched
 IDs, invalid projection/type combinations, immutable binding stores, and
 missing or mismatched parameters.
+Each fact now owns a source-independent list of at most four `Dereference`,
+`Index`, `TupleField`, or `Subslice` projections. Assignment parser projections
+translate once into this list; specialized local tuple-field, array-element,
+and local-array range reads retain their corresponding projection. Validation
+walks the list through the base type and rejects holes, invalid transitions,
+out-of-range fields, and overflow. The exact projection-capacity error is
+`TooManyRuntimePlaceProjections`.
 The tables are bounded ephemeral compiler state and include expanded inlined
 helper bodies; they are not serialized IR or a claim of whole-program analysis.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
 
-Read facts still resolve names during emission and retain only the base identity
-for aggregate/address operations; address-taking is not yet classified as a
-borrow. Parser-level IDs, general projection lists, initialization and move
-paths, CFG analysis, borrows, loans, and regions are still absent. The next
+Read facts still resolve names during emission; general nested read-place
+discovery and dereference-read projection are not centralized, and address-
+taking is not yet classified as a borrow. Parser-level IDs, initialization and
+move paths, CFG analysis, borrows, loans, and regions are still absent. The next
 compiler milestone is to turn this emission-side foundation into the bounded
-typed body-wide local/place/access table with complete projection chains, then
-add CFG and initialization/move facts.
+typed body-wide local/place/access table, then add CFG and initialization/move
+facts.
 
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains
