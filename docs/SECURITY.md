@@ -114,3 +114,22 @@ device is not delegated to an origin without separate authorization. The
 sanitized semantic document tree, not arbitrary browser internals or JavaScript
 execution, is the normal AI boundary. Remote AI receives no UI, media, secret,
 or browsing state without explicit disclosure authority.
+
+## Filesystem and graphics invariants
+
+Filesystem names and object IDs never authorize. Rename preserves stable object
+identity, and open capabilities remain bound to the object rather than its
+current path. Derivation only decreases rights; snapshot access requires its own
+authority. Recovery fails safely on inconsistent metadata, and checksummed
+metadata corruption must be detected wherever coverage applies. Filesystem
+checksums establish committed-data integrity, not publisher trust, executable
+admission, or rollback protection.
+
+An application that owns a surface does not own the physical display. A surface
+does not imply scanout authority, and one graphics buffer does not imply access
+to another. VGPU guests never receive host pointers. Trusted decorations and
+security indicators remain compositor-owned through GOP and accelerated modes.
+Backend takeover or fallback repeats capability validation and cannot weaken the
+GUI trust boundary. Semantic AI/accessibility state remains distinct from
+untrusted pixels. Fence identities, values, ownership, overflow, and reuse are
+bounded and generational.

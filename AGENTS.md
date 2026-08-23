@@ -57,6 +57,15 @@ Architectural invariants:
 - the compositor owns trusted display surfaces, semantic GUI state is primary
   for accessibility and automation, and raw input or visual access remains a
   separately privileged fallback.
+- every meaningful public resource has identity and lifetime, while a
+  capability—not a name, path, or guessed object ID—carries authority; do not
+  expose meaningless internal details as objects merely for uniformity;
+- native storage uses capability-bound stable objects and is not founded on
+  FAT32, ext4, NTFS, POSIX permissions, or a universal global namespace;
+- applications submit capability-bound surfaces/buffers to the trusted
+  compositor and never render directly to GOP, VGPU, native GPU, or scanout;
+  surfaces, buffers, render devices, display outputs, fences, rendering, and
+  presentation remain distinct abstractions.
 
 Implement OS work in the dependency order in `docs/ROADMAP.md`. Determine the
 next milestone from current code, tests, documentation, TODOs, and Git history,

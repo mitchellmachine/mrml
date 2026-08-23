@@ -41,14 +41,24 @@ authority; unrelated domains continue.
 ## Phase 2 — Minimal userspace system
 
 1. Implement the policy/configuration service and service supervision protocol.
-2. Implement a storage service and authenticated bounded block protocol.
-3. Implement a network service returning bounded connection capabilities.
-4. Add firewall/network-policy as defense in depth outside the kernel.
-5. Add tool and local-inference services over control and bulk IPC.
+2. Define native filesystem object identities and attenuated directory/file
+   rights, then the volume/superblock and directory/file metadata formats.
+3. Implement extent mapping, checksummed COW metadata, directory operations,
+   file reads/writes, explicit transactions, and crash recovery in that order.
+4. Add snapshot objects and capability enforcement, then system-generation and
+   authenticated update integration.
+5. Add compatibility filesystem readers and optional advanced storage features
+   only after measured need; they do not define native semantics.
+6. Implement a network service returning bounded connection capabilities.
+7. Add firewall/network-policy as defense in depth outside the kernel.
+8. Add tool and local-inference services over control and bulk IPC.
 
 Security gate: services start with explicit least authority; paths, ports,
 names, identity, and signatures do not grant ambient access; raw packet/device
-access is separately privileged; service failure is contained.
+access is separately privileged; service failure is contained. Filesystem names
+and IDs never authorize, rename preserves object identity, transactions are
+all-or-nothing, covered corruption is detected, inconsistent recovery fails
+safely, and snapshots require authority without implying anti-rollback.
 
 ## Phase 3 — Safe applications and trusted GUI foundation
 
@@ -60,15 +70,28 @@ Before trusted consent UI, establish the application-facing foundation:
 3. Project the same capability-preserving API into application microVMs.
 4. Define logical display coordinates and output identities for fractional
    per-monitor HiDPI.
-5. Implement the trusted compositor boundary and non-spoofable domain identity.
-6. Implement a bounded, generational semantic scene graph with authorized
+5. Define capability-bound graphics objects, keeping surfaces, buffers, render
+   devices, display outputs, command queues, and fences distinct.
+6. Implement the trusted compositor boundary, non-spoofable domain identity,
+   surface commit protocol, and backend-neutral compositor/display interface.
+7. Implement software composition, GOP presentation, and damage tracking in
+   that order.
+8. Add bounded asynchronous fence semantics.
+9. Define the VGPU resource protocol and shared command/completion transport,
+   then implement accelerated VGPU rendering.
+10. Support live GOP-to-accelerated takeover and accelerated-failure-to-GOP
+   recovery; native physical GPU backends come later.
+11. Implement a bounded, generational semantic scene graph with authorized
    incremental subscriptions and resynchronization.
-7. Benchmark scene updates, input-to-action latency, composition, and scaling.
+12. Benchmark scene updates, input-to-action latency, composition, damage,
+    synchronization, scaling, takeover, and recovery.
 
 Security gate: ordinary native apps cannot introduce unsafe native code or
 ambient authority; VM transport cannot widen capabilities; applications cannot
 spoof trusted surfaces; stale semantic identities/deltas cannot target reused
-objects; semantic inspection and raw input remain separate authority.
+objects; surface/buffer ownership cannot become scanout or cross-process access;
+backend changes preserve validation; semantic inspection and raw input remain
+separate authority.
 
 ## Phase 4 — Browser and AI application control
 

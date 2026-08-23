@@ -13,6 +13,12 @@ kernel is new, original Rust intended for CC0 dedication. Research informs
 requirements and trade-offs; no third-party implementation is copied or
 adapted.
 
+The current UEFI filesystem calls load boot artifacts and the current GOP
+renderer supplies bounded bring-up diagnostics. They are not the planned native
+filesystem, compositor, surface/buffer protocol, or desktop graphics stack. The
+mediated VGPU work below supplies experimental resource/compute mechanisms; it
+does not define GUI semantics or prove accelerated presentation.
+
 ## Security boundary
 
 MRML assumes a conventional Windows or Linux host and its VMM process may be

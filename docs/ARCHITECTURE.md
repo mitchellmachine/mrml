@@ -93,6 +93,56 @@ relevant descendants and derived state—handles, mappings, shared memory, IPC,
 DMA, devices, network/firewall state, cached decisions, and temporary grants—
 are unusable or quarantined.
 
+The durable object-model rule is: **everything meaningful is an object, and
+authority to an object is represented by capabilities**. An object is a
+resource with identity and lifetime; a capability grants specific operations on
+it; a name or path discovers it but does not authorize it. This applies to
+storage and graphics resources. It does not require turning meaningless private
+implementation details into public objects.
+
+## Native storage direction
+
+**PLANNED:** MRML will have a capability-aware native filesystem. The EFI System
+Partition and UEFI Simple File System remain appropriate FAT32 interoperability
+for boot. ext4, NTFS, and other formats may later be compatibility/import
+services, but FAT32, legacy formats, POSIX permissions, and a universal global
+namespace do not define native MRML storage or security semantics.
+
+Paths locate objects; capabilities authorize them. Namespace traversal resolves
+a stable `DirectoryObject`, `FileObject`, `SnapshotObject`, `VolumeObject`, or
+`NamespaceObject`, then access requires explicit rights. Renaming an object does
+not change its identity, and knowing or guessing its ID grants nothing. Open
+handles remain bound to objects rather than mutable paths. Processes receive
+specific roots and objects—such as app-private data, a selected project, or an
+update target—rather than seeing a universal namespace filtered by deny rules.
+Compatibility layers may emulate conventional paths.
+
+Conceptual directory rights include `LOOKUP`, `ENUMERATE`, `CREATE_FILE`,
+`CREATE_DIRECTORY`, `RENAME_CHILD`, and `REMOVE_CHILD`; file rights include
+`READ`, `WRITE`, `RESIZE`, `MAP`, `READ_METADATA`, and `WRITE_METADATA`. These
+are not frozen ABI names. There is no universal `ADMIN` right, and derivation
+never increases authority.
+
+The intentionally small native filesystem v1 targets stable object IDs,
+directories/files, extent allocation, checksummed copy-on-write metadata,
+atomic transactions, snapshots, crash consistency/recovery, and capability
+enforcement. User data is checksummed by default if measurements make it
+practical. Compression, encryption, deduplication, replication, remote storage,
+complex quotas, and advanced caching are optional later work, not v1 blockers.
+
+Critical metadata is not mutated in place: modified tree nodes/extents form a
+new generation followed by an atomic root/superblock transition. Redundant or
+rotating roots should be evaluated for recovery. Extent records may reserve
+future `HOLE`, `COMPRESSED`, `ENCRYPTED`, or `SHARED` semantics without
+implementing them prematurely. Explicit transactions make grouped writes,
+renames, and metadata changes externally all-or-nothing.
+
+Snapshots are capability-controlled objects with a generation, filesystem
+root, optional parent, and metadata. They support authenticated system-
+generation recovery, but checksums are not executable signatures and snapshots
+are not malicious-downgrade protection. That claim still requires authenticated
+persistent anti-rollback state.
+
 ## IPC and shared data
 
 The control path is kernel-mediated, bounded IPC for small messages,

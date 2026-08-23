@@ -60,6 +60,13 @@ explicitly and downgrade the status rather than guessing.
   is not an MRML browser engine, compositor, or OS application implementation.
 - Application/GUI/browser OS work: search the whole tree; absence is meaningful
   and planned documentation must not be promoted to implementation status.
+- Native filesystem: no implementation currently exists. UEFI Simple File
+  System use is boot interoperability, and `mrml-runtime` file APIs wrap host
+  files; neither establishes native MRML storage semantics.
+- Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are
+  bring-up/diagnostic mechanisms. `virtual_gpu.rs` is experimental mediated GPU
+  machinery. None is a compositor, surface protocol, display backend, fence
+  model, or accelerated desktop implementation.
 
 Use `rg` to locate definitions, callers, tests, TODOs, probe modes, and feature
 gates. Inspect manifests and the pinned toolchain before assuming build targets.

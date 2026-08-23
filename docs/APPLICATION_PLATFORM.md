@@ -146,6 +146,58 @@ quick settings, notifications, settings, light/dark appearance, keyboard
 navigation, and strong HiDPI. Familiarity is useful; copying trademarks,
 proprietary assets, names, icons, or another OS's exact design is forbidden.
 
+### Graphics object and backend model
+
+**PLANNED:** applications and application VMs submit surfaces and buffers through
+an MRML surface protocol. They never render directly to GOP, the VGPU, a native
+physical GPU, or scanout during normal desktop operation. The trusted compositor
+owns final presentation through a backend-neutral render/display interface with
+GOP initially, VGPU acceleration later, and native GPU backends after that.
+Application GUI semantics never depend on the selected backend.
+
+Surface, graphics buffer, render device, and display device are distinct. A
+surface contains logical size/scale, state, input/opaque regions, damage,
+semantic linkage, and an attached buffer. A buffer contains physical dimensions,
+format, stride/layout, backing, and ownership. A render device produces or
+operates on resources; a display device presents completed output. A GPU may
+render without driving scanout, so rendering and presentation cannot collapse
+into one abstraction.
+
+Graphics resources are stable capability-bound objects such as `Surface`,
+`GraphicsBuffer`, `RenderDevice`, `DisplayOutput`, `Fence`, and `CommandQueue`.
+Conceptual attenuated rights include `MAP_CPU`, `RENDER`, `SAMPLE`, `PRESENT`,
+`SHARE`, and `CONFIGURE`; these are not frozen ABI definitions. Buffer write
+authority does not imply presentation, scanout, another process's buffer, or
+display-configuration authority.
+
+Surface updates are atomic commits: buffer attachment, title, semantic state,
+and damage become visible as one coherent transition. Damage tracking is a
+first-class optimization, especially for software GOP composition, but
+incorrect or missing application damage cannot violate correctness; the
+compositor retains a safe full-redraw fallback. Capability-bound fences or
+equivalent monotonic synchronization permit asynchronous rendering and safe
+buffer reuse without blocking the whole compositor on one client.
+
+The initial/recovery backend is a compositor-owned software backbuffer copied by
+damaged region into the validated UEFI GOP framebuffer. Applications never map
+the physical GOP framebuffer. GOP remains available for early boot, bring-up,
+recovery, diagnostics, and accelerated-driver failure.
+
+Accelerated rendering is optional for retaining trusted UI. GOP-to-VGPU/native
+takeover preserves existing surface identities while changing only compositor
+backend state. Conversely, accelerated failure revokes or fails affected
+resources, recreates required software buffers, and returns to GOP without
+weakening trusted decoration, semantic state, or capability validation—and,
+where safely possible, without rebooting or restarting applications.
+
+The VGPU provides low-level buffers, textures, copies, render commands, fences,
+and presentation resources; it does not know buttons, text fields, window
+titles, or accessibility nodes. Prefer bounded asynchronous shared command and
+completion rings so tiny operations do not each require a VM exit. Guests use
+validated generational resource IDs, never arbitrary host pointers. KVM/WHP
+details remain below the common VMM/VGPU boundary and never enter the compositor
+or application protocol.
+
 ### HiDPI and coordinates
 
 Logical coordinates, not framebuffer pixels, are canonical. Each output exposes
@@ -184,6 +236,11 @@ synchronized bounded view instead of repeatedly receiving the whole desktop.
 This reduces latency, tokens, remote API cost, and local context use. Object
 identities, generations, visibility, actions, ordering, delta loss/recovery,
 and subscription authorization require adversarial validation.
+
+Semantic state and the surface tree remain synchronized but independent. A
+rendering backend failure may replace buffers or presentation state; it must not
+destroy the semantic desktop used by accessibility, text-only AI, automation,
+or recovery.
 
 ## AI and multimodal access
 
