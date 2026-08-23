@@ -957,13 +957,16 @@ impl WhpSystem {
         let root = build_page_tables(
             &mut partition,
             image,
-            layout,
-            handoff_bytes,
-            map_framebuffer.then_some((framebuffer.base().get(), framebuffer_bytes)),
-            devices.local_apic,
-            queue,
-            devices.cpus,
-            trampoline,
+            PageTableLaunchContext {
+                layout,
+                handoff_bytes,
+                framebuffer: map_framebuffer
+                    .then_some((framebuffer.base().get(), framebuffer_bytes)),
+                local_apic: devices.local_apic,
+                queue,
+                cpus: devices.cpus,
+                trampoline,
+            },
         )?;
         partition.configure_long_mode(
             entry,
@@ -991,9 +994,8 @@ impl WhpSystem {
     }
 }
 
-fn build_page_tables(
-    partition: &mut PreparedWhpPartition<'_>,
-    image: &PeImage<'_>,
+#[derive(Clone, Copy)]
+struct PageTableLaunchContext {
     layout: WhpLaunchLayout,
     handoff_bytes: u64,
     framebuffer: Option<(u64, u64)>,
@@ -1001,7 +1003,22 @@ fn build_page_tables(
     queue: Option<GpuSharedQueueLayout>,
     cpus: u8,
     trampoline: Option<u64>,
+}
+
+fn build_page_tables(
+    partition: &mut PreparedWhpPartition<'_>,
+    image: &PeImage<'_>,
+    context: PageTableLaunchContext,
 ) -> Result<PhysAddr, WhpError> {
+    let PageTableLaunchContext {
+        layout,
+        handoff_bytes,
+        framebuffer,
+        local_apic,
+        queue,
+        cpus,
+        trampoline,
+    } = context;
     partition.write_guest(layout.table_physical, &0u64.to_le_bytes())?;
     partition.write_guest(
         layout.table_physical + 8,

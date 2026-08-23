@@ -141,6 +141,15 @@ host forge receipts. A receipt authenticates the authority's decision, not the
 subsequent execution or GPU result, and policy admission still independently
 rejects replay, debug mode, rollback, and insufficient claims.
 
+WHP now provides a fixed-capacity untrusted launch broker for that protocol.
+Generational tickets prevent a canceled or completed request from acquiring a
+reused slot; request and receipt transitions are one-way; messages must have
+the exact canonical lengths; and capacity exhaustion fails closed without
+allocation. The broker stores only opaque bytes and never receives the receipt
+MAC key. Consequently these checks provide memory safety and deterministic
+transport behavior, while authenticity still comes exclusively from endpoint
+verification of the authority receipt.
+
 The bare-metal x86_64 path now has an allocation-free VMX-root contract and an
 emulated instruction backend. Consumer hardware is rejected unless VMX regions
 fit one write-back 4 KiB page and EPT, unrestricted guests, and single-context
