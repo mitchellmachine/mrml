@@ -91,6 +91,7 @@ fn application_main() -> Result<()> {
         service_mode || service_preemption_mode || smp_service_migration_mode;
     let timer_mode = arguments.len() == 5 && arguments[4] == "timer-probe";
     let preemption_mode = arguments.len() == 5 && arguments[4] == "preemption-probe";
+    let vmx_root_mode = arguments.len() == 5 && arguments[4] == "vmx-root-probe";
     let smp_mode = arguments.len() == 5 && arguments[4] == "smp-probe";
     let smp_scheduler_mode = arguments.len() == 5 && arguments[4] == "smp-scheduler-probe";
     let smp_ipi_mode = arguments.len() == 5 && arguments[4] == "smp-ipi-probe";
@@ -100,13 +101,14 @@ fn application_main() -> Result<()> {
         && !service_artifact_mode
         && !timer_mode
         && !preemption_mode
+        && !vmx_root_mode
         && !smp_mode
         && !smp_scheduler_mode
         && !smp_ipi_mode
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[3]
@@ -172,6 +174,7 @@ fn application_main() -> Result<()> {
     let cuda_bundle = if service_artifact_mode
         || timer_mode
         || preemption_mode
+        || vmx_root_mode
         || smp_mode
         || smp_scheduler_mode
         || smp_ipi_mode
@@ -391,6 +394,37 @@ fn application_main() -> Result<()> {
             physical,
             instruction
         ));
+    }
+    if vmx_root_mode {
+        let expected = [0xd0u32, 0xd1, 0xd2, 0xd3, 0xd4, 0xdf];
+        let mut actual = exit;
+        for (index, stage) in expected.into_iter().enumerate() {
+            let wanted = VmExit::Io {
+                port: 0xe9,
+                size: 1,
+                write: true,
+                value: stage,
+            };
+            if actual != wanted {
+                return Err(anyhow!(
+                    "WHP nested-VMX stage {:#x} mismatch: {:?}",
+                    stage,
+                    actual
+                ));
+            }
+            if index + 1 != expected.len() {
+                actual = VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("WHP nested-VMX execution failed: {:?}", error))?;
+            }
+        }
+        println!(
+            "verified controlled nested-VMX EPT violation and teardown under WHP: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
     }
     if service_preemption_mode {
         if exit

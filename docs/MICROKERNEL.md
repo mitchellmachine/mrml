@@ -657,7 +657,7 @@ failure EPT violation with a hardware-valid guest-physical address inside the
 exact expected 4 KiB monitor-private page. VMREAD failure, malformed access
 qualification, another exit reason, or an adjacent-page access leaves the
 controller outside `GuestRunning` and cannot resume uncertain state.
-Minimal launch programming is now one fixed 47-field VMCS specification. It
+Minimal launch programming is now one fixed 67-field VMCS specification. It
 preflights field widths, exact EPT identity, all five hardware control masks,
 long-mode entry/exit state, segment selectors and access rights, canonical
 entry/stack pointers, and the invalid guest-link sentinel before the first
@@ -674,15 +674,30 @@ decoder. The canonical guest state is now a fully specified unrestricted
 real-mode context, including all segment selectors, limits, bases, access
 rights, and descriptor-table state, so the isolation probe needs no guest page
 tables before touching the denied GPA.
-Both Windows and Linux LLVM assemblers accept the implementation. The
-instructions have not yet been executed by a bare-metal MRML boot, so this is
-not evidence of a successful hardware VM launch.
-QEMU 11.1 on Windows accepted a paused WHPX `q35` configuration with
-`-cpu max,+vmx` and exposed one vCPU to its monitor on 2026-08-23. No current
-UEFI or kernel-image entry point constructs `ProtectedMonitor` or invokes the
-native VMX adapter, so no MRML monitor image could be executed in that guest.
-This is only nested-VMX configuration feasibility, not `VMXON`, guest launch,
-bare-metal, or physical-hardware evidence.
+The opt-in `vmx-root-probe` kernel image now provides eight statically owned,
+page-aligned pages and resolves their exact supervisor-writable physical
+backing through the active CR3. It rejects aliases and misalignment, builds a
+four-level EPT with one read/execute guest-code page, and deliberately leaves
+guest GPA `0x2000` absent while retaining a separate monitor-only backing page.
+After deriving capabilities and controls from the architectural MSRs, it
+validates the locked feature-control and fixed-bit requirements before setting
+`CR4.VMXE`. The four-byte real-mode guest reads `0x2000`; the probe accepts only
+the exact read-only EPT violation, requires successful `VMXOFF`, restores the
+original CR4, and emits a bounded debug-port stage trace. Any uncertain teardown
+state enters an interrupt-disabled halt loop instead of restoring or resuming.
+
+On 2026-08-23 the signed Windows WHP runner admitted the exact version-1 probe
+image and observed entry byte `d0`, followed by failure byte `e0`: WHP cleared
+CPUID.1 ECX VMX for this guest, so the kernel rejected the platform before any
+VMX MSR read or privileged VMX operation. QEMU 11.1 TCG also explicitly reported
+`TCG doesn't support requested feature: CPUID[eax=01h].ECX.vmx [bit 5]` for
+`-machine q35,accel=tcg -cpu max,+vmx`. A paused QEMU WHPX configuration still
+accepts the requested CPU option, but that does not override the WHP guest's
+missing VMX capability. These are controlled negative probes, not evidence of
+`VMXON`, guest launch, bare-metal execution, physical hardware, or remote
+attestation. The image and state machine are now wired for a platform that
+actually exposes nested VMX or for a physical boot; neither successful path has
+yet been performed.
 
 VMX capability decisions are derived from raw `IA32_VMX_BASIC`, secondary
 processor-control, and EPT/VPID capability MSRs rather than host-supplied
