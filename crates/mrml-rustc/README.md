@@ -2335,7 +2335,9 @@ Pinned-nightly generic `saturating_cast::<T>`, `wrapping_cast::<T>`, and
 numeric-bound saturation, Rust `as` wrapping, and unconditional strict overflow
 traps across signedness and width changes. Runtime expressions can additionally
 consume the `Option`-returning `checked_cast::<T>` through the supported option
-consumers described below. Unsafe functions can additionally use
+consumers described below. The same consumers accept `checked_cast_signed` on
+unsigned integers and `checked_cast_unsigned` on signed integers. Unsafe
+functions can additionally use
 `unchecked_cast::<T>` for every integer pair; safe functions and constants
 reject it, and valid callers receive the direct representability-assuming cast.
 
@@ -2350,8 +2352,9 @@ receiver/argument types, invalid arity, unsigned negation, and signed disjoint
 bit-or are rejected; unsafe blocks are not accepted as a substitute because
 this bounded parser does not yet represent their safety context.
 
-Runtime integer expressions can consume pinned-nightly `checked_div_exact` and
-generic `checked_cast::<T>` results with `Option::unwrap_or` and
+Runtime integer expressions can consume pinned-nightly `checked_div_exact`,
+generic `checked_cast::<T>`, and same-width checked sign-cast results with
+`Option::unwrap_or` and
 `Option::unwrap_or_default`, or observe them with `Option::is_some` and
 `Option::is_none`. Exact nonzero divisions and representable casts return
 their quotient, converted value, or `Some`; inexact divisions, zero divisors,

@@ -166,6 +166,7 @@ pub enum IntegerWidthCastMode {
 pub enum CheckedIntegerOptionOperation {
     ExactDivision,
     Cast(IntegerType),
+    SignCast { signed: bool },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4418,6 +4419,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_cast_unsigned"
                         | "strict_cast_signed"
                         | "strict_cast_unsigned"
+                        | "checked_cast_signed"
+                        | "checked_cast_unsigned"
                         | "unchecked_add"
                         | "unchecked_sub"
                         | "unchecked_mul"
@@ -4862,6 +4865,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     signed: method.text.ends_with("_signed"),
                     saturating: method.text.starts_with("saturating_"),
                     strict: method.text.starts_with("strict_"),
+                },
+                "checked_cast_signed" | "checked_cast_unsigned" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: None,
+                    operation: CheckedIntegerOptionOperation::SignCast {
+                        signed: method.text.ends_with("_signed"),
+                    },
                 },
                 "unchecked_add"
                 | "unchecked_sub"

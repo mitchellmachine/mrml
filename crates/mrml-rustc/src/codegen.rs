@@ -3357,6 +3357,24 @@ fn runtime_expression_type_with_locals<
                 {
                     RuntimeExpressionType::Integer(Some(target))
                 }
+                crate::expression::CheckedIntegerOptionOperation::SignCast { signed }
+                    if argument.is_none() =>
+                {
+                    let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    };
+                    if source.is_signed() == signed {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    }
+                    RuntimeExpressionType::Integer(Some(
+                        if signed {
+                            source.signed_counterpart()
+                        } else {
+                            source.unsigned_counterpart()
+                        }
+                        .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?,
+                    ))
+                }
                 _ => return Err(CodegenErrorKind::RuntimeTypeMismatch),
             };
             let fallback_matches = if let Some(fallback) = fallback {
@@ -3412,6 +3430,10 @@ fn runtime_expression_type_with_locals<
                         ) == Ok(base_type)
                     }),
                 crate::expression::CheckedIntegerOptionOperation::Cast(_) => argument.is_none(),
+                crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
+                    argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed() != signed)
+                }
             };
             if !matches!(base_type, RuntimeExpressionType::Integer(Some(_))) || !producer_valid {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -10659,7 +10681,27 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         let previous_width = self.width;
         self.width = source_width;
         self.emit_expression(tree, base, depth + 1)?;
-        if let crate::expression::CheckedIntegerOptionOperation::Cast(target) = operation {
+        let cast_target = match operation {
+            crate::expression::CheckedIntegerOptionOperation::Cast(target) => Some(target),
+            crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
+                let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                if source.is_signed() == signed {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                }
+                Some(
+                    if signed {
+                        source.signed_counterpart()
+                    } else {
+                        source.unsigned_counterpart()
+                    }
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?,
+                )
+            }
+            crate::expression::CheckedIntegerOptionOperation::ExactDivision => None,
+        };
+        if let Some(target) = cast_target {
             if argument.is_some() {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
@@ -15443,6 +15485,48 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.checked_cast::<u8>().is_some() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_same_width_sign_cast_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, fallback: i32) -> i32 { input.checked_cast_signed().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> u64 { input.checked_cast_unsigned().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> bool { input.checked_cast_signed().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> bool { input.checked_cast_unsigned().is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi,)
+                        .is_ok(),
+                    "{source}"
+                );
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> bool { input.checked_cast_signed().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> bool { input.checked_cast_unsigned().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, fallback: u32) -> i32 { input.checked_cast_signed().unwrap_or(fallback) }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
