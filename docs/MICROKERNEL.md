@@ -191,6 +191,16 @@ and load dispatch execute. The current probe also proves its real built-image
 export is structurally accepted before reaching that loader gate, but error 577
 prevents initialization and therefore prevents a real `CallEnclave` execution.
 It is not evidence that Windows has accepted or run the image.
+On 2026-08-23 the same source was rebuilt with the custom target, passed
+`mrml-sign finalize-vbs-enclave`, and was signed by Microsoft SignTool with
+`/ph /fd SHA256` using a disposable RSA-3072 development certificate carrying
+the documented Code Signing, VBS Enclave, and Author EKUs. The host again
+reported VBS support and reserved the non-debug 2 MiB enclave, but
+`LoadEnclaveImageW` returned error 193 (`ERROR_BAD_EXE_FORMAT`). This reaches a
+later PE/load-configuration gate than the earlier error 577; it still does not
+prove Windows initialization, VTL1 entry, receipt verification, attestation
+verification, or secret consumption. The temporary certificate and private key
+were removed after the test.
 Enabling global test-signing or trusting a development code-signing root weakens
 the host policy and is never performed automatically by the build.
 
@@ -626,6 +636,12 @@ physical-address operands remain live memory operands for the instructions.
 Both Windows and Linux LLVM assemblers accept the implementation. The
 instructions have not yet been executed by a bare-metal MRML boot, so this is
 not evidence of a successful hardware VM launch.
+QEMU 11.1 on Windows accepted a paused WHPX `q35` configuration with
+`-cpu max,+vmx` and exposed one vCPU to its monitor on 2026-08-23. No current
+UEFI or kernel-image entry point constructs `ProtectedMonitor` or invokes the
+native VMX adapter, so no MRML monitor image could be executed in that guest.
+This is only nested-VMX configuration feasibility, not `VMXON`, guest launch,
+bare-metal, or physical-hardware evidence.
 
 VMX capability decisions are derived from raw `IA32_VMX_BASIC`, secondary
 processor-control, and EPT/VPID capability MSRs rather than host-supplied
