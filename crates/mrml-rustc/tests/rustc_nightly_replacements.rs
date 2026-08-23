@@ -1343,6 +1343,24 @@ fn rustc_sequential_conditional_local_identities_reach_native_objects() {
 }
 
 #[test]
+fn rustc_loop_scope_local_identities_reach_native_objects() {
+    // Original loop/nested/branch scope probe paired with the pinned nightly's
+    // lexical binding and loop-control behavior.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u16) -> u16 { let mut index: u16 = 0; let mut total: u16 = 0; while index < limit { let current: u16 = index + 1; loop { let nested: u16 = current; total += nested; break; } if current % 2 == 0 { let branch: u16 = current + 1; total += branch; } else { let branch: u16 = current + 2; total += branch; } index = current; } let after: u16 = total; after }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<8192, 4096, 4, 8, 8, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_guarded_mutation_reaches_native_objects() {
     // Original scalar replacement for the guard-before-mutation ordering in
     // tests/ui/consts/control-flow/basics.rs at the pinned nightly commit.
