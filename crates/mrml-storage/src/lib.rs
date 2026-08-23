@@ -31,8 +31,8 @@ pub use cow::{
 };
 pub use directory::{DirectoryError, DirectoryState, StorageObjectAllocator};
 pub use extent::{
-    EXTENT_RECORD_BYTES, ExtentError, ExtentKind, ExtentLocation, ExtentMap, ExtentRecord,
-    MAX_EXTENT_BLOCKS,
+    EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,
+    ExtentLocation, ExtentMap, ExtentRecord, MAX_EXTENT_BLOCKS,
 };
 pub use file::{
     FileReadBackend, FileReadError, FileState, FileStateError, FileWriteBackend, FileWriteError,

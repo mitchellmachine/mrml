@@ -386,6 +386,22 @@ impl DirectoryMetadata {
         self.object
     }
 
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub const fn parent(self) -> Option<StorageObjectId> {
+        self.parent
+    }
+
+    pub const fn entry_count(self) -> u32 {
+        self.entry_count
+    }
+
+    pub const fn entries(self) -> MetadataPointer {
+        self.entries
+    }
+
     pub fn encode(self, output: &mut [u8; DIRECTORY_METADATA_BYTES]) {
         *output = [0; DIRECTORY_METADATA_BYTES];
         output[..8].copy_from_slice(&DIRECTORY_MAGIC);

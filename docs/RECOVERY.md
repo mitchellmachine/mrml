@@ -132,7 +132,11 @@ explicitly and downgrade the status rather than guessing.
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned
   image binds volume, publication generation, record geometry, full-image
   digest, and zero padding, and decode rebuilds the index. It is not yet read
-  through a block backend or traversed by the recovery validator. UEFI
+  through a block backend or traversed by the recovery validator. Allocation
+  image ownership is now distinct and exactly root/publication-generation bound.
+  Canonical extent-list images bind file identity, object generation, logical
+  length, record geometry, full-image digest, and zero padding, then rebuild
+  exact extent coverage during decode. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

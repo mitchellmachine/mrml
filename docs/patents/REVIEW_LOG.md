@@ -764,6 +764,18 @@ optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional checksummed allocation metadata.
 
+## 2026-08-23 — canonical extent metadata images
+
+MRML source: `crates/mrml-storage/src/extent.rs` and allocation ownership types.
+
+The service uses a conventional versioned extent-list header, fixed-width
+checksummed records, whole-image SHA3-256 corruption detection, zero padding,
+and reconstruction of bounded extent-map invariants. Allocation metadata uses a
+separate conventional ownership tag. This adds no novel extent structure,
+allocator, recovery method, cryptographic construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional checksummed extent-list metadata.
+
 ## 2026-08-23 — bounded assignment-expression read traversal
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

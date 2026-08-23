@@ -3,11 +3,14 @@ use mrml_crypto::Sha3_256;
 use crate::{StorageObjectId, VolumeHeader, VolumeId};
 
 pub const EXTENT_RECORD_BYTES: usize = 144;
+pub const EXTENT_IMAGE_HEADER_BYTES: usize = 96;
 pub const MAX_EXTENT_BLOCKS: u32 = 1 << 20;
 
 const EXTENT_MAGIC: [u8; 8] = *b"MREXT001";
 const EXTENT_VERSION: u16 = 1;
 const DIGEST_OFFSET: usize = 112;
+const IMAGE_MAGIC: [u8; 8] = *b"MREXI001";
+const IMAGE_DIGEST_OFFSET: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -214,7 +217,36 @@ impl<const N: usize> ExtentMap<N> {
         file_length: u64,
         records: &[ExtentRecord],
     ) -> Result<Self, ExtentError> {
-        if file.volume() != header.volume() || metadata_generation == 0 || records.len() > N {
+        let mut stored = [None; N];
+        if records.len() > N {
+            return Err(ExtentError::InvalidMap);
+        }
+        for (slot, record) in stored.iter_mut().zip(records.iter().copied()) {
+            *slot = Some(record);
+        }
+        Self::from_stored(
+            header,
+            file,
+            metadata_generation,
+            file_length,
+            stored,
+            records.len(),
+        )
+    }
+
+    fn from_stored(
+        header: VolumeHeader,
+        file: StorageObjectId,
+        metadata_generation: u64,
+        file_length: u64,
+        stored: [Option<ExtentRecord>; N],
+        count: usize,
+    ) -> Result<Self, ExtentError> {
+        if file.volume() != header.volume()
+            || metadata_generation == 0
+            || count > N
+            || stored[..count].iter().any(Option::is_none)
+        {
             return Err(ExtentError::InvalidMap);
         }
         let block_size = u64::from(header.block_size());
@@ -227,13 +259,13 @@ impl<const N: usize> ExtentMap<N> {
         }
         let logical_blocks =
             file_length / block_size + u64::from(!file_length.is_multiple_of(block_size));
-        if (logical_blocks == 0) != records.is_empty() {
+        if (logical_blocks == 0) != (count == 0) {
             return Err(ExtentError::IncompleteCoverage);
         }
 
-        let mut stored = [None; N];
         let mut next_logical = 0_u64;
-        for (index, record) in records.iter().copied().enumerate() {
+        for index in 0..count {
+            let record = stored[index].ok_or(ExtentError::InvalidMap)?;
             if record.file != file
                 || record.metadata_generation != metadata_generation
                 || record.logical_block != next_logical
@@ -259,13 +291,12 @@ impl<const N: usize> ExtentMap<N> {
                 {
                     return Err(ExtentError::PhysicalRange);
                 }
-                for prior in records[..index].iter().copied() {
+                for prior in stored[..index].iter().flatten().copied() {
                     if prior.kind == ExtentKind::Data && physical_ranges_overlap(prior, record) {
                         return Err(ExtentError::PhysicalOverlap);
                     }
                 }
             }
-            stored[index] = Some(record);
             next_logical = end;
         }
         if next_logical != logical_blocks {
@@ -273,7 +304,7 @@ impl<const N: usize> ExtentMap<N> {
         }
         Ok(Self {
             records: stored,
-            count: records.len(),
+            count,
             file,
             metadata_generation,
             file_length,
@@ -347,6 +378,149 @@ impl<const N: usize> ExtentMap<N> {
     }
 }
 
+pub struct ExtentImage<const N: usize> {
+    volume: VolumeId,
+    pointer: crate::MetadataPointer,
+    encoded_len: usize,
+    map: ExtentMap<N>,
+}
+
+impl<const N: usize> ExtentImage<N> {
+    pub fn build(
+        header: VolumeHeader,
+        file: StorageObjectId,
+        metadata_generation: u64,
+        file_length: u64,
+        pointer: crate::MetadataPointer,
+        records: &[ExtentRecord],
+    ) -> Result<Self, ExtentError> {
+        if !pointer_fits(header, pointer) {
+            return Err(ExtentError::InvalidImage);
+        }
+        let encoded_len = image_bytes(header, pointer)?;
+        let used = records
+            .len()
+            .checked_mul(EXTENT_RECORD_BYTES)
+            .and_then(|bytes| bytes.checked_add(EXTENT_IMAGE_HEADER_BYTES))
+            .ok_or(ExtentError::Arithmetic)?;
+        if used > encoded_len {
+            return Err(ExtentError::InvalidImage);
+        }
+        Ok(Self {
+            volume: header.volume(),
+            pointer,
+            encoded_len,
+            map: ExtentMap::build(header, file, metadata_generation, file_length, records)?,
+        })
+    }
+
+    pub fn decode(
+        header: VolumeHeader,
+        file: StorageObjectId,
+        metadata_generation: u64,
+        file_length: u64,
+        pointer: crate::MetadataPointer,
+        input: &[u8],
+    ) -> Result<Self, ExtentError> {
+        if !pointer_fits(header, pointer) || input.len() != image_bytes(header, pointer)? {
+            return Err(ExtentError::InvalidImage);
+        }
+        if input[..8] != IMAGE_MAGIC
+            || get_u16(input, 10)? != EXTENT_IMAGE_HEADER_BYTES as u16
+            || get_u16(input, 12)? != EXTENT_RECORD_BYTES as u16
+            || input[14..16].iter().any(|byte| *byte != 0)
+            || input[60..IMAGE_DIGEST_OFFSET].iter().any(|byte| *byte != 0)
+        {
+            return Err(ExtentError::NonCanonical);
+        }
+        if get_u16(input, 8)? != EXTENT_VERSION {
+            return Err(ExtentError::UnsupportedVersion);
+        }
+        if read_volume(input, 16)? != header.volume() {
+            return Err(ExtentError::WrongVolume);
+        }
+        if get_u64(input, 32)? != file.local()
+            || get_u64(input, 40)? != metadata_generation
+            || get_u64(input, 48)? != file_length
+        {
+            return Err(ExtentError::InvalidImage);
+        }
+        if input[IMAGE_DIGEST_OFFSET..EXTENT_IMAGE_HEADER_BYTES] != image_digest(input) {
+            return Err(ExtentError::Corrupt);
+        }
+        let count = usize::try_from(get_u32(input, 56)?).map_err(|_| ExtentError::InvalidImage)?;
+        if count > N {
+            return Err(ExtentError::InvalidImage);
+        }
+        let used = count
+            .checked_mul(EXTENT_RECORD_BYTES)
+            .and_then(|bytes| bytes.checked_add(EXTENT_IMAGE_HEADER_BYTES))
+            .ok_or(ExtentError::Arithmetic)?;
+        if used > input.len() || input[used..].iter().any(|byte| *byte != 0) {
+            return Err(ExtentError::NonCanonical);
+        }
+        let mut records = [None; N];
+        for (index, slot) in records[..count].iter_mut().enumerate() {
+            let start = EXTENT_IMAGE_HEADER_BYTES + index * EXTENT_RECORD_BYTES;
+            *slot = Some(ExtentRecord::decode(
+                &input[start..start + EXTENT_RECORD_BYTES],
+                header.volume(),
+            )?);
+        }
+        Ok(Self {
+            volume: header.volume(),
+            pointer,
+            encoded_len: input.len(),
+            map: ExtentMap::from_stored(
+                header,
+                file,
+                metadata_generation,
+                file_length,
+                records,
+                count,
+            )?,
+        })
+    }
+
+    pub const fn pointer(&self) -> crate::MetadataPointer {
+        self.pointer
+    }
+
+    pub const fn map(&self) -> &ExtentMap<N> {
+        &self.map
+    }
+
+    pub fn encode(&self, output: &mut [u8]) -> Result<(), ExtentError> {
+        if output.len() != self.encoded_len {
+            return Err(ExtentError::Truncated);
+        }
+        output.fill(0);
+        output[..8].copy_from_slice(&IMAGE_MAGIC);
+        put_u16(output, 8, EXTENT_VERSION);
+        put_u16(output, 10, EXTENT_IMAGE_HEADER_BYTES as u16);
+        put_u16(output, 12, EXTENT_RECORD_BYTES as u16);
+        output[16..32].copy_from_slice(&self.volume.bytes());
+        put_u64(output, 32, self.map.file().local());
+        put_u64(output, 40, self.map.metadata_generation());
+        put_u64(output, 48, self.map.file_length());
+        put_u32(output, 56, self.map.len() as u32);
+        for index in 0..self.map.len() {
+            let start = EXTENT_IMAGE_HEADER_BYTES + index * EXTENT_RECORD_BYTES;
+            let end = start + EXTENT_RECORD_BYTES;
+            let encoded: &mut [u8; EXTENT_RECORD_BYTES] = (&mut output[start..end])
+                .try_into()
+                .map_err(|_| ExtentError::Truncated)?;
+            self.map
+                .record(index)
+                .ok_or(ExtentError::InvalidMap)?
+                .encode(encoded);
+        }
+        let digest = image_digest(output);
+        output[IMAGE_DIGEST_OFFSET..EXTENT_IMAGE_HEADER_BYTES].copy_from_slice(&digest);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExtentError {
     Truncated,
@@ -361,6 +535,7 @@ pub enum ExtentError {
     PhysicalOverlap,
     OutOfRange,
     Arithmetic,
+    InvalidImage,
 }
 
 fn contains_block(record: ExtentRecord, block: u64) -> bool {
@@ -377,6 +552,40 @@ fn record_digest(input: &[u8]) -> [u8; 32] {
     digest.update(&input[..DIGEST_OFFSET]);
     digest.update(&[0; 32]);
     digest.finalize()
+}
+
+fn image_digest(input: &[u8]) -> [u8; 32] {
+    let mut digest = Sha3_256::new();
+    digest.update(&input[..IMAGE_DIGEST_OFFSET]);
+    digest.update(&[0; 32]);
+    digest.update(&input[EXTENT_IMAGE_HEADER_BYTES..]);
+    digest.finalize()
+}
+
+fn image_bytes(
+    header: VolumeHeader,
+    pointer: crate::MetadataPointer,
+) -> Result<usize, ExtentError> {
+    usize::try_from(
+        u64::from(header.block_size())
+            .checked_mul(u64::from(pointer.blocks()))
+            .ok_or(ExtentError::Arithmetic)?,
+    )
+    .map_err(|_| ExtentError::Arithmetic)
+}
+
+fn pointer_fits(header: VolumeHeader, pointer: crate::MetadataPointer) -> bool {
+    pointer
+        .block()
+        .checked_add(u64::from(pointer.blocks()))
+        .is_some_and(|end| end <= header.block_count())
+        && !pointer_contains(pointer, 0)
+        && !pointer_contains(pointer, header.primary_superblock())
+        && !pointer_contains(pointer, header.secondary_superblock())
+}
+
+fn pointer_contains(pointer: crate::MetadataPointer, block: u64) -> bool {
+    block >= pointer.block() && block < pointer.block() + u64::from(pointer.blocks())
 }
 
 fn read_volume(input: &[u8], offset: usize) -> Result<VolumeId, ExtentError> {
@@ -571,5 +780,39 @@ mod tests {
             ExtentMap::<2>::build(header(), file(3), 1, u64::MAX, &records).map(|_| ()),
             Err(ExtentError::InvalidMap)
         );
+    }
+
+    #[test]
+    fn extent_image_round_trip_binds_file_generation_length_and_padding() {
+        let pointer = crate::MetadataPointer::new(30, 1).unwrap();
+        let records = [
+            ExtentRecord::data(file(3), 4, 0, 1, 20, [1; 32]).unwrap(),
+            ExtentRecord::hole(file(3), 4, 1, 1).unwrap(),
+        ];
+        let image = ExtentImage::<2>::build(header(), file(3), 4, 8192, pointer, &records).unwrap();
+        let mut encoded = [0; 4096];
+        image.encode(&mut encoded).unwrap();
+        let decoded =
+            ExtentImage::<2>::decode(header(), file(3), 4, 8192, pointer, &encoded).unwrap();
+        assert_eq!(decoded.pointer(), pointer);
+        assert_eq!(decoded.map().len(), 2);
+        assert_eq!(
+            decoded.map().locate(1),
+            Ok(ExtentLocation::Hole {
+                available_blocks: 1
+            })
+        );
+        assert!(matches!(
+            ExtentImage::<2>::decode(header(), file(3), 5, 8192, pointer, &encoded),
+            Err(ExtentError::InvalidImage)
+        ));
+
+        encoded[4095] = 1;
+        let digest = image_digest(&encoded);
+        encoded[IMAGE_DIGEST_OFFSET..EXTENT_IMAGE_HEADER_BYTES].copy_from_slice(&digest);
+        assert!(matches!(
+            ExtentImage::<2>::decode(header(), file(3), 4, 8192, pointer, &encoded),
+            Err(ExtentError::NonCanonical)
+        ));
     }
 }

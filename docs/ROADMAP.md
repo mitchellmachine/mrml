@@ -269,6 +269,12 @@ authority; unrelated domains continue.
    zero-filled unused capacity. Decoding rebuilds all ownership invariants.
    Concrete block persistence, allocation/free mutation, and complete graph
    traversal remain pending.
+   Allocation-image ranges now use a distinct ownership kind and can be checked
+   against the selected root and publication generation. Canonical block-aligned
+   extent-list images now bind file identity, object generation, logical length,
+   record geometry, complete-image SHA3-256, and zero padding; decoding rebuilds
+   the exact-coverage extent map. These remove serialized-list ambiguity before
+   reachable-tree traversal, which remains pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

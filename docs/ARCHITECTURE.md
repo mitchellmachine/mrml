@@ -263,6 +263,12 @@ The allocation index now has a canonical block-aligned image whose header binds
 the volume, publication generation, record width/count, complete-image digest,
 and zero padding; decoding reconstructs and revalidates the index rather than
 trusting serialized ownership. It is still not connected to a block backend.
+Allocation-image ownership is a distinct kind bound to the selected root and
+publication generation rather than being confused with ordinary object
+metadata. Extent lists likewise have a canonical block-aligned image binding
+file identity, object generation, logical length, fixed record geometry,
+complete-image digest, and zero padding; decoding rebuilds exact coverage and
+physical-range invariants.
 The complete validator, block backend, directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI

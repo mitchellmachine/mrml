@@ -2794,7 +2794,16 @@ nonzero padding even under a recomputed digest, parses every record, and rebuild
 the index invariants. Allocation/free mutation, concrete durable publication,
 and full reachable-tree traversal remain unimplemented.
 
-Fifty focused unit tests and strict crate-local clippy pass on Windows
+Allocation metadata now distinguishes its own image allocation from ordinary
+object metadata and requires exact root, publication generation, and range for
+self-ownership. Extent lists now use a separate canonical block-aligned image
+whose header binds file identity, object metadata generation, logical file
+length, fixed record width/count, and the complete image including zero padding.
+Decode rejects wrong identity/generation/length, noncanonical padding even under
+a recomputed digest, malformed records, incomplete logical coverage, reserved
+physical ranges, and intra-file overlap while reconstructing the `ExtentMap`.
+
+Fifty-one focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2807,7 +2816,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 50 tests, and both strict crate-local clippy
+Both current unit-test runs pass 51 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

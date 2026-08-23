@@ -17,6 +17,7 @@ const IMAGE_DIGEST_OFFSET: usize = 64;
 pub enum AllocationKind {
     FileData = 1,
     ObjectMetadata = 2,
+    AllocationMetadata = 3,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +113,7 @@ impl AllocationRecord {
         let kind = match input[12] {
             1 => AllocationKind::FileData,
             2 => AllocationKind::ObjectMetadata,
+            3 => AllocationKind::AllocationMetadata,
             _ => return Err(AllocationError::InvalidRecord),
         };
         Self::new(
@@ -231,6 +233,21 @@ impl<const N: usize> AllocationIndex<N> {
             pointer.block(),
             pointer.blocks(),
             AllocationKind::ObjectMetadata,
+        )
+    }
+
+    pub fn owns_allocation_image(
+        &self,
+        owner: StorageObjectId,
+        publication_generation: u64,
+        pointer: MetadataPointer,
+    ) -> bool {
+        self.contains_exact(
+            owner,
+            publication_generation,
+            pointer.block(),
+            pointer.blocks(),
+            AllocationKind::AllocationMetadata,
         )
     }
 
@@ -360,6 +377,11 @@ impl<const N: usize> AllocationImage<N> {
 
     pub const fn index(&self) -> &AllocationIndex<N> {
         &self.index
+    }
+
+    pub fn is_self_owned_by(&self, root: StorageObjectId) -> bool {
+        self.index
+            .owns_allocation_image(root, self.generation, self.pointer)
     }
 
     pub fn encode(&self, output: &mut [u8]) -> Result<(), AllocationError> {
@@ -570,7 +592,7 @@ mod tests {
     fn allocation_image_round_trip_binds_complete_zero_padded_generation() {
         let pointer = MetadataPointer::new(10, 1).unwrap();
         let records = [
-            AllocationRecord::new(object(1), 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+            AllocationRecord::new(object(1), 5, 10, 1, AllocationKind::AllocationMetadata).unwrap(),
             AllocationRecord::new(object(7), 4, 20, 3, AllocationKind::FileData).unwrap(),
         ];
         let image = AllocationImage::<2>::build(header(), 5, pointer, &records).unwrap();
@@ -580,6 +602,8 @@ mod tests {
         assert_eq!(decoded.generation(), 5);
         assert_eq!(decoded.pointer(), pointer);
         assert_eq!(decoded.index().len(), 2);
+        assert!(decoded.is_self_owned_by(object(1)));
+        assert!(!decoded.is_self_owned_by(object(7)));
         assert!(
             decoded
                 .index()
