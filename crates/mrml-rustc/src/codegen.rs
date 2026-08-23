@@ -2370,10 +2370,32 @@ fn preanalyze_runtime_local_binding<
             .map(|expression| expression.kind),
         Some(ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } | ExprKind::Tuple { .. })
     );
+    let literal_conditional_tuple = runtime_type_is_tuple(ty)
+        && matches!(
+            tree.expression(tree.root()).map(|expression| expression.kind),
+            Some(
+                ExprKind::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } | ExprKind::LoopBreakIf {
+                    then_branch,
+                    else_branch,
+                    ..
+                }
+            ) if matches!(
+                tree.expression(then_branch).map(|expression| expression.kind),
+                Some(ExprKind::Tuple { .. })
+            ) && matches!(
+                tree.expression(else_branch).map(|expression| expression.kind),
+                Some(ExprKind::Tuple { .. })
+            )
+        );
     if (!runtime_type_is_array(ty)
         && !runtime_type_is_tuple(ty)
         && !runtime_type_is_fat_reference(ty))
         || literal_aggregate
+        || literal_conditional_tuple
     {
         preanalyze_runtime_expression_reads(
             facts,
@@ -18805,6 +18827,44 @@ mod tests {
             facts.assignment_reads[7].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(2))
         );
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_conditional_tuple_literals_once() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: u16, second: u16, choose: bool) -> u16 { let selected: (u16, u16) = if choose { (first + 1, second) } else { (second + 2, first) }; selected.0 }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 6);
+        for (fact, identity) in facts.assignment_reads[..6].iter().zip([
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+        }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
