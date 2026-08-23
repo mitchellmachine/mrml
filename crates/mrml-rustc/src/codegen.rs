@@ -2315,6 +2315,10 @@ fn validate_runtime_inline_const<
             recurse(distance)?;
         }
         ExprKind::IntegerSignCast { base, .. } => recurse(base)?,
+        ExprKind::IntegerClampMagnitude { base, limit } => {
+            recurse(base)?;
+            recurse(limit)?;
+        }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
             recurse(distance)?;
@@ -3298,6 +3302,36 @@ fn runtime_expression_type_with_locals<
             }
             .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
             Ok(RuntimeExpressionType::Integer(Some(target_type)))
+        }
+        ExprKind::IntegerClampMagnitude { base, limit } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let expected_limit = integer_type
+                .unsigned_counterpart()
+                .map(|ty| RuntimeExpressionType::Integer(Some(ty)));
+            if !integer_type.is_signed()
+                || expected_limit
+                    != Some(runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        limit,
+                        depth + 1,
+                    )?)
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
         }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             let base_type = runtime_expression_type_with_locals(
@@ -5480,6 +5514,55 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     }
                 }
                 self.width = target_width;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerClampMagnitude { base, limit } => {
+                let RuntimeExpressionType::Integer(Some(base_type)) =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let base_width = runtime_width(base_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let limit_type = base_type
+                    .unsigned_counterpart()
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let limit_width = runtime_width(limit_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = base_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.width = limit_width;
+                self.emit_expression(tree, limit, depth + 1)?;
+                self.emit(&[0x48, 0x89, 0xc2, 0x58])?;
+                self.evaluation_depth -= 1;
+                self.width = base_width;
+                self.emit(&[0x48, 0xb9])?;
+                self.emit(&base_width.maximum.to_le_bytes())?;
+                self.emit(&[0x48, 0x39, 0xca])?;
+                let done_large_limit = self.emit_forward_branch(0x87)?;
+                self.emit(&[0x48, 0x39, 0xd0])?;
+                let check_lower = self.emit_forward_branch(0x8e)?;
+                self.emit(&[0x48, 0x89, 0xd0])?;
+                let done_upper = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(check_lower)?;
+                self.emit(&[0x48, 0xf7, 0xda, 0x48, 0x39, 0xd0])?;
+                let done_lower = self.emit_forward_branch(0x8d)?;
+                self.emit(&[0x48, 0x89, 0xd0])?;
+                self.patch_forward_branch(done_large_limit)?;
+                self.patch_forward_branch(done_upper)?;
+                self.patch_forward_branch(done_lower)?;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -14123,6 +14206,44 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> u8 { input.cast_unsigned() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn clamps_signed_integer_magnitudes() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8, limit: u8) -> i8 { input.clamp_magnitude(limit) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, limit: u16) -> i16 { input.clamp_magnitude(limit) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, limit: u64) -> i64 { input.clamp_magnitude(limit) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize, limit: usize) -> isize { input.clamp_magnitude(limit) }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, limit: u8) -> u8 { input.clamp_magnitude(limit) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8, limit: i8) -> i8 { input.clamp_magnitude(limit) }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };

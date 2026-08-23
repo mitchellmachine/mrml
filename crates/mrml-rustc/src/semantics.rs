@@ -213,6 +213,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerFunnelShift { .. }
                         | ExprKind::IntegerSignCast { .. }
+                        | ExprKind::IntegerClampMagnitude { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
@@ -1918,6 +1919,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerFunnelShift { .. }
                 | ExprKind::IntegerSignCast { .. }
+                | ExprKind::IntegerClampMagnitude { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
@@ -2073,6 +2075,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
                 || recurse(distance, inside_inline_const)
         }
         ExprKind::IntegerSignCast { base, .. } => recurse(base, inside_inline_const),
+        ExprKind::IntegerClampMagnitude { base, limit } => {
+            recurse(base, inside_inline_const) || recurse(limit, inside_inline_const)
+        }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
@@ -2200,6 +2205,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
             ..
         } => recurse(base) || recurse(other) || recurse(distance),
         ExprKind::IntegerSignCast { base, .. } => recurse(base),
+        ExprKind::IntegerClampMagnitude { base, limit } => recurse(base) || recurse(limit),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
@@ -2657,6 +2663,9 @@ fn evaluate_call_aware_integer<
             )?;
             integer_power_bits(value, exponent, bits, ty.is_signed(), mode)
                 .map_err(arithmetic_error)?
+        }
+        ExprKind::IntegerClampMagnitude { .. } => {
+            return Err(SemanticErrorKind::UnsupportedConstCall);
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
@@ -3627,6 +3636,9 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             sign_cast_bits(value, bits, signed, saturating, strict)
                 .map_err(ExecutionError::Arithmetic)?
         }
+        ExprKind::IntegerClampMagnitude { .. } => {
+            return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+        }
         ExprKind::IntegerWrappingShift {
             base,
             distance,
@@ -3843,6 +3855,9 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
             } else {
                 source.unsigned_counterpart()
             }
+        }
+        ExprKind::IntegerClampMagnitude { base, .. } => {
+            expression_integer_type(tree, base, constants)
         }
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)

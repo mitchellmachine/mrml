@@ -2137,6 +2137,11 @@ clamp unsigned values above the signed maximum or negative signed values to
 zero; `strict_cast_signed` and `strict_cast_unsigned` trap for those same
 out-of-range inputs. All variants require the exact opposite-signed integer of
 the same width as their result.
+Pinned-nightly signed `clamp_magnitude` accepts the exact unsigned counterpart
+as its limit and clamps runtime values to the symmetric inclusive range around
+zero. Limits above the signed maximum leave the receiver unchanged, including
+the signed minimum. The method remains runtime-only, matching its non-const
+definition in the pinned toolchain.
 Unsigned primitives support stable `next_power_of_two` and pinned-nightly
 `wrapping_next_power_of_two`. Zero maps to one; checked runtime objects trap
 when the rounded power exceeds the receiver width, while unchecked and explicit

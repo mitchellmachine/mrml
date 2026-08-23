@@ -306,6 +306,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerRotate { .. }
             | ExprKind::IntegerFunnelShift { .. }
             | ExprKind::IntegerSignCast { .. }
+            | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }

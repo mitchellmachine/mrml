@@ -2653,6 +2653,28 @@ fn rustc_same_width_integer_sign_casts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_signed_clamp_magnitude_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i8, limit: u8) -> i8 { value.clamp_magnitude(limit) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i64, limit: u64) -> i64 { value.clamp_magnitude(limit) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+
+    assert!(compile_wide(
+        "const VALUE: i8 = 120i8.clamp_magnitude(100); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",
