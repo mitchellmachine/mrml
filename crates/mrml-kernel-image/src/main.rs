@@ -93,8 +93,8 @@ use mrml_kernel::{
 };
 #[cfg(feature = "service-probe")]
 use mrml_kernel::{
-    Capability, CapabilitySpace, RestartPolicy, ServiceAddressSpaceEraser, ServiceError, ServiceId,
-    ServiceSupervisor,
+    Capability, CapabilitySpace, ControlEvent, PeerDeathReason, RestartPolicy,
+    ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceSupervisor,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -331,7 +331,7 @@ static mut USER_RUNTIME: Option<TaskRuntime<2, 1>> = None;
 #[cfg(feature = "user-probe")]
 static mut USER_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_RUNTIME: Option<TaskRuntime<2, 1>> = None;
+static mut SERVICE_RUNTIME: Option<TaskRuntime<2, 2>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "service-probe")]
@@ -759,7 +759,29 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .unwrap_or_else(|_| halt());
                 match terminated.next {
                     ScheduleOutcome::Switch { to, .. } => {
-                        let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
+                        let ControlEvent::PeerDied(death) =
+                            runtime.receive_control(to).unwrap_or_else(|_| halt())
+                        else {
+                            halt()
+                        };
+                        if death.peer() != current || death.reason() != PeerDeathReason::Exited {
+                            halt();
+                        }
+                        asm!(
+                            "out dx, eax",
+                            in("dx") SERVICE_PROBE_PORT,
+                            in("eax") 0x22u32,
+                            options(nomem, nostack)
+                        );
+                        let ControlEvent::Message(received) =
+                            runtime.receive_control(to).unwrap_or_else(|_| halt())
+                        else {
+                            halt()
+                        };
+                        if received.sender() != current || received.sequence() == 0 {
+                            halt();
+                        }
+                        let message = received.into_message();
                         runtime
                             .context_mut(to)
                             .unwrap_or_else(|_| halt())
@@ -2019,7 +2041,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
-        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap_or_else(|_| halt());
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap_or_else(|_| halt());
         let receiver = runtime
             .create(Priority::NORMAL, context_a)
             .unwrap_or_else(|_| halt());
@@ -2041,6 +2063,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             .insert(ObjectId(0xa1), Rights::CONTROL)
             .unwrap_or_else(|_| halt());
         let endpoint_object = ObjectId(0x91);
+        let receiver_capability = runtime
+            .capabilities_mut(receiver)
+            .and_then(|space| {
+                space
+                    .insert(endpoint_object, Rights::SIGNAL)
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
         let capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2049,6 +2079,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        let endpoint = Endpoint::new(endpoint_object);
+        runtime
+            .connect_control_peers(receiver, sender, &endpoint, receiver_capability, capability)
+            .unwrap_or_else(|_| halt());
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
@@ -2056,7 +2090,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         {
             halt();
         }
-        core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(Endpoint::new(endpoint_object)));
+        core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(endpoint));
         core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
         core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
         core::ptr::addr_of_mut!(SERVICE_CONTROLS).write(Some([control_a, control_b]));
@@ -2493,7 +2527,7 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 
 #[cfg(feature = "service-probe")]
 unsafe fn restart_service_pair(
-    runtime: &mut TaskRuntime<2, 1>,
+    runtime: &mut TaskRuntime<2, 2>,
     supervisor: &mut ServiceSupervisor<2>,
     receiver_service: ServiceId,
 ) -> ! {
@@ -2542,10 +2576,20 @@ unsafe fn restart_service_pair(
         .flatten()
         .unwrap_or_else(|| halt());
     unsafe { service_restart_stage(0x34) };
-    if unsafe { (*core::ptr::addr_of!(SERVICE_ENDPOINT)).as_ref() }.is_none() {
-        halt();
-    }
+    let endpoint = unsafe {
+        (*core::ptr::addr_of!(SERVICE_ENDPOINT))
+            .as_ref()
+            .unwrap_or_else(|| halt())
+    };
     unsafe { service_restart_stage(0x35) };
+    let receiver_capability = runtime
+        .capabilities_mut(receiver)
+        .and_then(|space| {
+            space
+                .insert(ObjectId(0x91), Rights::SIGNAL)
+                .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+        })
+        .unwrap_or_else(|_| halt());
     let capability = runtime
         .capabilities_mut(sender)
         .and_then(|space| {
@@ -2553,6 +2597,9 @@ unsafe fn restart_service_pair(
                 .insert(ObjectId(0x91), Rights::SIGNAL)
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
+        .unwrap_or_else(|_| halt());
+    runtime
+        .connect_control_peers(receiver, sender, endpoint, receiver_capability, capability)
         .unwrap_or_else(|_| halt());
     unsafe { service_restart_stage(0x36) };
     let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
@@ -2591,7 +2638,7 @@ unsafe fn service_restart_stage(stage: u32) {
 
 #[cfg(feature = "service-probe")]
 unsafe fn verify_restart_budget_exhausted(
-    runtime: &mut TaskRuntime<2, 1>,
+    runtime: &mut TaskRuntime<2, 2>,
     supervisor: &mut ServiceSupervisor<2>,
 ) {
     let management = unsafe {
@@ -2630,7 +2677,7 @@ unsafe fn enter_service_preemption_context(context: &UserContext) -> ! {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn enter_service_task(runtime: &TaskRuntime<2, 1>, task: mrml_kernel::TaskId) -> ! {
+unsafe fn enter_service_task(runtime: &TaskRuntime<2, 2>, task: mrml_kernel::TaskId) -> ! {
     let context = runtime
         .context(task)
         .map(|context| context as *const UserContext)

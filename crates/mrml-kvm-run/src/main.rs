@@ -648,6 +648,18 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("KVM execution after sender cleanup failed: {:?}", error))?;
         if exit
             != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x22,
+            })
+        {
+            return Err(anyhow!("KVM typed peer-death proof mismatch: {:?}", exit));
+        }
+        exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("KVM execution after typed peer death failed: {:?}", error))?;
+        if exit
+            != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
                 size: 4,
                 write: true,
@@ -789,6 +801,25 @@ fn application_main() -> Result<()> {
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!(
                 "KVM execution after restarted sender cleanup failed: {:?}",
+                error
+            )
+        })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x22,
+            })
+        {
+            return Err(anyhow!(
+                "restarted KVM typed peer-death proof mismatch: {:?}",
+                exit
+            ));
+        }
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!(
+                "KVM execution after restarted typed peer death failed: {:?}",
                 error
             )
         })?;

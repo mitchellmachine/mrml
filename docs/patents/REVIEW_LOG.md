@@ -224,6 +224,21 @@ optimization.
 Patent review: `NOT_TRIGGERED` — conventional hosted reset orchestration and
 verification.
 
+## 2026-08-23 — signed typed service peer-death proof
+
+MRML source: `crates/mrml-kernel-image/src/main.rs` and
+`crates/mrml-{kvm,whp}-run/src/main.rs`.
+
+The signed hosted service path now checks an existing typed clean peer-death
+event and exact sender/sequence envelope before receiver continuation, then
+reconstructs the same capability-authorized relation for fresh task
+generations. This is ordinary lifecycle notification, generational identity
+checking, and controlled-probe staging; it adds no novel algorithm, device
+protocol, codec, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional typed lifecycle notification and
+test-harness verification.
+
 ## 2026-08-23 — diverging Rust helper signatures
 
 MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.

@@ -1627,6 +1627,23 @@ Linux/WSL2 `/dev/kvm` (`verify=21616us`, `prepare=3030us`, `execute=1056us`,
 `execute=567us`, `total=26846us`). These are controlled hosted-probe results;
 the host remains trusted.
 
+The next signed revision makes the lifecycle control channel real in this same
+path. Both services receive fresh `SIGNAL` capabilities for the exact endpoint
+object, and `TaskRuntime::connect_control_peers` commits the relation only after
+both live generational domains authorize it. When the sender exits, retirement
+publishes `PeerDeathReason::Exited`; before returning to CPL3, the kernel checks
+that event's exact retired `TaskId`, then dequeues the ordinary message envelope
+and checks its exact sender plus a nonzero endpoint sequence. A distinct
+host-visible `0x22` stage proves this ordering. Restart issues new capabilities
+to both new task generations and rebuilds the relation rather than reusing old
+tokens; the second clean exit repeats the same proof. Fresh 2026-08-23 signed
+artifacts completed both generations under Arch Linux/WSL2 `/dev/kvm`
+(`verify=21224us`, `prepare=2833us`, `execute=1075us`, `total=48573us`) and
+Windows WHP (`verify=18294us`, `prepare=3764us`, `execute=663us`,
+`total=26432us`). This proves typed clean peer-death and envelope attribution in
+the hosted control path. A surviving peer observing typed fault death and live
+task-owned shared-page revocation remain separate outstanding evidence.
+
 Every registration now binds a validated restart policy containing a nonzero
 maximum restart count, base delay, and maximum delay. Retirement computes the
 next eligible scheduler tick with checked arithmetic; delay doubles after each

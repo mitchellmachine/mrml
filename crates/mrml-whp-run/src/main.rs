@@ -603,6 +603,18 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("WHP execution after sender cleanup failed: {:?}", error))?;
         if exit
             != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x22,
+            })
+        {
+            return Err(anyhow!("WHP typed peer-death proof mismatch: {:?}", exit));
+        }
+        let exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("WHP execution after typed peer death failed: {:?}", error))?;
+        if exit
+            != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
                 size: 4,
                 write: true,
@@ -734,6 +746,25 @@ fn application_main() -> Result<()> {
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!(
                 "WHP execution after restarted sender cleanup failed: {:?}",
+                error
+            )
+        })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x22,
+            })
+        {
+            return Err(anyhow!(
+                "restarted WHP typed peer-death proof mismatch: {:?}",
+                exit
+            ));
+        }
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!(
+                "WHP execution after restarted typed peer death failed: {:?}",
                 error
             )
         })?;

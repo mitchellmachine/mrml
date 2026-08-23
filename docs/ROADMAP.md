@@ -53,6 +53,10 @@ separately. Freshly signed WHP and KVM runs now exercise cleanup-ticket-gated
 per-slot address-space reprovisioning across clean exit, fault, restart, and
 restart-budget exhaustion. The task-owned shared-binding/host-resource
 composition remains simulation-tested rather than live-probe evidence.
+Those signed paths now also establish an exact-generation control-peer relation
+in each generation. Clean sender exit publishes a typed `Exited` result; the
+kernel verifies its retired task identity and the queued message envelope's
+sender and endpoint sequence before receiver continuation.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
@@ -62,6 +66,12 @@ typed death result; the supervisor performs one bounded clean restart; and the
 unrelated service continues. Exercise equivalent signed paths under WHP and KVM
 and add adversarial unit tests. This milestone must not claim host-resistant
 confidentiality.
+
+The signed two-service path now covers the blocking control channel, exact
+sender/sequence envelopes, typed clean peer death, cleanup-gated fault
+retirement, and bounded restart on both hosted backends. Its remaining Phase 1
+integration work is the revocable task-owned shared-page bulk channel and typed
+fault-death observation by a peer that remains live through the crash.
 
 ## Phase 1 — Kernel and service foundation
 
@@ -85,9 +95,10 @@ confidentiality.
    cleanup, final host-handle retirement, exact erasure gating, and bounded
    restart are coupled through one supervised recovery operation. Cleanup and
    restart failures retain retryable fail-closed state. Signed KVM and WHP runs
-   exercise exact per-slot address-space cleanup before restart; the broader
-   task-owned shared-binding/host-resource composition remains outstanding live
-   evidence rather than a missing kernel mechanism.
+   exercise exact per-slot address-space cleanup before restart plus
+   exact-generation control-peer reconstruction and typed clean-death delivery;
+   the broader task-owned shared-binding/host-resource composition remains
+   outstanding live evidence rather than a missing kernel mechanism.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
    **IMPLEMENTED:** release microbenchmarks cover backend-neutral
