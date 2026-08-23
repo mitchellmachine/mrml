@@ -2570,8 +2570,9 @@ all-zero default representation; reference outputs are rejected because Rust
 references do not implement `Default`. Captured parameters and locals remain
 available to the mapping closure.
 
-Runtime expressions can call an earlier, safe, non-const Rust-ABI function with
-up to four built-in integer or Boolean parameters and a scalar result.
+Runtime expressions can call a safe, non-const Rust-ABI function declared
+before or after the selected export, with up to four built-in integer or
+Boolean parameters and a scalar result.
 Arguments execute eagerly in source order, are normalized to their declared
 types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
@@ -2628,8 +2629,10 @@ Every returning edge removes only that callee's arguments and locals before
 skipping the remaining body, while a fallthrough tail performs the same cleanup
 once on its normal edge.
 Calls may nest to eight levels and are inlined into the selected exported
-function, so the object still contains one symbol and no call relocations.
-Forward calls, caller-local capture, unsafe or foreign-ABI callees,
+function, so the object still contains one symbol and no call relocations. The
+bounded active-call-name stack rejects direct and mutual recursion before
+expanding a cycle; acyclic forward and backward chains remain declaration-order
+independent. Caller-local capture, unsafe or foreign-ABI callees,
 value-producing loop expressions, deeper loop nesting, aggregates, references,
 and recursion fail closed. An original nested
 statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
@@ -2662,6 +2665,12 @@ A divergent-tail branch probe produced a 238-byte COFF object and a 624-byte
 ELF64 object. Pinned-nightly callers exercised four bypass inputs and the
 callee's reachable early-return edge on both hosts; the unexecuted nonzero call
 path is the emitted infinite backedge and has no synthetic caller join.
+A three-helper forward-call chain produced a 478-byte COFF object and an
+872-byte ELF64 object. Pinned-nightly callers matched an independent reference
+across 52 values and branch choices on both hosts, including forward calls from
+the export and between helpers, eager argument composition, conditional arms,
+and the final helper's early-return boundary. Separate direct and mutual cycles
+were rejected by the active-call check.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

@@ -830,6 +830,7 @@ pub fn compile_x86_64_function_with_options<
         saved_locals: 0,
         evaluation_depth: 0,
         runtime_call_depth: 0,
+        runtime_call_names: [None; 8],
         runtime_call_local_floor: None,
     };
     emitter.emit_prologue()?;
@@ -6039,6 +6040,7 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     saved_locals: usize,
     evaluation_depth: usize,
     runtime_call_depth: usize,
+    runtime_call_names: [Option<&'tree str>; 8],
     runtime_call_local_floor: Option<usize>,
 }
 
@@ -6521,6 +6523,13 @@ impl<
         depth: usize,
     ) -> Result<(), CodegenError> {
         const MAX_RUNTIME_CALL_DEPTH: usize = 8;
+        if self.runtime_call_names[..self.runtime_call_depth]
+            .iter()
+            .flatten()
+            .any(|name| *name == target.name)
+        {
+            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+        }
         if self.runtime_call_depth == MAX_RUNTIME_CALL_DEPTH
             || target.parameter_count > MAX_PARAMETERS - self.saved_locals
         {
@@ -6580,6 +6589,7 @@ impl<
         }
         let previous_floor = self.runtime_call_local_floor;
         self.runtime_call_local_floor = Some(checkpoint);
+        self.runtime_call_names[self.runtime_call_depth] = Some(target.name);
         self.runtime_call_depth += 1;
         let body_start = self.function.body_expression_span.start;
         let mut return_patches = [None; MAX_BYTES];
@@ -6715,6 +6725,7 @@ impl<
             self.emit_expression(&tree, tree.root(), depth)
         })();
         self.runtime_call_depth -= 1;
+        self.runtime_call_names[self.runtime_call_depth] = None;
         self.runtime_call_local_floor = previous_floor;
         emission?;
         if return_type == RuntimeExpressionType::Bool {

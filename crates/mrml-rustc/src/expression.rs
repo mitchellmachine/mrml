@@ -196,6 +196,7 @@ pub struct RuntimeCallParameter<'source> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeCallTarget<'source, const MAX_PARAMETERS: usize> {
+    pub name: &'source str,
     pub parameters: [Option<RuntimeCallParameter<'source>>; MAX_PARAMETERS],
     pub parameter_count: usize,
     pub return_type: ScalarType,

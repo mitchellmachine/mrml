@@ -15,7 +15,6 @@ struct PipelineResolver<
     module: &'module Module<'source, MAX_ITEMS, MAX_PARAMETERS>,
     constants: &'module ConstantTable<'source, MAX_CONSTANTS>,
     target: TargetLayout,
-    function_index: usize,
 }
 
 impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>
@@ -76,7 +75,9 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
         if argument_count > CALL_PARAMETERS {
             return None;
         }
-        let function = self.module.items()[..self.function_index]
+        let function = self
+            .module
+            .items()
             .iter()
             .flatten()
             .find_map(|item| match item {
@@ -100,6 +101,7 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
             });
         }
         Some(crate::RuntimeCallTarget {
+            name: function.name,
             parameters,
             parameter_count: argument_count,
             return_type,
@@ -216,13 +218,12 @@ pub fn compile_source_function_with_options<
             kind: CompileErrorKind::Semantic(error.kind),
             span: Some(error.span),
         })?;
-    let (function_index, function) = module
+    let function = module
         .items()
         .iter()
         .flatten()
-        .enumerate()
-        .find_map(|(index, item)| match item {
-            Item::Function(function) if function.name == function_name => Some((index, function)),
+        .find_map(|item| match item {
+            Item::Function(function) if function.name == function_name => Some(function),
             _ => None,
         })
         .ok_or(CompileError {
@@ -237,7 +238,6 @@ pub fn compile_source_function_with_options<
         module: &module,
         constants: &constants,
         target,
-        function_index,
     };
     let code = compile_x86_64_function_with_options::<
         _,
@@ -348,7 +348,17 @@ mod tests {
         assert_eq!(&coff.bytes()[..2], &0x8664u16.to_le_bytes());
 
         let forward = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { later(value) } fn later(value: u64) -> u64 { value + 1 }";
-        let error = compile(forward, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert!(compile(forward, "answer", ObjectFormat::Elf64).is_ok());
+
+        let recursive = "fn recurse(value: u64) -> u64 { recurse(value) } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { recurse(value) }";
+        let error = compile(recursive, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+        );
+
+        let mutual_recursion = "fn first(value: u64) -> u64 { second(value) } fn second(value: u64) -> u64 { first(value) } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { first(value) }";
+        let error = compile(mutual_recursion, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
