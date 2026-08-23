@@ -307,12 +307,38 @@ impl<const P: usize> TransactionReceipt<P> {
         expected: &[Option<TransactionParticipant>; N],
         count: usize,
     ) -> Result<(), TransactionError> {
+        self.consume_batch_with(expected, count, &[None; 0], 0)
+    }
+
+    pub(crate) fn consume_batch_with<const N: usize, const M: usize>(
+        &mut self,
+        expected: &[Option<TransactionParticipant>; N],
+        count: usize,
+        additional: &[Option<TransactionParticipant>; M],
+        additional_count: usize,
+    ) -> Result<(), TransactionError> {
+        let total = count
+            .checked_add(additional_count)
+            .ok_or(TransactionError::ParticipantMismatch)?;
         if count == 0 || count > N || count > self.remaining {
+            return Err(TransactionError::ParticipantMismatch);
+        }
+        if additional_count > M || total > self.remaining {
             return Err(TransactionError::ParticipantMismatch);
         }
         for index in 0..count {
             let participant = expected[index].ok_or(TransactionError::ParticipantMismatch)?;
             if expected[..index].contains(&Some(participant))
+                || additional[..additional_count].contains(&Some(participant))
+                || !self.participants.contains(&Some(participant))
+            {
+                return Err(TransactionError::ParticipantMismatch);
+            }
+        }
+        for index in 0..additional_count {
+            let participant = additional[index].ok_or(TransactionError::ParticipantMismatch)?;
+            if additional[..index].contains(&Some(participant))
+                || expected[..count].contains(&Some(participant))
                 || !self.participants.contains(&Some(participant))
             {
                 return Err(TransactionError::ParticipantMismatch);
@@ -326,7 +352,15 @@ impl<const P: usize> TransactionReceipt<P> {
                 .ok_or(TransactionError::ParticipantMismatch)?;
             *entry = None;
         }
-        self.remaining -= count;
+        for participant in additional[..additional_count].iter().flatten() {
+            let entry = self
+                .participants
+                .iter_mut()
+                .find(|entry| **entry == Some(*participant))
+                .ok_or(TransactionError::ParticipantMismatch)?;
+            *entry = None;
+        }
+        self.remaining -= total;
         Ok(())
     }
 }
@@ -550,5 +584,50 @@ mod tests {
             Err(TransactionPublishError::WrongPlan)
         ));
         assert_eq!((backend.verified, backend.replaced), (0, 0));
+    }
+
+    #[test]
+    fn grouped_receipt_consumption_preflights_every_participant() {
+        let first = participant(10, 3);
+        let second = participant(20, 8);
+        let child = TransactionParticipant::creation(object(30), StorageObjectKind::File).unwrap();
+        let allocation = TransactionParticipant::allocation(volume(), 9, 10).unwrap();
+        let missing = participant(40, 2);
+        let mut receipt = TransactionReceipt::<4> {
+            identity: StorageTransactionId::new(22).unwrap(),
+            publication_generation: 10,
+            participants: [Some(first), Some(second), Some(child), Some(allocation)],
+            remaining: 4,
+        };
+        assert_eq!(
+            receipt.consume_batch_with(
+                &[Some(first), Some(second)],
+                2,
+                &[Some(child), Some(missing)],
+                2,
+            ),
+            Err(TransactionError::ParticipantMismatch)
+        );
+        assert_eq!(receipt.remaining(), 4);
+        assert_eq!(
+            receipt.consume_batch_with(
+                &[Some(first), Some(second)],
+                2,
+                &[Some(child), Some(first)],
+                2,
+            ),
+            Err(TransactionError::ParticipantMismatch)
+        );
+        assert_eq!(receipt.remaining(), 4);
+        assert_eq!(
+            receipt.consume_batch_with(
+                &[Some(first), Some(second)],
+                2,
+                &[Some(child), Some(allocation)],
+                2,
+            ),
+            Ok(())
+        );
+        assert_eq!(receipt.remaining(), 0);
     }
 }

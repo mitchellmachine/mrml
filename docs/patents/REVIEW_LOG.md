@@ -916,6 +916,16 @@ allocation, identity, capability, persistence, or cryptographic technique.
 
 Patent review: `NOT_TRIGGERED` — conventional exact allocation bookkeeping.
 
+## 2026-08-23 — grouped create receipt consumption
+
+MRML source: `crates/mrml-storage/src/transaction.rs`.
+
+The transaction receipt conventionally preflights two bounded participant
+groups for presence and duplicates before clearing the complete set. This adds
+no novel transaction, capability, filesystem, or persistence technique.
+
+Patent review: `NOT_TRIGGERED` — conventional atomic receipt bookkeeping.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

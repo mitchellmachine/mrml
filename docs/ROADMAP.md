@@ -273,8 +273,10 @@ authority; unrelated domains continue.
    inserts the child at the target, advances every directory once, and
    propagates exact child generations to the root. The complete directory
    closure now passes the same preflight/staging path as moves and is admitted
-   child-before-parent to one bounded directory transaction. Full create
-   transaction assembly remains pending.
+   child-before-parent to one bounded directory transaction. Receipt handling
+   can now atomically preflight and consume the variable directory closure with
+   fixed create participants, rejecting missing or cross-group duplicates
+   without partial consumption. Full create transaction assembly remains pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

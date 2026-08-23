@@ -2972,7 +2972,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-one focused unit tests and strict crate-local clippy pass on Windows
+Seventy-two focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, allocator/create integration,
 complete crash recovery, snapshots, a block-device service, and
@@ -2985,7 +2985,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 71 tests, and both strict crate-local clippy
+Both current unit-test runs pass 72 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3020,7 +3020,9 @@ where applicable, generation 1, canonical empty subordinate images, and an
 unambiguous creation participant. General mutation closure construction binds
 the exact target-to-root predecessor chain and fails closed on stale parent
 entries or incomplete propagation; shared staging rejects every cross-successor
-range overlap before I/O. This agent review is not
+range overlap before I/O. Grouped receipt consumption preflights the variable
+directory set and fixed create participants as one exact set, rejecting missing
+or cross-group duplicate membership without partial consumption. This agent review is not
 independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
