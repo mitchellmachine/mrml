@@ -194,7 +194,7 @@ fn application_main() -> Result<()> {
     }
     let verified_binding = VbsAttestationData::decode(&verified_binding)
         .map_err(|error| anyhow!("verifier returned malformed binding: {:?}", error))?;
-    let expected_binding = VbsAttestationData::for_policy(nonce, policy)
+    let expected_binding = VbsAttestationData::for_launch_request(nonce, request, policy)
         .map_err(|error| anyhow!("expected binding rejected: {:?}", error))?;
     if verified_binding != expected_binding {
         return Err(anyhow!("verifier returned an unexpected authority binding"));

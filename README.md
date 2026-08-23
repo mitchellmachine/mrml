@@ -131,8 +131,9 @@ safe TPM-provisioned attested keys with boot, kernel, and hypervisor debugging
 never enabled. This platform query does not make the embedded development MAC
 key secret or constitute remote attestation.
 The authority can emit a bounded Windows-signed local VBS report binding a fresh
-verifier nonce to the exact policy digest. Only another VBS enclave on the same
-machine can use Microsoft's verification API, so the ordinary host transports
+verifier nonce to a domain-separated digest of the exact canonical launch
+request and policy. Only another VBS enclave on the same machine can use
+Microsoft's verification API, so the ordinary host transports
 this report without treating it as verified evidence.
 An allocation-free parser validates the complete signed-statement layout and can
 compare exact code/signer identities, debug state, and security-version floors,
@@ -142,9 +143,10 @@ Every enclave entry obtains its own runtime address interval and rejects context
 input, or output ranges that overlap or wrap into VTL1 before invoking explicit
 boundary-copy APIs.
 The Windows probe loads separate authority and verifier VBS instances. The
-verifier creates a one-use enclave-random challenge, validates Windows' report
-signature, binds the challenge and policy, and requires the authority identity
-and security versions to match its own signed image. A VTL0-visible success value
+verifier creates a one-use enclave-random challenge, retains the complete
+expected request binding inside VTL1, validates Windows' report signature, and
+requires the authority identity and security versions to match its own signed
+image. A VTL0-visible success value
 is diagnostic only and cannot authorize host-side secret release.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for

@@ -198,8 +198,10 @@ subsequent execution or GPU result, and policy admission still independently
 rejects replay, debug mode, rollback, and insufficient claims.
 
 The control plane also defines an exact 64-byte VBS attestation statement: the
-verifier contributes a fresh 32-byte nonce and VTL1 appends SHA3-256 of the
-canonical approved policy. `IssueAttestationReport` asks Windows to embed that
+verifier contributes a fresh 32-byte nonce and VTL1 appends a domain-separated
+SHA3-256 commitment to the canonical approved policy and the complete canonical
+launch request. The commitment therefore covers the sequence, nonce, image,
+and policy measurement. `IssueAttestationReport` asks Windows to embed that
 statement in a VBS-signed local report, writes it into a fixed 64 KiB bounded
 envelope, and returns an explicit length. The host transports but does not
 validate this evidence. Microsoft's verifier works only inside another VBS
@@ -210,7 +212,8 @@ Hyper-V or the secure kernel.
 The kernel protocol now has a strict allocation-free parser for the documented
 VBS report package. It validates package arithmetic, versions, reserved fields,
 signature presence, the exact 224-byte single-primary-module signed statement,
-the 64-byte nonce/policy binding, and the complete 152-byte primary identity.
+the 64-byte nonce/request/policy binding, and the complete 152-byte primary
+identity.
 Verifier-owned policy can then require exact owner, code, author, family, and
 image identifiers plus minimum enclave, secure-kernel, and platform security
 versions; every debug flag is rejected. The result type is deliberately named
@@ -220,10 +223,11 @@ same original bytes.
 
 The host probe now loads two independent VBS reservations from the same signed
 image. The verifier instance checks the compiled image/policy request, generates
-and retains a nonzero 256-bit challenge with enclave-safe `BCryptGenRandom`, and
-rejects a second challenge while one is pending. VTL0 relays that nonce to the
+a nonzero 256-bit challenge with enclave-safe `BCryptGenRandom`, constructs and
+retains the complete expected binding inside VTL1, and rejects a second challenge
+while one is pending. VTL0 relays that nonce to the
 authority instance and returns the resulting bounded report. Verification first
-copies the entire envelope into VTL1, consumes and erases the challenge, calls
+copies the entire envelope into VTL1, consumes and erases that binding, calls
 `EnclaveVerifyAttestationReport`, parses the exact verified bytes, and requires
 the signed owner, unique-code, author, family, and image identities to equal the
 verifier instance's own `EnclaveGetEnclaveInformation` identity. Enclave,

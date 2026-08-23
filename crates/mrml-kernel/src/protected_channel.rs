@@ -50,7 +50,7 @@ impl VbsAuthorityOperation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VbsAttestationData {
     verifier_nonce: [u8; 32],
-    policy_digest: [u8; 32],
+    statement_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -282,16 +282,25 @@ impl<'a> VbsAttestationEnvelope<'a> {
 }
 
 impl VbsAttestationData {
-    pub fn for_policy(
+    pub fn for_launch_request(
         verifier_nonce: [u8; 32],
+        request: LaunchRequest,
         policy: ProtectionPolicy,
     ) -> Result<Self, ProtectedChannelError> {
         if verifier_nonce == [0; 32] {
             return Err(ProtectedChannelError::MissingNonce);
         }
+        if request.nonce() != verifier_nonce || request.policy_measurement() != policy.commitment()
+        {
+            return Err(ProtectedChannelError::AttestationBindingMismatch);
+        }
+        let mut digest = Sha3_256::new();
+        digest.update(b"MRML-VBS-ATTESTATION-STATEMENT-v1\0");
+        digest.update(&policy.encode());
+        digest.update(&request.encode());
         Ok(Self {
             verifier_nonce,
-            policy_digest: Sha3_256::digest(&policy.encode()),
+            statement_digest: digest.finalize(),
         })
     }
 
@@ -299,14 +308,14 @@ impl VbsAttestationData {
         self.verifier_nonce
     }
 
-    pub const fn policy_digest(self) -> [u8; 32] {
-        self.policy_digest
+    pub const fn statement_digest(self) -> [u8; 32] {
+        self.statement_digest
     }
 
     pub fn encode(self) -> [u8; VBS_ATTESTATION_DATA_BYTES] {
         let mut output = [0; VBS_ATTESTATION_DATA_BYTES];
         output[..32].copy_from_slice(&self.verifier_nonce);
-        output[32..].copy_from_slice(&self.policy_digest);
+        output[32..].copy_from_slice(&self.statement_digest);
         output
     }
 
@@ -316,17 +325,17 @@ impl VbsAttestationData {
         }
         let mut verifier_nonce = [0; 32];
         verifier_nonce.copy_from_slice(&input[..32]);
-        let mut policy_digest = [0; 32];
-        policy_digest.copy_from_slice(&input[32..]);
+        let mut statement_digest = [0; 32];
+        statement_digest.copy_from_slice(&input[32..]);
         if verifier_nonce == [0; 32] {
             return Err(ProtectedChannelError::MissingNonce);
         }
-        if policy_digest == [0; 32] {
+        if statement_digest == [0; 32] {
             return Err(ProtectedChannelError::MissingMeasurement);
         }
         Ok(Self {
             verifier_nonce,
-            policy_digest,
+            statement_digest,
         })
     }
 }
@@ -760,6 +769,11 @@ mod tests {
         LaunchRequest::new(sequence, NONCE, IMAGE, policy.commitment()).unwrap()
     }
 
+    fn attestation_binding(nonce: [u8; 32], policy: ProtectionPolicy) -> VbsAttestationData {
+        let request = LaunchRequest::new(4, nonce, IMAGE, policy.commitment()).unwrap();
+        VbsAttestationData::for_launch_request(nonce, request, policy).unwrap()
+    }
+
     fn request(sequence: u64) -> LaunchRequest {
         request_for_policy(sequence, policy(false))
     }
@@ -1050,17 +1064,21 @@ mod tests {
     #[test]
     fn vbs_attestation_data_binds_nonce_and_exact_policy() {
         let approved = policy(false);
-        let data = VbsAttestationData::for_policy(NONCE, approved).unwrap();
+        let data = attestation_binding(NONCE, approved);
         assert_eq!(data.verifier_nonce(), NONCE);
-        assert_eq!(data.policy_digest(), Sha3_256::digest(&approved.encode()));
         assert_eq!(VbsAttestationData::decode(&data.encode()), Ok(data));
-        assert_ne!(
-            data,
-            VbsAttestationData::for_policy(NONCE, policy(true)).unwrap()
-        );
+        assert_ne!(data, attestation_binding(NONCE, policy(true)));
+        let request = request_for_policy(4, approved);
         assert_eq!(
-            VbsAttestationData::for_policy([0; 32], approved),
+            VbsAttestationData::for_launch_request([0; 32], request, approved),
             Err(ProtectedChannelError::MissingNonce)
+        );
+        let other_request = request_for_policy(5, approved);
+        assert_ne!(
+            data.statement_digest(),
+            VbsAttestationData::for_launch_request(NONCE, other_request, approved)
+                .unwrap()
+                .statement_digest()
         );
     }
 
@@ -1088,7 +1106,7 @@ mod tests {
 
     #[test]
     fn unverified_vbs_report_parser_is_strict_and_preserves_identity() {
-        let binding = VbsAttestationData::for_policy(NONCE, policy(false)).unwrap();
+        let binding = attestation_binding(NONCE, policy(false));
         let report = synthetic_vbs_report(binding);
         let parsed = UnverifiedVbsAttestationReport::parse(&report).unwrap();
         assert_eq!(parsed.report(), report);
@@ -1118,7 +1136,7 @@ mod tests {
 
     #[test]
     fn unverified_vbs_report_rejects_layout_and_debug_ambiguity() {
-        let binding = VbsAttestationData::for_policy(NONCE, policy(false)).unwrap();
+        let binding = attestation_binding(NONCE, policy(false));
         let mut report = synthetic_vbs_report(binding);
         report[12..16].copy_from_slice(&225u32.to_le_bytes());
         assert_eq!(
@@ -1135,7 +1153,7 @@ mod tests {
 
     #[test]
     fn unverified_vbs_report_expectation_rejects_rebinding_and_rollback() {
-        let binding = VbsAttestationData::for_policy(NONCE, policy(false)).unwrap();
+        let binding = attestation_binding(NONCE, policy(false));
         let report = synthetic_vbs_report(binding);
         let parsed = UnverifiedVbsAttestationReport::parse(&report).unwrap();
         let expected = VbsAttestationExpectation::new(
@@ -1153,7 +1171,7 @@ mod tests {
             parsed.matches_expectation(binding, expected),
             Err(ProtectedChannelError::AttestationSecurityVersionTooOld)
         );
-        let other_binding = VbsAttestationData::for_policy([0xb3; 32], policy(false)).unwrap();
+        let other_binding = attestation_binding([0xb3; 32], policy(false));
         assert_eq!(
             parsed.matches_expectation(other_binding, expected),
             Err(ProtectedChannelError::AttestationBindingMismatch)

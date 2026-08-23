@@ -7,12 +7,12 @@ use core::ffi::c_void;
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
     ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport,
-    VBS_ATTESTATION_CHALLENGE_BYTES,
+    VBS_ATTESTATION_DATA_BYTES, VbsAttestationData,
 };
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    UnverifiedVbsAttestationReport, VBS_ATTESTATION_DATA_BYTES, VBS_ATTESTATION_ENVELOPE_BYTES,
-    VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES, VbsAttestationData,
+    UnverifiedVbsAttestationReport, VBS_ATTESTATION_CHALLENGE_BYTES,
+    VBS_ATTESTATION_ENVELOPE_BYTES, VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
     VbsAttestationEnvelope, VbsAttestationExpectation, VbsAuthorityContext, VbsAuthorityOperation,
 };
 
@@ -146,7 +146,7 @@ const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 2;
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy)]
 struct ChallengeState {
-    nonce: [u8; VBS_ATTESTATION_CHALLENGE_BYTES],
+    binding: [u8; VBS_ATTESTATION_DATA_BYTES],
     pending: bool,
 }
 
@@ -154,28 +154,28 @@ struct ChallengeState {
 impl ChallengeState {
     const fn new() -> Self {
         Self {
-            nonce: [0; VBS_ATTESTATION_CHALLENGE_BYTES],
+            binding: [0; VBS_ATTESTATION_DATA_BYTES],
             pending: false,
         }
     }
 
-    fn store(&mut self, nonce: [u8; VBS_ATTESTATION_CHALLENGE_BYTES]) -> Result<(), ()> {
-        if self.pending || nonce == [0; VBS_ATTESTATION_CHALLENGE_BYTES] {
+    fn store(&mut self, binding: VbsAttestationData) -> Result<(), ()> {
+        if self.pending {
             return Err(());
         }
-        self.nonce = nonce;
+        self.binding = binding.encode();
         self.pending = true;
         Ok(())
     }
 
-    fn take(&mut self) -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], ()> {
+    fn take(&mut self) -> Result<VbsAttestationData, ()> {
         if !self.pending {
             return Err(());
         }
-        let nonce = self.nonce;
-        self.nonce.fill(0);
+        let binding = VbsAttestationData::decode(&self.binding).map_err(|_| ())?;
+        self.binding.fill(0);
         self.pending = false;
-        Ok(nonce)
+        Ok(binding)
     }
 }
 
@@ -446,7 +446,9 @@ fn current_identity_expectation() -> Result<VbsAttestationExpectation, Authority
 }
 
 #[cfg(target_os = "windows")]
-fn generate_challenge() -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], AuthorityStatus> {
+fn generate_challenge(
+    seed: LaunchRequest,
+) -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], AuthorityStatus> {
     let mut nonce = [0; VBS_ATTESTATION_CHALLENGE_BYTES];
     // SAFETY: the buffer is enclave-local, exact-sized, and exclusively borrowed.
     if unsafe {
@@ -461,15 +463,24 @@ fn generate_challenge() -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], Authori
     {
         return Err(AuthorityStatus::ChallengeGenerationFailed);
     }
+    let request = LaunchRequest::new(
+        seed.sequence(),
+        nonce,
+        seed.image_measurement(),
+        authority_policy().commitment(),
+    )
+    .map_err(|_| AuthorityStatus::ChallengeGenerationFailed)?;
+    let binding = VbsAttestationData::for_launch_request(nonce, request, authority_policy())
+        .map_err(|_| AuthorityStatus::ChallengeGenerationFailed)?;
     // SAFETY: the image declares one enclave thread, preventing concurrent access.
     unsafe { &mut *CHALLENGE_STATE.0.get() }
-        .store(nonce)
+        .store(binding)
         .map_err(|_| AuthorityStatus::ChallengePending)?;
     Ok(nonce)
 }
 
 #[cfg(target_os = "windows")]
-fn take_challenge() -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], AuthorityStatus> {
+fn take_challenge() -> Result<VbsAttestationData, AuthorityStatus> {
     // SAFETY: the image declares one enclave thread, preventing concurrent access.
     unsafe { &mut *CHALLENGE_STATE.0.get() }
         .take()
@@ -617,8 +628,8 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
                 return AuthorityStatus::AttestationVerificationFailed as usize as *mut c_void;
             }
         };
-        let challenge = match take_challenge() {
-            Ok(challenge) => challenge,
+        let expected_binding = match take_challenge() {
+            Ok(binding) => binding,
             Err(status) => return status as usize as *mut c_void,
         };
         // SAFETY: the report is an immutable enclave-local copy with a bounded u32
@@ -633,10 +644,6 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
         {
             return AuthorityStatus::AttestationVerificationFailed as usize as *mut c_void;
         }
-        let expected_binding = match VbsAttestationData::for_policy(challenge, authority_policy()) {
-            Ok(binding) => binding,
-            Err(_) => return AuthorityStatus::AttestationIdentityRejected as usize as *mut c_void,
-        };
         let expected_identity = match current_identity_expectation() {
             Ok(identity) => identity,
             Err(status) => return status as usize as *mut c_void,
@@ -702,7 +709,8 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
             let Ok(launch) = approved_request(&request) else {
                 return AuthorityStatus::RequestRejected as usize as *mut c_void;
             };
-            let Ok(binding) = VbsAttestationData::for_policy(launch.nonce(), authority_policy())
+            let Ok(binding) =
+                VbsAttestationData::for_launch_request(launch.nonce(), launch, authority_policy())
             else {
                 return AuthorityStatus::RequestRejected as usize as *mut c_void;
             };
@@ -755,10 +763,10 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
             }
         }
         VbsAuthorityOperation::GenerateAttestationChallenge => {
-            if approved_request(&request).is_err() {
+            let Ok(seed) = approved_request(&request) else {
                 return AuthorityStatus::RequestRejected as usize as *mut c_void;
-            }
-            let challenge = match generate_challenge() {
+            };
+            let challenge = match generate_challenge(seed) {
                 Ok(challenge) => challenge,
                 Err(status) => return status as usize as *mut c_void,
             };
@@ -905,15 +913,19 @@ mod tests {
     #[test]
     fn verifier_challenge_is_single_pending_and_single_use() {
         let mut state = ChallengeState::new();
+        let policy = authority_policy();
+        let request =
+            LaunchRequest::new(1, [0x91; 32], AUTHORITY_MEASUREMENT, policy.commitment()).unwrap();
+        let binding = VbsAttestationData::for_launch_request([0x91; 32], request, policy).unwrap();
+        let other_request =
+            LaunchRequest::new(1, [0x92; 32], AUTHORITY_MEASUREMENT, policy.commitment()).unwrap();
+        let other_binding =
+            VbsAttestationData::for_launch_request([0x92; 32], other_request, policy).unwrap();
         assert_eq!(state.take(), Err(()));
-        assert_eq!(state.store([0; VBS_ATTESTATION_CHALLENGE_BYTES]), Err(()));
-        assert_eq!(state.store([0x91; VBS_ATTESTATION_CHALLENGE_BYTES]), Ok(()));
-        assert_eq!(
-            state.store([0x92; VBS_ATTESTATION_CHALLENGE_BYTES]),
-            Err(())
-        );
-        assert_eq!(state.take(), Ok([0x91; VBS_ATTESTATION_CHALLENGE_BYTES]));
+        assert_eq!(state.store(binding), Ok(()));
+        assert_eq!(state.store(other_binding), Err(()));
+        assert_eq!(state.take(), Ok(binding));
         assert_eq!(state.take(), Err(()));
-        assert_eq!(state.nonce, [0; VBS_ATTESTATION_CHALLENGE_BYTES]);
+        assert_eq!(state.binding, [0; VBS_ATTESTATION_DATA_BYTES]);
     }
 }
