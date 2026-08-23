@@ -145,16 +145,38 @@ plus one explicit direct, dereference, index, or numeric tuple-field projection;
 index source and spans are captured once, and ambiguous non-numeric tuple
 assignment projections fail closed. Runtime typing/emission still rediscovers
 type information recursively. Runtime locals now receive checked monotonic IDs
-that are not recycled after scope cleanup, and assignment writes resolve once
-to a typed local-ID/parameter base plus the parsed projection before emission.
+that are not recycled after scope cleanup. Their name, type, mutability, and ID
+remain in a fixed 256-entry fact table after the active stack slot is released.
+Assignment writes resolve once to a typed local-ID/parameter base plus the
+parsed projection before emission and append an ordered fact to a separate
+fixed 256-entry table.
 The resolved place also classifies access intent as `Write` or
 `ReadModifyWrite`; every supported direct, tuple-field, fixed-array,
 reference-array, slice, and dereference assignment family uses that fact to
-decide whether the previous value is read.
+decide whether the previous value is read. Final emission validates contiguous
+local identities, referenced local/parameter types, projection/type shape,
+binding mutability, and the absence of holes in the ordered access facts.
+Capacity exhaustion and inconsistent internal facts fail explicitly.
+
+These tables cover the current runtime emission, including expanded inlined
+helper bodies; they are ephemeral compiler state rather than serialized IR.
 Expression reads and parser/semantic locals still resolve by name, and there is
-not yet a general projection list, typed body-wide place table, move path, loan,
+not yet a general projection list, complete typed body table, move path, loan,
 or CFG. This runtime write-place foundation is therefore an incremental
 prerequisite, not a claim of ownership checking.
+
+Complexity assessment for the bounded runtime fact tables:
+
+```text
+Complexity impact: LOW
+TCB impact: NONE
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
 
 ## Modern trait-solver roadmap
 

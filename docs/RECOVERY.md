@@ -134,9 +134,9 @@ projection. Do not regress this to target-string splitting in semantics or
 code generation. Index text is trimmed once with its exact body-relative span;
 non-numeric tuple assignment fields fail with `ExpectedAssignmentTarget` only
 after an assignment operator is recognized, so ordinary method-call expressions
-remain parseable. The next dependency is stable bounded local/place identity
-and projection lists in a typed body IR, followed by body-wide access facts and
-CFG edges; move/loan/region claims remain unimplemented.
+remain parseable. The next dependency is a stable bounded typed body
+representation with general projection lists and CFG edges;
+move/loan/region claims remain unimplemented.
 
 Runtime assignment lowering has the first stable-identity slice. Every emitted
 local and inlined-helper parameter receives a checked monotonic `RuntimeLocalId`;
@@ -148,9 +148,24 @@ the parsed projection, effective mutability, and explicit `Write` or
 classification instead of independently inferring old-value reads from the
 operator. Resolution validates the ID again before a local store. Do not
 confuse the storage index with identity or reintroduce separate name/access
-inference in assignment families. Expression reads,
-parser-level IDs, general projection lists, body-wide access facts, and CFG
-analysis are still absent and are the next recovery boundary.
+inference in assignment families.
+
+The runtime emitter retains up to 256 local facts and 256 ordered assignment-
+access facts. Local facts preserve ID, name, type, and mutability after scope
+cleanup releases the active stack entry; assignment facts preserve stable
+local/parameter identity, parsed projection, type, access intent, and source
+span. `finish` rejects holes, recycled/mismatched IDs, invalid projection/type
+combinations, immutable binding stores, and missing or mismatched parameters.
+The tables are bounded ephemeral compiler state and include expanded inlined
+helper bodies; they are not serialized IR or a claim of whole-program analysis.
+The exact capacity errors are `TooManyRuntimeLocalFacts` and
+`TooManyRuntimePlaceAccessFacts`; invariant failure is
+`InvalidRuntimePlaceFacts`.
+
+Expression reads, parser-level IDs, general projection lists, initialization
+and move paths, CFG analysis, loans, and regions are still absent. The next
+compiler milestone is to turn this write-side foundation into the bounded typed
+body-wide local/place/access table, then add CFG and initialization/move facts.
 
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains

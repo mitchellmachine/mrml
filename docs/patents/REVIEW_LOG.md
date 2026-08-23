@@ -436,3 +436,16 @@ no novel algorithm, ABI optimization, device protocol, codec, or cryptographic
 construction.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded IPC and context switching.
+
+## 2026-08-23 — bounded runtime body fact tables
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Runtime emission now retains fixed-capacity monotonic local facts across stack-
+slot reuse and source-ordered assignment-place access facts through final
+invariant validation. This is conventional compiler symbol, type,
+use/definition, and place bookkeeping; it introduces no novel algorithm, ABI,
+protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary bounded compiler fact tables and
+validation within the existing Rust-subset compiler category.
