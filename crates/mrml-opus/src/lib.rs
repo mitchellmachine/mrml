@@ -2943,7 +2943,9 @@ mod tests {
             for payload in [0x00, 0x7f, 0xff] {
                 let mut decoder = Decoder::new(2).unwrap();
                 let mut output = [1i16; 5_760];
-                let samples = decoder.decode(&[toc, payload], &mut output, 48_000).unwrap();
+                let samples = decoder
+                    .decode(&[toc, payload], &mut output, 48_000)
+                    .unwrap();
                 assert!(samples > 0);
                 assert!(output[..samples * 2].iter().all(|&sample| sample == 0));
                 assert_eq!(decoder.final_range(), 0);

@@ -14,8 +14,11 @@ mod linux {
 
     #[link(name = "opus")]
     unsafe extern "C" {
-        fn opus_decoder_create(sample_rate: c_int, channels: c_int, error: *mut c_int)
-        -> *mut c_void;
+        fn opus_decoder_create(
+            sample_rate: c_int,
+            channels: c_int,
+            error: *mut c_int,
+        ) -> *mut c_void;
         fn opus_decoder_destroy(decoder: *mut c_void);
         fn opus_decode(
             decoder: *mut c_void,
@@ -26,11 +29,7 @@ mod linux {
             decode_fec: c_int,
         ) -> c_int;
         #[link_name = "opus_decoder_ctl"]
-        fn opus_decoder_get_u32(
-            decoder: *mut c_void,
-            request: c_int,
-            value: *mut u32,
-        ) -> c_int;
+        fn opus_decoder_get_u32(decoder: *mut c_void, request: c_int, value: *mut u32) -> c_int;
     }
 
     fn decode_reference(packet: &[u8]) -> Option<u32> {
@@ -72,7 +71,9 @@ mod linux {
             .checked_mul(parsed.frame_count as usize)?;
         let mut decoder = Decoder::new(2).ok()?;
         let mut pcm = [0i16; 11_520];
-        decoder.decode(packet, &mut pcm[..samples * 2], 48_000).ok()?;
+        decoder
+            .decode(packet, &mut pcm[..samples * 2], 48_000)
+            .ok()?;
         Some(decoder.final_range())
     }
 
@@ -106,9 +107,9 @@ mod linux {
             }
         }
         for length in 2..packet.len() {
-            if mismatch(&packet[..length]).is_some_and(|(reference, mrml)| {
-                reference != 0 && mrml != 0
-            }) {
+            if mismatch(&packet[..length])
+                .is_some_and(|(reference, mrml)| reference != 0 && mrml != 0)
+            {
                 if verbose {
                     println!("truncate length={length}");
                 }
@@ -159,12 +160,12 @@ mod linux {
                 return Err(format!("unexpected argument: {argument}"));
             }
         }
-        let input = packet_hex.ok_or_else(|| {
-            "usage: opus_range_diff <packet-hex> [--verbose]".to_owned()
-        })?;
+        let input = packet_hex
+            .ok_or_else(|| "usage: opus_range_diff <packet-hex> [--verbose]".to_owned())?;
         let packet = parse_hex(&input)?;
-        let (minimal, reference, mrml) = minimize(packet, verbose)
-            .ok_or_else(|| "packet is rejected by a decoder or final ranges already match".to_owned())?;
+        let (minimal, reference, mrml) = minimize(packet, verbose).ok_or_else(|| {
+            "packet is rejected by a decoder or final ranges already match".to_owned()
+        })?;
         print_packet(&minimal, reference, mrml);
         Ok(())
     }
