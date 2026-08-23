@@ -12619,6 +12619,39 @@ mod tests {
     }
 
     #[test]
+    fn wraps_mixed_signedness_integer_arithmetic() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: u8) -> i8 { left.wrapping_add_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: u64) -> i64 { left.wrapping_sub_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: i16) -> u16 { left.wrapping_add_signed(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: i64) -> u64 { left.wrapping_sub_signed(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.wrapping_add_signed(right) }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
+    }
+
+    #[test]
     fn checks_strict_primitive_integer_arithmetic() {
         let sources = [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.strict_add(right) }",

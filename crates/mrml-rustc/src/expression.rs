@@ -3932,6 +3932,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "strict_sub_signed"
                         | "strict_add_unsigned"
                         | "strict_sub_unsigned"
+                        | "wrapping_add_signed"
+                        | "wrapping_sub_signed"
+                        | "wrapping_add_unsigned"
+                        | "wrapping_sub_unsigned"
                         | "strict_mul"
                         | "strict_div"
                         | "strict_rem"
@@ -4033,6 +4037,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "strict_sub_signed"
                     | "strict_add_unsigned"
                     | "strict_sub_unsigned"
+                    | "wrapping_add_signed"
+                    | "wrapping_sub_signed"
+                    | "wrapping_add_unsigned"
+                    | "wrapping_sub_unsigned"
                     | "strict_mul"
                     | "strict_div"
                     | "strict_rem"
@@ -4152,6 +4160,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 | "strict_sub_signed"
                 | "strict_add_unsigned"
                 | "strict_sub_unsigned"
+                | "wrapping_add_signed"
+                | "wrapping_sub_signed"
+                | "wrapping_add_unsigned"
+                | "wrapping_sub_unsigned"
                 | "strict_mul"
                 | "strict_div"
                 | "strict_rem" => ExprKind::WrappingArithmetic {
@@ -4163,11 +4175,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "wrapping_add"
                         | "strict_add"
                         | "strict_add_signed"
-                        | "strict_add_unsigned" => BinaryOperator::Add,
+                        | "strict_add_unsigned"
+                        | "wrapping_add_signed"
+                        | "wrapping_add_unsigned" => BinaryOperator::Add,
                         "wrapping_sub"
                         | "strict_sub"
                         | "strict_sub_signed"
-                        | "strict_sub_unsigned" => BinaryOperator::Subtract,
+                        | "strict_sub_unsigned"
+                        | "wrapping_sub_signed"
+                        | "wrapping_sub_unsigned" => BinaryOperator::Subtract,
                         "wrapping_mul" | "strict_mul" => BinaryOperator::Multiply,
                         "wrapping_div" | "strict_div" => BinaryOperator::Divide,
                         "wrapping_rem" | "strict_rem" => BinaryOperator::Remainder,

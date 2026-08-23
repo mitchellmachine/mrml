@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 443 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 445 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1909,6 +1909,12 @@ runtime functions. The same syntax remains type-directed for raw pointers, so
 their existing `wrapping_add` and `wrapping_sub` element offsets are preserved.
 Four emitted System V integer objects matched pinned Rust across ordinary and
 overflowing narrow, 32-bit, and 64-bit boundary cases.
+Stable `wrapping_add_signed`, `wrapping_sub_signed`,
+`wrapping_add_unsigned`, and `wrapping_sub_unsigned` require the corresponding
+same-width opposite-signed argument and wrap the mathematical result to the
+receiver type. Four 512- to 520-byte System V objects matched pinned Rust across
+eight narrow and full-width cross-sign boundaries, including both signed and
+unsigned extrema.
 Stable primitive `strict_add`, `strict_sub`, and `strict_mul` preserve matching
 signed or unsigned receiver types and trap on overflow independently of the
 runtime overflow-check setting. Three System V objects emitted explicitly with
