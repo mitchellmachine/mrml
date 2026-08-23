@@ -2532,6 +2532,7 @@ fn evaluate_call_aware_integer<
                     crate::expression::IntegerBitTransform::WrappingNegate
                         | crate::expression::IntegerBitTransform::WrappingAbsolute
                         | crate::expression::IntegerBitTransform::Absolute
+                        | crate::expression::IntegerBitTransform::StrictAbsolute
                         | crate::expression::IntegerBitTransform::SaturatingNegate
                         | crate::expression::IntegerBitTransform::SaturatingAbsolute
                         | crate::expression::IntegerBitTransform::Signum
@@ -2560,8 +2561,11 @@ fn evaluate_call_aware_integer<
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
-            if transform == crate::expression::IntegerBitTransform::Absolute
-                && value == 1_u128 << (bits - 1)
+            if matches!(
+                transform,
+                crate::expression::IntegerBitTransform::Absolute
+                    | crate::expression::IntegerBitTransform::StrictAbsolute
+            ) && value == 1_u128 << (bits - 1)
             {
                 return Err(arithmetic_error(ConstEvalError::Overflow));
             }
@@ -3487,8 +3491,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
-            if transform == crate::expression::IntegerBitTransform::Absolute
-                && value == 1_u128 << (bits - 1)
+            if matches!(
+                transform,
+                crate::expression::IntegerBitTransform::Absolute
+                    | crate::expression::IntegerBitTransform::StrictAbsolute
+            ) && value == 1_u128 << (bits - 1)
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::Overflow));
             }
@@ -3906,7 +3913,9 @@ fn transform_integer_bits(
                 0_u128.wrapping_sub(value) & mask
             }
         }
-        IntegerBitTransform::WrappingAbsolute | IntegerBitTransform::Absolute => {
+        IntegerBitTransform::WrappingAbsolute
+        | IntegerBitTransform::Absolute
+        | IntegerBitTransform::StrictAbsolute => {
             if value & (1_u128 << (bits - 1)) == 0 {
                 value
             } else {

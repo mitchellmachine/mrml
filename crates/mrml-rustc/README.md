@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 439 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 441 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1934,6 +1934,12 @@ overflow checks for every intermediate product. Two unchecked-mode System V
 objects matched pinned Rust for exponent zero, signed parity, ordinary and
 large valid powers; narrow unsigned and full-width signed overflow probes
 trapped.
+Stable signed primitive `strict_abs` returns representable absolute values and
+traps on the receiver minimum independently of overflow settings. Its
+narrow-width lowering uses explicit receiver-range validation rather than the
+64-bit `neg` overflow flag, also correcting checked ordinary narrow `abs`.
+Unchecked i8 and i64 System V objects matched pinned Rust across signs, zero,
+extrema-adjacent values, and both minimum-value probes trapped.
 Signed integers additionally support `wrapping_neg` and `wrapping_abs` in
 constants and runtime functions. Both preserve the receiver width, including
 the two's-complement minimum value whose mathematical negation is not

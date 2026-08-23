@@ -3262,6 +3262,7 @@ fn runtime_expression_type_with_locals<
                 crate::expression::IntegerBitTransform::WrappingNegate
                     | crate::expression::IntegerBitTransform::WrappingAbsolute
                     | crate::expression::IntegerBitTransform::Absolute
+                    | crate::expression::IntegerBitTransform::StrictAbsolute
                     | crate::expression::IntegerBitTransform::SaturatingNegate
                     | crate::expression::IntegerBitTransform::SaturatingAbsolute
                     | crate::expression::IntegerBitTransform::Signum
@@ -5425,12 +5426,20 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         }
                         self.patch_forward_branch(saturated)?;
                     }
-                    IntegerBitTransform::WrappingAbsolute | IntegerBitTransform::Absolute => {
+                    IntegerBitTransform::WrappingAbsolute
+                    | IntegerBitTransform::Absolute
+                    | IntegerBitTransform::StrictAbsolute => {
                         self.emit(&[0x48, 0x85, 0xc0])?;
                         let nonnegative = self.emit_forward_branch(0x89)?;
                         self.emit(&[0x48, 0xf7, 0xd8])?;
-                        if transform == IntegerBitTransform::Absolute && self.overflow_checks {
-                            self.emit_trap_branch(0x80)?;
+                        if transform == IntegerBitTransform::StrictAbsolute
+                            || (transform == IntegerBitTransform::Absolute && self.overflow_checks)
+                        {
+                            if operand_width.bits == 64 {
+                                self.emit_trap_branch(0x80)?;
+                            } else {
+                                self.emit_range_check()?;
+                            }
                         }
                         self.patch_forward_branch(nonnegative)?;
                     }
@@ -12751,6 +12760,52 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 2048, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn computes_strict_signed_integer_absolute_values() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.strict_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.strict_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.strict_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize) -> isize { input.strict_abs() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 1024, 2, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.strict_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.strict_abs() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 2, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

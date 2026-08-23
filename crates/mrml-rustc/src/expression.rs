@@ -515,6 +515,7 @@ pub enum IntegerBitTransform {
     StrictNegate,
     WrappingAbsolute,
     Absolute,
+    StrictAbsolute,
     SaturatingNegate,
     SaturatingAbsolute,
     NextPowerOfTwo,
@@ -3903,6 +3904,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "to_le"
                         | "wrapping_neg"
                         | "strict_neg"
+                        | "strict_abs"
                         | "wrapping_abs"
                         | "abs"
                         | "unsigned_abs"
@@ -4239,6 +4241,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 | "to_le"
                 | "wrapping_neg"
                 | "strict_neg"
+                | "strict_abs"
                 | "wrapping_abs"
                 | "abs"
                 | "saturating_neg"
@@ -4257,6 +4260,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "strict_neg" => IntegerBitTransform::StrictNegate,
                         "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
                         "abs" => IntegerBitTransform::Absolute,
+                        "strict_abs" => IntegerBitTransform::StrictAbsolute,
                         "saturating_neg" => IntegerBitTransform::SaturatingNegate,
                         "saturating_abs" => IntegerBitTransform::SaturatingAbsolute,
                         "next_power_of_two" => IntegerBitTransform::NextPowerOfTwo,
