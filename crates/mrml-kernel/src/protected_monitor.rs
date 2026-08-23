@@ -1,4 +1,4 @@
-use crate::PhysAddr;
+use crate::{PhysAddr, ProtectionBackend, ProtectionClaims, ProtectionError, ProtectionReport};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DomainId(u64);
@@ -72,6 +72,8 @@ pub enum MonitorError {
     DomainHasGranules,
     SequenceExhausted,
     ScrubFailed,
+    InvalidSecurityVersion,
+    Report(ProtectionError),
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +99,8 @@ pub struct ProtectedMonitor<const DOMAINS: usize, const GRANULES: usize> {
     domain_generations: [u32; DOMAINS],
     granules: [Option<Granule>; GRANULES],
     granule_generations: [u32; GRANULES],
+    security_version: u64,
+    report_sequence: u64,
 }
 
 impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRANULES> {
@@ -106,7 +110,18 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             domain_generations: [0; DOMAINS],
             granules: [None; GRANULES],
             granule_generations: [0; GRANULES],
+            security_version: 1,
+            report_sequence: 0,
         }
+    }
+
+    pub fn with_security_version(security_version: u64) -> Result<Self, MonitorError> {
+        if security_version == 0 {
+            return Err(MonitorError::InvalidSecurityVersion);
+        }
+        let mut monitor = Self::new();
+        monitor.security_version = security_version;
+        Ok(monitor)
     }
 
     pub fn create_domain(&mut self) -> Result<DomainId, MonitorError> {
@@ -280,6 +295,50 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         Ok(self.domain(id)?.state)
     }
 
+    /// Issues backend evidence only from live monitor-owned state. The report
+    /// remains local evidence until an independent authority authenticates it.
+    pub fn issue_report(
+        &mut self,
+        id: DomainId,
+        nonce: [u8; 32],
+    ) -> Result<ProtectionReport, MonitorError> {
+        let domain = *self.domain(id)?;
+        if !matches!(domain.state, DomainState::Measured | DomainState::Runnable) {
+            return Err(MonitorError::InvalidDomainState);
+        }
+        let mut owns_private = false;
+        let mut owns_shared = false;
+        for granule in self
+            .granules
+            .iter()
+            .flatten()
+            .filter(|granule| granule.owner == Some(id))
+        {
+            owns_private |= granule.state == GranuleState::Private;
+            owns_shared |= granule.state == GranuleState::Shared;
+        }
+        let mut claims = ProtectionClaims::MEASURED;
+        if owns_private && !owns_shared {
+            claims = claims.union(ProtectionClaims::DOMAIN_ISOLATION);
+        }
+        let sequence = self
+            .report_sequence
+            .checked_add(1)
+            .ok_or(MonitorError::SequenceExhausted)?;
+        let report = ProtectionReport::new(
+            ProtectionBackend::BareMetalMonitor,
+            claims,
+            false,
+            self.security_version,
+            sequence,
+            domain.measurement,
+            nonce,
+        )
+        .map_err(MonitorError::Report)?;
+        self.report_sequence = sequence;
+        Ok(report)
+    }
+
     fn transition_unowned(
         &mut self,
         id: GranuleId,
@@ -392,5 +451,70 @@ mod tests {
         let second = monitor.create_domain().unwrap();
         assert_ne!(first, second);
         assert_eq!(monitor.domain_state(first), Err(MonitorError::StaleDomain));
+    }
+
+    #[test]
+    fn reports_derive_claims_only_from_live_owned_state() {
+        let mut monitor = ProtectedMonitor::<1, 1>::with_security_version(7).unwrap();
+        let domain = monitor.create_domain().unwrap();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0x40_0000).unwrap())
+            .unwrap();
+        assert_eq!(
+            monitor.issue_report(domain, [1; 32]),
+            Err(MonitorError::InvalidDomainState)
+        );
+        monitor.delegate(granule).unwrap();
+        monitor.assign_private(granule, domain).unwrap();
+        monitor.seal_domain(domain, [0x81; 64]).unwrap();
+        let private = monitor.issue_report(domain, [1; 32]).unwrap();
+        assert_eq!(private.backend(), ProtectionBackend::BareMetalMonitor);
+        assert_eq!(private.security_version(), 7);
+        assert_eq!(private.sequence(), 1);
+        assert_eq!(private.measurement(), [0x81; 64]);
+        assert_eq!(
+            private.claims(),
+            ProtectionClaims::MEASURED.union(ProtectionClaims::DOMAIN_ISOLATION)
+        );
+        assert!(!private.debug_allowed());
+
+        monitor.share(granule, domain).unwrap();
+        let shared = monitor.issue_report(domain, [2; 32]).unwrap();
+        assert_eq!(shared.claims(), ProtectionClaims::MEASURED);
+        assert_eq!(shared.sequence(), 2);
+    }
+
+    #[test]
+    fn stopped_destroyed_and_stale_domains_cannot_issue_evidence() {
+        let mut monitor = ProtectedMonitor::<1, 1>::new();
+        let domain = monitor.create_domain().unwrap();
+        monitor.seal_domain(domain, [0x91; 64]).unwrap();
+        monitor.start_domain(domain).unwrap();
+        monitor.stop_domain(domain).unwrap();
+        assert_eq!(
+            monitor.issue_report(domain, [3; 32]),
+            Err(MonitorError::InvalidDomainState)
+        );
+        monitor.destroy_domain(domain).unwrap();
+        assert_eq!(
+            monitor.issue_report(domain, [3; 32]),
+            Err(MonitorError::StaleDomain)
+        );
+    }
+
+    #[test]
+    fn invalid_nonce_does_not_consume_report_sequence() {
+        let mut monitor = ProtectedMonitor::<1, 0>::new();
+        let domain = monitor.create_domain().unwrap();
+        monitor.seal_domain(domain, [0xa1; 64]).unwrap();
+        assert_eq!(
+            monitor.issue_report(domain, [0; 32]),
+            Err(MonitorError::Report(ProtectionError::MissingNonce))
+        );
+        assert_eq!(monitor.issue_report(domain, [4; 32]).unwrap().sequence(), 1);
+        assert!(matches!(
+            ProtectedMonitor::<1, 0>::with_security_version(0),
+            Err(MonitorError::InvalidSecurityVersion)
+        ));
     }
 }

@@ -214,6 +214,26 @@ INVEPT before first entry, distinguishes launch from resume, records exits
 before inspecting guest state, and never advances state after a failed
 instruction. This ordering layer is tested with an emulated backend.
 
+Protection reports can now be issued directly from the monitor's live domain
+table rather than assembled from caller-selected claims. Issuance is allowed
+only while the exact generational domain is measured or runnable, binds the
+sealed measurement, non-debug state, configured nonzero monitor security
+version, fresh caller nonce, and a monitor-global checked monotonic sequence.
+A domain with at least one private granule and no shared granules receives
+`DOMAIN_ISOLATION | MEASURED`; a domain with shared ownership is explicitly
+downgraded to `MEASURED`. Building, stopped, destroyed, and stale-generation
+domains cannot issue evidence, and a malformed nonce does not consume the
+sequence. This report is still local evidence until independently
+authenticated; the ownership state machine alone is not remote attestation.
+
+The allowable claim sets now match implemented mechanisms. Neither VBS nor the
+bare-metal monitor may claim `SEALED_KEYS`; attempts are rejected as unsupported
+until the respective protected key lifecycle actually exists. Bare-metal also
+does not claim `PRIVATE_MEMORY`, `HOST_VMM_ISOLATION`, `TRUSTED_IO`, or
+`ATTESTED` merely because VMX or a domain record exists. These claims require
+hardware page-transition/IOMMU enforcement and an authenticated evidence path,
+not a configuration flag.
+
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context
 `INVEPT`. It can only be constructed through an unsafe CPL0 boundary whose

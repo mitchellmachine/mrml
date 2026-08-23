@@ -23,12 +23,10 @@ impl ProtectionBackend {
     pub const fn maximum_claims(self) -> ProtectionClaims {
         match self {
             Self::Unprotected => ProtectionClaims::NONE,
-            Self::VbsEnclave => ProtectionClaims::VTL0_ISOLATION
-                .union(ProtectionClaims::MEASURED)
-                .union(ProtectionClaims::SEALED_KEYS),
-            Self::BareMetalMonitor => ProtectionClaims::DOMAIN_ISOLATION
-                .union(ProtectionClaims::MEASURED)
-                .union(ProtectionClaims::SEALED_KEYS),
+            Self::VbsEnclave => ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED),
+            Self::BareMetalMonitor => {
+                ProtectionClaims::DOMAIN_ISOLATION.union(ProtectionClaims::MEASURED)
+            }
         }
     }
 }
@@ -142,6 +140,14 @@ impl ProtectionReport {
 
     pub const fn sequence(self) -> u64 {
         self.sequence
+    }
+
+    pub const fn security_version(self) -> u64 {
+        self.security_version
+    }
+
+    pub const fn debug_allowed(self) -> bool {
+        self.debug_allowed
     }
 
     pub fn encode(self) -> [u8; PROTECTION_REPORT_BYTES] {
@@ -377,13 +383,11 @@ mod tests {
 
     #[test]
     fn admission_rejects_downgrade_debug_replay_and_wrong_measurement() {
-        let required = ProtectionClaims::VTL0_ISOLATION
-            .union(ProtectionClaims::MEASURED)
-            .union(ProtectionClaims::SEALED_KEYS);
+        let required = ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED);
         let policy = ProtectionPolicy::new(required, false, 7, MEASUREMENT);
         let mut session = ProtectionSession::new(NONCE).unwrap();
         let admitted = session.admit(vbs(4), policy).unwrap();
-        assert!(admitted.permits_secret_release());
+        assert!(!admitted.permits_secret_release());
         assert_eq!(session.admit(vbs(4), policy), Err(ProtectionError::Replay));
 
         let debug = ProtectionReport::new(
@@ -435,5 +439,28 @@ mod tests {
             )
             .unwrap();
         assert!(!admission.permits_secret_release());
+    }
+
+    #[test]
+    fn unimplemented_key_sealing_cannot_be_claimed() {
+        for backend in [
+            ProtectionBackend::VbsEnclave,
+            ProtectionBackend::BareMetalMonitor,
+        ] {
+            assert_eq!(
+                ProtectionReport::new(
+                    backend,
+                    backend
+                        .maximum_claims()
+                        .union(ProtectionClaims::SEALED_KEYS),
+                    false,
+                    1,
+                    1,
+                    MEASUREMENT,
+                    NONCE,
+                ),
+                Err(ProtectionError::UnsupportedClaim)
+            );
+        }
     }
 }
