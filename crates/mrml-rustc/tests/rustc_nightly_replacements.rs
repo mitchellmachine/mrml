@@ -3397,6 +3397,24 @@ fn rustc_checked_option_and_sequences_producers() {
 }
 
 #[test]
+fn rustc_boolean_option_constructors_preserve_eagerness() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(flag: bool, value: u16, fallback: u16) -> u16 { flag.then_some(value).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(flag: bool, numerator: i64, divisor: i64) -> i64 { flag.then(|| numerator / divisor).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(flag: bool, value: u8) -> u32 { flag.then_some(value).map(|present| present as u32 + 1).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(flag: bool, value: i16) -> bool { flag.then(|| value).is_some_and(|present| present > 10) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",

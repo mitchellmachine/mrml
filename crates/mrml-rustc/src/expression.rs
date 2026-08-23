@@ -586,6 +586,14 @@ pub enum ExprKind<'source> {
         option: ExprId,
         alternative: ExprId,
     },
+    IntegerOptionThenSome {
+        condition: ExprId,
+        value: ExprId,
+    },
+    IntegerOptionThen {
+        condition: ExprId,
+        closure: ExprId,
+    },
     IntegerOptionInspect {
         option: ExprId,
         closure: ExprId,
@@ -1023,6 +1031,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerOptionOr { .. }
             | ExprKind::IntegerOptionXor { .. }
             | ExprKind::IntegerOptionAnd { .. }
+            | ExprKind::IntegerOptionThenSome { .. }
+            | ExprKind::IntegerOptionThen { .. }
             | ExprKind::IntegerOptionInspect { .. }
             | ExprKind::IntegerOptionFilter { .. }
             | ExprKind::IntegerClampMagnitude { .. }
@@ -1322,7 +1332,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerOptionOrElse { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionOr { .. }
             | ExprKind::IntegerOptionXor { .. }
-            | ExprKind::IntegerOptionAnd { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            | ExprKind::IntegerOptionAnd { .. }
+            | ExprKind::IntegerOptionThenSome { .. }
+            | ExprKind::IntegerOptionThen { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionInspect { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionFilter { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2974,6 +2986,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
                 self.substitute_identifier(alternative, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionThenSome { condition, value } => {
+                self.substitute_identifier(condition, name, replacement, depth + 1)?;
+                self.substitute_identifier(value, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionThen { condition, closure } => {
+                self.substitute_identifier(condition, name, replacement, depth + 1)?;
+                self.substitute_identifier(closure, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerOptionInspect { option, closure } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
@@ -4787,6 +4807,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "or"
                         | "xor"
                         | "and"
+                        | "then_some"
+                        | "then"
                         | "inspect"
                         | "filter"
                         | "clamp_magnitude"
@@ -4985,6 +5007,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "or"
                     | "xor"
                     | "and"
+                    | "then_some"
+                    | "then"
                     | "inspect"
                     | "filter"
                     | "unwrap_or"
@@ -5526,6 +5550,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "and" => ExprKind::IntegerOptionAnd {
                     option: base,
                     alternative: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "then_some" => ExprKind::IntegerOptionThenSome {
+                    condition: base,
+                    value: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "then" => ExprKind::IntegerOptionThen {
+                    condition: base,
+                    closure: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },

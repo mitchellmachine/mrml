@@ -1198,7 +1198,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 545 Windows library, conformance, rustc-nightly-replacement, and driver
+The 547 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1221,6 +1221,11 @@ and a 640-byte ELF64 object. Independent pinned-nightly callers observed the
 right-hand `u16` value only when both the left `u8` and right `u16` producers
 succeeded; either failure and the combined failure produced `None` on both
 hosts.
+A Boolean-option probe covering eager `then_some` and lazy `then` emitted a
+283-byte COFF object and a 672-byte ELF64 object. Independent pinned-nightly
+callers observed both present and absent eager values, a selected lazy quotient,
+and a false lazy edge whose closure contained division by zero but was not
+executed, on Windows and Arch Linux WSL.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.
@@ -2506,6 +2511,13 @@ producer. Both operands execute in source order even when the receiver is
 forces `None` after the alternative has executed. The alternative may use a
 different built-in integer payload type, and that type is retained through
 later option combinators and terminal consumers.
+
+Boolean receivers can construct integer options through eager `bool::then_some`
+and lazy `bool::then`. `then_some` evaluates its integer argument before using
+the receiver as the option validity flag. `then` requires a bounded
+zero-argument closure and executes its integer body only when the receiver is
+true. Both producers retain the payload's concrete integer type and compose
+with the existing maps, filters, predicates, and terminal consumers.
 
 Checked integer options also support composable `Option::inspect`. Its closure
 receives an immutable reference to a present candidate, must return unit, and
