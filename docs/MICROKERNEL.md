@@ -269,9 +269,11 @@ now has a live-leaf EPT transition adapter that denies and invalidates DMA first
 revokes old EPT access before granting new access, invalidates every affected
 EPT context, and scrubs a complete 4 KiB granule before restoring host access.
 An invalidation failure after a leaf write returns `FailStop`. Its platform
-IOMMU and scrub implementations remain inside the trusted bare-metal monitor
-boundary and must be implemented and validated on hardware before stronger
-claims are enabled.
+IOMMU implementation remains inside the trusted bare-metal monitor boundary.
+The supplied scrubber binds a unique pinned physical-page mapping and performs
+volatile byte zeroization across the entire page before an ordering fence. The
+IOMMU path and scrub primitive must still be validated on hardware before
+stronger claims are enabled.
 
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context

@@ -34,7 +34,7 @@ pub use descriptors::{
 };
 pub use ept::{
     DmaIsolation, EptAccess, EptAdapterError, EptGranuleBinding, EptGranuleHardware,
-    GranuleScrubber,
+    GranuleScrubber, VolatileGranuleScrubber,
 };
 pub use local_apic::{
     ApStartupTiming, ApicIpi, LocalApicController, LocalApicError, LocalApicTimer, TimerDivide,

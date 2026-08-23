@@ -2,6 +2,7 @@ use crate::{
     DomainId, GranuleHardware, GranuleHardwareOutcome, GranuleTransition, GranuleTransitionKind,
     PAGE_SIZE, PhysAddr,
 };
+use core::sync::atomic::{Ordering, compiler_fence};
 
 use super::{EptPointer, VmxInstructions};
 
@@ -39,6 +40,38 @@ pub trait DmaIsolation {
 
 pub trait GranuleScrubber {
     fn scrub(&mut self, physical: PhysAddr, bytes: usize) -> bool;
+}
+
+/// Volatile zeroization of one pinned, direct-mapped granule.
+pub struct VolatileGranuleScrubber<'a> {
+    physical: PhysAddr,
+    page: &'a mut [u8; PAGE_SIZE as usize],
+}
+
+impl<'a> VolatileGranuleScrubber<'a> {
+    /// # Safety
+    ///
+    /// `page` must be the unique writable kernel mapping of `physical` for the
+    /// lifetime of this object. DMA and other CPU access must already be
+    /// revoked before `scrub` is called.
+    pub const unsafe fn new(physical: PhysAddr, page: &'a mut [u8; PAGE_SIZE as usize]) -> Self {
+        Self { physical, page }
+    }
+}
+
+impl GranuleScrubber for VolatileGranuleScrubber<'_> {
+    fn scrub(&mut self, physical: PhysAddr, bytes: usize) -> bool {
+        if physical != self.physical || bytes != self.page.len() {
+            return false;
+        }
+        for byte in self.page.iter_mut() {
+            // SAFETY: construction requires a unique live mapping, and each
+            // byte is visited exactly once through that exclusive reference.
+            unsafe { core::ptr::write_volatile(byte, 0) };
+        }
+        compiler_fence(Ordering::SeqCst);
+        true
+    }
 }
 
 /// Live host and optional domain EPT leaves for one physical granule.
@@ -314,5 +347,15 @@ mod tests {
             monitor.granule_state(granule),
             Ok(crate::GranuleState::HardwareUncertain)
         );
+    }
+
+    #[test]
+    fn volatile_scrubber_clears_the_complete_bound_page() {
+        let physical = PhysAddr::new(0x60_0000).unwrap();
+        let mut page = [0xa5; PAGE_SIZE as usize];
+        let mut scrubber = unsafe { VolatileGranuleScrubber::new(physical, &mut page) };
+        assert!(!scrubber.scrub(PhysAddr::new(0x61_0000).unwrap(), PAGE_SIZE as usize));
+        assert!(scrubber.scrub(physical, PAGE_SIZE as usize));
+        assert!(page.iter().all(|byte| *byte == 0));
     }
 }
