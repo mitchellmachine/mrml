@@ -149,17 +149,38 @@ without the exact capability. Fingerprint claims require empirical evidence.
 
 ## Phase 5 — Authority, consent, and observation
 
-1. Implement a capability-native authority broker with narrow scope, duration,
-   and one-shot grants.
-2. Implement a trusted userspace consent agent with anti-spoof transaction
-   binding; keep UI outside the kernel.
-3. Add typed structured security events and protected audit storage.
-4. Add a non-omnipotent security monitor with separate observation and narrow
-   remediation capabilities.
+After the core capability/service substrate and trusted compositor exist:
+
+1. Add bounded capability provenance tracking and delegation audit events.
+2. Add an access-controlled capability introspection/explanation API.
+3. Implement trusted file-picker capability delegation.
+4. Add the structured system-monitor authority and security-exception view.
+5. Add common time/lifecycle-bounded capability expiration.
+6. Define `SecretObject` and independent use/export rights.
+7. Add non-extractable credential operations and trusted export consent.
+8. Make local/remote AI sessions visible, expiring security principals.
+9. Add structured diagnostic objects with observation-only capabilities.
+10. Add exact-target, independently attenuated debugging rights.
+11. Add disposable application/VM domains and trusted identity indicators.
+12. Add bounded object provenance/history.
+13. Preserve data-origin/taint labels through service and AI boundaries.
+14. Integrate provenance with prompt-injection-resistant AI context/tool policy.
+15. Add device ownership/delegation visualization and transition audit.
+16. Add deterministic system-generation metadata.
+17. Integrate crash/restart policy with persistent-state restoration.
+
+In parallel, implement the capability-native authority broker with narrow scope,
+duration, and one-shot grants; the trusted userspace consent agent with anti-
+spoof transaction binding; protected audit storage; and a non-omnipotent
+security monitor with separate observation/remediation capabilities. Do not
+attempt the entire list as one change.
 
 Security gate: identity is not authority; temporary grants expire/revoke on all
 specified paths; applications cannot forge consent or privileged events; the
-monitor cannot exceed its explicit capabilities.
+monitor cannot exceed its explicit capabilities. Names, object IDs, and data do
+not create authority; introspection leaks no secrets; `USE` never implies secret
+`EXPORT`; debug stays target-scoped; AI remains non-root; disposable domains
+retain no undeclared persistent authority.
 
 Trusted consent depends on the Phase 3 compositor boundary. The authority broker
 and non-UI policy core may be developed earlier, but no application-rendered UI
@@ -173,10 +194,14 @@ can count as trusted consent.
 3. Add rollback, stale-update, corruption, interrupted-write, and recovery tests.
 4. Establish reproducible builds, independently controlled release keys,
    Secure Boot integration, recovery, and key rotation.
+5. Bind inspectable system-generation metadata to the exact kernel, compositor,
+   services, configuration root, and compiler/runtime artifacts.
 
 Security gate: older signed vulnerable releases cannot be admitted after a
 committed advance; loss/corruption fails safely and has a documented recovery
 path. No rollback-resistance claim precedes physical testing.
+Generation identity is not called deterministic until both artifacts and
+configuration are reproducible.
 
 ## Phase 7 — Bare-metal hardware isolation
 

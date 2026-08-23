@@ -26,6 +26,13 @@ and MRML-specific mediated GPU queues are foundations, not a complete virtual
 device model. A future VirtIO-GPU-compatible presentation path must coexist with
 rather than replace the authenticated signed-kernel CUDA compute path.
 
+The existing generational capability, IPC attenuation/rollback, task retirement,
+service restart, typed error, artifact-state, and protected secret-use mechanisms
+are foundations only. MRML does not yet implement a general authority provenance
+graph, introspection/explanation API, expiration service, secure file picker,
+disposable domain launcher, `SecretObject` service, credential broker, AI
+principal UI, structured diagnostic-object service, or scoped debugger.
+
 ## Security boundary
 
 MRML assumes a conventional Windows or Linux host and its VMM process may be

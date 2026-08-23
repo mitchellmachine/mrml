@@ -97,8 +97,79 @@ The durable object-model rule is: **everything meaningful is an object, and
 authority to an object is represented by capabilities**. An object is a
 resource with identity and lifetime; a capability grants specific operations on
 it; a name or path discovers it but does not authorize it. This applies to
-storage and graphics resources. It does not require turning meaningless private
-implementation details into public objects.
+files, directories, processes, threads, services, windows, surfaces, VMs,
+devices, connections, audio streams, configuration, credentials, AI sessions,
+debugging, media, snapshots, and security state. **Names identify. Capabilities
+authorize.** This does not require turning meaningless private implementation
+details into public objects.
+
+### Capability namespace and provenance
+
+**PLANNED:** a launcher/policy assembles each application's initial capability
+namespace. Entries such as GUI, app-data, playback, network-connect, or AI
+inference refer to already authorized objects; globally discoverable service
+names never confer privilege. Optional services may be discovered without
+granting access.
+
+Capabilities will carry bounded, access-controlled provenance sufficient to
+explain their parent/delegator, rights attenuation, target object, lifetime,
+expiration, transfer, and revocation. Introspection answers “why does this have
+access?” using the real delegation graph—for example, user selection through a
+trusted picker produced a file READ capability—not a cosmetic ACL explanation.
+It must not reveal object contents, secret values, unrelated principals, or an
+unbounded history.
+
+Where practical, authority has a common lifecycle: delegate, derive, restrict,
+revoke, expire, and inspect provenance. Subsystems retain specific rights.
+Lifetime policies may bind to one operation, process/window/VM lifetime, device
+removal, logout, an explicit deadline, or revocation. The common mechanism—not
+subsystem-specific timers—must invalidate derived state.
+
+### Secrets, debugging, and diagnostics
+
+**PLANNED:** `SecretObject` represents passwords, API/OAuth tokens, keys,
+sessions, and recovery material. A secret capability normally permits bounded
+`USE`, `AUTHENTICATE`, or `SIGN` without plaintext disclosure. `ROTATE`,
+`DELETE`, and especially `EXPORT` are separate rights; export generally needs
+stronger policy or trusted consent. Protocols that require plaintext exposure
+must document the limitation. Remote AI receives no export authority by
+default.
+
+Debugging is object-scoped authority, not universal ptrace/root. Independent
+rights may read registers/memory, break, single-step, write state, inject a
+signal, or terminate one exact process. Diagnostics likewise expose structured
+fault objects and events—subsystem, target, operation, error, severity, and
+recoverability—through observation capabilities that do not imply kernel memory
+or mutation access.
+
+### Disposable domains and restart
+
+**PLANNED:** “Open Isolated” launches unknown downloads, documents, media,
+browsers, or suspicious applications in a temporary process/VM domain with
+minimal capability namespace and trusted compositor identity. Closing it
+revokes authority, destroys the domain, discards temporary storage, and erases
+sensitive memory where practical. Persistent storage or networking is absent
+unless explicitly delegated.
+
+Userspace services should be crash/restart oriented where suitable: detect
+failure, revoke all service authority, destroy transient state, launch a clean
+generation, and restore only explicit persistent configuration. Services whose
+domain requires richer recovery need not be forced into this model.
+
+### Object and data provenance
+
+**PLANNED:** bounded, privacy-conscious, access-controlled object history may
+record creator/modifier/downloader, network origin, URL, source application or
+domain, signature/admission state, timestamps when trustworthy, and relevant
+capability transfers. Integrity-protected system provenance remains distinct
+from application-supplied metadata.
+
+Lightweight data labels such as trusted user instruction, system policy, local
+trusted content, untrusted file/web/email/remote content, and AI-generated
+content survive important serialization and AI-context boundaries. **Data
+cannot grant authority.** Imperative text from an untrusted source remains data;
+tool execution is still capability constrained. Provenance informs decisions
+and prompt-injection defense but never replaces authorization.
 
 ## Native storage direction
 

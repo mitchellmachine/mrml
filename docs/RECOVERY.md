@@ -82,6 +82,22 @@ evidence. Critical device semantics must live in durable documentation, not
 only source comments or old probe logs. A future VirtIO-GPU display device must
 remain separate from and coexist with the MRML-specific signed-kernel CUDA
 compute protocol.
+- Authority transparency and security UX are planned, not implemented. Search
+  `capability.rs`, `ipc.rs`, `task_runtime.rs`, `service_lifecycle.rs`, protected
+  execution, and artifact state for foundations. Current code has generational
+  capabilities, attenuation, transfer rollback, revocation on domain death,
+  restart policy, typed errors, and narrow protected-secret-use examples; it
+  does not have general provenance/introspection, expiration, a file picker,
+  disposable domains, `SecretObject`, credential broker, visible AI principals,
+  diagnostic objects, scoped debugger, provenance labels, or security UI.
+
+Recover the intended model from ARCHITECTURE, SECURITY, APPLICATION_PLATFORM,
+and ROADMAP: launcher-built capability namespaces; bounded delegation graphs and
+“why access?” explanations; real live revocation; non-extractable secrets;
+lifecycle expiration; capability-scoped diagnostics/debugging; structured data
+provenance and prompt-injection defense; deterministic system generations; and
+crash/restart restoration. Never infer implementation from conceptual event or
+right names.
 
 Use `rg` to locate definitions, callers, tests, TODOs, probe modes, and feature
 gates. Inspect manifests and the pinned toolchain before assuming build targets.

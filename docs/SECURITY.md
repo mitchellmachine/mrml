@@ -51,6 +51,7 @@ or remote attestation.
 
 ## Capability and isolation invariants
 
+- Object identity is not authority; names and data are not authority.
 - Identity and provenance may select policy but do not grant authority.
 - Capability derivation cannot increase authority.
 - Object and task identities are nonzero, bounded, and generational; stale
@@ -65,6 +66,13 @@ or remote attestation.
   leaves a fail-closed state.
 - One service fault must not confer authority on another service or require an
   unrelated kernel/system failure.
+- Temporary capabilities must actually expire and revoke every derived path;
+  disposable domains must not silently retain persistent authority.
+- Secret `USE` does not imply `EXPORT`; remote AI receives no secret material or
+  export right by default.
+- Debug authority is exact-target and rights-scoped, never implicitly global.
+- AI control is not user/root authority, and provenance labels never replace
+  capability enforcement.
 
 ## Persistent state and boot
 
@@ -87,6 +95,21 @@ only when trustworthy. Events must avoid secrets and cannot be forgeable or
 erasable by ordinary services. Monitoring and remediation remain separate,
 narrow capabilities; high-impact remediation requires policy authorization or
 trusted consent.
+
+Security-sensitive delegation will use structured events such as capability
+grant/derive/transfer/revoke/expire/deny, secret use/export request, debug grant,
+device assignment, and AI session start/revoke. Records identify only necessary
+principals and objects and never secret contents. Introspection and “why access?”
+queries are themselves authorized and privacy bounded.
+
+Structured diagnostics separate observation from mutation: permission to inspect
+a fault object does not grant kernel memory, debug, or repair authority. Security
+UI consumes trusted capability/lifecycle state, not application-provided claims.
+
+For AI prompt-injection defense, content provenance survives browser/document/
+email/media/source/remote-service ingestion into model context. Untrusted text
+cannot become a trusted instruction merely by wording itself imperatively, and
+model output cannot exceed the tool capabilities held by the AI session.
 
 ## Application and GUI boundary
 

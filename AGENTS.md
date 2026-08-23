@@ -78,6 +78,21 @@ Architectural invariants:
 - virtual NIC, audio capture/playback, USB interface, HID routing, passthrough,
   and raw-device authorities remain explicit and independently revocable;
   secure attention terminates in the trusted host environment.
+- apply “names identify; capabilities authorize” consistently to every
+  meaningful public object, including services, processes, VMs, devices,
+  connections, credentials, AI sessions, diagnostics, and security state;
+- data is never authority: provenance-labeled web, email, document, media,
+  source, model, or remote content cannot manufacture instructions or tool
+  capabilities, and provenance never replaces a capability check;
+- secret use and secret export are separate rights; AI and applications should
+  receive constrained non-extractable operations rather than plaintext wherever
+  protocols permit;
+- introspection, diagnostics, monitoring, and debugging are independently
+  capability-controlled and reveal neither unrelated object state nor secrets;
+  debug authority over one process is never system-wide authority;
+- lifecycle/time-bounded authority must actually expire and revoke all derived
+  state; disposable domains retain no storage, network, device, or secret
+  authority unless explicitly granted.
 
 Implement OS work in the dependency order in `docs/ROADMAP.md`. Determine the
 next milestone from current code, tests, documentation, TODOs, and Git history,

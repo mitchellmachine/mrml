@@ -264,6 +264,35 @@ grantable. Input is routed by trusted host services and compositor focus; raw
 global HID and secure-attention handling are never ordinary application or VM
 capabilities.
 
+## Authority and security UX
+
+**PLANNED:** trusted file pickers delegate object capabilities, not path strings.
+An open request yields only the selected file and requested rights, not its
+containing directory. Save delegates only the create/replace authority required
+for the selected destination. Picker UI and the delegation transaction are
+trusted-system surfaces that applications cannot spoof.
+
+The system monitor combines CPU, memory, GPU, and I/O usage with each process,
+application, VM, and AI principal's isolation class, filesystem/network/device/
+audio/debug/AI authority, temporary elevation, and active security exceptions.
+Where semantically safe, live revoke invokes the actual capability mechanism,
+not a cosmetic policy toggle. Human views express intent (“can authenticate to
+GitHub; cannot read the password”) while advanced authorized views expose the
+bounded delegation graph.
+
+AI sessions are visible principals with provider/model, local or remote status,
+session identity, current/temporary capabilities, network reach, accessible
+objects, and expiration. Users have a trusted “revoke all authority” operation.
+AI may receive scoped browser or development debugging and non-extractable
+credential use without camera, microphone, policy, unrelated-process, secret-
+export, or root-equivalent authority.
+
+Trusted UI clearly marks disposable domains and active security reductions such
+as debug rights, raw device access, credential export, global input injection,
+camera/microphone capture, VM passthrough, CET/IBT exceptions, or a future JIT
+exception. Indicators use system state rather than application claims and remain
+revocable where temporary.
+
 ### Browser semantic interface
 
 The browser exposes a sanitized interactive document tree combining document
