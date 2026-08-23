@@ -218,8 +218,11 @@ Supported scalar control reads now include top-level conditional-return and
 conditional-assignment conditions, conditional and explicit return values,
 while-loop heads, direct conditional break/continue/return controls,
 conditional loop block/arm conditions and branch-local return values, and the
-final scalar tail. Aggregate/fat values retain specialized emission-time
-materialization instead of being misclassified as one scalar read.
+final scalar tail. Nested-loop blocks mirror the emitter's entry-condition,
+action-boundary, and control-order traversal exactly, including interleaved
+unconditional returns, conditional breaks, conditional returns, and conditional
+continues before each following action. Aggregate/fat values retain specialized
+emission-time materialization instead of being misclassified as one scalar read.
 Emission must consume every preassigned declaration exactly once. Inlined helper
 parameters and later scoped locals append to a checked dynamic tail and cannot
 steal a preassigned source identity; mismatches fail as
@@ -241,9 +244,8 @@ nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
 It does not yet preanalyze compound array-base materialization, aggregate/fat-
-reference initializers or returns, method/call, interleaved nested-loop controls,
-aggregate tails, or other body reads, or replace name lookup across the whole
-body. Expanded
+reference initializers or returns, method/call, aggregate tails, or other body
+reads, or replace name lookup across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of

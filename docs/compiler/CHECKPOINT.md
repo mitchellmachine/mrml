@@ -83,7 +83,8 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   statements in the emitter's exact scoped order; and
 - scalar read planning for top-level branch conditions and returns, while-loop
   heads, direct conditional loop controls, conditional loop blocks/arms and
-  branch-local returns, explicit scalar returns, and final scalar tails.
+  branch-local returns, explicit scalar returns, final scalar tails, and
+  interleaved nested-loop controls in exact action-boundary/control order.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -91,8 +92,8 @@ unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Aggregate/fat-reference initializers and returns, compound array
-bases, method/call families, interleaved nested-loop controls, aggregate tails,
-and other body reads remain emission-time facts. Names are still resolved during
+bases, method/call families, aggregate tails, and other body reads remain
+emission-time facts. Names are still resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Initialization/move paths, body basic blocks and edges, borrows, loans, regions,
@@ -103,8 +104,8 @@ Polonius-style analysis, and a general trait solver are unimplemented.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. complete bounded read-place preanalysis for interleaved nested-loop controls
-   and supported aggregate/materialization families in exact emission order;
+1. complete bounded read-place preanalysis for supported
+   aggregate/materialization families in exact emission order;
 2. add explicit basic blocks and control-flow edges;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
@@ -131,8 +132,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 582 tests on each host: 321
-library tests, 10 conformance tests, 249 replacement tests, and 2 driver tests.
+The checkpoint source passed 584 tests on each host: 322
+library tests, 10 conformance tests, 250 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

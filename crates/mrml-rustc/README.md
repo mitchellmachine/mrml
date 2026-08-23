@@ -2934,8 +2934,11 @@ second name-resolution or access-classification path. Conditions, control
 values, and scalar tails now use the same path for supported top-level branches
 and returns, while heads, direct conditional loop controls, conditional loop
 blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
+Nested-loop blocks additionally mirror entry conditions and every stored control
+at its exact action boundary and control order before activating the following
+local or action.
 Method/call families, aggregate/fat materialization and returns, aggregate tails,
-and interleaved nested-loop controls remain outside this preanalysis slice.
+remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
@@ -2980,6 +2983,14 @@ WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
 return, while head, in-loop condition, branch-local initializer and return, and
 the final scalar tail. Its original replacement emits both COFF and ELF64
 objects through those same control and scope shapes.
+
+The interleaved nested-loop control-read milestone passed all 584 compiler and
+driver tests on Windows gnullvm and all 584 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+20 exact parameter and stable-local read identities across the outer while head,
+nested entry condition, controls before and after a nested local declaration,
+conditional return value, later assignment RHS, and final tail. Its original
+replacement emits both COFF and ELF64 objects through the same ordered controls.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
