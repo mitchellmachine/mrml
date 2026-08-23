@@ -2374,14 +2374,6 @@ fn evaluate_call_aware_integer<
             }
             let left = recurse(base)?;
             let right = recurse(argument)?;
-            if strict {
-                return if ty.is_signed() {
-                    evaluate_call_aware_signed_binary(operator, left, right, bits)
-                } else {
-                    evaluate_call_aware_unsigned_binary(operator, left, right, bits)
-                }
-                .map_err(arithmetic_error);
-            }
             if euclidean {
                 return euclidean_integer_arithmetic(
                     left,
@@ -2391,6 +2383,14 @@ fn evaluate_call_aware_integer<
                     operator,
                     euclidean_wrapping,
                 )
+                .map_err(arithmetic_error);
+            }
+            if strict {
+                return if ty.is_signed() {
+                    evaluate_call_aware_signed_binary(operator, left, right, bits)
+                } else {
+                    evaluate_call_aware_unsigned_binary(operator, left, right, bits)
+                }
                 .map_err(arithmetic_error);
             }
             match operator {
@@ -3490,10 +3490,6 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             }
             let left = recurse(base)?;
             let right = recurse(argument)?;
-            if strict {
-                return evaluate_call_aware_signed_binary(operator, left, right, bits)
-                    .map_err(ExecutionError::Arithmetic);
-            }
             if euclidean {
                 return euclidean_integer_arithmetic(
                     left,
@@ -3504,6 +3500,10 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                     euclidean_wrapping,
                 )
                 .map_err(ExecutionError::Arithmetic);
+            }
+            if strict {
+                return evaluate_call_aware_signed_binary(operator, left, right, bits)
+                    .map_err(ExecutionError::Arithmetic);
             }
             match operator {
                 BinaryOperator::Add => left.overflowing_add(right).0,

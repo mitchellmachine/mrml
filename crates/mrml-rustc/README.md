@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 431 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 433 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1914,6 +1914,11 @@ signed or unsigned receiver types and trap on overflow independently of the
 runtime overflow-check setting. Three System V objects emitted explicitly with
 `-C overflow-checks=no` matched ordinary pinned-Rust results; independent
 narrow signed/unsigned and full-width overflow probes all trapped.
+Stable `strict_div`, `strict_rem`, `strict_div_euclid`, and
+`strict_rem_euclid` likewise retain exact receiver types and ignore disabled
+overflow checks. Five unchecked-mode System V objects matched truncating and
+Euclidean pinned-Rust results. Independent probes proved divisor-zero and every
+signed minimum/negative-one division or remainder form traps.
 Signed integers additionally support `wrapping_neg` and `wrapping_abs` in
 constants and runtime functions. Both preserve the receiver width, including
 the two's-complement minimum value whose mathematical negation is not

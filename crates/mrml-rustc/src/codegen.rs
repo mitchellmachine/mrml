@@ -5124,14 +5124,14 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     right?;
                     self.evaluation_depth -= 1;
                     self.emit(&[0x59])?;
-                    let result = if strict {
+                    let result = if euclidean {
+                        self.emit_euclidean_division(operator, euclidean_wrapping)
+                    } else if strict {
                         let previous_overflow_checks = self.overflow_checks;
                         self.overflow_checks = true;
                         let result = self.emit_binary(operator);
                         self.overflow_checks = previous_overflow_checks;
                         result
-                    } else if euclidean {
-                        self.emit_euclidean_division(operator, euclidean_wrapping)
                     } else if matches!(
                         operator,
                         crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder
@@ -12544,6 +12544,53 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.strict_add(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.strict_mul(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn checks_strict_primitive_integer_division() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.strict_div(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i16, right: i16) -> i16 { left.strict_rem(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: i64) -> i64 { left.strict_div_euclid(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i16, right: i16) -> i16 { left.strict_rem_euclid(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 1024, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.strict_div(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.strict_rem(right) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

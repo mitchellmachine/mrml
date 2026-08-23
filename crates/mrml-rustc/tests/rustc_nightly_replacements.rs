@@ -1866,6 +1866,28 @@ fn rustc_strict_arithmetic_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_strict_division_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.strict_div(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i16, right: i16) -> i16 { left.strict_rem(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: i64) -> i64 { left.strict_div_euclid(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i16, right: i16) -> i16 { left.strict_rem_euclid(right) }",
+        "const VALUE: u8 = 84u8.strict_div(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-85i16).strict_rem(43); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: i64 = (-85i64).strict_div_euclid(43); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+        "const VALUE: i16 = (-85i16).strict_rem_euclid(43); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_euclidean_integer_division_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",
