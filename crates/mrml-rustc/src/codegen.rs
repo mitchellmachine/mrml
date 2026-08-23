@@ -2427,7 +2427,8 @@ fn validate_runtime_inline_const<
         | ExprKind::DefaultValue
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
-        | ExprKind::Char(_) => {}
+        | ExprKind::Char(_)
+        | ExprKind::String(_) => {}
     }
     Ok(())
 }
@@ -3320,7 +3321,10 @@ fn runtime_expression_type_with_locals<
             Err(CodegenErrorKind::RuntimeExpressionUnsupported)
         }
         ExprKind::IntegerOptionUnwrapOr {
-            option, fallback, ..
+            option,
+            fallback,
+            message,
+            ..
         } => {
             let option = tree
                 .expression(option)
@@ -3510,19 +3514,27 @@ fn runtime_expression_type_with_locals<
                 _ => return Err(CodegenErrorKind::RuntimeTypeMismatch),
             };
             let fallback_matches = if let Some(fallback) = fallback {
-                runtime_types_compatible(
-                    runtime_expression_type_with_locals(
-                        function,
-                        resolver,
-                        locals,
-                        tree,
-                        fallback,
-                        depth + 1,
-                    )?,
-                    result_type,
-                )
+                let fallback_type = runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    fallback,
+                    depth + 1,
+                )?;
+                if message {
+                    matches!(
+                        fallback_type,
+                        RuntimeExpressionType::Reference {
+                            target: RuntimeReferenceTarget::Str,
+                            ..
+                        }
+                    )
+                } else {
+                    runtime_types_compatible(fallback_type, result_type)
+                }
             } else {
-                true
+                !message
             };
             if !matches!(base_type, RuntimeExpressionType::Integer(Some(_))) || !fallback_matches {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -4360,6 +4372,10 @@ fn runtime_expression_type_with_locals<
         )),
         ExprKind::Bool(_) => Ok(RuntimeExpressionType::Bool),
         ExprKind::Char(_) => Ok(RuntimeExpressionType::Char),
+        ExprKind::String(_) => Ok(RuntimeExpressionType::Reference {
+            target: RuntimeReferenceTarget::Str,
+            mutable: false,
+        }),
         ExprKind::Identifier(name) => Ok(locals
             .iter()
             .flatten()
@@ -6108,10 +6124,25 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 option,
                 fallback,
                 trap,
+                message,
             } => {
                 let (operand_width, previous_width) =
                     self.emit_checked_integer_option(tree, option, depth + 1)?;
                 if trap {
+                    if message {
+                        let message =
+                            fallback.ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                        self.emit(&[0x50, 0x41, 0x50])?;
+                        self.evaluation_depth += 2;
+                        if !matches!(
+                            tree.expression(message).map(|value| value.kind),
+                            Some(ExprKind::String(_))
+                        ) {
+                            self.emit_expression(tree, message, depth + 1)?;
+                        }
+                        self.emit(&[0x41, 0x58, 0x58])?;
+                        self.evaluation_depth -= 2;
+                    }
                     self.emit(&[0x4d, 0x85, 0xc0])?;
                     self.emit_trap_branch(0x84)?;
                 } else {
@@ -7573,6 +7604,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             ExprKind::Char(value) => {
                 self.emit(&[0x48, 0xb8])?;
                 self.emit(&u64::from(value).to_le_bytes())?;
+            }
+            ExprKind::String(_) => {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::Identifier(name) => self.emit_identifier(name)?,
             ExprKind::Call {
@@ -16863,6 +16897,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.unwrap() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).unwrap() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn expects_checked_integer_options_or_traps() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).expect(\"checked addition overflowed\") }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, message: &str) -> u8 { a.checked_add(b).expect(message) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64, message: &str) -> i64 { a.checked_signed_diff(b).expect(message) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, message: &mut str) -> i16 { input.checked_truncate::<i16>().expect(message) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).expect() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, message: u8) -> u8 { a.checked_add(b).expect(message) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, message: &str) -> u8 { a.expect(message) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

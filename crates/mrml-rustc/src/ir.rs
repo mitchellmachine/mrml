@@ -268,6 +268,12 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             ExprKind::Unit | ExprKind::DefaultValue => {
                 self.push(Instruction::PushInteger(0), expression.span)?;
             }
+            ExprKind::String(_) => {
+                return Err(IrError {
+                    kind: IrErrorKind::InvalidExpressionTree,
+                    span: expression.span,
+                });
+            }
             ExprKind::IntegerAssociatedConstant {
                 integer_type,
                 constant,

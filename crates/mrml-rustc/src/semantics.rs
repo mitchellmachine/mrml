@@ -2174,6 +2174,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::Char(_)
+        | ExprKind::String(_)
         | ExprKind::Identifier(_) => false,
     }
 }
@@ -2309,6 +2310,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::Char(_)
+        | ExprKind::String(_)
         | ExprKind::Identifier(_) => false,
     }
 }

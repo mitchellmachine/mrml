@@ -2364,7 +2364,8 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `checked_div_exact`, generic
 `checked_cast::<T>`, and same-width checked sign-cast results with
 `Option::unwrap_or` and
-`Option::unwrap_or_default`, extract them with `Option::unwrap`, or observe them with `Option::is_some` and
+`Option::unwrap_or_default`, extract them with `Option::unwrap` or
+`Option::expect`, or observe them with `Option::is_some` and
 `Option::is_none`. Non-overflowing arithmetic, valid divisions and remainders,
 exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
@@ -2400,7 +2401,12 @@ Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. `Option::unwrap` returns the checked value when present and reaches the
 compiler's shared invalid-operation trap when the checked operation produces
-`None`. These consumers share one value-plus-validity emitter while
+`None`. `Option::expect` accepts a string literal or runtime `&str` message,
+evaluates a runtime message after the checked receiver, and uses the same
+bounded trap because this compiler does not embed diagnostic formatting in
+generated freestanding objects. String literals now have their own expression
+node and type as immutable `&str`; other runtime uses remain rejected until
+object data and relocation emission are implemented. These consumers share one value-plus-validity emitter while
 direct `Option` returns, option locals, other option consumers, and constant
 evaluation remain outside this milestone until their enum ABI and value
 representation are implemented.

@@ -539,6 +539,7 @@ pub enum ExprKind<'source> {
         option: ExprId,
         fallback: Option<ExprId>,
         trap: bool,
+        message: bool,
     },
     IntegerOptionPredicate {
         option: ExprId,
@@ -607,6 +608,7 @@ pub enum ExprKind<'source> {
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
+    String(&'source str),
     Identifier(&'source str),
     Call {
         callee: &'source str,
@@ -903,6 +905,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerLogarithm { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
+            | ExprKind::String(_)
             | ExprKind::Identifier(_)
             | ExprKind::Call { .. }
             | ExprKind::Cast { .. } => false,
@@ -1190,6 +1193,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
+            ExprKind::String(_) => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Identifier(name) => resolver
                 .resolve(name)
                 .ok_or(ConstEvalError::UnknownIdentifier),
@@ -1843,6 +1847,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             Some(token) if token.kind == TokenKind::Character => self.push(Expr {
                 kind: ExprKind::Char(decode_character(token)?),
+                span: token.span,
+            }),
+            Some(token) if token.kind == TokenKind::String => self.push(Expr {
+                kind: ExprKind::String(token.text),
                 span: token.span,
             }),
             Some(token) if token.text == "if" => self.if_expression(token, depth + 1),
@@ -2808,6 +2816,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
             | ExprKind::Char(_)
+            | ExprKind::String(_)
             | ExprKind::Identifier(_) => {}
         }
         Ok(())
@@ -4478,6 +4487,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
+                        | "expect"
                         | "unwrap"
                         | "unwrap_or"
                         | "unwrap_or_default"
@@ -4667,6 +4677,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
+                    | "expect"
                     | "unwrap_or"
                     | "strict_add"
                     | "strict_sub"
@@ -5086,16 +5097,27 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?),
                     trap: false,
+                    message: false,
                 },
                 "unwrap_or_default" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
                     fallback: None,
                     trap: false,
+                    message: false,
                 },
                 "unwrap" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
                     fallback: None,
                     trap: true,
+                    message: false,
+                },
+                "expect" => ExprKind::IntegerOptionUnwrapOr {
+                    option: base,
+                    fallback: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    trap: true,
+                    message: true,
                 },
                 "is_some" | "is_none" => ExprKind::IntegerOptionPredicate {
                     option: base,
