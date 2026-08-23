@@ -18,6 +18,7 @@ mod memory;
 mod pe;
 mod platform;
 mod policy;
+mod protected_execution;
 mod scheduler;
 mod service_lifecycle;
 mod shared_memory;
@@ -60,6 +61,10 @@ pub use platform::{Architecture, Hypervisor, IsolationClass, VmRole};
 pub use policy::{
     DeviceAddress, DeviceGrant, HostDevice, IommuTopology, MAX_VM_NAME, PolicyError, SystemPolicy,
     VmName, VmPolicy,
+};
+pub use protected_execution::{
+    PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend, ProtectionClaims,
+    ProtectionError, ProtectionPolicy, ProtectionReport, ProtectionSession,
 };
 pub use scheduler::{
     BalanceOutcome, BalancePolicyError, BalanceTarget, DetachedTask, KernelScheduleError,

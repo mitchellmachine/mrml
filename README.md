@@ -109,6 +109,14 @@ formal noninterference. Those require hardware validation, TPM-backed monotonic
 state, IOMMU/reset testing, reproducible release infrastructure, formal work,
 and independent security review.
 
+Protected execution is reported as an explicit backend and bounded claim set,
+never inferred from a VMM name. Ordinary WHP/KVM is unprotected; the planned
+Windows VBS authority protects only against VTL0 and still trusts Hyper-V and
+the secure kernel; the bare-metal path uses an MRML VMX-root monitor; and
+SEV-SNP/TDX remain future stronger backends. Reports are policy inputs, not
+attestation, until authenticated by the corresponding hardware-backed launch
+authority. See `docs/MICROKERNEL.md` for the layered design.
+
 ## Kernel state
 
 The current x86_64 kernel has demonstrated:

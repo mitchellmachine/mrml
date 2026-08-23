@@ -34,6 +34,35 @@ reduce that trust in the future, but MRML makes no such claim without measured
 launch attestation, encrypted/integrity-protected memory, protected interrupt
 and I/O paths, rollback protection, and an audited confidential-GPU channel.
 
+### Layered protected execution
+
+Protection is an explicit, downgrade-resistant launch property rather than an
+inference from the VMM name. Each launch authority emits a canonical report
+containing the backend, an exact claim set, security version, code measurement,
+fresh nonce, monotonic sequence, and debug state. Policy independently requires
+claims and measurements; unknown bits, backend overclaims, replay, debug mode,
+and security-version rollback fail closed. The report format and policy checker
+are implemented, but a report is not attestation until a hardware-backed launch
+authority authenticates it. Secrets must not be released on a self-asserted or
+ordinary hosted report.
+
+The intended x86_64 layers are:
+
+- ordinary WHP or KVM remains explicitly unprotected against its host;
+- a Windows VBS enclave may isolate a small launch authority and keys from a
+  compromised VTL0 host, while still trusting Hyper-V, the secure kernel,
+  firmware, and hardware;
+- bare-metal MRML places domain ownership, page-state transitions, interrupt
+  routing, and IOMMU policy in a minimal VMX-root monitor;
+- AMD SEV-SNP and Intel TDX remain stronger optional future backends for
+  reducing trust in an outer VMM, conditional on verified platform evidence.
+
+None of these layers implies trusted GPU output. A claim set cannot include
+private memory, hostile-VMM isolation, attestation, or trusted I/O merely
+because the host advertises Hyper-V or because a guest boots successfully.
+Backend-specific evidence verification and a protected accelerator channel are
+separate requirements.
+
 The privileged kernel will contain only scheduling, address-space and interrupt
 mechanisms, capability enforcement, IPC, and the minimum early console/timer
 code needed to recover. Filesystems, networking, storage, GPU, CUDA mediation,
