@@ -3488,6 +3488,12 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &mut [bool; 2]) -> bool { flip(values)[1] } fn flip(values: &mut [bool; 2]) -> &mut [bool; 2] { values[1] = !values[1]; values }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[char; 2]) -> char { identity(values)[1] } fn identity(values: &[char; 2]) -> &[char; 2] { values }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { let values: [(); 2] = [(); 2]; identity(&values)[1] } fn identity(values: &[(); 2]) -> &[(); 2] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[u16], text: &str, index: usize) -> usize { score(identity(values), text, index) } fn identity(values: &[u16]) -> &[u16] { values } fn score(values: &[u16], text: &str, index: usize) -> usize { values.len() + values[index] as usize + text.len() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &mut [u16], index: usize, early: bool) -> u16 { let selected: &mut [u16] = choose(values, early); selected[index] += 1; selected[index] } fn choose(values: &mut [u16], early: bool) -> &mut [u16] { if early { return identity(values); } identity(values) } fn identity(values: &mut [u16]) -> &mut [u16] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(text: &str) -> usize { let returned: &str = identity(text); returned.len() } fn identity(text: &str) -> &str { text }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[char]) -> char { identity(values)[0] } fn identity(values: &[char]) -> &[char] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &mut [bool]) -> bool { let returned: &mut [bool] = identity(values); returned[0] = !returned[0]; returned[0] } fn identity(values: &mut [bool]) -> &mut [bool] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { let values: [(); 2] = [(); 2]; identity(&values[..])[1] } fn identity(values: &[()]) -> &[()] { values }",
     ];
     for source in sources {
         assert_eq!(

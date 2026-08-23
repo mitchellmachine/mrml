@@ -201,6 +201,13 @@ pub enum ScalarType {
         count: usize,
         mutable: bool,
     },
+    SliceReference {
+        element: CallArrayElement,
+        mutable: bool,
+    },
+    StrReference {
+        mutable: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,6 +241,17 @@ pub enum CallArrayElement {
     Char,
 }
 
+impl CallArrayElement {
+    fn from_name(name: &str) -> Option<Self> {
+        match name.trim() {
+            "()" => Some(Self::Unit),
+            "bool" => Some(Self::Bool),
+            "char" => Some(Self::Char),
+            name => IntegerType::from_name(name).map(Self::Integer),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CastType {
     Integer(IntegerType),
@@ -262,22 +280,24 @@ impl ScalarType {
                         .strip_prefix('[')
                         .and_then(|body| body.strip_suffix(']'))
                     {
-                        let (element, count) = body.split_once(';')?;
-                        let count = count.trim().parse::<usize>().ok()?;
-                        if count > MAX_ARRAY_ELEMENTS {
-                            return None;
+                        if let Some((element, count)) = body.split_once(';') {
+                            let count = count.trim().parse::<usize>().ok()?;
+                            if count > MAX_ARRAY_ELEMENTS {
+                                return None;
+                            }
+                            return Some(Self::ArrayReference {
+                                element: CallArrayElement::from_name(element)?,
+                                count,
+                                mutable,
+                            });
                         }
-                        let element = match element.trim() {
-                            "()" => CallArrayElement::Unit,
-                            "bool" => CallArrayElement::Bool,
-                            "char" => CallArrayElement::Char,
-                            name => CallArrayElement::Integer(IntegerType::from_name(name)?),
-                        };
-                        return Some(Self::ArrayReference {
-                            element,
-                            count,
+                        return Some(Self::SliceReference {
+                            element: CallArrayElement::from_name(body)?,
                             mutable,
                         });
+                    }
+                    if target == "str" {
+                        return Some(Self::StrReference { mutable });
                     }
                     let target = match target {
                         "bool" => PointerPointee::Bool,
@@ -1160,7 +1180,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     | ScalarType::Unit
                     | ScalarType::RawPointer { .. }
                     | ScalarType::Reference { .. }
-                    | ScalarType::ArrayReference { .. },
+                    | ScalarType::ArrayReference { .. }
+                    | ScalarType::SliceReference { .. }
+                    | ScalarType::StrReference { .. },
                 ..
             } => false,
             ExprKind::Sequence { then, .. } => self.is_boolean_expression(then, depth + 1),
@@ -1507,6 +1529,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Reference { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::ArrayReference { .. } => Err(ConstEvalError::InvalidCast),
+                    ScalarType::SliceReference { .. } | ScalarType::StrReference { .. } => {
+                        Err(ConstEvalError::InvalidCast)
+                    }
                 }
             }
             ExprKind::Unary { operator, operand } => {

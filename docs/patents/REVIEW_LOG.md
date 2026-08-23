@@ -63,6 +63,22 @@ distinctive optimization, memory layout, calling convention, or algorithm.
 Patent review: `NOT_TRIGGERED` — ordinary compiler type propagation and inline
 lowering within the review log's existing Rust-subset compiler category.
 
+## 2026-08-23 — slice and string reference helper signatures
+
+MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+
+The compiler now carries existing slice element, string, and mutability
+information through bounded descriptors for inlined safe Rust-ABI helper calls.
+It transports the existing two-word pointer/length representation through
+arguments, locals, normal and early returns, and direct indexing. The change
+uses ordinary type compatibility, bounds checks, register/stack movement, and
+inline-frame cleanup; it adds no distinctive optimization, public calling
+convention, memory layout, or algorithm.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler type propagation, multiword
+value transport, and inline lowering within the existing Rust-subset compiler
+category.
+
 ## 2026-08-23 — native guest-mapping revocation ordering
 
 MRML source: `crates/mrml-kernel/src/vm.rs`,

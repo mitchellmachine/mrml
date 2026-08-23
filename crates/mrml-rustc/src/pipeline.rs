@@ -448,6 +448,45 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
+        let slice_parameter = "fn sum(values: &[u16], index: usize) -> usize { values.len() + values[index] as usize } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16], index: usize) -> usize { sum(values, index) }";
+        assert!(compile(slice_parameter, "answer", ObjectFormat::Elf64).is_ok());
+
+        let mutable_slice_parameter = "fn bump(values: &mut [u16], index: usize) -> u16 { values[index] += 1; values[index] } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &mut [u16], index: usize) -> u16 { bump(values, index) }";
+        assert!(compile(mutable_slice_parameter, "answer", ObjectFormat::Coff).is_ok());
+
+        let string_parameter = "fn measure(text: &str) -> usize { text.len() } #[unsafe(no_mangle)] pub extern \"C\" fn answer(text: &str) -> usize { measure(text) }";
+        assert!(compile(string_parameter, "answer", ObjectFormat::Elf64).is_ok());
+
+        let slice_return = "fn choose(values: &[u16], early: bool) -> &[u16] { if early { return values; } values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16], early: bool) -> usize { let returned: &[u16] = choose(values, early); returned.len() + returned[0] as usize }";
+        assert!(compile(slice_return, "answer", ObjectFormat::Coff).is_ok());
+
+        let mutable_slice_return = "fn identity(values: &mut [u16]) -> &mut [u16] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &mut [u16]) -> usize { let returned: &mut [u16] = identity(values); returned[0] += 1; returned.len() + returned[0] as usize }";
+        assert!(compile(mutable_slice_return, "answer", ObjectFormat::Elf64).is_ok());
+
+        let string_return = "fn identity(text: &str) -> &str { text } #[unsafe(no_mangle)] pub extern \"C\" fn answer(text: &str) -> usize { let returned: &str = identity(text); returned.len() }";
+        assert!(compile(string_return, "answer", ObjectFormat::Coff).is_ok());
+
+        let wrong_slice_element = "fn first(values: &[u32]) -> u32 { values[0] } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16]) -> u32 { first(values) }";
+        let error = compile(wrong_slice_element, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_slice_mutability = "fn first(values: &mut [u16]) -> u16 { values[0] } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16]) -> u16 { first(values) }";
+        let error = compile(wrong_slice_mutability, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_fat_kind = "fn measure(text: &str) -> usize { text.len() } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u8]) -> usize { measure(values) }";
+        let error = compile(wrong_fat_kind, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
         let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

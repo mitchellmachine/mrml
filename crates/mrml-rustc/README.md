@@ -2710,9 +2710,19 @@ mutable-to-shared reborrowing, exact mutable array-reference returns used as
 index bases, caller-visible single-element updates, and preservation of every
 untouched element. Object-emission tests additionally cover Boolean, character,
 and locally sourced unit-element arrays. Separate adversarial sources reject
-element, count, and shared-to-mutable mismatches. Slice and string references
-remain outside helper signatures because their two-word fat-pointer calling
-convention is separate.
+element, count, and shared-to-mutable mismatches.
+A slice/string-reference helper chain produced an 802-byte COFF object and an
+1184-byte ELF64 object. Pinned-nightly callers matched 24 independent cases on
+Windows and Arch Linux, covering empty, ASCII, multibyte UTF-8, and non-ASCII
+strings; varied slice lengths and indexes; mutable-to-shared reborrowing;
+two-word arguments; direct composition of returned slices into another helper;
+normal and explicit-early mutable slice returns; caller-visible mutation; and
+string lengths. Object-emission tests additionally cover Boolean, character,
+and locally sourced unit slices, direct indexing of returned slices, and fat
+locals. Separate adversarial sources reject element, mutability, and slice/string
+kind mismatches. These references use a compiler-internal two-register return
+transport while calls remain inlined; this is not a general public Rust ABI
+implementation.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
