@@ -3222,6 +3222,8 @@ fn runtime_expression_type_with_locals<
                 crate::expression::IntegerBitTransform::WrappingNegate
                     | crate::expression::IntegerBitTransform::WrappingAbsolute
                     | crate::expression::IntegerBitTransform::Absolute
+                    | crate::expression::IntegerBitTransform::SaturatingNegate
+                    | crate::expression::IntegerBitTransform::SaturatingAbsolute
                     | crate::expression::IntegerBitTransform::Signum
             ) && !integer_type.is_signed()
             {
@@ -5196,6 +5198,28 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.emit(&[0x48, 0x89, 0xc8])?;
                     }
                     IntegerBitTransform::WrappingNegate => self.emit(&[0x48, 0xf7, 0xd8])?,
+                    IntegerBitTransform::SaturatingNegate
+                    | IntegerBitTransform::SaturatingAbsolute => {
+                        self.emit(&[0x48, 0xba])?;
+                        self.emit(&(operand_width.minimum as u64).to_le_bytes())?;
+                        self.emit(&[0x48, 0x39, 0xd0])?;
+                        let ordinary = self.emit_forward_branch(0x85)?;
+                        self.emit(&[0x48, 0xb8])?;
+                        self.emit(&operand_width.maximum.to_le_bytes())?;
+                        let saturated = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(ordinary)?;
+                        let nonnegative = if transform == IntegerBitTransform::SaturatingAbsolute {
+                            self.emit(&[0x48, 0x85, 0xc0])?;
+                            Some(self.emit_forward_branch(0x89)?)
+                        } else {
+                            None
+                        };
+                        self.emit(&[0x48, 0xf7, 0xd8])?;
+                        if let Some(nonnegative) = nonnegative {
+                            self.patch_forward_branch(nonnegative)?;
+                        }
+                        self.patch_forward_branch(saturated)?;
+                    }
                     IntegerBitTransform::WrappingAbsolute | IntegerBitTransform::Absolute => {
                         self.emit(&[0x48, 0x85, 0xc0])?;
                         let nonnegative = self.emit_forward_branch(0x89)?;
@@ -11977,6 +12001,49 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn saturates_signed_integer_negation_and_absolute_value() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.saturating_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.saturating_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> i32 { input.saturating_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.saturating_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize) -> isize { input.saturating_neg() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1280, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.saturating_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { input.saturating_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.saturating_neg() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 896, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

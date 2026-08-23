@@ -2465,6 +2465,8 @@ fn evaluate_call_aware_integer<
                     crate::expression::IntegerBitTransform::WrappingNegate
                         | crate::expression::IntegerBitTransform::WrappingAbsolute
                         | crate::expression::IntegerBitTransform::Absolute
+                        | crate::expression::IntegerBitTransform::SaturatingNegate
+                        | crate::expression::IntegerBitTransform::SaturatingAbsolute
                         | crate::expression::IntegerBitTransform::Signum
                 ) && !ty.is_signed())
             {
@@ -3484,8 +3486,24 @@ fn transform_integer_bits(
         IntegerBitTransform::ReverseBits => value.reverse_bits() >> (128 - bits),
         IntegerBitTransform::ToLittleEndian => value,
         IntegerBitTransform::WrappingNegate => 0_u128.wrapping_sub(value) & mask,
+        IntegerBitTransform::SaturatingNegate => {
+            if value == 1_u128 << (bits - 1) {
+                (1_u128 << (bits - 1)) - 1
+            } else {
+                0_u128.wrapping_sub(value) & mask
+            }
+        }
         IntegerBitTransform::WrappingAbsolute | IntegerBitTransform::Absolute => {
             if value & (1_u128 << (bits - 1)) == 0 {
+                value
+            } else {
+                0_u128.wrapping_sub(value) & mask
+            }
+        }
+        IntegerBitTransform::SaturatingAbsolute => {
+            if value == 1_u128 << (bits - 1) {
+                (1_u128 << (bits - 1)) - 1
+            } else if value & (1_u128 << (bits - 1)) == 0 {
                 value
             } else {
                 0_u128.wrapping_sub(value) & mask

@@ -1843,6 +1843,27 @@ fn rustc_wrapping_integer_methods_reach_native_objects() {
 }
 
 #[test]
+fn rustc_saturating_integer_unary_methods_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> i8 { input.saturating_neg() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> i16 { input.saturating_abs() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i32) -> i32 { input.saturating_neg() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.saturating_abs() }",
+        "const VALUE: i8 = (-128i8).saturating_neg(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i16 = (-32768i16).saturating_abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: i32 = (-42i32).saturating_abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_signed_integer_classification_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> i8 { input.signum() }",

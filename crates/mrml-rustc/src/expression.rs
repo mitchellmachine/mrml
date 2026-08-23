@@ -497,6 +497,8 @@ pub enum IntegerBitTransform {
     WrappingNegate,
     WrappingAbsolute,
     Absolute,
+    SaturatingNegate,
+    SaturatingAbsolute,
     Signum,
 }
 
@@ -3843,6 +3845,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_abs"
                         | "abs"
                         | "unsigned_abs"
+                        | "saturating_neg"
+                        | "saturating_abs"
                         | "abs_diff"
                         | "count_ones"
                         | "count_zeros"
@@ -4050,20 +4054,24 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                 },
                 "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
-                | "wrapping_abs" | "abs" | "signum" => ExprKind::IntegerBitTransform {
-                    base,
-                    transform: match method.text {
-                        "swap_bytes" => IntegerBitTransform::SwapBytes,
-                        "reverse_bits" => IntegerBitTransform::ReverseBits,
-                        "to_be" => IntegerBitTransform::ToBigEndian,
-                        "to_le" => IntegerBitTransform::ToLittleEndian,
-                        "wrapping_neg" => IntegerBitTransform::WrappingNegate,
-                        "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
-                        "abs" => IntegerBitTransform::Absolute,
-                        "signum" => IntegerBitTransform::Signum,
-                        _ => unreachable!(),
-                    },
-                },
+                | "wrapping_abs" | "abs" | "saturating_neg" | "saturating_abs" | "signum" => {
+                    ExprKind::IntegerBitTransform {
+                        base,
+                        transform: match method.text {
+                            "swap_bytes" => IntegerBitTransform::SwapBytes,
+                            "reverse_bits" => IntegerBitTransform::ReverseBits,
+                            "to_be" => IntegerBitTransform::ToBigEndian,
+                            "to_le" => IntegerBitTransform::ToLittleEndian,
+                            "wrapping_neg" => IntegerBitTransform::WrappingNegate,
+                            "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
+                            "abs" => IntegerBitTransform::Absolute,
+                            "saturating_neg" => IntegerBitTransform::SaturatingNegate,
+                            "saturating_abs" => IntegerBitTransform::SaturatingAbsolute,
+                            "signum" => IntegerBitTransform::Signum,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
                 "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
                 | "leading_ones" | "trailing_ones" => ExprKind::IntegerBitCount {
                     base,
