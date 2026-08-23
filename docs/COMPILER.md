@@ -3,6 +3,9 @@
 This document records the durable architectural direction for `mrml-rustc`.
 Implementation status remains grounded in current source, tests, and native
 evidence; this roadmap does not promote planned work to implemented work.
+The concise, commit-addressed recovery state is maintained in
+[`compiler/CHECKPOINT.md`](compiler/CHECKPOINT.md); update it after every pushed
+compiler milestone.
 
 ## Identity and compatibility objective
 

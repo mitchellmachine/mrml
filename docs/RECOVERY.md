@@ -137,6 +137,11 @@ substitute whichever nightly is installed. If advancing the oracle, retain the
 old record, run both generations, classify every delta, change semantics only
 deliberately, and retain original regression probes.
 
+Read `docs/compiler/CHECKPOINT.md` for the concise commit-addressed compiler
+state, exact last complete Windows/Arch gates, known analysis boundary, and next
+dependency milestone. Treat it as a recovery index, verify it against source,
+and update it after every pushed compiler milestone.
+
 Current typed-place recovery boundary: parsed assignments store their base
 binding separately from an explicit dereference, index, or numeric tuple-field
 projection. Do not regress this to target-string splitting in semantics or
