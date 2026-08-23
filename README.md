@@ -96,6 +96,11 @@ violates any rule must not be merged.
 - Compiler and codec work must clearly identify its supported subset and pass
   independent differential, conformance, malformed-input, and interoperability
   testing before broader compatibility is claimed.
+- Apply the worldwide patent-awareness rules in
+  [docs/patents](docs/patents/README.md) to substantial patent-sensitive
+  mechanisms. Prefer verified expired, public-domain, clearly non-overlapping,
+  or appropriately royalty-free designs. CC0 addresses copyright and does not
+  establish freedom to operate under third-party patents.
 
 ## Trust model
 

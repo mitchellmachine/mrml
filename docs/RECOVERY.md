@@ -3,6 +3,13 @@
 Use this procedure when prior conversations, agent memory, local notes, signing
 artifacts, or development context are unavailable. Git is authoritative.
 
+Patent research is also durable repository state. Before repeating a search,
+read `docs/patents/README.md`, its status registers, and `REVIEW_LOG.md`.
+Resume from recorded mechanisms, claims, families, jurisdictions, official
+registers, dates, license conditions, and confidence. Never promote a discovery
+record to an active-right candidate without territorial status verification,
+or convert an incomplete search or royalty-free label into a clearance claim.
+
 ## 1. Establish repository state
 
 Run read-only inspection first:

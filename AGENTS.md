@@ -108,3 +108,22 @@ large cross-cutting OS subsystems in one task, branch, or functional commit.
 Finish and verify the current OS dependency gate before starting another. The
 compiler task may proceed alongside it only when changes, tests, and review
 remain separable and shared-file edits do not couple the milestones.
+
+Patent review is technical risk screening, not legal adjudication. For each
+substantial new mechanism, report `Patent review: NOT_TRIGGERED` or
+`Patent review: TRIGGERED` with the reason and a link to
+`docs/patents/REVIEW_LOG.md`. Prefer mechanisms whose relevant patents are
+verified expired, public-domain, or covered by an applicable royalty-free
+grant. Verify the grant's claims, versions, territories, beneficiaries,
+reciprocity, defensive-suspension, termination and downstream-distribution
+conditions; "open source," a standard, CC0, independent creation, or an AI
+origin does not establish patent clearance. If a suitable grant or clearly
+non-overlapping implementation cannot be established, pause that mechanism for
+targeted review or use a documented design-around rather than guessing.
+
+Search claim limitations and actual MRML mechanisms, not titles or branding.
+Discover families worldwide, but verify claims and status independently in the
+authoritative national or regional register for every material right; a PCT
+publication is not a worldwide patent. Persist public findings under
+`docs/patents/`. Never copy patent implementation prose into code or state that
+MRML is patent-free or infringes a patent solely from automated analysis.
