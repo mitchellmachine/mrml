@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 419 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 421 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -2027,6 +2027,12 @@ evaluate each signed or unsigned receiver in its own width and return `u32`, as
 Rust requires. Six native objects matched pinned Rust for zero, all-ones,
 sign-bit, and sparse-bit cases, including the full-width zero results and
 signed narrow representation masks.
+Unsigned primitives support stable `next_power_of_two` and pinned-nightly
+`wrapping_next_power_of_two`. Zero maps to one; checked runtime objects trap
+when the rounded power exceeds the receiver width, while unchecked and explicit
+wrapping forms return zero. Constant ordinary calls always reject overflow.
+Checked, unchecked, and explicit-wrapping System V objects matched pinned Rust
+across zero, exact and adjacent powers, and narrow/full-width overflow.
 The stable `ilog2`, `ilog10`, and `ilog` methods return `u32` for signed and
 unsigned primitive receivers in constants and runtime functions. They round
 down through a bounded division loop and trap for zero, nonpositive signed

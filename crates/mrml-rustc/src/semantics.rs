@@ -2523,12 +2523,23 @@ fn evaluate_call_aware_integer<
                         | crate::expression::IntegerBitTransform::SaturatingAbsolute
                         | crate::expression::IntegerBitTransform::Signum
                 ) && !ty.is_signed())
+                || (matches!(
+                    transform,
+                    crate::expression::IntegerBitTransform::NextPowerOfTwo
+                        | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
+                ) && ty.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
             let value = recurse(base)?;
             if transform == crate::expression::IntegerBitTransform::Absolute
                 && value == 1_u128 << (bits - 1)
+            {
+                return Err(arithmetic_error(ConstEvalError::Overflow));
+            }
+            if transform == crate::expression::IntegerBitTransform::NextPowerOfTwo
+                && next_power_of_two_integer_bits(value, bits) == 0
+                && value > 1
             {
                 return Err(arithmetic_error(ConstEvalError::Overflow));
             }
@@ -3398,6 +3409,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || matches!(
+                    transform,
+                    crate::expression::IntegerBitTransform::NextPowerOfTwo
+                        | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
+                )
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
@@ -3780,6 +3796,9 @@ fn transform_integer_bits(
                 0_u128.wrapping_sub(value) & mask
             }
         }
+        IntegerBitTransform::NextPowerOfTwo | IntegerBitTransform::WrappingNextPowerOfTwo => {
+            next_power_of_two_integer_bits(value, bits)
+        }
         IntegerBitTransform::Signum => {
             if value == 0 {
                 0
@@ -3790,6 +3809,21 @@ fn transform_integer_bits(
             }
         }
     }
+}
+
+fn next_power_of_two_integer_bits(value: u128, bits: u8) -> u128 {
+    let mask = signed_mask(bits);
+    let value = value & mask;
+    if value <= 1 {
+        return 1;
+    }
+    let mut result = value - 1;
+    let mut shift = 1_u32;
+    while shift < u32::from(bits) {
+        result |= result >> shift;
+        shift <<= 1;
+    }
+    result.wrapping_add(1) & mask
 }
 
 fn count_integer_bits(value: u128, bits: u8, count: crate::expression::IntegerBitCount) -> u32 {

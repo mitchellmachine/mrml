@@ -2180,6 +2180,25 @@ fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_next_power_of_two_methods_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.next_power_of_two() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> u64 { input.wrapping_next_power_of_two() }",
+        "const VALUE: u8 = 0u8.next_power_of_two(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u16 = 3u16.next_power_of_two(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+        "const VALUE: u32 = 4294967295u32.wrapping_next_power_of_two(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_logarithms_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u32 { input.ilog2() }",

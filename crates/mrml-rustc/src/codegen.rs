@@ -3264,6 +3264,11 @@ fn runtime_expression_type_with_locals<
                     | crate::expression::IntegerBitTransform::SaturatingAbsolute
                     | crate::expression::IntegerBitTransform::Signum
             ) && !integer_type.is_signed()
+                || (matches!(
+                    transform,
+                    crate::expression::IntegerBitTransform::NextPowerOfTwo
+                        | crate::expression::IntegerBitTransform::WrappingNextPowerOfTwo
+                ) && integer_type.is_signed())
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
@@ -5378,6 +5383,34 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                             self.emit_trap_branch(0x80)?;
                         }
                         self.patch_forward_branch(nonnegative)?;
+                    }
+                    IntegerBitTransform::NextPowerOfTwo
+                    | IntegerBitTransform::WrappingNextPowerOfTwo => {
+                        self.emit(&[0x48, 0x83, 0xf8, 1])?;
+                        let above_one = self.emit_forward_branch(0x87)?;
+                        self.emit(&[0xb8, 1, 0, 0, 0])?;
+                        let end = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(above_one)?;
+                        self.emit(&[0x48, 0xff, 0xc8])?;
+                        let mut shift = 1_u8;
+                        while shift < operand_width.bits {
+                            self.emit(&[
+                                0x48, 0x89, 0xc1, 0x48, 0xc1, 0xe9, shift, 0x48, 0x09, 0xc8,
+                            ])?;
+                            shift <<= 1;
+                        }
+                        self.emit(&[0x48, 0x83, 0xc0, 1])?;
+                        if transform == IntegerBitTransform::NextPowerOfTwo && self.overflow_checks
+                        {
+                            if operand_width.bits == 64 {
+                                self.emit_trap_branch(0x82)?;
+                            } else {
+                                self.emit_range_check()?;
+                            }
+                        } else {
+                            self.emit_normalize()?;
+                        }
+                        self.patch_forward_branch(end)?;
                     }
                     IntegerBitTransform::Signum => {
                         self.emit(&[
@@ -13082,6 +13115,54 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn rounds_unsigned_integers_to_powers_of_two() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.next_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> u16 { input.wrapping_next_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { input.next_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { input.wrapping_next_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> usize { input.next_power_of_two() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 2048, 2, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.next_power_of_two() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.wrapping_next_power_of_two() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
