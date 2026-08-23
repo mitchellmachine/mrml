@@ -704,6 +704,22 @@ attestation. The image and state machine are now wired for a platform that
 actually exposes nested VMX or for a physical boot; neither successful path has
 yet been performed.
 
+The same version-2 kernel and an independently signed version-1 service were
+then booted through the repository-owned UEFI loader under QEMU 11.1 TCG with
+EDK2, `virtio-rng-pci`, a FAT boot directory, and the debug console at port
+`0xe9`. The exact trace was
+`a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3 d0 e0`: the loader authenticated and
+materialized both artifacts, constructed the bounded handoff and protected page
+tables, crossed `ExitBootServices`, transferred through the kernel trampoline,
+and reached the VMX probe before the same CPUID rejection. The command used
+`-machine q35,accel=tcg -m 512M -cpu max`, read-only
+`edk2-x86_64-code.fd`, a disposable writable vars image, the FAT directory as a
+raw drive, `virtio-rng-pci`, and `isa-debugcon.iobase=0xe9`. A repeat with
+`-machine q35,accel=whpx -cpu max,+vmx` produced only QEMU's
+`Ignoring request for interrupt vector 0` warning and no loader trace before it
+was terminated after 30 seconds. Neither controlled result is positive VMX or
+physical-hardware evidence.
+
 VMX capability decisions are derived from raw `IA32_VMX_BASIC`, secondary
 processor-control, and EPT/VPID capability MSRs rather than host-supplied
 booleans. Entry prerequisites require a locked `IA32_FEATURE_CONTROL` that
