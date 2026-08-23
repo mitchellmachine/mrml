@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 421 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 423 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -2039,6 +2039,12 @@ down through a bounded division loop and trap for zero, nonpositive signed
 receivers, or radices below two.
 Four System V objects matched pinned Rust across exact powers, adjacent values,
 extrema, and arbitrary radices; three invalid-domain probes trapped.
+Stable signed and unsigned primitive `isqrt` returns the floor of the integer
+square root in constants and runtime functions. A bounded restoring algorithm
+uses only fixed-width integer registers, and signed negative inputs trap as
+pinned Rust requires. Four linked System V objects matched pinned Rust across
+zero, exact squares, adjacent values, and narrow/full-width extrema; an
+independent signed-negative probe trapped with an illegal instruction.
 The cast/conditional slice emitted 552-byte signed and 520-byte Boolean ELF
 objects. A separate nightly-built caller linked and executed both successfully.
 The compound-comparison replacement emitted a 552-byte ELF object and passed

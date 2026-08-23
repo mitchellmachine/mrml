@@ -515,6 +515,7 @@ pub enum IntegerBitTransform {
     SaturatingAbsolute,
     NextPowerOfTwo,
     WrappingNextPowerOfTwo,
+    IntegerSquareRoot,
     Signum,
 }
 
@@ -3897,6 +3898,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_abs"
                         | "next_power_of_two"
                         | "wrapping_next_power_of_two"
+                        | "isqrt"
                         | "saturating_add"
                         | "saturating_sub"
                         | "saturating_mul"
@@ -4183,6 +4185,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 | "saturating_abs"
                 | "next_power_of_two"
                 | "wrapping_next_power_of_two"
+                | "isqrt"
                 | "signum" => ExprKind::IntegerBitTransform {
                     base,
                     transform: match method.text {
@@ -4197,6 +4200,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "saturating_abs" => IntegerBitTransform::SaturatingAbsolute,
                         "next_power_of_two" => IntegerBitTransform::NextPowerOfTwo,
                         "wrapping_next_power_of_two" => IntegerBitTransform::WrappingNextPowerOfTwo,
+                        "isqrt" => IntegerBitTransform::IntegerSquareRoot,
                         "signum" => IntegerBitTransform::Signum,
                         _ => unreachable!(),
                     },

@@ -2532,6 +2532,12 @@ fn evaluate_call_aware_integer<
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
             let value = recurse(base)?;
+            if transform == crate::expression::IntegerBitTransform::IntegerSquareRoot
+                && ty.is_signed()
+                && value & (1_u128 << (bits - 1)) != 0
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
             if transform == crate::expression::IntegerBitTransform::Absolute
                 && value == 1_u128 << (bits - 1)
             {
@@ -3418,6 +3424,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
             let value = recurse(base)?;
+            if transform == crate::expression::IntegerBitTransform::IntegerSquareRoot
+                && value & (1_u128 << (bits - 1)) != 0
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
             if transform == crate::expression::IntegerBitTransform::Absolute
                 && value == 1_u128 << (bits - 1)
             {
@@ -3799,6 +3810,7 @@ fn transform_integer_bits(
         IntegerBitTransform::NextPowerOfTwo | IntegerBitTransform::WrappingNextPowerOfTwo => {
             next_power_of_two_integer_bits(value, bits)
         }
+        IntegerBitTransform::IntegerSquareRoot => integer_square_root(value, bits),
         IntegerBitTransform::Signum => {
             if value == 0 {
                 0
@@ -3809,6 +3821,24 @@ fn transform_integer_bits(
             }
         }
     }
+}
+
+fn integer_square_root(mut value: u128, bits: u8) -> u128 {
+    let mut result = 0_u128;
+    let mut bit = 1_u128 << (bits - 2);
+    while bit > value {
+        bit >>= 2;
+    }
+    while bit != 0 {
+        if value >= result + bit {
+            value -= result + bit;
+            result = (result >> 1) + bit;
+        } else {
+            result >>= 1;
+        }
+        bit >>= 2;
+    }
+    result
 }
 
 fn next_power_of_two_integer_bits(value: u128, bits: u8) -> u128 {

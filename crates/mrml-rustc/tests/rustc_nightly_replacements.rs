@@ -2221,6 +2221,28 @@ fn rustc_integer_logarithms_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_square_roots_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.isqrt() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> i16 { input.isqrt() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> u64 { input.isqrt() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.isqrt() }",
+        "const VALUE: u8 = 0u8.isqrt(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = 10i16.isqrt(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u32 = 4294967295u32.isqrt(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: i64 = 9223372036854775807i64.isqrt(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_bit_counts_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u32 { input.count_ones() }",

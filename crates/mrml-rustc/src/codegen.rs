@@ -5412,6 +5412,35 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         }
                         self.patch_forward_branch(end)?;
                     }
+                    IntegerBitTransform::IntegerSquareRoot => {
+                        if operand_width.signed {
+                            self.emit(&[0x48, 0x85, 0xc0])?;
+                            self.emit_trap_branch(0x88)?;
+                        }
+                        self.emit(&[0x45, 0x31, 0xc0, 0x49, 0xb9])?;
+                        self.emit(&(1_u64 << (operand_width.bits - 2)).to_le_bytes())?;
+                        let align = self.length;
+                        self.emit(&[0x4c, 0x39, 0xc8])?;
+                        let aligned = self.emit_forward_branch(0x83)?;
+                        self.emit(&[0x49, 0xc1, 0xe9, 2])?;
+                        self.emit_backward_branch(align)?;
+                        self.patch_forward_branch(aligned)?;
+                        let root = self.length;
+                        self.emit(&[0x4d, 0x85, 0xc9])?;
+                        let done = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x4d, 0x89, 0xc2, 0x4d, 0x01, 0xca])?;
+                        self.emit(&[0x4c, 0x39, 0xd0])?;
+                        let below = self.emit_forward_branch(0x82)?;
+                        self.emit(&[0x4c, 0x29, 0xd0, 0x49, 0xd1, 0xe8, 0x4d, 0x01, 0xc8])?;
+                        let shifted = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(below)?;
+                        self.emit(&[0x49, 0xd1, 0xe8])?;
+                        self.patch_forward_branch(shifted)?;
+                        self.emit(&[0x49, 0xc1, 0xe9, 2])?;
+                        self.emit_backward_branch(root)?;
+                        self.patch_forward_branch(done)?;
+                        self.emit(&[0x4c, 0x89, 0xc0])?;
+                    }
                     IntegerBitTransform::Signum => {
                         self.emit(&[
                             0x48, 0x85, 0xc0, 0x0f, 0x9f, 0xc0, 0x0f, 0x9c, 0xc1, 0x0f, 0xb6, 0xc0,
@@ -13213,6 +13242,41 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn computes_primitive_integer_square_roots() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.isqrt() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.isqrt() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { input.isqrt() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.isqrt() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> usize { input.isqrt() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source =
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.isqrt() }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 2048, 2, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]
