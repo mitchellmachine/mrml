@@ -942,6 +942,9 @@ impl<'source> BodyParser<'source> {
         let Some(name) = name.filter(|token| token.kind == TokenKind::Identifier) else {
             return Err(self.error(ParseErrorKind::ExpectedIdentifier, name));
         };
+        if mutable && name.text == "_" {
+            return Err(self.error(ParseErrorKind::ExpectedIdentifier, Some(name)));
+        }
         let ty = if self
             .peek()?
             .is_some_and(|token| token.kind == TokenKind::Colon)

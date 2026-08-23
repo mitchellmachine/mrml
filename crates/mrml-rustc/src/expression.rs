@@ -2225,6 +2225,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         span: token.span,
                     });
                 }
+                if token.text == "_" {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, Some(token)));
+                }
                 if !self
                     .peek()?
                     .is_some_and(|next| next.kind == TokenKind::OpenParen)

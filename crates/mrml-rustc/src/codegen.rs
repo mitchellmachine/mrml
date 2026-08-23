@@ -268,13 +268,15 @@ pub fn compile_x86_64_constant_function<
                 span: translate_span(function.body_expression_span.start, local.initializer_span),
             });
         }
-        local_values[local_count] = Some(ConstantLocal {
-            name: local.name,
-            value,
-            ty: local_type,
-            mutable: local.mutable,
-        });
-        local_count += 1;
+        if local.name != "_" {
+            local_values[local_count] = Some(ConstantLocal {
+                name: local.name,
+                value,
+                ty: local_type,
+                mutable: local.mutable,
+            });
+            local_count += 1;
+        }
     }
     for assignment in body.assignments().iter().flatten() {
         if assignment.index().is_some() {
@@ -10230,12 +10232,6 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         operand_type: &str,
         body_start: usize,
     ) -> Result<(), CodegenError> {
-        if self.saved_locals == MAX_PARAMETERS {
-            return Err(CodegenError {
-                kind: CodegenErrorKind::TooManyRuntimeLocals,
-                span: translate_span(body_start, local.name_span),
-            });
-        }
         let tree = local
             .parse_initializer::<MAX_EXPRESSION_NODES>()
             .map_err(|error| CodegenError {
@@ -10300,6 +10296,37 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             return Err(CodegenError {
                 kind: CodegenErrorKind::RuntimeTypeMismatch,
                 span: translate_span(body_start, local.initializer_span),
+            });
+        }
+        if local.name == "_" {
+            let previous_width = self.width;
+            self.width = runtime_expression_width(local_type).unwrap_or(previous_width);
+            let emission = match local_type {
+                RuntimeExpressionType::Array { count, .. } => {
+                    self.emit_array_to_stack(&tree, tree.root(), count)?;
+                    self.evaluation_depth -= count;
+                    self.emit_stack_cleanup_bytes(
+                        count
+                            .checked_mul(8)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                    )
+                }
+                RuntimeExpressionType::Reference {
+                    target: RuntimeReferenceTarget::Slice(_) | RuntimeReferenceTarget::Str,
+                    ..
+                } => {
+                    self.emit_slice_value_to_stack(&tree, tree.root(), 0)?;
+                    self.emit_stack_cleanup_bytes(16)
+                }
+                _ => self.emit_expression(&tree, tree.root(), 0),
+            };
+            self.width = previous_width;
+            return emission;
+        }
+        if self.saved_locals == MAX_PARAMETERS {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::TooManyRuntimeLocals,
+                span: translate_span(body_start, local.name_span),
             });
         }
         let stack_slots = runtime_local_stack_slots(local_type);
@@ -14026,6 +14053,61 @@ mod tests {
                 .kind,
             CodegenErrorKind::ImmutableAssignment
         );
+    }
+
+    #[test]
+    fn evaluates_wildcard_let_initializers_without_binding_them() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { let _: u64 = input + 1; input + 2 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { let _: [u64; 2] = [input, input + 1]; input + 2 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(values: &[u8]) -> usize { let _: &[u8] = &values[..]; values.len() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, flag: bool) -> u64 { let first: u64 = input; let second: u64 = input + 1; if flag { let _: u64 = input + 2; } first + second }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let constant = Parser::new(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { let _: u64 = 1; 42 }",
+        )
+        .parse_module::<2, 2>()
+        .unwrap();
+        let Some(Item::Function(function)) = constant.items()[0] else {
+            panic!("expected function")
+        };
+        let code =
+            compile_x86_64_function::<_, 64, 2, 16>(&function, &NoConstants, X86_64Abi::Windows)
+                .unwrap();
+        assert_eq!(&code.bytes()[2..10], &42u64.to_le_bytes());
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { let mut _ = 1u64; 0 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { let _: bool = 1u8; 0 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { let _: u64 = 1; _ }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>();
+            if let Ok(module) = module {
+                let Some(Item::Function(function)) = module.items()[0] else {
+                    panic!("expected function")
+                };
+                assert!(
+                    compile_x86_64_function::<_, 256, 2, 32>(
+                        &function,
+                        &NoConstants,
+                        X86_64Abi::SystemV,
+                    )
+                    .is_err(),
+                    "{source}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -968,6 +968,11 @@ bindings may shadow an earlier local or parameter, including with a different
 integer type. A shadowing initializer still resolves the previous binding,
 while later reads and assignments select the newest binding. Forward
 references, unsupported types, and out-of-range values are rejected.
+The scalar wildcard pattern in `let _ = initializer;` and explicitly typed
+variants evaluates the initializer in source order but creates no name and no
+persistent local stack slot. Supported scalar, fixed-array, and fat-reference
+initializers retain their ordinary checks and traps before their temporary
+values are discarded. `let mut _` and using `_` as a value are rejected.
 Parameterized functions emit independently typed integer locals and Boolean
 locals into bounded stack slots. Later initializers and the tail can reload those slots;
 parameter offsets incorporate saved locals and temporary expression depth, and
@@ -1201,7 +1206,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 549 Windows library, conformance, rustc-nightly-replacement, and driver
+The 551 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1233,6 +1238,11 @@ A scalar-shadowing probe emitted a 265-byte COFF object and a 656-byte ELF64
 object. Independent pinned-nightly callers observed parameter shadowing across
 `u8`, `u16`, `u64`, and `u32`, mutation of the newest binding, and final values
 10, 42, and 520 on Windows and Arch Linux WSL.
+A wildcard-let probe emitted a 256-byte COFF object and a 648-byte ELF64 object.
+Independent pinned-nightly callers observed zero, ordinary, and `u64` boundary
+results after MRML evaluated and discarded scalar arithmetic, a two-element
+array, and integer division without retaining a wildcard binding on either
+host.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.

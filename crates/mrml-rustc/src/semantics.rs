@@ -1290,12 +1290,16 @@ fn evaluate_const_local<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
             depth,
         )?,
     };
-    resolver.push(ConstCallArgument {
-        name: local.name,
-        ty,
-        value,
-        mutable: local.mutable,
-    })
+    if local.name == "_" {
+        Ok(())
+    } else {
+        resolver.push(ConstCallArgument {
+            name: local.name,
+            ty,
+            value,
+            mutable: local.mutable,
+        })
+    }
 }
 
 fn evaluate_const_assignment<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
