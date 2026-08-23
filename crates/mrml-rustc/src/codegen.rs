@@ -14649,6 +14649,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> i64 { i64::MAX }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> usize { usize::MAX }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u32 { isize::BITS }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> i32 { i32::min_value() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { u64::max_value() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -14671,6 +14673,25 @@ mod tests {
                 .kind,
             CodegenErrorKind::RuntimeTypeMismatch,
         );
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::min_value(1) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u8 { u8::max_value }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
     }
 
     #[test]

@@ -2501,6 +2501,9 @@ fn rustc_integer_associated_constants_reach_native_objects() {
         "const VALUE: u128 = u128::MAX; #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE as u64 }",
         "const VALUE: i128 = i128::MIN; #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE as i64 }",
         "const VALUE: u32 = usize::BITS; #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { i32::min_value() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { u64::max_value() }",
+        "const VALUE: isize = isize::min_value(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> isize { VALUE }",
     ];
     for source in sources {
         assert_eq!(

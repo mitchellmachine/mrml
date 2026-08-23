@@ -1654,6 +1654,32 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                             },
                         });
                     }
+                    let legacy_constant = match member.text {
+                        "min_value" => Some(IntegerAssociatedConstant::Minimum),
+                        "max_value" => Some(IntegerAssociatedConstant::Maximum),
+                        _ => None,
+                    };
+                    if let Some(constant) = legacy_constant {
+                        let open = self.take()?;
+                        if !open.is_some_and(|open| open.kind == TokenKind::OpenParen) {
+                            return Err(self.error(ExpressionErrorKind::ExpectedExpression, open));
+                        }
+                        let close = self.take()?;
+                        let Some(close) = close.filter(|close| close.kind == TokenKind::CloseParen)
+                        else {
+                            return Err(self.error(ExpressionErrorKind::ExpectedCloseParen, close));
+                        };
+                        return self.push(Expr {
+                            kind: ExprKind::IntegerAssociatedConstant {
+                                integer_type,
+                                constant,
+                            },
+                            span: Span {
+                                start: token.span.start,
+                                end: close.span.end,
+                            },
+                        });
+                    }
                     if !matches!(member.text, "from_be" | "from_le") {
                         return Err(
                             self.error(ExpressionErrorKind::ExpectedExpression, Some(member))

@@ -2125,7 +2125,9 @@ associated constants. `MIN` and `MAX` retain the named primitive type, including
 the target pointer width and signed two's-complement boundary, while `BITS`
 produces `u32`. Values through 64 bits reach native functions directly; `u128`
 and `i128` boundaries participate in constant evaluation and may be explicitly
-cast into a supported x86-64 ABI result.
+cast into a supported x86-64 ABI result. The legacy stable `min_value()` and
+`max_value()` associated functions resolve to the same typed boundaries and
+require an empty argument list.
 Six 504- to 568-byte System V objects matched pinned Rust across zero, adjacent
 low bits, sparse patterns, both width boundaries, and unsigned maxima.
 Pinned-nightly unsigned `carryless_mul`, `extract_bits`, and `deposit_bits`
