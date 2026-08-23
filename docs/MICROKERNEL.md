@@ -76,6 +76,15 @@ systems where forwarded exports are not directly visible. This proves enclave
 reservation on the tested Windows host, but no code has yet been loaded or
 initialized inside that enclave.
 
+The owning Windows handle now models `Reserved -> ImageLoaded -> Initialized`
+as an explicit one-way state machine. It dynamically resolves
+`LoadEnclaveImageW` (the signed PE image path required by current Windows) and
+`InitializeEnclave`, rejects unterminated or embedded-NUL UTF-16 paths, rejects
+initialization before an accepted image, requires a nonzero thread count, and
+preserves the VBS initialization structure as mutable because Windows returns
+the actual created thread count through it. These transitions are implemented
+and malformed-state tested; an MRML enclave PE has not yet passed the load gate.
+
 The untrusted broker protocol uses fixed-size canonical launch requests and
 authority receipts. A request binds a fresh nonce and sequence to the exact
 SHA3-512 image and policy measurements. The authority receipt binds that full

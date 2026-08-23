@@ -30,6 +30,10 @@ pub enum VbsEnclaveError {
     ApiUnavailable,
     Unsupported,
     CreateFailed(u32),
+    InvalidState,
+    InvalidPath,
+    LoadFailed(u32),
+    InitializeFailed(u32),
 }
 
 #[repr(C)]
@@ -41,12 +45,27 @@ struct EnclaveCreateInfoVbs {
 
 #[cfg(windows)]
 type DeleteEnclaveFn = unsafe extern "system" fn(*mut c_void) -> i32;
+#[cfg(windows)]
+type LoadEnclaveImageWFn = unsafe extern "system" fn(*mut c_void, *const u16) -> i32;
+#[cfg(windows)]
+type InitializeEnclaveFn =
+    unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void, u32, *mut u32) -> i32;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VbsEnclaveState {
+    Reserved,
+    ImageLoaded,
+    Initialized,
+}
 
 #[cfg(windows)]
 pub struct VbsEnclaveReservation {
     base: NonNull<u8>,
     size: usize,
     delete: DeleteEnclaveFn,
+    load_image: LoadEnclaveImageWFn,
+    initialize_enclave: InitializeEnclaveFn,
+    state: VbsEnclaveState,
     _library: DynamicLibrary,
 }
 
@@ -78,10 +97,19 @@ impl VbsEnclaveReservation {
         let delete = library
             .symbol(c"DeleteEnclave")
             .ok_or(VbsEnclaveError::ApiUnavailable)?;
+        let load_image = library
+            .symbol(c"LoadEnclaveImageW")
+            .ok_or(VbsEnclaveError::ApiUnavailable)?;
+        let initialize_enclave = library
+            .symbol(c"InitializeEnclave")
+            .ok_or(VbsEnclaveError::ApiUnavailable)?;
         // SAFETY: both symbols are resolved by their documented Kernel32 names
         // and retained for the lifetime of the reservation by `_library`.
         let create: CreateEnclaveFn = unsafe { core::mem::transmute(create) };
         let delete: DeleteEnclaveFn = unsafe { core::mem::transmute(delete) };
+        let load_image: LoadEnclaveImageWFn = unsafe { core::mem::transmute(load_image) };
+        let initialize_enclave: InitializeEnclaveFn =
+            unsafe { core::mem::transmute(initialize_enclave) };
         let information = EnclaveCreateInfoVbs { flags: 0, owner_id };
         // -1 is the documented pseudo-handle for the current process.
         let process = usize::MAX as *mut c_void;
@@ -103,6 +131,9 @@ impl VbsEnclaveReservation {
             base,
             size: VBS_ENCLAVE_ALIGNMENT,
             delete,
+            load_image,
+            initialize_enclave,
+            state: VbsEnclaveState::Reserved,
             _library: library,
         })
     }
@@ -117,6 +148,58 @@ impl VbsEnclaveReservation {
 
     pub const fn is_empty(&self) -> bool {
         false
+    }
+
+    pub const fn state(&self) -> VbsEnclaveState {
+        self.state
+    }
+
+    pub fn load_image_wide(&mut self, path: &[u16]) -> Result<(), VbsEnclaveError> {
+        if self.state != VbsEnclaveState::Reserved {
+            return Err(VbsEnclaveError::InvalidState);
+        }
+        if path.len() < 2 || path.last() != Some(&0) || path[..path.len() - 1].contains(&0) {
+            return Err(VbsEnclaveError::InvalidPath);
+        }
+        // SAFETY: `base` is live and `path` is one validated NUL-terminated
+        // UTF-16 string that remains allocated for the duration of this call.
+        if unsafe { (self.load_image)(self.base.as_ptr().cast(), path.as_ptr()) } == 0 {
+            return Err(VbsEnclaveError::LoadFailed(unsafe { GetLastError() }));
+        }
+        self.state = VbsEnclaveState::ImageLoaded;
+        Ok(())
+    }
+
+    pub fn initialize(&mut self, requested_threads: u32) -> Result<u32, VbsEnclaveError> {
+        #[repr(C)]
+        struct EnclaveInitInfoVbs {
+            length: u32,
+            thread_count: u32,
+        }
+
+        if self.state != VbsEnclaveState::ImageLoaded || requested_threads == 0 {
+            return Err(VbsEnclaveError::InvalidState);
+        }
+        let mut information = EnclaveInitInfoVbs {
+            length: core::mem::size_of::<EnclaveInitInfoVbs>() as u32,
+            thread_count: requested_threads,
+        };
+        // SAFETY: the reservation is live and contains an image accepted by
+        // Windows; the information object matches the documented 8-byte ABI.
+        if unsafe {
+            (self.initialize_enclave)(
+                usize::MAX as *mut c_void,
+                self.base.as_ptr().cast(),
+                core::ptr::from_mut(&mut information).cast(),
+                core::mem::size_of::<EnclaveInitInfoVbs>() as u32,
+                core::ptr::null_mut(),
+            )
+        } == 0
+        {
+            return Err(VbsEnclaveError::InitializeFailed(unsafe { GetLastError() }));
+        }
+        self.state = VbsEnclaveState::Initialized;
+        Ok(information.thread_count)
     }
 }
 
@@ -149,8 +232,9 @@ impl VbsEnclaveApis {
     pub const INITIALIZE: Self = Self(1 << 2);
     pub const CALL: Self = Self(1 << 3);
     pub const DELETE: Self = Self(1 << 4);
+    pub const LOAD_IMAGE: Self = Self(1 << 5);
     pub const REQUIRED: Self = Self(
-        Self::CREATE.0 | Self::LOAD_DATA.0 | Self::INITIALIZE.0 | Self::CALL.0 | Self::DELETE.0,
+        Self::CREATE.0 | Self::LOAD_IMAGE.0 | Self::INITIALIZE.0 | Self::CALL.0 | Self::DELETE.0,
     );
 
     pub const fn contains(self, required: Self) -> bool {
@@ -176,6 +260,7 @@ pub fn vbs_enclave_apis() -> VbsEnclaveApis {
         (c"InitializeEnclave", VbsEnclaveApis::INITIALIZE),
         (c"CallEnclave", VbsEnclaveApis::CALL),
         (c"DeleteEnclave", VbsEnclaveApis::DELETE),
+        (c"LoadEnclaveImageW", VbsEnclaveApis::LOAD_IMAGE),
     ] {
         if library.symbol(name).is_some() {
             bits |= flag.0;
@@ -1920,6 +2005,27 @@ mod tests {
             let reservation = super::VbsEnclaveReservation::reserve([0x42; 32]).unwrap();
             assert_eq!(reservation.size(), super::VBS_ENCLAVE_ALIGNMENT);
             let _ = reservation.base();
+            assert_eq!(reservation.state(), super::VbsEnclaveState::Reserved);
+        }
+    }
+
+    #[test]
+    fn enclave_loader_rejects_ambiguous_paths_and_early_initialization() {
+        if super::vbs_enclave_support() == super::VbsEnclaveSupport::Supported {
+            let mut reservation = super::VbsEnclaveReservation::reserve([0x43; 32]).unwrap();
+            assert_eq!(
+                reservation.load_image_wide(&[b'x' as u16]),
+                Err(super::VbsEnclaveError::InvalidPath)
+            );
+            assert_eq!(
+                reservation.load_image_wide(&[b'x' as u16, 0, b'y' as u16, 0]),
+                Err(super::VbsEnclaveError::InvalidPath)
+            );
+            assert_eq!(
+                reservation.initialize(1),
+                Err(super::VbsEnclaveError::InvalidState)
+            );
+            assert_eq!(reservation.state(), super::VbsEnclaveState::Reserved);
         }
     }
 
