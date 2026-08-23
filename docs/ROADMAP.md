@@ -306,8 +306,14 @@ authority; unrelated domains continue.
    claim, rotates to a disjoint new image, applies exact frees and additions,
    sorts the complete successor index, and rebuilds every invariant. An added
    range cannot overlap any active allocation even when that allocation is freed
-   in the same unpublished successor, preventing pre-commit reuse. Concrete
-   staging and transaction admission remain pending.
+   in the same unpublished successor, preventing pre-commit reuse. The canonical
+   successor image is now encoded into caller-bounded storage,
+   hashed over its complete bytes, staged and durably flushed through a narrow
+   unsafe backend contract, and returned only as a prepared update. Transactions
+   model volume-allocation state as a resource distinct from directory/file
+   objects, require the exact derived image in the publication plan, and return
+   the successor only after its one-use receipt is consumed. Concrete block
+   integration and directory participation remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

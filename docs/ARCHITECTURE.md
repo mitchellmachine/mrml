@@ -305,7 +305,20 @@ state at every COW persistence boundary. Pre-replacement crashes retain the old
 root; the uncertain replacement/final-flush window admits either old or fully
 metadata-durable new state; completed flush selects the new root. No partial
 metadata generation is selectable. This remains a deterministic model, not
-physical power-loss evidence. The concrete block backend, directory/allocator
+physical power-loss evidence. Allocation updates now build a complete
+next-generation image rather than mutating live ownership. Frees affect only
+that successor, additions are sorted
+into its canonical index, its own metadata allocation rotates to the exact next
+publication generation, and neither a retained nor same-successor-freed active
+range may be reused before root publication. Allocation updates can now stage
+that complete encoded allocation image
+through a narrow unsafe durability contract. The service derives SHA3-256 over
+the exact staged bytes and admits a distinct volume-allocation resource to the
+multi-object transaction; it cannot collide with the root directory object's
+participant identity. The successor becomes visible only after its exact image
+is present in the COW plan and its one-use receipt is consumed. The concrete
+block backend,
+directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

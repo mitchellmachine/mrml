@@ -163,7 +163,13 @@ explicitly and downgrade the status rather than guessing.
   publication operation: pre-replacement failures recover the old root;
   uncertain replacement/flush failures allow only old or fully metadata-durable
   new state; successful flush recovers new state. Physical power-loss behavior
-  is not verified. UEFI
+  is not verified. Allocation/free changes now form an exact next-generation
+  image: the active image remains unchanged, its self-allocation rotates, and
+  no active range—including one freed by that successor—may be reused before
+  publication. Exact encoded successor bytes are now staged, durably flushed,
+  digest-bound into a distinct allocation transaction resource, and exposed only
+  after a one-use publication receipt. Concrete block and directory transaction
+  integration remain pending. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

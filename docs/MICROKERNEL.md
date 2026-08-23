@@ -2846,7 +2846,24 @@ new root. The validator never selects a superblock without its durable metadata.
 This models ordering and allowed outcomes only; it does not model a particular
 drive cache, atomic-write unit, torn sector, controller, or physical power cut.
 
-Fifty-six focused unit tests and strict crate-local clippy pass on Windows
+Allocation mutation now produces an immutable complete successor image. The
+planner requires active self-ownership, advances exactly one publication
+generation, removes the old allocation-image record, adds the disjoint new
+allocation-image record, applies exact free/allocate changes, physically sorts
+the result, and reconstructs all bounds/overlap invariants. The active image is
+unchanged. Every addition is compared against every active range before frees
+are considered, so a range freed by the same successor cannot be prematurely
+reused. Missing and duplicate frees, overlap among additions, capacity failure,
+generation exhaustion, and a non-disjoint new allocation image fail without
+producing a successor. The complete canonical bytes are now staged and durably
+flushed through an unsafe backend contract before a `PreparedAllocationUpdate`
+exists, and the service derives its COW digest over those exact bytes. The
+transaction resource model distinguishes volume allocation state from ordinary
+object/kind participants, so allocation and the root directory may coexist in
+one future transaction. Admission requires the exact allocation image in the COW
+plan; only a one-use successful publication receipt exposes the successor.
+
+Fifty-eight focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2859,7 +2876,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 56 tests, and both strict crate-local clippy
+Both current unit-test runs pass 58 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
