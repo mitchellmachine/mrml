@@ -2368,7 +2368,7 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `Option::expect`, or extract them in an unsafe function with
 `Option::unwrap_unchecked`; callers can observe them with `Option::is_some` and
 `Option::is_none`, `Option::is_some_and`, and `Option::is_none_or`, or map them
-with `Option::map_or` or `Option::map_or_else`.
+with `Option::map_or`, `Option::map_or_else`, or `Option::map_or_default`.
 Non-overflowing arithmetic, valid divisions and remainders,
 exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
@@ -2444,6 +2444,13 @@ Checked-option `map_or_else` makes both output paths lazy. Its zero-argument
 default closure executes only for `None`, while its typed one-argument mapping
 closure executes only for `Some`. Both closures may capture parameters and
 locals and must produce compatible one-word scalar results.
+
+Checked-option `map_or_default` executes its typed one-argument mapping closure
+only for `Some` and produces the mapped result type's `Default` value for
+`None`. Integer, boolean, character, and scalar raw-pointer outputs use their
+all-zero default representation; reference outputs are rejected because Rust
+references do not implement `Default`. Captured parameters and locals remain
+available to the mapping closure.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

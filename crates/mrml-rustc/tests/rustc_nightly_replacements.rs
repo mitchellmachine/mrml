@@ -3279,6 +3279,25 @@ fn rustc_checked_integer_option_map_or_else_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_checked_integer_option_map_or_default_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or_default(|value| value as u32 + offset) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64, threshold: i64) -> bool { a.checked_signed_diff(b).map_or_default(|value| value < threshold) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.checked_truncate::<i16>().map_or_default(|value| value as i64 * 2) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> char { input.checked_ilog2().map_or_default(|value| if value > 3 { 'y' } else { 'z' }) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> *const u8 { input.checked_ilog2().map_or_default(|value| value as usize as *const u8) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_sign_cast_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, fallback: i32) -> i32 { input.checked_cast_signed().unwrap_or(fallback) }",
