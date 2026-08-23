@@ -5,13 +5,16 @@
 //! kernel dependency graph.
 
 #[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
 mod tests {
     use core::hint::black_box;
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
         CapabilitySpace, Endpoint, GuestMemory, GuestRegion, HostResourceHandle, KernelScheduler,
-        ObjectId, PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler, SchedulerLoad,
-        SharedAccess, SharedEndpoint, SharedMemoryBindings, TaskRuntime, VmTable,
+        ObjectId, OwnershipMailbox, PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler,
+        SchedulerLoad, SharedAccess, SharedEndpoint, SharedMemoryBindings, TaskRuntime, VmTable,
     };
     use mrml_runtime::{Instant, mrml_println};
 
@@ -34,6 +37,146 @@ mod tests {
 
     fn context(root: u64, entry: u64) -> UserContext {
         UserContext::new(PhysAddr::new(root).unwrap(), entry, 0x7000_0000).unwrap()
+    }
+
+    #[cfg(windows)]
+    mod windows_affinity {
+        use core::ffi::c_void;
+        use core::mem::size_of;
+        use std::vec;
+
+        const RELATION_PROCESSOR_CORE: u32 = 0;
+        const RELATION_ALL: u32 = 0xffff;
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct GroupAffinity {
+            mask: usize,
+            group: u16,
+            reserved: [u16; 3],
+        }
+
+        #[repr(C)]
+        struct ProcessorNumber {
+            group: u16,
+            number: u8,
+            reserved: u8,
+        }
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut c_void;
+            fn GetCurrentProcessorNumberEx(number: *mut ProcessorNumber);
+            fn GetLogicalProcessorInformationEx(
+                relationship: u32,
+                buffer: *mut u8,
+                bytes: *mut u32,
+            ) -> i32;
+            fn SetThreadGroupAffinity(
+                thread: *mut c_void,
+                affinity: *const GroupAffinity,
+                previous: *mut GroupAffinity,
+            ) -> i32;
+        }
+
+        pub struct AffinityGuard(GroupAffinity);
+
+        impl Drop for AffinityGuard {
+            fn drop(&mut self) {
+                let mut ignored = GroupAffinity {
+                    mask: 0,
+                    group: 0,
+                    reserved: [0; 3],
+                };
+                unsafe {
+                    SetThreadGroupAffinity(GetCurrentThread(), &self.0, &mut ignored);
+                }
+            }
+        }
+
+        pub fn pin(group: u16, number: u8) -> AffinityGuard {
+            assert_eq!(size_of::<usize>(), 8);
+            assert!(number < 64);
+            let requested = GroupAffinity {
+                mask: 1usize << number,
+                group,
+                reserved: [0; 3],
+            };
+            let mut previous = GroupAffinity {
+                mask: 0,
+                group: 0,
+                reserved: [0; 3],
+            };
+            assert_ne!(
+                unsafe { SetThreadGroupAffinity(GetCurrentThread(), &requested, &mut previous) },
+                0
+            );
+            let actual = current();
+            assert_eq!(actual, (group, number));
+            AffinityGuard(previous)
+        }
+
+        pub fn current() -> (u16, u8) {
+            let mut number = ProcessorNumber {
+                group: 0,
+                number: 0,
+                reserved: 0,
+            };
+            unsafe { GetCurrentProcessorNumberEx(&mut number) };
+            (number.group, number.number)
+        }
+
+        pub fn distinct_cores() -> [(u16, u8); 2] {
+            let mut bytes = 0u32;
+            unsafe {
+                GetLogicalProcessorInformationEx(RELATION_ALL, core::ptr::null_mut(), &mut bytes);
+            }
+            assert!(bytes >= 32);
+            let mut buffer = vec![0u8; bytes as usize];
+            assert_ne!(
+                unsafe {
+                    GetLogicalProcessorInformationEx(RELATION_ALL, buffer.as_mut_ptr(), &mut bytes)
+                },
+                0
+            );
+            let mut selected = [(0u16, 0u8); 2];
+            let mut count = 0usize;
+            let mut offset = 0usize;
+            while offset < bytes as usize {
+                assert!(offset + 8 <= bytes as usize);
+                let relationship =
+                    u32::from_ne_bytes(buffer[offset..offset + 4].try_into().unwrap());
+                let entry_bytes =
+                    u32::from_ne_bytes(buffer[offset + 4..offset + 8].try_into().unwrap()) as usize;
+                assert!(entry_bytes >= 8 && offset + entry_bytes <= bytes as usize);
+                if relationship == RELATION_PROCESSOR_CORE {
+                    assert!(entry_bytes >= 48);
+                    let groups =
+                        u16::from_ne_bytes(buffer[offset + 30..offset + 32].try_into().unwrap())
+                            as usize;
+                    assert!(groups != 0 && 32 + groups * 16 <= entry_bytes);
+                    let mask_offset = offset + 32;
+                    let mask = u64::from_ne_bytes(
+                        buffer[mask_offset..mask_offset + 8].try_into().unwrap(),
+                    );
+                    let group = u16::from_ne_bytes(
+                        buffer[mask_offset + 8..mask_offset + 10]
+                            .try_into()
+                            .unwrap(),
+                    );
+                    if mask != 0 {
+                        selected[count] = (group, mask.trailing_zeros() as u8);
+                        count += 1;
+                        if count == 2 {
+                            assert_ne!(selected[0], selected[1]);
+                            return selected;
+                        }
+                    }
+                }
+                offset += entry_bytes;
+            }
+            panic!("two distinct Windows processor cores are required");
+        }
     }
 
     #[test]
@@ -432,5 +575,71 @@ mod tests {
             start.elapsed().as_nanos(),
             HANDOFF_ITERATIONS,
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "manual affinity-pinned physical-core performance gate"]
+    fn physical_cross_core_mailbox_round_trip_budget() {
+        use std::sync::{Arc, mpsc};
+        use std::thread;
+
+        const CROSS_CORE_ITERATIONS: u64 = 100_000;
+        let [first_processor, second_processor] = windows_affinity::distinct_cores();
+        let _main_affinity = windows_affinity::pin(first_processor.0, first_processor.1);
+        let outbound = Arc::new(OwnershipMailbox::<u64>::new());
+        let inbound = Arc::new(OwnershipMailbox::<u64>::new());
+        let worker_outbound = outbound.clone();
+        let worker_inbound = inbound.clone();
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let _worker_affinity = windows_affinity::pin(second_processor.0, second_processor.1);
+            ready_sender.send(windows_affinity::current()).unwrap();
+            for _ in 0..CROSS_CORE_ITERATIONS {
+                let token = loop {
+                    if let Some(token) = worker_outbound.take() {
+                        break token;
+                    }
+                    core::hint::spin_loop();
+                };
+                let mut pending = token;
+                loop {
+                    match worker_inbound.publish(pending) {
+                        Ok(()) => break,
+                        Err((_, returned)) => {
+                            pending = returned;
+                            core::hint::spin_loop();
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(ready_receiver.recv().unwrap(), second_processor);
+        assert_eq!(windows_affinity::current(), first_processor);
+
+        let start = Instant::now();
+        for sequence in 0..CROSS_CORE_ITERATIONS {
+            outbound.publish(black_box(sequence)).unwrap();
+            let returned = loop {
+                if let Some(token) = inbound.take() {
+                    break token;
+                }
+                core::hint::spin_loop();
+            };
+            assert_eq!(returned, sequence);
+        }
+        let elapsed = start.elapsed().as_nanos();
+        worker.join().unwrap();
+        mrml_println!(
+            "MRML_KERNEL_BENCH physical_cross_core_mailbox_round_trip_total_ns={} physical_cross_core_mailbox_round_trip_ns={} iterations={} first_group={} first_cpu={} second_group={} second_cpu={}",
+            elapsed,
+            elapsed / CROSS_CORE_ITERATIONS as u128,
+            CROSS_CORE_ITERATIONS,
+            first_processor.0,
+            first_processor.1,
+            second_processor.0,
+            second_processor.1,
+        );
+        assert!(elapsed / (CROSS_CORE_ITERATIONS as u128) < 1_000_000);
     }
 }

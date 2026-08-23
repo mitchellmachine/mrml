@@ -1158,6 +1158,7 @@ const fn wide_name() -> [u16; 18] {
 mod tests {
     use super::*;
     use crate::MapPermissions;
+    use mrml_runtime::{Instant, mrml_println};
 
     #[test]
     fn register_values_match_whp_union_layout() {
@@ -1211,6 +1212,33 @@ mod tests {
                 )
                 .unwrap();
         }
+    }
+
+    #[test]
+    #[ignore = "manual live WHP mapping performance gate"]
+    fn live_map_revoke_lifecycle_budget_when_hypervisor_is_present() {
+        const ITERATIONS: u64 = 10_000;
+        let system = WhpSystem::open().unwrap();
+        if !system.hypervisor_present().unwrap() {
+            return;
+        }
+        let mut partition = system.prepare_partition().unwrap();
+        let range = GuestRange::new(0x10_0000, PAGE_SIZE, MapPermissions::read_write()).unwrap();
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            partition.map_zeroed(range).unwrap();
+            partition
+                .revoke_guest_mapping(range.guest_address(), range.size())
+                .unwrap();
+        }
+        let elapsed = start.elapsed().as_nanos();
+        mrml_println!(
+            "MRML_WHP_BENCH live_map_revoke_lifecycle_total_ns={} live_map_revoke_lifecycle_ns={} iterations={}",
+            elapsed,
+            elapsed / ITERATIONS as u128,
+            ITERATIONS,
+        );
+        assert!(elapsed / (ITERATIONS as u128) < 1_000_000);
     }
 
     #[test]

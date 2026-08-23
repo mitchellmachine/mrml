@@ -71,10 +71,12 @@ confidentiality.
    work rather than a missing mechanism.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
-   **PARTIALLY IMPLEMENTED:** release microbenchmarks cover backend-neutral
+   **IMPLEMENTED:** release microbenchmarks cover backend-neutral
    one-way and round-trip IPC policy, blocked wakeup, capability transfer and
-   revocation, shared-binding setup, and cross-runtime domain handoff. Pinned
-   physical cross-core and native mapping measurements remain outstanding.
+   revocation, shared-binding setup, and cross-runtime domain handoff. Windows
+   evidence now includes a topology-validated affinity-pinned distinct-core
+   mailbox round trip and live WHP map/revoke lifecycle; an Arch Linux/WSL2
+   `/dev/kvm` run covers the matching KVM allocation/map/revoke lifecycle.
 
 Security gate: no stale identity, capability, mapping, queue entry, or shared
 page remains usable after death/revocation; partial operations cannot duplicate

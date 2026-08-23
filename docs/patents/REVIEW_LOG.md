@@ -150,3 +150,18 @@ no new runtime mechanism, algorithm, protocol, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary measurement of existing kernel policy
 operations.
+
+## 2026-08-23 — pinned cross-core and live WHP mapping benchmarks
+
+MRML source: `crates/mrml-kernel-bench/src/lib.rs`,
+`crates/mrml-whp/src/native.rs`, and `crates/mrml-kvm/src/native.rs`.
+
+The host-only harness parses documented Windows processor topology, pins two
+threads to distinct reported cores, and measures the existing ownership
+mailbox. WHP and KVM ignored tests measure their existing allocation, GPA map,
+unmap, and release lifecycles. These are ordinary measurement and affinity
+controls and introduce no new scheduler, mapping algorithm, protocol, or
+optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary measurement of existing kernel and
+hypervisor operations.

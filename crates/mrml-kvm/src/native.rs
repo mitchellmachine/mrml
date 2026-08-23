@@ -394,6 +394,7 @@ impl KvmVcpu {
         decode_run_page(bytes)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn configure_long_mode_entry(
         &mut self,
         entry: u64,
@@ -1366,6 +1367,7 @@ impl<const N: usize> RevocableVmBackend for KvmBackend<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_runtime::{Instant, mrml_println};
 
     fn valid_pe() -> [u8; 1024] {
         let mut pe = [0u8; 1024];
@@ -1394,6 +1396,27 @@ mod tests {
         pe[section + 36..section + 40].copy_from_slice(&0x6000_0000u32.to_le_bytes());
         pe[0x200] = 0xcc;
         pe
+    }
+
+    #[test]
+    #[ignore = "manual live KVM mapping performance gate"]
+    fn live_map_revoke_lifecycle_budget() {
+        const ITERATIONS: u64 = 10_000;
+        let system = KvmSystem::open().unwrap();
+        let mut backend = system.create_backend::<1>(0).unwrap();
+        let start = Instant::now();
+        for _ in 0..ITERATIONS {
+            backend.map_memory(0x10_0000, PAGE_SIZE as usize, false).unwrap();
+            backend.revoke_guest_mapping(0x10_0000, PAGE_SIZE).unwrap();
+        }
+        let elapsed = start.elapsed().as_nanos();
+        mrml_println!(
+            "MRML_KVM_BENCH live_map_revoke_lifecycle_total_ns={} live_map_revoke_lifecycle_ns={} iterations={}",
+            elapsed,
+            elapsed / ITERATIONS as u128,
+            ITERATIONS,
+        );
+        assert!(elapsed / (ITERATIONS as u128) < 1_000_000);
     }
 
     fn valid_handoff() -> [u8; 240] {

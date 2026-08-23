@@ -2211,12 +2211,26 @@ sample (10,000 for the larger domain handoff):
 | capability revoke plus reissue | 5.311 ns |
 | shared binding setup plus authorized revoke | 2.348 ns |
 | two-way cross-runtime domain detach/attach | 330.240 ns |
+| affinity-pinned distinct-core ownership-mailbox round trip | 136.201 ns |
 
-These are throughput-derived optimized policy averages. The cross-runtime case
-does not prove execution on separate physical cores, and the shared-binding
-case does not include native page-table changes. None is a syscall, context
+These are throughput-derived optimized policy averages. The affinity benchmark
+parsed Windows processor-core topology, selected group 0 logical CPUs 0 and 2
+from distinct core records, pinned and verified both threads, and transferred
+each non-copyable token through the kernel `OwnershipMailbox` in both
+directions. The cross-runtime case itself does not prove physical placement,
+and the shared-binding case does not include native page-table changes. None is a syscall, context
 switch, hypervisor, or end-to-end service latency measurement. Hardware-backed
 comparisons require pinned repeated samples and exact environment evidence.
+
+A separate live WHP release observation mapped and revoked one writable 4 KiB
+GPA 10,000 times in one prepared partition. The complete lifecycle—including
+host `VirtualAlloc`/`VirtualFree`, `WHvMapGpaRange`, and `WHvUnmapGpaRange`—took
+240,192,000 ns total, or 24,019 ns per iteration. This is Windows WHP evidence
+only. A matching Arch Linux/WSL2 `/dev/kvm` release run completed 10,000
+allocation, `KVM_SET_USER_MEMORY_REGION` registration, zero-sized slot removal,
+and `munmap` lifecycles in 692,148,811 ns total, or 69,214 ns per iteration.
+Both measurements include host allocation overhead and are backend-specific;
+neither is bare-metal or physical-hardware evidence.
 
 Baseline recorded 2026-08-20 and rechecked on Arch Linux 2026-08-21 on the current development host, one million
 iterations per sample:
