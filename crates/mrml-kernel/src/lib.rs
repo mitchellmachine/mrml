@@ -18,6 +18,7 @@ mod memory;
 mod pe;
 mod platform;
 mod policy;
+mod protected_channel;
 mod protected_execution;
 mod protected_monitor;
 mod scheduler;
@@ -62,6 +63,10 @@ pub use platform::{Architecture, Hypervisor, IsolationClass, VmRole};
 pub use policy::{
     DeviceAddress, DeviceGrant, HostDevice, IommuTopology, MAX_VM_NAME, PolicyError, SystemPolicy,
     VmName, VmPolicy,
+};
+pub use protected_channel::{
+    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
+    ProtectedChannelError,
 };
 pub use protected_execution::{
     PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend, ProtectionClaims,

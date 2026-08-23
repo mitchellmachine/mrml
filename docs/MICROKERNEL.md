@@ -67,6 +67,17 @@ does not create an enclave and does not upgrade a WHP launch's protection
 claims; signed enclave image construction, loading, and evidence verification
 remain incomplete.
 
+The untrusted broker protocol uses fixed-size canonical launch requests and
+authority receipts. A request binds a fresh nonce and sequence to the exact
+SHA3-512 image and policy measurements. The authority receipt binds that full
+request digest to the protection report with a domain-separated HMAC-SHA-256;
+reserved bytes, altered fields, wrong requests, and malformed reports fail
+closed. The symmetric receipt key belongs only in the VBS authority and a
+trusted verifier. Copying it into an ordinary WHP guest would let a compromised
+host forge receipts. A receipt authenticates the authority's decision, not the
+subsequent execution or GPU result, and policy admission still independently
+rejects replay, debug mode, rollback, and insufficient claims.
+
 The privileged kernel will contain only scheduling, address-space and interrupt
 mechanisms, capability enforcement, IPC, and the minimum early console/timer
 code needed to recover. Filesystems, networking, storage, GPU, CUDA mediation,
