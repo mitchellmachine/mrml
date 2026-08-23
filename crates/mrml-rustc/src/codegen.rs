@@ -3371,6 +3371,20 @@ fn runtime_expression_type_with_locals<
                 {
                     base_type
                 }
+                crate::expression::CheckedIntegerOptionOperation::Logarithm { .. }
+                    if argument.is_none_or(|argument| {
+                        runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            argument,
+                            depth + 1,
+                        ) == Ok(base_type)
+                    }) =>
+                {
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                }
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
                 | crate::expression::CheckedIntegerOptionOperation::Power
                     if argument.is_some_and(|argument| {
@@ -3494,6 +3508,17 @@ fn runtime_expression_type_with_locals<
                     argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !source.is_signed())
                 }
+                crate::expression::CheckedIntegerOptionOperation::Logarithm { .. } => argument
+                    .is_none_or(|argument| {
+                        runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            argument,
+                            depth + 1,
+                        ) == Ok(base_type)
+                    }),
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
                 | crate::expression::CheckedIntegerOptionOperation::Power => {
                     argument.is_some_and(|argument| {
@@ -10819,6 +10844,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             crate::expression::CheckedIntegerOptionOperation::Shift { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Power => None,
             crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo => None,
+            crate::expression::CheckedIntegerOptionOperation::Logarithm { .. } => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -11033,6 +11059,43 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.patch_forward_branch(overflow)?;
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
+        }
+        if let crate::expression::CheckedIntegerOptionOperation::Logarithm { binary } = operation {
+            if let Some(radix) = argument {
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, radix, depth + 1)?;
+                self.emit(&[0x49, 0x89, 0xc1, 0x58])?;
+                self.evaluation_depth -= 1;
+            } else {
+                self.emit(&[0x49, 0xc7, 0xc1])?;
+                self.emit(&(if binary { 2_u32 } else { 10_u32 }).to_le_bytes())?;
+            }
+            self.emit(&[0x45, 0x31, 0xc0, 0x48, 0x85, 0xc0])?;
+            let invalid_base =
+                self.emit_forward_branch(if source_width.signed { 0x8e } else { 0x84 })?;
+            let invalid_radix = if argument.is_some() {
+                self.emit(&[0x49, 0x83, 0xf9, 2])?;
+                Some(self.emit_forward_branch(if source_width.signed { 0x8c } else { 0x82 })?)
+            } else {
+                None
+            };
+            self.emit(&[0x41, 0xb8, 1, 0, 0, 0, 0x45, 0x31, 0xd2])?;
+            let loop_start = self.length;
+            self.emit(&[0x4c, 0x39, 0xc8])?;
+            let done = self.emit_forward_branch(0x82)?;
+            self.emit(&[0x48, 0x31, 0xd2, 0x49, 0xf7, 0xf1, 0x41, 0xff, 0xc2])?;
+            self.emit_backward_branch(loop_start)?;
+            self.patch_forward_branch(done)?;
+            self.emit(&[0x44, 0x89, 0xd0])?;
+            self.patch_forward_branch(invalid_base)?;
+            if let Some(invalid_radix) = invalid_radix {
+                self.patch_forward_branch(invalid_radix)?;
+            }
+            let result_width =
+                runtime_width("u32").ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            self.width = result_width;
+            return Ok((result_width, previous_width));
         }
         let exact = operation == crate::expression::CheckedIntegerOptionOperation::ExactDivision;
         let remainder_result = matches!(
@@ -15986,6 +16049,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64) -> u64 { a.checked_next_power_of_two() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_logarithm_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, radix: u64, fallback: u32) -> u32 { a.checked_ilog(radix).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16) -> u32 { a.checked_ilog2().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> bool { a.checked_ilog10().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, radix: i64) -> bool { a.checked_ilog(radix).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, radix: u16) -> u32 { a.checked_ilog(radix).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, fallback: u64) -> u32 { a.checked_ilog2().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> u32 { a.checked_ilog10() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };

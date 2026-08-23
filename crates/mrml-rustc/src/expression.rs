@@ -171,6 +171,7 @@ pub enum CheckedIntegerOptionOperation {
     Shift { left: bool },
     Power,
     NextPowerOfTwo,
+    Logarithm { binary: bool },
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4448,6 +4449,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_shr"
                         | "checked_pow"
                         | "checked_next_power_of_two"
+                        | "checked_ilog"
+                        | "checked_ilog2"
+                        | "checked_ilog10"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4627,6 +4631,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_shl"
                     | "checked_shr"
                     | "checked_pow"
+                    | "checked_ilog"
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
@@ -4976,6 +4981,21 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     argument: None,
                     operation: CheckedIntegerOptionOperation::NextPowerOfTwo,
                 },
+                "checked_ilog" | "checked_ilog2" | "checked_ilog10" => {
+                    ExprKind::CheckedIntegerOption {
+                        base,
+                        argument: if method.text == "checked_ilog" {
+                            Some(argument.ok_or_else(|| {
+                                self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                            })?)
+                        } else {
+                            None
+                        },
+                        operation: CheckedIntegerOptionOperation::Logarithm {
+                            binary: method.text == "checked_ilog2",
+                        },
+                    }
+                }
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {
                     base,
                     argument: Some(argument.ok_or_else(|| {
