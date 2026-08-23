@@ -2359,6 +2359,25 @@ fn preanalyze_runtime_local_binding<
         operand_type,
         body_start,
     )?;
+    if !runtime_type_is_array(ty)
+        && !runtime_type_is_tuple(ty)
+        && !runtime_type_is_fat_reference(ty)
+    {
+        let tree = local
+            .parse_initializer::<MAX_EXPRESSION_NODES>()
+            .map_err(|error| CodegenError {
+                kind: CodegenErrorKind::Expression(error.kind),
+                span: translate_span(body_start + local.initializer_span.start, error.span),
+            })?;
+        preanalyze_runtime_expression_reads(
+            facts,
+            &locals[..*local_count],
+            function,
+            resolver,
+            &tree,
+            local.initializer_span,
+        )?;
+    }
     if local.name == "_" {
         return Ok(());
     }
@@ -2446,7 +2465,7 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
     })
 }
 
-fn preanalyze_runtime_assignment_reads<
+fn preanalyze_runtime_expression_reads<
     'source,
     R: ConstantResolver,
     const MAX_PARAMETERS: usize,
@@ -2456,15 +2475,9 @@ fn preanalyze_runtime_assignment_reads<
     locals: &[Option<RuntimeLocal<'source>>],
     function: &Function<'source, MAX_PARAMETERS>,
     resolver: &R,
-    assignment: &crate::Assignment<'source>,
+    tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
+    expression_span: Span,
 ) -> Result<(), CodegenError> {
-    let tree = assignment
-        .parse_value::<MAX_EXPRESSION_NODES>()
-        .map_err(|error| CodegenError {
-            kind: CodegenErrorKind::Expression(error.kind),
-            span: translate_span(assignment.value_span.start, error.span),
-        })?;
-
     fn push_read<'source, const MAX_PARAMETERS: usize>(
         facts: &mut RuntimeBodyFacts<'source>,
         locals: &[Option<RuntimeLocal<'source>>],
@@ -2632,43 +2645,87 @@ fn preanalyze_runtime_assignment_reads<
             return Ok(());
         }
 
-        let mut visit = |operand| {
-            recurse(
-                facts,
-                locals,
-                function,
-                resolver,
-                tree,
-                operand,
-                depth + 1,
-                assignment_span,
-            )
-        };
+        macro_rules! visit {
+            ($operand:expr) => {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    $operand,
+                    depth + 1,
+                    assignment_span,
+                )
+            };
+        }
         match expression.kind {
             ExprKind::Cast { operand, .. }
             | ExprKind::Ascribe { operand, .. }
             | ExprKind::Return { operand }
-            | ExprKind::LoopBreak { operand } => visit(operand)?,
+            | ExprKind::LoopBreak { operand } => visit!(operand)?,
             ExprKind::Unary {
                 operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
                 operand,
             } => match tree.expression(operand).map(|expression| expression.kind) {
-                Some(ExprKind::Identifier(_)) | Some(ExprKind::Index { .. }) => visit(operand)?,
+                Some(ExprKind::Identifier(_)) => visit!(operand)?,
+                Some(ExprKind::Index { base, index }) => {
+                    let base_type = runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: assignment_span,
+                    })?;
+                    if matches!(base_type, RuntimeExpressionType::Array { .. })
+                        && let Some(ExprKind::Identifier(name)) =
+                            tree.expression(base).map(|expression| expression.kind)
+                    {
+                        let span = tree
+                            .expression(base)
+                            .ok_or(CodegenError {
+                                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                span: assignment_span,
+                            })?
+                            .span;
+                        push_read(
+                            facts,
+                            locals,
+                            function,
+                            RuntimeReadPlace {
+                                name,
+                                span,
+                                projections: RuntimePlaceProjections::single(
+                                    RuntimePlaceProjection::Index,
+                                ),
+                            },
+                            assignment_span,
+                        )?;
+                    } else {
+                        visit!(base)?;
+                    }
+                    visit!(index)?;
+                }
                 Some(ExprKind::Unary {
                     operator: crate::UnaryOperator::Dereference,
                     operand: reference,
-                }) => visit(reference)?,
-                Some(ExprKind::RangeIndex { base, .. }) => visit(base)?,
+                }) => visit!(reference)?,
+                Some(ExprKind::RangeIndex { base, .. }) => visit!(base)?,
                 _ => {}
             },
-            ExprKind::Unary { operand, .. } => visit(operand)?,
+            ExprKind::Unary { operand, .. } => visit!(operand)?,
             ExprKind::Sequence { first, then } => {
-                visit(first)?;
-                visit(then)?;
+                visit!(first)?;
+                visit!(then)?;
             }
             ExprKind::Binary { left, right, .. } => {
-                visit(left)?;
-                visit(right)?;
+                visit!(left)?;
+                visit!(right)?;
             }
             ExprKind::If {
                 condition,
@@ -2680,9 +2737,9 @@ fn preanalyze_runtime_assignment_reads<
                 then_branch,
                 else_branch,
             } => {
-                visit(condition)?;
-                visit(then_branch)?;
-                visit(else_branch)?;
+                visit!(condition)?;
+                visit!(then_branch)?;
+                visit!(else_branch)?;
             }
             // Inline const operands cannot capture runtime locals. Other compound
             // expression families remain outside this bounded preanalysis slice.
@@ -2696,9 +2753,37 @@ fn preanalyze_runtime_assignment_reads<
         locals,
         function,
         resolver,
-        &tree,
+        tree,
         tree.root(),
         0,
+        expression_span,
+    )
+}
+
+fn preanalyze_runtime_assignment_reads<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    assignment: &crate::Assignment<'source>,
+) -> Result<(), CodegenError> {
+    let tree = assignment
+        .parse_value::<MAX_EXPRESSION_NODES>()
+        .map_err(|error| CodegenError {
+            kind: CodegenErrorKind::Expression(error.kind),
+            span: translate_span(assignment.value_span.start, error.span),
+        })?;
+    preanalyze_runtime_expression_reads(
+        facts,
+        locals,
+        function,
+        resolver,
+        &tree,
         assignment.value_span,
     )
 }
@@ -17558,14 +17643,21 @@ mod tests {
             facts.assignment_accesses[3].unwrap().access,
             RuntimePlaceAccess::ReadModifyWrite
         );
-        assert_eq!(facts.assignment_read_count, 4);
-        for (fact, id) in facts.assignment_reads[..4].iter().zip([
-            RuntimeLocalId(1),
-            RuntimeLocalId(2),
-            RuntimeLocalId(4),
-            RuntimeLocalId(5),
+        assert_eq!(facts.assignment_read_count, 11);
+        for (fact, id) in facts.assignment_reads[..11].iter().zip([
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(4)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(5)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
         ]) {
-            assert_eq!(fact.unwrap().base, RuntimePlaceIdentity::Local(id));
+            assert_eq!(fact.unwrap().base, id);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
@@ -17595,8 +17687,9 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 2);
-        assert_eq!(facts.assignment_read_count, 6);
-        for (fact, identity) in facts.assignment_reads[..6].iter().zip([
+        assert_eq!(facts.assignment_read_count, 7);
+        for (fact, identity) in facts.assignment_reads[..7].iter().zip([
+            RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
             RuntimePlaceIdentity::Parameter(2),
@@ -17608,10 +17701,10 @@ mod tests {
             assert_eq!(fact.unwrap().access, RuntimePlaceAccess::Read);
         }
         assert_eq!(
-            facts.assignment_reads[1].unwrap().projections,
+            facts.assignment_reads[2].unwrap().projections,
             RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(0))
         );
-        for index in [0, 2, 3, 4, 5] {
+        for index in [0, 1, 3, 4, 5, 6] {
             assert_eq!(
                 facts.assignment_reads[index].unwrap().projections,
                 RuntimePlaceProjections::EMPTY
@@ -17645,8 +17738,12 @@ mod tests {
 
         assert_eq!(count, 2);
         assert_eq!(facts.assignment_access_count, 2);
-        assert_eq!(facts.assignment_read_count, 7);
-        for (fact, (identity, projections)) in facts.assignment_reads[..7].iter().zip([
+        assert_eq!(facts.assignment_read_count, 8);
+        for (fact, (identity, projections)) in facts.assignment_reads[..8].iter().zip([
+            (
+                RuntimePlaceIdentity::Parameter(0),
+                RuntimePlaceProjections::EMPTY,
+            ),
             (
                 RuntimePlaceIdentity::Parameter(1),
                 RuntimePlaceProjections::EMPTY,
@@ -17682,6 +17779,49 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_scalar_initializer_reads_before_shadowing() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16, left: u16, right: u16, choose: bool) -> u16 { let first: u16 = input + left; let first: u16 = first + right; let selected: u16 = if choose { first + left } else { input + right }; selected }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(facts.assignment_access_count, 0);
+        assert_eq!(facts.assignment_read_count, 9);
+        for (fact, identity) in facts.assignment_reads[..9].iter().zip([
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(2),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 3072, 8, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
@@ -17737,12 +17877,17 @@ mod tests {
             facts.assignment_accesses[3].unwrap().access,
             RuntimePlaceAccess::Write
         );
-        assert_eq!(facts.assignment_read_count, 4);
-        for (fact, id) in facts.assignment_reads[..4].iter().zip([
+        assert_eq!(facts.assignment_read_count, 9);
+        for (fact, id) in facts.assignment_reads[..9].iter().zip([
+            RuntimeLocalId(0),
+            RuntimeLocalId(2),
             RuntimeLocalId(3),
+            RuntimeLocalId(2),
             RuntimeLocalId(4),
+            RuntimeLocalId(2),
             RuntimeLocalId(5),
             RuntimeLocalId(2),
+            RuntimeLocalId(1),
         ]) {
             assert_eq!(fact.unwrap().base, RuntimePlaceIdentity::Local(id));
         }

@@ -1076,6 +1076,24 @@ fn rustc_nested_assignment_indexes_reach_native_objects() {
 }
 
 #[test]
+fn rustc_scalar_initializer_read_order_reaches_native_objects() {
+    // Original bounded replacement for initializer-before-binding scope,
+    // sequential shadowing, and lazy scalar initializer branches.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, left: u16, right: u16, choose: bool) -> u16 { let first: u16 = input + left; let first: u16 = first + right; let selected: u16 = if choose { first ^ left } else { input ^ right }; selected }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<2048, 1536, 8, 8, 8, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.
