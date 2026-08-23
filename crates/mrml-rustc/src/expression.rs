@@ -546,6 +546,7 @@ pub enum ExprKind<'source> {
     IntegerOptionPredicate {
         option: ExprId,
         some: bool,
+        closure: Option<ExprId>,
     },
     IntegerClampMagnitude {
         base: ExprId,
@@ -612,7 +613,12 @@ pub enum ExprKind<'source> {
     Char(u32),
     String(&'source str),
     Closure {
+        parameter: Option<ExprId>,
         body: ExprId,
+    },
+    ClosureParameter {
+        binding: ExprId,
+        target: Option<IntegerType>,
     },
     Identifier(&'source str),
     Call {
@@ -840,6 +846,37 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
         self.root
     }
 
+    pub(crate) fn bind_closure_parameter(
+        &mut self,
+        parameter: ExprId,
+        target: IntegerType,
+    ) -> Result<(), ExpressionErrorKind> {
+        if !matches!(
+            self.nodes.get(parameter.0).and_then(Option::as_ref),
+            Some(Expr {
+                kind: ExprKind::ClosureParameter {
+                    binding,
+                    target: None,
+                },
+                ..
+            }) if *binding == parameter
+        ) {
+            return Err(ExpressionErrorKind::InvalidExpressionTree);
+        }
+        for expression in self.nodes[..self.node_count].iter_mut().flatten() {
+            if matches!(
+                expression.kind,
+                ExprKind::ClosureParameter { binding, .. } if binding == parameter
+            ) {
+                expression.kind = ExprKind::ClosureParameter {
+                    binding: parameter,
+                    target: Some(target),
+                };
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn range_validations(&self) -> &[Option<RangeValidation>] {
         &self.range_validations[..self.range_validation_count]
     }
@@ -912,6 +949,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::Char(_)
             | ExprKind::String(_)
             | ExprKind::Closure { .. }
+            | ExprKind::ClosureParameter { .. }
             | ExprKind::Identifier(_)
             | ExprKind::Call { .. }
             | ExprKind::Cast { .. } => false,
@@ -1201,6 +1239,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Char(value) => Ok(u128::from(value)),
             ExprKind::String(_) => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Closure { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::ClosureParameter { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Identifier(name) => resolver
                 .resolve(name)
                 .ok_or(ConstEvalError::UnknownIdentifier),
@@ -1863,7 +1902,51 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             Some(token) if token.kind == TokenKind::Operator && token.text == "||" => {
                 let body = self.expression(0, depth + 1)?;
                 self.push(Expr {
-                    kind: ExprKind::Closure { body },
+                    kind: ExprKind::Closure {
+                        parameter: None,
+                        body,
+                    },
+                    span: Span {
+                        start: token.span.start,
+                        end: self.node_span(body)?.end,
+                    },
+                })
+            }
+            Some(token) if token.kind == TokenKind::Operator && token.text == "|" => {
+                let parameter = self.take()?;
+                let Some(parameter) = parameter.filter(|value| value.kind == TokenKind::Identifier)
+                else {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, parameter));
+                };
+                let close = self.take()?;
+                if !close
+                    .is_some_and(|value| value.kind == TokenKind::Operator && value.text == "|")
+                {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, close));
+                }
+                let body = self.expression(0, depth + 1)?;
+                let binding = ExprId(self.node_count);
+                let placeholder = self.push(Expr {
+                    kind: ExprKind::ClosureParameter {
+                        binding,
+                        target: None,
+                    },
+                    span: parameter.span,
+                })?;
+                self.substitute_identifier(
+                    body,
+                    parameter.text,
+                    ExprKind::ClosureParameter {
+                        binding,
+                        target: None,
+                    },
+                    depth + 1,
+                )?;
+                self.push(Expr {
+                    kind: ExprKind::Closure {
+                        parameter: Some(placeholder),
+                        body,
+                    },
                     span: Span {
                         start: token.span.start,
                         end: self.node_span(body)?.end,
@@ -2720,10 +2803,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     self.substitute_identifier(fallback, name, replacement, depth + 1)?;
                 }
             }
-            ExprKind::IntegerOptionPredicate { option, .. } => {
+            ExprKind::IntegerOptionPredicate {
+                option, closure, ..
+            } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
+                if let Some(closure) = closure {
+                    self.substitute_identifier(closure, name, replacement, depth + 1)?;
+                }
             }
-            ExprKind::Closure { body } => {
+            ExprKind::Closure { body, .. } => {
                 self.substitute_identifier(body, name, replacement, depth + 1)?;
             }
             ExprKind::SaturatingArithmetic { base, argument, .. } => {
@@ -2837,6 +2925,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             | ExprKind::Bool(_)
             | ExprKind::Char(_)
             | ExprKind::String(_)
+            | ExprKind::ClosureParameter { .. }
             | ExprKind::Identifier(_) => {}
         }
         Ok(())
@@ -4515,6 +4604,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unwrap_or_default"
                         | "is_some"
                         | "is_none"
+                        | "is_some_and"
+                        | "is_none_or"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4700,6 +4791,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_sub"
                     | "checked_mul"
                     | "expect"
+                    | "is_some_and"
+                    | "is_none_or"
                     | "unwrap_or"
                     | "unwrap_or_else"
                     | "strict_add"
@@ -5171,6 +5264,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "is_some" | "is_none" => ExprKind::IntegerOptionPredicate {
                     option: base,
                     some: method.text == "is_some",
+                    closure: None,
+                },
+                "is_some_and" | "is_none_or" => ExprKind::IntegerOptionPredicate {
+                    option: base,
+                    some: method.text == "is_none_or",
+                    closure: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
                 },
                 "clamp_magnitude" => ExprKind::IntegerClampMagnitude {
                     base,

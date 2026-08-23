@@ -2367,7 +2367,8 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `Option::unwrap_or_default`, extract them with `Option::unwrap` or
 `Option::expect`, or extract them in an unsafe function with
 `Option::unwrap_unchecked`; callers can observe them with `Option::is_some` and
-`Option::is_none`. Non-overflowing arithmetic, valid divisions and remainders,
+`Option::is_none`, `Option::is_some_and`, and `Option::is_none_or`.
+Non-overflowing arithmetic, valid divisions and remainders,
 exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
 signed `MIN` negation/absolute-value, and out-of-range casts select the eagerly
@@ -2423,6 +2424,13 @@ is emitted only on the `None` edge, so traps and other checked evaluation in a
 fallback remain skipped for `Some`. Zero-argument closures now have a distinct
 expression node; using one as a first-class runtime value remains unsupported
 until closure layout and callable ABI support are implemented.
+
+Bounded one-argument closures support checked-option `is_some_and` and
+`is_none_or`. The compiler substitutes the closure parameter with a typed
+candidate-stack node, preserving exact cast, logarithm, signed-difference, and
+ordinary producer result types without extending its function-local lifetime.
+Captured parameters and locals remain available. Predicate bodies execute only
+for `Some`; `None` returns `false` for `is_some_and` and `true` for `is_none_or`.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

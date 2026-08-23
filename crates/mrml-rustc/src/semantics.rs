@@ -2088,8 +2088,13 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(option, inside_inline_const)
                 || fallback.is_some_and(|fallback| recurse(fallback, inside_inline_const))
         }
-        ExprKind::IntegerOptionPredicate { option, .. } => recurse(option, inside_inline_const),
-        ExprKind::Closure { body } => recurse(body, inside_inline_const),
+        ExprKind::IntegerOptionPredicate {
+            option, closure, ..
+        } => {
+            recurse(option, inside_inline_const)
+                || closure.is_some_and(|closure| recurse(closure, inside_inline_const))
+        }
+        ExprKind::Closure { body, .. } => recurse(body, inside_inline_const),
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
@@ -2176,6 +2181,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         | ExprKind::Bool(_)
         | ExprKind::Char(_)
         | ExprKind::String(_)
+        | ExprKind::ClosureParameter { .. }
         | ExprKind::Identifier(_) => false,
     }
 }
@@ -2256,8 +2262,10 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerOptionUnwrapOr {
             option, fallback, ..
         } => recurse(option) || fallback.is_some_and(recurse),
-        ExprKind::IntegerOptionPredicate { option, .. } => recurse(option),
-        ExprKind::Closure { body } => recurse(body),
+        ExprKind::IntegerOptionPredicate {
+            option, closure, ..
+        } => recurse(option) || closure.is_some_and(recurse),
+        ExprKind::Closure { body, .. } => recurse(body),
         ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerFunnelShift {
@@ -2313,6 +2321,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         | ExprKind::Bool(_)
         | ExprKind::Char(_)
         | ExprKind::String(_)
+        | ExprKind::ClosureParameter { .. }
         | ExprKind::Identifier(_) => false,
     }
 }
