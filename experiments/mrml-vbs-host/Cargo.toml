@@ -1,0 +1,20 @@
+[workspace]
+
+[package]
+name = "mrml-vbs-host"
+version = "0.1.0"
+edition = "2024"
+authors = ["Mitchell Renouf <mitchell@localhost>"]
+license = "CC0-1.0"
+description = "Original dependency-free MRML VBS enclave lifecycle probe"
+
+[dependencies]
+mrml-error = { path = "../../crates/mrml-error" }
+mrml-runtime = { path = "../../crates/mrml-runtime" }
+mrml-windows = { path = "../../crates/mrml-windows" }
+
+[profile.release]
+panic = "abort"
+lto = "thin"
+codegen-units = 1
+

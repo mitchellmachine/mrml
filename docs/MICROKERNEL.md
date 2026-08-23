@@ -117,6 +117,19 @@ it set `IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY` and
 image passes the independent MRML Authenticode digest parser. A Windows-accepted
 certificate signature is still required before the real load test.
 
+`experiments/mrml-vbs-host` is an original `no_std` lifecycle probe using only
+MRML crates and `core`. It reports capability/ABI discovery, creates the
+non-debug enclave, passes a bounded canonical UTF-16 image path, loads the
+image, and initializes one enclave thread. On the current Windows host, the
+finalized DLL was Authenticode-signed with a newly generated RSA-3072/SHA-256
+development certificate carrying Code Signing, VBS Enclave, and Author EKUs.
+The probe reached `LoadEnclaveImageW` and returned Windows error 577
+(`ERROR_INVALID_IMAGE_HASH`) because that self-signed root is deliberately not
+trusted and Windows test-signing was not enabled. This is evidence that create
+and load dispatch execute, but not that Windows has accepted or run the image.
+Enabling global test-signing or trusting a development code-signing root weakens
+the host policy and is never performed automatically by the build.
+
 The untrusted broker protocol uses fixed-size canonical launch requests and
 authority receipts. A request binds a fresh nonce and sequence to the exact
 SHA3-512 image and policy measurements. The authority receipt binds that full
