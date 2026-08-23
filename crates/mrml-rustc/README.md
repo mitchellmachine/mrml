@@ -2354,7 +2354,8 @@ this bounded parser does not yet represent their safety context.
 
 Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `checked_mul`, `checked_div`, `checked_rem`, `checked_neg`, `checked_abs`,
-`checked_shl`, `checked_shr`, and `checked_pow`, pinned-nightly
+`checked_shl`, `checked_shr`, `checked_pow`, and unsigned
+`checked_next_power_of_two`, pinned-nightly
 `checked_div_exact`, generic
 `checked_cast::<T>`, and same-width checked sign-cast results with
 `Option::unwrap_or` and
@@ -2369,6 +2370,8 @@ receiver width likewise select the fallback, zero default, or `None`.
 Checked exponentiation uses exponentiation by squaring, accepts Rust's required
 `u32` exponent, and rejects overflow at either accumulator multiplication or
 factor squaring.
+Checked next-power-of-two accepts zero as one and returns `None` when rounding
+would exceed the unsigned receiver's highest representable power of two.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while

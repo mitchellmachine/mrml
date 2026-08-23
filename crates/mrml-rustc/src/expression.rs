@@ -170,6 +170,7 @@ pub enum CheckedIntegerOptionOperation {
     SignedUnary { absolute: bool },
     Shift { left: bool },
     Power,
+    NextPowerOfTwo,
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4446,6 +4447,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_shl"
                         | "checked_shr"
                         | "checked_pow"
+                        | "checked_next_power_of_two"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4968,6 +4970,11 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?),
                     operation: CheckedIntegerOptionOperation::Power,
+                },
+                "checked_next_power_of_two" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: None,
+                    operation: CheckedIntegerOptionOperation::NextPowerOfTwo,
                 },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {
                     base,

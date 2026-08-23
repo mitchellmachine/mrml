@@ -3365,6 +3365,12 @@ fn runtime_expression_type_with_locals<
                 {
                     base_type
                 }
+                crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo
+                    if argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !source.is_signed()) =>
+                {
+                    base_type
+                }
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
                 | crate::expression::CheckedIntegerOptionOperation::Power
                     if argument.is_some_and(|argument| {
@@ -3483,6 +3489,10 @@ fn runtime_expression_type_with_locals<
                 crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => {
                     argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed())
+                }
+                crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo => {
+                    argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !source.is_signed())
                 }
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
                 | crate::expression::CheckedIntegerOptionOperation::Power => {
@@ -10808,6 +10818,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Shift { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Power => None,
+            crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -10996,6 +11007,30 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.patch_forward_branch(done)?;
             self.patch_forward_branch(finished)?;
             self.patch_forward_branch(end)?;
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
+        }
+        if operation == crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo {
+            if argument.is_some() || source_width.signed {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit(&[0x45, 0x31, 0xc0, 0x48, 0xba])?;
+            let maximum_power = 1u64 << (source_width.bits - 1);
+            self.emit(&maximum_power.to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let overflow = self.emit_forward_branch(0x87)?;
+            self.emit(&[0x48, 0x83, 0xf8, 1])?;
+            let zero_or_one = self.emit_forward_branch(0x86)?;
+            self.emit(&[
+                0x48, 0xff, 0xc8, 0x48, 0x0f, 0xbd, 0xc8, 0x48, 0xff, 0xc1, 0xb8, 1, 0, 0, 0, 0x48,
+                0xd3, 0xe0,
+            ])?;
+            let valid = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(zero_or_one)?;
+            self.emit(&[0xb8, 1, 0, 0, 0])?;
+            self.patch_forward_branch(valid)?;
+            self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
+            self.patch_forward_branch(overflow)?;
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
         }
@@ -15916,6 +15951,46 @@ mod tests {
             };
             assert!(
                 compile_x86_64_function::<_, 2048, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_next_power_of_two_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, fallback: u8) -> u8 { a.checked_next_power_of_two().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64) -> u64 { a.checked_next_power_of_two().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: usize) -> bool { a.checked_next_power_of_two().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u16) -> bool { a.checked_next_power_of_two().is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8) -> i8 { a.checked_next_power_of_two().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> bool { a.checked_next_power_of_two().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64) -> u64 { a.checked_next_power_of_two() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::SystemV,
