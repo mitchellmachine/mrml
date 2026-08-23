@@ -2341,8 +2341,8 @@ reject it, and valid callers receive the direct representability-assuming cast.
 
 Unsafe functions can use the stable `unchecked_add`, `unchecked_sub`,
 `unchecked_mul`, `unchecked_neg`, `unchecked_shl`, and `unchecked_shr` integer
-methods and pinned-nightly `unchecked_shl_exact`, `unchecked_shr_exact`,
-`unchecked_funnel_shl`, `unchecked_funnel_shr`, and
+methods and pinned-nightly `unchecked_div_exact`, `unchecked_shl_exact`,
+`unchecked_shr_exact`, `unchecked_funnel_shl`, `unchecked_funnel_shr`, and
 `unchecked_disjoint_bitor`. They emit the direct
 unchecked scalar operation for callers that uphold Rust's documented
 preconditions. Calls from safe functions, constant initializers, invalid

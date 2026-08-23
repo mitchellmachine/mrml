@@ -15053,6 +15053,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i16, b: i16) -> i16 { a.unchecked_sub(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u32, b: u32) -> u32 { a.unchecked_mul(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u32, b: u32) -> u32 { a.unchecked_div_exact(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64, b: i64) -> i64 { a.unchecked_div_exact(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64) -> i64 { a.unchecked_neg() }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, n: u32) -> u8 { a.unchecked_shl(n) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64, n: u32) -> i64 { a.unchecked_shr(n) }",
@@ -15077,6 +15079,9 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unchecked_add() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_div_exact() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u16) -> u8 { a.unchecked_div_exact(b) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_div_exact(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i8) -> i8 { a.unchecked_neg(1) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unchecked_neg() }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i8, b: i8) -> i8 { a.unchecked_disjoint_bitor(b) }",

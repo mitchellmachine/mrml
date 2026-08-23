@@ -4373,6 +4373,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unchecked_add"
                         | "unchecked_sub"
                         | "unchecked_mul"
+                        | "unchecked_div_exact"
                         | "unchecked_neg"
                         | "unchecked_shl"
                         | "unchecked_shr"
@@ -4539,6 +4540,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "unchecked_add"
                     | "unchecked_sub"
                     | "unchecked_mul"
+                    | "unchecked_div_exact"
                     | "unchecked_shl"
                     | "unchecked_shr"
                     | "unchecked_shl_exact"
@@ -4809,6 +4811,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "unchecked_add"
                 | "unchecked_sub"
                 | "unchecked_mul"
+                | "unchecked_div_exact"
                 | "unchecked_neg"
                 | "unchecked_shl"
                 | "unchecked_shr"
@@ -4827,6 +4830,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "unchecked_add" => BinaryOperator::Add,
                         "unchecked_sub" => BinaryOperator::Subtract,
                         "unchecked_mul" => BinaryOperator::Multiply,
+                        "unchecked_div_exact" => BinaryOperator::Divide,
                         "unchecked_neg" => BinaryOperator::Subtract,
                         "unchecked_shl" | "unchecked_shl_exact" | "unchecked_funnel_shl" => {
                             BinaryOperator::ShiftLeft

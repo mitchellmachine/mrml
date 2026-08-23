@@ -2825,6 +2825,8 @@ fn rustc_unchecked_integer_operations_reach_native_objects() {
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i16, b: i16) -> i16 { a.unchecked_sub(b) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u32, b: u32) -> u32 { a.unchecked_mul(b) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u32, b: u32) -> u32 { a.unchecked_div_exact(b) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64, b: i64) -> i64 { a.unchecked_div_exact(b) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64) -> i64 { a.unchecked_neg() }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, n: u32) -> u8 { a.unchecked_shl(n) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64, n: u32) -> i64 { a.unchecked_shr(n) }",
