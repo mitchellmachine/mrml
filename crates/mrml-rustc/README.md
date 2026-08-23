@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 423 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 425 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1979,6 +1979,12 @@ type for signed integers, selecting subtraction order before arithmetic so the
 full signed minimum-to-maximum distance remains representable.
 Four emitted System V objects matched pinned Rust for both operand orders,
 equal inputs, unsigned boundaries, and signed extrema across 8 through 64 bits.
+Stable primitive integer `midpoint` requires matching receiver and argument
+types and returns the same type. Its overflow-free bitwise average rounds
+toward zero for signed values, including odd negative sums, without widening
+or allocating. Four linked System V objects matched pinned Rust across operand
+orders, exact and fractional averages, mixed signs, and narrow/full-width
+extrema.
 Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and

@@ -308,7 +308,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
-            | ExprKind::IntegerAbsoluteDifference { .. }
+            | ExprKind::IntegerPairTransform { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::IntegerLogarithm { .. } => {
                 return Err(IrError {

@@ -423,9 +423,10 @@ pub enum ExprKind<'source> {
     IntegerUnsignedAbsolute {
         base: ExprId,
     },
-    IntegerAbsoluteDifference {
+    IntegerPairTransform {
         base: ExprId,
         other: ExprId,
+        transform: IntegerPairTransform,
     },
     IntegerBitCount {
         base: ExprId,
@@ -517,6 +518,12 @@ pub enum IntegerBitTransform {
     WrappingNextPowerOfTwo,
     IntegerSquareRoot,
     Signum,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerPairTransform {
+    AbsoluteDifference,
+    Midpoint,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -683,7 +690,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
-            | ExprKind::IntegerAbsoluteDifference { .. }
+            | ExprKind::IntegerPairTransform { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::IntegerLogarithm { .. }
             | ExprKind::Integer(_)
@@ -954,9 +961,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerUnsignedAbsolute { .. } => Err(ConstEvalError::InvalidExpressionTree),
-            ExprKind::IntegerAbsoluteDifference { .. } => {
-                Err(ConstEvalError::InvalidExpressionTree)
-            }
+            ExprKind::IntegerPairTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerLogarithm { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
@@ -2272,7 +2277,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::IntegerUnsignedAbsolute { base } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
-            ExprKind::IntegerAbsoluteDifference { base, other } => {
+            ExprKind::IntegerPairTransform { base, other, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(other, name, replacement, depth + 1)?;
             }
@@ -3904,6 +3909,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_mul"
                         | "saturating_div"
                         | "abs_diff"
+                        | "midpoint"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -4002,6 +4008,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "saturating_pow"
                     | "pow"
                     | "abs_diff"
+                    | "midpoint"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -4168,11 +4175,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
-                "abs_diff" => ExprKind::IntegerAbsoluteDifference {
+                "abs_diff" | "midpoint" => ExprKind::IntegerPairTransform {
                     base,
                     other: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
+                    transform: if method.text == "midpoint" {
+                        IntegerPairTransform::Midpoint
+                    } else {
+                        IntegerPairTransform::AbsoluteDifference
+                    },
                 },
                 "swap_bytes"
                 | "reverse_bits"

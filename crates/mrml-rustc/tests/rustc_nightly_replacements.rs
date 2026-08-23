@@ -1996,6 +1996,28 @@ fn rustc_integer_absolute_differences_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_midpoints_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: i8) -> i8 { left.midpoint(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u16, right: u16) -> u16 { left.midpoint(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: i64) -> i64 { left.midpoint(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u64, right: u64) -> u64 { left.midpoint(right) }",
+        "const VALUE: i8 = (-128i8).midpoint(127); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: u16 = 1u16.midpoint(65535); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+        "const VALUE: i64 = (-9223372036854775807i64).midpoint(9223372036854775807); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+        "const VALUE: u64 = 0u64.midpoint(18446744073709551615u64); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_rotations_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.rotate_left(distance) }",
