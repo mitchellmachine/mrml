@@ -209,6 +209,7 @@ pub fn analyze_constants<
                 matches!(
                     expression.kind,
                     ExprKind::WrappingArithmetic { .. }
+                        | ExprKind::SaturatingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
@@ -1910,6 +1911,7 @@ fn evaluate_integer_const_expression<
         matches!(
             expression.kind,
             ExprKind::WrappingArithmetic { .. }
+                | ExprKind::SaturatingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
@@ -2048,6 +2050,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::WrappingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
+        ExprKind::SaturatingArithmetic { base, argument, .. } => {
+            recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
+        }
         ExprKind::IntegerRotate { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
@@ -2165,6 +2170,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::SignedIntegerPredicate { base, .. } => recurse(base),
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
+        ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent } => recurse(base) || recurse(exponent),
@@ -2384,6 +2390,27 @@ fn evaluate_call_aware_integer<
                 }
                 _ => return Err(arithmetic_error(ConstEvalError::InvalidExpressionTree)),
             }
+        }
+        ExprKind::SaturatingArithmetic {
+            base,
+            argument,
+            operator,
+        } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || integer_expression_type(context, symbol_count, tree, argument, constants)
+                    .is_some_and(|argument_type| argument_type != ty)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            saturating_integer_arithmetic(
+                recurse(base)?,
+                recurse(argument)?,
+                bits,
+                ty.is_signed(),
+                operator,
+            )
         }
         ExprKind::IntegerRotate {
             base,
@@ -3343,6 +3370,21 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 }
             }
         }
+        ExprKind::SaturatingArithmetic {
+            base,
+            argument,
+            operator,
+        } => {
+            let base_type = expression_integer_type(tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || expression_integer_type(tree, argument, constants)
+                    .is_some_and(|argument_type| argument_type != ty)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            saturating_integer_arithmetic(recurse(base)?, recurse(argument)?, bits, true, operator)
+        }
         _ => return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast)),
     };
     Ok(value & signed_mask(bits))
@@ -3369,6 +3411,9 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::Binary { left, right, .. } => expression_integer_type(tree, left, constants)
             .or_else(|| expression_integer_type(tree, right, constants)),
         ExprKind::WrappingArithmetic { base, .. } => expression_integer_type(tree, base, constants),
+        ExprKind::SaturatingArithmetic { base, .. } => {
+            expression_integer_type(tree, base, constants)
+        }
         ExprKind::IntegerRotate { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)
@@ -3419,6 +3464,35 @@ fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u12
         ((value << distance) | (value >> (u32::from(bits) - distance))) & mask
     } else {
         ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
+    }
+}
+
+fn saturating_integer_arithmetic(
+    left: u128,
+    right: u128,
+    bits: u8,
+    signed: bool,
+    operator: BinaryOperator,
+) -> u128 {
+    let mask = signed_mask(bits);
+    if signed {
+        let left = decode_signed(left & mask, bits);
+        let right = decode_signed(right & mask, bits);
+        let value = if operator == BinaryOperator::Add {
+            left.saturating_add(right)
+        } else {
+            left.saturating_sub(right)
+        };
+        let minimum = if bits == 128 {
+            i128::MIN
+        } else {
+            -(1_i128 << (bits - 1))
+        };
+        value.clamp(minimum, signed_maximum(bits)) as u128 & mask
+    } else if operator == BinaryOperator::Add {
+        left.saturating_add(right).min(mask)
+    } else {
+        left.saturating_sub(right)
     }
 }
 

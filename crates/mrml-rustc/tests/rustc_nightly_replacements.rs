@@ -1864,6 +1864,28 @@ fn rustc_saturating_integer_unary_methods_reach_native_objects() {
 }
 
 #[test]
+fn rustc_saturating_integer_binary_methods_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.saturating_add(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, rhs: i16) -> i16 { input.saturating_sub(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, rhs: u64) -> u64 { input.saturating_sub(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.saturating_add(rhs) }",
+        "const VALUE: u8 = 250u8.saturating_add(42); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-32768i16).saturating_sub(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: i32 = 2147483647i32.saturating_add(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
+        "const VALUE: u64 = 0u64.saturating_sub(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_signed_integer_classification_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> i8 { input.signum() }",

@@ -393,6 +393,11 @@ pub enum ExprKind<'source> {
         argument: ExprId,
         operator: BinaryOperator,
     },
+    SaturatingArithmetic {
+        base: ExprId,
+        argument: ExprId,
+        operator: BinaryOperator,
+    },
     IntegerRotate {
         base: ExprId,
         distance: ExprId,
@@ -653,6 +658,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::WrappingArithmetic { .. }
+            | ExprKind::SaturatingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
@@ -922,6 +928,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 Ok(u128::from(predicate.matches(value)))
             }
             ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::SaturatingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2219,6 +2226,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::WrappingArithmetic { base, argument, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(argument, name, replacement, depth + 1)?;
+            }
+            ExprKind::SaturatingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(argument, name, replacement, depth + 1)?;
             }
@@ -3847,6 +3858,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unsigned_abs"
                         | "saturating_neg"
                         | "saturating_abs"
+                        | "saturating_add"
+                        | "saturating_sub"
                         | "abs_diff"
                         | "count_ones"
                         | "count_zeros"
@@ -3927,6 +3940,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_mul"
                     | "wrapping_div"
                     | "wrapping_rem"
+                    | "saturating_add"
+                    | "saturating_sub"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -4024,6 +4039,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "wrapping_div" => BinaryOperator::Divide,
                         "wrapping_rem" => BinaryOperator::Remainder,
                         _ => unreachable!(),
+                    },
+                },
+                "saturating_add" | "saturating_sub" => ExprKind::SaturatingArithmetic {
+                    base,
+                    argument: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    operator: if method.text == "saturating_add" {
+                        BinaryOperator::Add
+                    } else {
+                        BinaryOperator::Subtract
                     },
                 },
                 "rotate_left" | "rotate_right" => ExprKind::IntegerRotate {

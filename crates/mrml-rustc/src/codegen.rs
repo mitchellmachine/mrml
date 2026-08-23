@@ -2296,6 +2296,10 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(argument)?;
         }
+        ExprKind::SaturatingArithmetic { base, argument, .. } => {
+            recurse(base)?;
+            recurse(argument)?;
+        }
         ExprKind::IntegerRotate { base, distance, .. } => {
             recurse(base)?;
             recurse(distance)?;
@@ -3123,6 +3127,30 @@ fn runtime_expression_type_with_locals<
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
+        }
+        ExprKind::SaturatingArithmetic { base, argument, .. } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let argument_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                argument,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || !runtime_types_compatible(argument_type, base_type)
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
         }
         ExprKind::IntegerRotate { base, distance, .. } => {
             let base_type = runtime_expression_type_with_locals(
@@ -5045,6 +5073,33 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     self.width = previous_width;
                     result?;
                 }
+            }
+            ExprKind::SaturatingArithmetic {
+                base,
+                argument,
+                operator,
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, argument, depth + 1)?;
+                self.emit(&[0x59])?;
+                self.evaluation_depth -= 1;
+                self.emit_saturating_arithmetic(operator)?;
+                self.width = previous_width;
             }
             ExprKind::IntegerRotate {
                 base,
@@ -8608,6 +8663,65 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.patch_forward_branch(end)
     }
 
+    fn emit_saturating_arithmetic(
+        &mut self,
+        operator: crate::BinaryOperator,
+    ) -> Result<(), CodegenError> {
+        use crate::BinaryOperator::{Add, Subtract};
+        if operator == Add {
+            self.emit(&[0x48, 0x01, 0xc8])?;
+        } else {
+            self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x89, 0xc8, 0x48, 0x29, 0xd0])?;
+        }
+        debug_assert!(matches!(operator, Add | Subtract));
+
+        if !self.width.signed && operator == Subtract {
+            let no_borrow = self.emit_forward_branch(0x83)?;
+            self.emit(&[0x31, 0xc0])?;
+            self.patch_forward_branch(no_borrow)?;
+        } else if !self.width.signed && self.width.bits == 64 {
+            let no_carry = self.emit_forward_branch(0x83)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&u64::MAX.to_le_bytes())?;
+            self.patch_forward_branch(no_carry)?;
+        } else if !self.width.signed {
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let in_range = self.emit_forward_branch(0x86)?;
+            self.emit(&[0x48, 0x89, 0xd0])?;
+            self.patch_forward_branch(in_range)?;
+        } else if self.width.bits == 64 {
+            let no_overflow = self.emit_forward_branch(0x81)?;
+            self.emit(&[0x48, 0x85, 0xc9])?;
+            let negative = self.emit_forward_branch(0x88)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+            self.patch_forward_branch(end)?;
+            self.patch_forward_branch(no_overflow)?;
+        } else {
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let not_above = self.emit_forward_branch(0x8e)?;
+            self.emit(&[0x48, 0x89, 0xd0])?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(not_above)?;
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let in_range = self.emit_forward_branch(0x8d)?;
+            self.emit(&[0x48, 0x89, 0xd0])?;
+            self.patch_forward_branch(in_range)?;
+            self.patch_forward_branch(end)?;
+        }
+        self.emit_normalize()
+    }
+
     fn emit_wrapping_division(
         &mut self,
         operator: crate::BinaryOperator,
@@ -12001,6 +12115,48 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn saturates_primitive_integer_addition_and_subtraction() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u8) -> u8 { input.saturating_add(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, rhs: i16) -> i16 { input.saturating_sub(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, rhs: u32) -> u32 { input.saturating_sub(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.saturating_add(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, rhs: usize) -> usize { input.saturating_add(rhs) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1280, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.saturating_add(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.saturating_sub(rhs) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 896, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

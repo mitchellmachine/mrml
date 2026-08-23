@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 407 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 409 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1940,6 +1940,10 @@ Their result is independent of runtime overflow-check settings; unsigned and
 Boolean receivers fail closed.
 Four emitted System V objects matched pinned Rust across minima, zero, ordinary
 negative and positive values, and maxima at 8, 16, 32, and 64 bits.
+Primitive signed and unsigned integers support `saturating_add` and
+`saturating_sub` in constants and runtime functions. Both require an argument
+of the receiver's exact type and clamp overflow or underflow to that type's
+minimum or maximum independently of runtime overflow-check settings.
 Signed integer `unsigned_abs` returns the corresponding same-width unsigned
 type in constants and runtime functions, including `isize -> usize`. It accepts
 every signed minimum without overflow and rejects unsigned or Boolean receivers
