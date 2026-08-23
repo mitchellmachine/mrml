@@ -298,9 +298,17 @@ scope first and may use only the unique include-all DRHD for its segment as a
 fallback. Missing devices, configuration read failures, malformed bridges,
 uncovered requesters, and multiple matches fail closed. Because PCI topology
 can change through hot-plug, launch-time resolution must be serialized and
-revalidated when ownership changes. MCFG discovery, multi-unit MMIO assembly,
-fault-record handling, and real-hardware validation remain required before
-stronger claims are enabled.
+revalidated when ownership changes. MCFG is now copied through the same unique,
+checksummed ACPI root walk and parsed into a fixed-capacity allocation table.
+The parser rejects reserved bits, malformed bus ranges, duplicate or overlapping
+segment coverage, overlapping physical windows, unaligned/overflowing physical
+ranges, missing allocations, and capacity exhaustion. ECAM arithmetic treats
+the firmware base as bus-zero-relative, validates the full end-bus physical
+extent, and maps only the declared start-through-end range. A fixed-capacity
+dispatcher rejects overlapping windows and routes each configuration read to
+exactly one segment window. ACPI `_CBA` hot-plug discovery, multi-unit VT-d MMIO
+assembly, fault-record handling, and real-hardware validation remain required
+before stronger claims are enabled.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 

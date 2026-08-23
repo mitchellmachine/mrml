@@ -21,6 +21,9 @@ const DMAR_HEADER_BYTES: usize = 48;
 const DRHD_HEADER_BYTES: usize = 16;
 const DEVICE_SCOPE_HEADER_BYTES: usize = 6;
 const MAX_PCI_PATH_DEPTH: usize = 8;
+const MCFG_HEADER_BYTES: usize = 44;
+const MCFG_ALLOCATION_BYTES: usize = 16;
+const MAX_PHYSICAL_EXCLUSIVE: u64 = 1 << 52;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VtdError {
@@ -49,6 +52,141 @@ pub enum DmarError {
     NotPciBridge,
     InvalidBusRange,
     NoRemappingUnit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum McfgError {
+    Truncated,
+    WrongSignature,
+    InvalidLength,
+    BadChecksum,
+    InvalidReserved,
+    InvalidBusRange,
+    InvalidAddress,
+    AllocationTableFull,
+    DuplicateOrOverlapping,
+    MissingAllocation,
+    SegmentTableFull,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct McfgAllocation {
+    pub base: PhysAddr,
+    pub segment: u16,
+    pub start_bus: u8,
+    pub end_bus: u8,
+}
+
+impl McfgAllocation {
+    pub fn bytes(self) -> usize {
+        (usize::from(self.end_bus) - usize::from(self.start_bus) + 1) << 20
+    }
+
+    pub fn physical_start(self) -> u64 {
+        self.base.get() + (u64::from(self.start_bus) << 20)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct McfgTopology<const ALLOCATIONS: usize> {
+    allocations: [Option<McfgAllocation>; ALLOCATIONS],
+    count: usize,
+}
+
+impl<const ALLOCATIONS: usize> McfgTopology<ALLOCATIONS> {
+    pub fn parse(table: &[u8]) -> Result<Self, McfgError> {
+        if table.len() < MCFG_HEADER_BYTES {
+            return Err(McfgError::Truncated);
+        }
+        if &table[..4] != b"MCFG" {
+            return Err(McfgError::WrongSignature);
+        }
+        let length = read_mcfg_u32(table, 4)? as usize;
+        if length != table.len()
+            || !(length - MCFG_HEADER_BYTES).is_multiple_of(MCFG_ALLOCATION_BYTES)
+        {
+            return Err(McfgError::InvalidLength);
+        }
+        if table.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0 {
+            return Err(McfgError::BadChecksum);
+        }
+        if table[36..MCFG_HEADER_BYTES].iter().any(|byte| *byte != 0) {
+            return Err(McfgError::InvalidReserved);
+        }
+        let mut topology = Self {
+            allocations: [None; ALLOCATIONS],
+            count: 0,
+        };
+        for bytes in table[MCFG_HEADER_BYTES..]
+            .as_chunks::<MCFG_ALLOCATION_BYTES>()
+            .0
+        {
+            if topology.count == ALLOCATIONS {
+                return Err(McfgError::AllocationTableFull);
+            }
+            if bytes[12..].iter().any(|byte| *byte != 0) {
+                return Err(McfgError::InvalidReserved);
+            }
+            if bytes[10] > bytes[11] {
+                return Err(McfgError::InvalidBusRange);
+            }
+            let base_value = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+            let base = PhysAddr::new(base_value).map_err(|_| McfgError::InvalidAddress)?;
+            let buses_from_zero = u64::from(bytes[11]) + 1;
+            let bytes_len = buses_from_zero
+                .checked_mul(1 << 20)
+                .ok_or(McfgError::InvalidAddress)?;
+            let end = base_value
+                .checked_add(bytes_len)
+                .ok_or(McfgError::InvalidAddress)?;
+            if base_value == 0
+                || !base_value.is_multiple_of(1 << 20)
+                || end > MAX_PHYSICAL_EXCLUSIVE
+            {
+                return Err(McfgError::InvalidAddress);
+            }
+            let allocation = McfgAllocation {
+                base,
+                segment: u16::from_le_bytes([bytes[8], bytes[9]]),
+                start_bus: bytes[10],
+                end_bus: bytes[11],
+            };
+            if topology.allocations().any(|existing| {
+                ranges_overlap(
+                    existing.physical_start(),
+                    existing.bytes() as u64,
+                    allocation.physical_start(),
+                    allocation.bytes() as u64,
+                ) || (existing.segment == allocation.segment
+                    && bus_ranges_overlap(existing, &allocation))
+            }) {
+                return Err(McfgError::DuplicateOrOverlapping);
+            }
+            topology.allocations[topology.count] = Some(allocation);
+            topology.count += 1;
+        }
+        if topology.count == 0 {
+            return Err(McfgError::MissingAllocation);
+        }
+        Ok(topology)
+    }
+
+    pub fn allocations(&self) -> impl Iterator<Item = &McfgAllocation> {
+        self.allocations[..self.count].iter().flatten()
+    }
+}
+
+fn bus_ranges_overlap(left: &McfgAllocation, right: &McfgAllocation) -> bool {
+    left.start_bus <= right.end_bus && right.start_bus <= left.end_bus
+}
+
+fn ranges_overlap(left: u64, left_len: u64, right: u64, right_len: u64) -> bool {
+    left < right + right_len && right < left + left_len
+}
+
+fn read_mcfg_u32(bytes: &[u8], offset: usize) -> Result<u32, McfgError> {
+    let source = bytes.get(offset..offset + 4).ok_or(McfgError::Truncated)?;
+    Ok(u32::from_le_bytes(source.try_into().unwrap()))
 }
 
 pub trait PciConfigSpace {
@@ -95,6 +233,33 @@ impl NativeEcamSegment {
             end_bus,
         })
     }
+
+    /// # Safety
+    ///
+    /// `base` must map `allocation.physical_start()` for `allocation.bytes()`
+    /// bytes with the same lifetime and serialization guarantees as `new`.
+    pub unsafe fn from_allocation(
+        base: *const u8,
+        bytes: usize,
+        allocation: McfgAllocation,
+    ) -> Result<Self, DmarError> {
+        // SAFETY: forwarded unchanged from this function's contract.
+        unsafe {
+            Self::new(
+                base,
+                bytes,
+                allocation.segment,
+                allocation.start_bus,
+                allocation.end_bus,
+            )
+        }
+    }
+
+    fn covers(&self, address: DeviceAddress) -> bool {
+        address.segment() == self.segment
+            && address.bus() >= self.start_bus
+            && address.bus() <= self.end_bus
+    }
 }
 
 impl PciConfigSpace for NativeEcamSegment {
@@ -118,6 +283,52 @@ impl PciConfigSpace for NativeEcamSegment {
         // SAFETY: construction establishes the mapped ECAM window and the
         // checked location is naturally aligned within a 4 KiB function.
         Some(unsafe { self.base.add(location).cast::<u32>().read_volatile() })
+    }
+}
+
+pub struct EcamSegments<const SEGMENTS: usize> {
+    windows: [Option<NativeEcamSegment>; SEGMENTS],
+    count: usize,
+}
+
+impl<const SEGMENTS: usize> EcamSegments<SEGMENTS> {
+    pub fn new() -> Self {
+        Self {
+            windows: core::array::from_fn(|_| None),
+            count: 0,
+        }
+    }
+
+    pub fn push(&mut self, window: NativeEcamSegment) -> Result<(), McfgError> {
+        if self.count == SEGMENTS {
+            return Err(McfgError::SegmentTableFull);
+        }
+        if self.windows[..self.count].iter().flatten().any(|existing| {
+            existing.segment == window.segment
+                && existing.start_bus <= window.end_bus
+                && window.start_bus <= existing.end_bus
+        }) {
+            return Err(McfgError::DuplicateOrOverlapping);
+        }
+        self.windows[self.count] = Some(window);
+        self.count += 1;
+        Ok(())
+    }
+}
+
+impl<const SEGMENTS: usize> Default for EcamSegments<SEGMENTS> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const SEGMENTS: usize> PciConfigSpace for EcamSegments<SEGMENTS> {
+    fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
+        self.windows[..self.count]
+            .iter_mut()
+            .flatten()
+            .find(|window| window.covers(address))?
+            .read_u32(address, offset)
     }
 }
 
@@ -672,6 +883,18 @@ mod tests {
         table
     }
 
+    fn mcfg() -> [u8; 60] {
+        let mut table = [0u8; 60];
+        table[..4].copy_from_slice(b"MCFG");
+        table[4..8].copy_from_slice(&60u32.to_le_bytes());
+        table[44..52].copy_from_slice(&0xe000_0000u64.to_le_bytes());
+        table[52..54].copy_from_slice(&0u16.to_le_bytes());
+        table[54] = 0x20;
+        table[55] = 0x2f;
+        finalize_table(&mut table);
+        table
+    }
+
     struct Config {
         bridge_header: u32,
     }
@@ -705,6 +928,42 @@ mod tests {
                 device: 3,
                 function: 0
             }
+        );
+    }
+
+    #[test]
+    fn parses_bounded_mcfg_allocations() {
+        let topology = McfgTopology::<2>::parse(&mcfg()).unwrap();
+        let allocation = topology.allocations().next().unwrap();
+        assert_eq!(allocation.base.get(), 0xe000_0000);
+        assert_eq!(allocation.segment, 0);
+        assert_eq!(allocation.start_bus, 0x20);
+        assert_eq!(allocation.end_bus, 0x2f);
+        assert_eq!(allocation.bytes(), 16 << 20);
+        assert_eq!(allocation.physical_start(), 0xe200_0000);
+    }
+
+    #[test]
+    fn rejects_corrupt_and_overlapping_mcfg_allocations() {
+        let mut corrupt = mcfg();
+        corrupt[44] ^= 1;
+        assert_eq!(
+            McfgTopology::<2>::parse(&corrupt),
+            Err(McfgError::BadChecksum)
+        );
+
+        let original = mcfg();
+        let mut overlap = [0u8; 76];
+        overlap[..60].copy_from_slice(&original);
+        overlap[4..8].copy_from_slice(&76u32.to_le_bytes());
+        overlap[60..68].copy_from_slice(&0xf000_0000u64.to_le_bytes());
+        overlap[68..70].copy_from_slice(&0u16.to_le_bytes());
+        overlap[70] = 0x2f;
+        overlap[71] = 0x30;
+        finalize_table(&mut overlap);
+        assert_eq!(
+            McfgTopology::<2>::parse(&overlap),
+            Err(McfgError::DuplicateOrOverlapping)
         );
     }
 

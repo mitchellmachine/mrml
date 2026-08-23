@@ -22,6 +22,9 @@ pub enum AcpiError {
     MissingDmar,
     DuplicateDmar,
     DmarTooLarge,
+    MissingMcfg,
+    DuplicateMcfg,
+    McfgTooLarge,
 }
 
 /// Read-only access to firmware-owned physical bytes. Implementations must
@@ -66,6 +69,24 @@ pub fn copy_dmar<M: AcpiMemory>(
         AcpiError::MissingDmar,
         AcpiError::DuplicateDmar,
         AcpiError::DmarTooLarge,
+    )
+}
+
+/// Finds and copies the unique PCI Express MCFG reachable from a validated
+/// RSDP into caller-owned bounded memory.
+pub fn copy_mcfg<M: AcpiMemory>(
+    memory: &mut M,
+    rsdp_physical: u64,
+    output: &mut [u8],
+) -> Result<usize, AcpiError> {
+    copy_unique_sdt(
+        memory,
+        rsdp_physical,
+        output,
+        *b"MCFG",
+        AcpiError::MissingMcfg,
+        AcpiError::DuplicateMcfg,
+        AcpiError::McfgTooLarge,
     )
 }
 
@@ -363,5 +384,23 @@ mod tests {
         let mut output = [0u8; 64];
         assert_eq!(copy_dmar(&mut memory, 0x100, &mut output), Ok(48));
         assert_eq!(&output[..4], b"DMAR");
+    }
+
+    #[test]
+    fn copies_unique_mcfg_through_the_same_validated_root() {
+        let mut memory = memory();
+        memory.0[0x200 + 4..0x200 + 8].copy_from_slice(&52u32.to_le_bytes());
+        memory.0[0x22c..0x234].copy_from_slice(&0x400u64.to_le_bytes());
+        finalize(&mut memory.0[0x200..0x234], 9);
+        let mcfg = &mut memory.0[0x400..0x43c];
+        mcfg[..4].copy_from_slice(b"MCFG");
+        mcfg[4..8].copy_from_slice(&60u32.to_le_bytes());
+        mcfg[44..52].copy_from_slice(&0xe000_0000u64.to_le_bytes());
+        mcfg[54] = 0;
+        mcfg[55] = 0;
+        finalize(mcfg, 9);
+        let mut output = [0u8; 64];
+        assert_eq!(copy_mcfg(&mut memory, 0x100, &mut output), Ok(60));
+        assert_eq!(&output[..4], b"MCFG");
     }
 }
