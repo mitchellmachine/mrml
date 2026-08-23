@@ -9,13 +9,14 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `486fc87ae2fa4ff345abb90037f25a3684a31660`
-  (`Discover bounded runtime read places`)
+- Compiler checkpoint commit: `acd1d64df8c74181c938ecf644c653499cd162db`
+  (`Preanalyze bounded runtime body facts`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
-- Preceding compiler commits: `aac7798` (`Bound runtime place projection
-  facts`), `308c781` (`Record stable runtime identifier reads`), and `099b11c`
-  (`Retain bounded runtime place facts`).
+- Preceding compiler commits: `486fc87` (`Discover bounded runtime read
+  places`), `aac7798` (`Bound runtime place projection facts`), `308c781`
+  (`Record stable runtime identifier reads`), and `099b11c` (`Retain bounded
+  runtime place facts`).
 - Oracle: `docs/compiler/oracles/ORACLE-0001.md`, rustc
   `1.100.0-nightly`, full commit
   `f7d782a3be46d6bb4b9792fe69a61db389ba1769`, dated 2026-08-19.
@@ -49,28 +50,35 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
 - bounded syntax discovery for identifier, dereference, index, tuple-field,
   subslice, transparent-wrapper, and sequence-tail read places; and
 - direct scalar dereference emission that records one projected read without a
-  duplicate empty base read.
+  duplicate empty base read;
+- a standalone fixed-capacity body-fact object outside the x86 machine-code
+  state; and
+- pre-emission typing and stable identity assignment for the supported leading
+  straight-line named-local declaration prefix, including translated source
+  spans and exact consumption validation.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
-This is emission-side prerequisite state, not a typed body IR and not a borrow
-checker. Names are still resolved during emission. Read-place discovery is not
-yet run body-wide or consumed by every nested emission family. Parser and
-semantic locals do not yet have stable IDs. Initialization/move paths, body
-basic blocks and edges, borrows, loans, regions, Polonius-style analysis, and a
-general trait solver are unimplemented.
+This is an initial typed body-fact slice, not a complete typed body IR and not a
+borrow checker. Conditional/loop declarations and general accesses are not yet
+preanalyzed. Names are still resolved during emission, and read-place discovery
+is not yet run body-wide or consumed by every nested emission family. Parser
+locals do not yet carry these IDs. Initialization/move paths, body basic blocks
+and edges, borrows, loans, regions, Polonius-style analysis, and a general trait
+solver are unimplemented.
 
 ## Next compiler work
 
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. move stable local/place/access identities out of emission into a bounded
-   typed body-wide representation;
-2. make that table consume bounded read-place discovery across supported body
-   expressions rather than rediscovering names during emission;
+1. expand stable typed identities across conditional/loop scopes and all
+   supported body declarations;
+2. make the standalone table consume bounded read-place discovery and writes
+   across supported body expressions rather than rediscovering names during
+   emission;
 3. add explicit basic blocks and control-flow edges;
 4. add initialization and move-path facts;
 5. then stage shared loans, mutable loans/invalidation, reborrows, and
@@ -97,7 +105,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 565 tests on each host: 312 library tests, 10
+The checkpoint source passed 566 tests on each host: 313 library tests, 10
 conformance tests, 241 replacement tests, and 2 driver tests. Warnings-denied
 Clippy also passed on both hosts. The commands were:
 
