@@ -9,12 +9,13 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e393097857c925a5b76025cc794a7b5b9e045f25`
-  (`Preanalyze sequential runtime declarations`)
+- Compiler checkpoint commit: `996ac72d3e88a1823b6bb11a13a7e392cb9b4822`
+  (`Preanalyze runtime loop declarations`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
-- Preceding compiler commits: `8b4a529` (`Preanalyze conditional branch local
-  identities`), `acd1d64` (`Preanalyze bounded runtime body facts`), `486fc87`
+- Preceding compiler commits: `e393097` (`Preanalyze sequential runtime
+  declarations`), `8b4a529` (`Preanalyze conditional branch local identities`),
+  `acd1d64` (`Preanalyze bounded runtime body facts`), `486fc87`
   (`Discover bounded runtime read places`), `aac7798`
   (`Bound runtime place projection facts`), `308c781`
   (`Record stable runtime identifier reads`), and `099b11c` (`Retain bounded
@@ -55,18 +56,19 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   duplicate empty base read;
 - a standalone fixed-capacity body-fact object outside the x86 machine-code
   state; and
-- pre-emission typing and stable identity assignment across the supported
-  top-level region before the first loop, including repeated conditional branch
-  declarations, intervening non-declaration statements, translated source spans,
-  distinct monotonically assigned identities, and exact consumption validation.
+- pre-emission typing and stable identity assignment for every declaration form
+  represented by the supported runtime body and loop parsers, mirroring pre-loop,
+  loop, nested-loop, conditional-arm, and post-loop emission order with exact
+  scoped-environment restoration and consumption validation.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Loop declarations, arbitrary nested scopes, and general accesses
-are not yet preanalyzed. Names are still resolved during emission, and read-place discovery
+borrow checker. General accesses are not yet preanalyzed. Names are still
+resolved during emission, expanded inlined-helper declarations append
+dynamically, and read-place discovery
 is not yet run body-wide or consumed by every nested emission family. Parser
 locals do not yet carry these IDs. Initialization/move paths, body basic blocks
 and edges, borrows, loans, regions, Polonius-style analysis, and a general trait
@@ -77,14 +79,12 @@ solver are unimplemented.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. expand stable typed identities across loop scopes and remaining nested body
-   declarations;
-2. make the standalone table consume bounded read-place discovery and writes
+1. make the standalone table consume bounded read-place discovery and writes
    across supported body expressions rather than rediscovering names during
    emission;
-3. add explicit basic blocks and control-flow edges;
-4. add initialization and move-path facts;
-5. then stage shared loans, mutable loans/invalidation, reborrows, and
+2. add explicit basic blocks and control-flow edges;
+3. add initialization and move-path facts;
+4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
 
 Modern trait solving, naked functions/`naked_asm!`, inline assembly, security
@@ -108,8 +108,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 570 tests on each host: 315
-library tests, 10 conformance tests, 243 replacement tests, and 2 driver tests.
+The checkpoint source passed 572 tests on each host: 316
+library tests, 10 conformance tests, 244 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

@@ -577,6 +577,20 @@ object format, ABI optimization, or persistent representation.
 Patent review: `NOT_TRIGGERED` — ordinary compiler scope and definition
 bookkeeping.
 
+## 2026-08-23 — bounded loop-scope compiler declaration facts
+
+MRML source: `crates/mrml-rustc`.
+
+The compiler mirrors its existing bounded emission traversal to perform
+conventional symbol-table preanalysis across loop, nested-loop, conditional-arm,
+and post-loop lexical scopes. It copies fixed-capacity environments at scope
+boundaries and retains monotonically assigned definition identities. This
+introduces no novel analysis algorithm, parser, object format, ABI optimization,
+or persistent representation.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler scope and definition
+bookkeeping.
+
 ## 2026-08-23 — sequential top-level compiler declaration facts
 
 MRML source: `crates/mrml-rustc`.
@@ -632,3 +646,18 @@ construction, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional checksummed copy-on-write metadata
 publication ordering.
+
+## 2026-08-23 — capability-authorized bounded directory operations
+
+MRML source: `crates/mrml-storage/src/directory.rs` and the storage authority
+and metadata modules.
+
+The service uses conventional fixed-capacity directory tables, monotonic object
+identifiers, per-operation capability checks, preflight-before-mutation updates,
+stable-identity rename, namespace unlink, and cross-directory file movement.
+Cross-directory directory movement is deliberately rejected without ancestry
+proof. This adds no novel filesystem tree, lookup algorithm, namespace
+optimization, cryptographic construction, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional capability-checked directory
+bookkeeping.

@@ -109,7 +109,10 @@ explicitly and downgrade the status rather than guessing.
   replacement, with fail-stop handling once replacement may have begun. No
   concrete block service, allocator, cross-file allocation index, complete COW
   tree, transaction engine, native file I/O, snapshot, or crash recovery exists
-  yet. UEFI Simple File System use is boot interoperability,
+  yet. Fixed-capacity directory state supports capability-authorized lookup,
+  enumeration, create, rename, remove, and cross-directory file moves, but its
+  object-ID allocator is volatile and cross-directory directory moves require a
+  future ancestry proof. UEFI Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are
@@ -203,12 +206,12 @@ and local-array range reads retain their corresponding projection. Validation
 walks the list through the base type and rejects holes, invalid transitions,
 out-of-range fields, and overflow. The exact projection-capacity error is
 `TooManyRuntimePlaceProjections`.
-Before prologue emission, a bounded pass types and preassigns identities across
-the supported top-level region before the first loop. It continues through
-assignments, expressions, returns, and repeated conditional assignments. Every
-conditional branch begins from the same outer scope without rewinding the fact-
-ID sequence, so same-named mutually exclusive or sequential branch locals and
-later top-level declarations remain distinct. The emitter must consume each
+Before prologue emission, a bounded pass types and preassigns identities for all
+declaration forms represented by the supported runtime body and loop parsers. It
+mirrors pre-loop, loop, nested-loop, conditional-arm, and post-loop emission
+order. Direct loop locals remain active inside that loop; nested and conditional
+actions copy the current environment, and each later loop restores the outer
+environment without rewinding the fact-ID sequence. The emitter must consume each
 preassigned declaration once. Helper parameters and later scoped locals
 append to the dynamic fact tail and cannot inherit those reserved IDs. The table
 is bounded ephemeral compiler state and includes expanded inlined helper bodies;
@@ -224,8 +227,8 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. Loop declarations, arbitrary nested scopes, and general
-accesses are not yet preanalyzed, and parser-level IDs,
+classified as a borrow. General accesses are not yet preanalyzed, and parser-
+level IDs,
 initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
 milestone is to expand the standalone table across scoped declarations and
