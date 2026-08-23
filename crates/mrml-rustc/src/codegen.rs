@@ -128,6 +128,14 @@ impl<R: ConstantResolver, const MAX_LOCALS: usize> ConstantResolver
     fn call_resolves_bool(&self, name: &str, argument_count: usize) -> bool {
         self.outer.call_resolves_bool(name, argument_count)
     }
+
+    fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+        &self,
+        name: &str,
+        argument_count: usize,
+    ) -> Option<crate::RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+        self.outer.resolve_runtime_call(name, argument_count)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -821,6 +829,8 @@ pub fn compile_x86_64_function_with_options<
         locals: [None; MAX_PARAMETERS],
         saved_locals: 0,
         evaluation_depth: 0,
+        runtime_call_depth: 0,
+        runtime_call_local_floor: None,
     };
     emitter.emit_prologue()?;
     for statement in body.statements().iter().flatten() {
@@ -1975,6 +1985,13 @@ fn runtime_expression_width(ty: RuntimeExpressionType) -> Option<RuntimeWidth> {
             ..
         } => runtime_width("char"),
         _ => None,
+    }
+}
+
+fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
+    match ty {
+        crate::ScalarType::Integer(ty) => RuntimeExpressionType::Integer(Some(ty)),
+        crate::ScalarType::Bool => RuntimeExpressionType::Bool,
     }
 }
 
@@ -5475,13 +5492,24 @@ fn runtime_expression_type_with_locals<
             callee,
             argument_count,
             ..
-        } if resolver.call_resolves_bool(callee, argument_count) => Ok(RuntimeExpressionType::Bool),
+        } if resolver
+            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+            .is_some_and(|target| target.return_type == crate::ScalarType::Bool)
+            || resolver.call_resolves_bool(callee, argument_count) =>
+        {
+            Ok(RuntimeExpressionType::Bool)
+        }
         ExprKind::Call {
             callee,
             argument_count,
             ..
         } => resolver
-            .resolve_call_type(callee, argument_count)
+            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+            .and_then(|target| match target.return_type {
+                crate::ScalarType::Integer(ty) => Some(ty),
+                crate::ScalarType::Bool => None,
+            })
+            .or_else(|| resolver.resolve_call_type(callee, argument_count))
             .map(|ty| RuntimeExpressionType::Integer(Some(ty)))
             .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported),
         ExprKind::InlineConst { operand } => {
@@ -6007,13 +6035,20 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     overflow_checks: bool,
     uses_sret: bool,
     saved_parameter_slots: usize,
-    locals: [Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
+    locals: [Option<RuntimeLocal<'tree>>; MAX_PARAMETERS],
     saved_locals: usize,
     evaluation_depth: usize,
+    runtime_call_depth: usize,
+    runtime_call_local_floor: Option<usize>,
 }
 
-impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARAMETERS: usize>
-    RuntimeEmitter<'tree, 'source, R, MAX_BYTES, MAX_PARAMETERS>
+impl<
+    'tree,
+    'source: 'tree,
+    R: ConstantResolver,
+    const MAX_BYTES: usize,
+    const MAX_PARAMETERS: usize,
+> RuntimeEmitter<'tree, 'source, R, MAX_BYTES, MAX_PARAMETERS>
 {
     fn local_stack_slots(&self) -> Result<usize, CodegenError> {
         self.locals[..self.saved_locals]
@@ -6476,6 +6511,83 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         let result = self.emit_expression_with_width(tree, id, depth);
         self.width = previous_width;
         result
+    }
+
+    fn emit_runtime_call<const MAX_NODES: usize>(
+        &mut self,
+        caller_tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        arguments: &[Option<crate::ExprId>],
+        target: crate::RuntimeCallTarget<'tree, MAX_PARAMETERS>,
+        depth: usize,
+    ) -> Result<(), CodegenError> {
+        const MAX_RUNTIME_CALL_DEPTH: usize = 8;
+        if self.runtime_call_depth == MAX_RUNTIME_CALL_DEPTH
+            || target.parameter_count > MAX_PARAMETERS - self.saved_locals
+        {
+            return Err(self.error(CodegenErrorKind::TooManyRuntimeLocals));
+        }
+        let checkpoint = self.saved_locals;
+        for (parameter, argument) in target.parameters[..target.parameter_count]
+            .iter()
+            .zip(arguments.iter())
+        {
+            let parameter =
+                parameter.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            let argument =
+                argument.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            let expected = runtime_type_from_scalar(parameter.ty);
+            let actual = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                caller_tree,
+                argument,
+                depth,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(actual, expected) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            let previous_width = self.width;
+            if let Some(width) = runtime_expression_width(expected) {
+                self.width = width;
+            }
+            self.emit_expression(caller_tree, argument, depth)?;
+            self.width = previous_width;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+        }
+        for parameter in target.parameters[..target.parameter_count].iter().flatten() {
+            self.locals[self.saved_locals] = Some(RuntimeLocal {
+                name: parameter.name,
+                ty: runtime_type_from_scalar(parameter.ty),
+                mutable: false,
+                stack_slots: 1,
+            });
+            self.saved_locals += 1;
+        }
+        self.evaluation_depth -= target.parameter_count;
+        let body = crate::ExpressionParser::<MAX_NODES>::new(target.body_expression)
+            .parse()
+            .map_err(|error| self.error(CodegenErrorKind::Expression(error.kind)))?;
+        let return_type = runtime_type_from_scalar(target.return_type);
+        let previous_width = self.width;
+        if let Some(width) = runtime_expression_width(return_type) {
+            self.width = width;
+        }
+        let previous_floor = self.runtime_call_local_floor;
+        self.runtime_call_local_floor = Some(checkpoint);
+        self.runtime_call_depth += 1;
+        let emission = self.emit_expression(&body, body.root(), depth);
+        self.runtime_call_depth -= 1;
+        self.runtime_call_local_floor = previous_floor;
+        emission?;
+        if return_type == RuntimeExpressionType::Bool {
+            self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
+        }
+        self.emit_scoped_local_cleanup(checkpoint)?;
+        self.width = previous_width;
+        Ok(())
     }
 
     fn emit_expression_with_width<const MAX_NODES: usize>(
@@ -8928,6 +9040,12 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 arguments,
                 argument_count,
             } => {
+                if let Some(target) = self
+                    .resolver
+                    .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+                {
+                    return self.emit_runtime_call(tree, &arguments, target, depth + 1);
+                }
                 let arguments =
                     evaluate_runtime_call_arguments(tree, arguments, argument_count, self.resolver)
                         .map_err(|kind| self.error(kind))?;
@@ -9735,11 +9853,16 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
     }
 
     fn emit_identifier(&mut self, name: &str) -> Result<(), CodegenError> {
-        if let Some(index) = self.locals[..self.saved_locals]
+        let local_floor = self.runtime_call_local_floor.unwrap_or(0);
+        if let Some(index) = self.locals[local_floor..self.saved_locals]
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(index, local)| local.filter(|local| local.name == name).map(|_| index))
+            .find_map(|(index, local)| {
+                local
+                    .filter(|local| local.name == name)
+                    .map(|_| index + local_floor)
+            })
         {
             let local =
                 self.locals[index].ok_or(self.error(CodegenErrorKind::UnknownRuntimeName))?;
@@ -9774,12 +9897,13 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             } else {
                 self.emit_normalize()
             }
-        } else if let Some(index) = self
-            .function
-            .parameters()
-            .iter()
-            .flatten()
-            .position(|parameter| parameter.name == name)
+        } else if self.runtime_call_local_floor.is_none()
+            && let Some(index) = self
+                .function
+                .parameters()
+                .iter()
+                .flatten()
+                .position(|parameter| parameter.name == name)
         {
             let parameter_type = self
                 .function
@@ -11097,7 +11221,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         assignment: &crate::Assignment<'_>,
         body_start: usize,
         local_index: usize,
-        target: RuntimeLocal<'source>,
+        target: RuntimeLocal<'tree>,
     ) -> Result<(), CodegenError> {
         let RuntimeExpressionType::Array { element, count } = target.ty else {
             return Err(CodegenError {

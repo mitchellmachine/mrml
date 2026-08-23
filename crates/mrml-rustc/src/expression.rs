@@ -189,6 +189,20 @@ pub enum ScalarType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCallParameter<'source> {
+    pub name: &'source str,
+    pub ty: ScalarType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeCallTarget<'source, const MAX_PARAMETERS: usize> {
+    pub parameters: [Option<RuntimeCallParameter<'source>>; MAX_PARAMETERS],
+    pub parameter_count: usize,
+    pub return_type: ScalarType,
+    pub body_expression: &'source str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PointerPointee {
     Integer(IntegerType),
     Bool,
@@ -1670,6 +1684,14 @@ pub trait ConstantResolver {
 
     fn call_resolves_bool(&self, _: &str, _: usize) -> bool {
         false
+    }
+
+    fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+        &self,
+        _: &str,
+        _: usize,
+    ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+        None
     }
 }
 

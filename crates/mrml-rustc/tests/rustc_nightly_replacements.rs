@@ -3463,6 +3463,13 @@ fn rustc_underscore_assignments_reach_native_objects() {
 }
 
 #[test]
+fn rustc_prior_scalar_function_calls_reach_native_objects() {
+    let source = "fn add(value: u16, offset: u16) -> u16 { value + offset } fn twice(value: u16) -> u64 { add(value, value) as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u8, choose: bool) -> u64 { if choose { twice(add(value as u16, 5)) } else { twice(add(value as u16, 6)) } }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",

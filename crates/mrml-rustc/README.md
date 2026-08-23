@@ -1211,7 +1211,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 553 Windows library, conformance, rustc-nightly-replacement, and driver
+The 555 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -2569,6 +2569,19 @@ only for `Some` and produces the mapped result type's `Default` value for
 all-zero default representation; reference outputs are rejected because Rust
 references do not implement `Default`. Captured parameters and locals remain
 available to the mapping closure.
+
+Runtime expressions can call an earlier, safe, non-const Rust-ABI function with
+up to four built-in integer or Boolean parameters and a scalar result. The
+callee must have an expression-only body. Arguments execute eagerly in source
+order, are normalized to their declared types, and become immutable lexical
+bindings while the body is emitted. Calls may nest to eight levels and are
+inlined into the selected exported function, so the object still contains one
+symbol and no call relocations. Forward calls, caller-local capture, unsafe or
+foreign-ABI callees, statement bodies, aggregates, references, and recursion
+fail closed. An original nested-call probe produced a 400-byte COFF object and
+a 792-byte ELF64 object; independent pinned-nightly callers exercised both
+Boolean branches and inputs at narrow-width boundaries on Windows and Arch
+Linux WSL.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

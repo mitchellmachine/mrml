@@ -24,7 +24,8 @@ pub use codegen::{
 pub use expression::{
     BinaryOperator, CastType, ConstEvalError, ConstantResolver, Expr, ExprId, ExprKind,
     ExpressionError, ExpressionErrorKind, ExpressionParser, ExpressionTree, IntegerLiteral,
-    IntegerType, NoConstants, PointerPointee, ScalarType, UnaryOperator,
+    IntegerType, NoConstants, PointerPointee, RuntimeCallParameter, RuntimeCallTarget, ScalarType,
+    UnaryOperator,
 };
 pub use ir::{
     ExecutionError, Instruction, IrError, IrErrorKind, IrProgram, lower_expression,

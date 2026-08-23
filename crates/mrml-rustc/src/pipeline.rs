@@ -15,6 +15,7 @@ struct PipelineResolver<
     module: &'module Module<'source, MAX_ITEMS, MAX_PARAMETERS>,
     constants: &'module ConstantTable<'source, MAX_CONSTANTS>,
     target: TargetLayout,
+    function_index: usize,
 }
 
 impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>
@@ -65,6 +66,53 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
                     && function.parameter_count() == argument_count
                     && function.return_type.is_some_and(|return_type| return_type.text == "bool"))
         })
+    }
+
+    fn resolve_runtime_call<const CALL_PARAMETERS: usize>(
+        &self,
+        name: &str,
+        argument_count: usize,
+    ) -> Option<crate::RuntimeCallTarget<'_, CALL_PARAMETERS>> {
+        if argument_count > CALL_PARAMETERS {
+            return None;
+        }
+        let function = self.module.items()[..self.function_index]
+            .iter()
+            .flatten()
+            .find_map(|item| match item {
+                Item::Function(function)
+                    if function.name == name
+                        && !function.constant
+                        && !function.unsafe_function
+                        && function.abi == crate::FunctionAbi::Rust
+                        && function.parameter_count() == argument_count =>
+                {
+                    Some(function)
+                }
+                _ => None,
+            })?;
+        let return_type = scalar_type(function.return_type?.text)?;
+        let mut parameters = [None; CALL_PARAMETERS];
+        for (index, parameter) in function.parameters().iter().flatten().enumerate() {
+            parameters[index] = Some(crate::RuntimeCallParameter {
+                name: parameter.name,
+                ty: scalar_type(parameter.ty.text)?,
+            });
+        }
+        Some(crate::RuntimeCallTarget {
+            parameters,
+            parameter_count: argument_count,
+            return_type,
+            body_expression: function.body_expression,
+        })
+    }
+}
+
+fn scalar_type(name: &str) -> Option<crate::ScalarType> {
+    if name == "bool" {
+        Some(crate::ScalarType::Bool)
+    } else {
+        crate::IntegerType::from_name(name).map(crate::ScalarType::Integer)
     }
 }
 
@@ -168,12 +216,13 @@ pub fn compile_source_function_with_options<
             kind: CompileErrorKind::Semantic(error.kind),
             span: Some(error.span),
         })?;
-    let function = module
+    let (function_index, function) = module
         .items()
         .iter()
         .flatten()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == function_name => Some(function),
+        .enumerate()
+        .find_map(|(index, item)| match item {
+            Item::Function(function) if function.name == function_name => Some((index, function)),
             _ => None,
         })
         .ok_or(CompileError {
@@ -188,6 +237,7 @@ pub fn compile_source_function_with_options<
         module: &module,
         constants: &constants,
         target,
+        function_index,
     };
     let code = compile_x86_64_function_with_options::<
         _,
@@ -287,5 +337,35 @@ mod tests {
         assert!(span.start <= span.end);
         assert!(span.end <= source.len());
         assert_eq!(error.message(), "machine-code generation failed");
+    }
+
+    #[test]
+    fn inlines_earlier_scalar_rust_functions_without_relocations() {
+        let source = "fn add(value: u16, offset: u16) -> u16 { value + offset } fn twice(value: u16) -> u64 { add(value, value) as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u8) -> u64 { twice(add(value as u16, 5)) }";
+        let elf = compile(source, "answer", ObjectFormat::Elf64).unwrap();
+        assert_eq!(&elf.bytes()[..4], b"\x7fELF");
+        let coff = compile(source, "answer", ObjectFormat::Coff).unwrap();
+        assert_eq!(&coff.bytes()[..2], &0x8664u16.to_le_bytes());
+
+        let forward = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { later(value) } fn later(value: u64) -> u64 { value + 1 }";
+        let error = compile(forward, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+        );
+
+        let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
+        let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::UnknownRuntimeName)
+        );
+
+        let wrong_type = "fn choose(value: bool) -> bool { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> bool { choose(value) }";
+        let error = compile(wrong_type, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
     }
 }
