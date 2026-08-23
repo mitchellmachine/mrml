@@ -664,6 +664,16 @@ entry/stack pointers, and the invalid guest-link sentinel before the first
 write. Callers cannot append optional fields or omit a required field. A
 partial `VMWRITE` poisons the controller; guest launch and resume remain denied
 while fail-closed `VMXOFF` teardown is still available.
+Native launch and resume no longer assume that a successful VM-entry
+instruction returns normally. Dedicated SysV assembly saves every callee-saved
+register, writes the live host RSP and a private return label into the VMCS,
+and distinguishes a VMfail return from hardware control transfer back through
+the configured host RIP. Rust receives an explicit running-versus-exit outcome;
+only the latter creates the one-use `VmExitPending` state accepted by the exit
+decoder. The canonical guest state is now a fully specified unrestricted
+real-mode context, including all segment selectors, limits, bases, access
+rights, and descriptor-table state, so the isolation probe needs no guest page
+tables before touching the denied GPA.
 Both Windows and Linux LLVM assemblers accept the implementation. The
 instructions have not yet been executed by a bare-metal MRML boot, so this is
 not evidence of a successful hardware VM launch.

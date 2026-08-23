@@ -243,11 +243,15 @@ mod tests {
         fn vmptrld(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
             Ok(())
         }
-        fn vmlaunch(&mut self) -> Result<(), VmxInstructionError> {
-            Ok(())
+        fn vmlaunch(
+            &mut self,
+        ) -> Result<crate::arch::x86_64::VmxLaunchOutcome, VmxInstructionError> {
+            Ok(crate::arch::x86_64::VmxLaunchOutcome::GuestRunning)
         }
-        fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
-            Ok(())
+        fn vmresume(
+            &mut self,
+        ) -> Result<crate::arch::x86_64::VmxLaunchOutcome, VmxInstructionError> {
+            Ok(crate::arch::x86_64::VmxLaunchOutcome::GuestRunning)
         }
         fn vmwrite(
             &mut self,

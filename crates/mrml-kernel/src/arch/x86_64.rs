@@ -63,7 +63,8 @@ pub use trap::{HardwareTrapFrame, TrapDisposition, TrapError, TrapFrame};
 pub use vmx::{
     EptPointer, EptViolation, MinimalVmcsLaunch, NativeVmx, VMCS_MINIMAL_LAUNCH_FIELDS, VmcsField,
     VmcsWrite, VmxCapabilities, VmxControl, VmxControlMask, VmxControlPolicy, VmxController,
-    VmxError, VmxInstructionError, VmxInstructions, VmxPrerequisites, VmxState,
+    VmxError, VmxHostState, VmxInstructionError, VmxInstructions, VmxLaunchOutcome,
+    VmxPrerequisites, VmxState,
 };
 pub use vtd::{
     CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamSegments,

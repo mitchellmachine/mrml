@@ -24,6 +24,12 @@ pub enum VmxInstructionError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VmxLaunchOutcome {
+    GuestRunning,
+    VmExit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VmcsField(u32);
 
 impl VmcsField {
@@ -358,6 +364,7 @@ pub enum VmxState {
     VmcsClear,
     VmcsLoaded,
     GuestRunning,
+    VmExitPending,
     Poisoned,
 }
 
@@ -385,9 +392,9 @@ impl VmcsWrite {
     }
 }
 
-pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 47;
+pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 67;
 
-/// Complete fixed field set for MRML's minimal unrestricted long-mode guest.
+/// Complete fixed field set for MRML's minimal unrestricted real-mode guest.
 /// Optional bitmap, MSR-list, CR3-target, and posted-interrupt fields remain
 /// disabled by the corresponding controls and therefore are deliberately not
 /// part of this canonical launch format.
@@ -397,8 +404,12 @@ const MINIMAL_LAUNCH_FIELD_ENCODINGS: [u32; VMCS_MINIMAL_LAUNCH_FIELDS] = [
     0x201a, // EPT pointer
     0x2800, 0x2806, 0x2c02, // guest link, guest EFER, host EFER
     0x4000, 0x4002, 0x4004, 0x400c, 0x4012, 0x401e, // execution controls
+    0x4800, 0x4802, 0x4804, 0x4806, 0x4808, 0x480a, 0x480c, 0x480e, // segment limits
+    0x4810, 0x4812, // GDTR/IDTR limits
     0x4814, 0x4816, 0x4818, 0x481a, 0x481c, 0x481e, 0x4820, 0x4822, // guest access rights
     0x6800, 0x6802, 0x6804, // guest CR0/CR3/CR4
+    0x6806, 0x6808, 0x680a, 0x680c, 0x680e, 0x6810, 0x6812, 0x6814, // segment bases
+    0x6816, 0x6818, // GDTR/IDTR bases
     0x681c, 0x681e, 0x6820, // guest RSP/RIP/RFLAGS
     0x6c00, 0x6c02, 0x6c04, // host CR0/CR3/CR4
     0x6c0a, 0x6c0c, 0x6c0e, // host TR/GDTR/IDTR bases
@@ -410,7 +421,70 @@ pub struct MinimalVmcsLaunch {
     writes: [VmcsWrite; VMCS_MINIMAL_LAUNCH_FIELDS],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxHostState {
+    pub cr0: u64,
+    pub cr3: u64,
+    pub cr4: u64,
+    pub efer: u64,
+    pub selectors: [u16; 7],
+    pub tr_base: u64,
+    pub gdtr_base: u64,
+    pub idtr_base: u64,
+    pub stack_pointer: u64,
+    pub instruction_pointer: u64,
+}
+
 impl MinimalVmcsLaunch {
+    pub fn unrestricted_real_mode(
+        ept: EptPointer,
+        controls: VmxControlPolicy,
+        host: VmxHostState,
+        guest_rip: u16,
+        guest_rsp: u16,
+    ) -> Result<Self, VmxError> {
+        let mut values = [0u64; VMCS_MINIMAL_LAUNCH_FIELDS];
+        values[..8].fill(0);
+        for (destination, selector) in values[8..15].iter_mut().zip(host.selectors) {
+            *destination = u64::from(selector);
+        }
+        values[15] = ept.bits();
+        values[16] = u64::MAX;
+        values[17] = 0;
+        values[18] = host.efer;
+        values[19] = u64::from(VmxControl::constrained(0, controls.pin).bits());
+        values[20] = u64::from(VmxControl::constrained(1 << 31, controls.primary).bits());
+        values[21] = 0;
+        values[22] = u64::from(VmxControl::constrained(1 << 9, controls.exit).bits());
+        values[23] = u64::from(VmxControl::constrained(0, controls.entry).bits());
+        values[24] =
+            u64::from(VmxControl::constrained((1 << 1) | (1 << 7), controls.secondary).bits());
+        values[25..35].copy_from_slice(&[
+            0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0, 0x67, 0xffff, 0xffff,
+        ]);
+        values[35..43].copy_from_slice(&[
+            0x0093,
+            0x009b,
+            0x0093,
+            0x0093,
+            0x0093,
+            0x0093,
+            1 << 16,
+            0x008b,
+        ]);
+        values[43..56].fill(0);
+        values[56..59].copy_from_slice(&[u64::from(guest_rsp), u64::from(guest_rip), 2]);
+        values[59..62].copy_from_slice(&[host.cr0, host.cr3, host.cr4]);
+        values[62..67].copy_from_slice(&[
+            host.tr_base,
+            host.gdtr_base,
+            host.idtr_base,
+            host.stack_pointer,
+            host.instruction_pointer,
+        ]);
+        Self::new(values, controls)
+    }
+
     pub fn new(
         values: [u64; VMCS_MINIMAL_LAUNCH_FIELDS],
         controls: VmxControlPolicy,
@@ -457,10 +531,13 @@ impl MinimalVmcsLaunch {
             || primary & ACTIVATE_SECONDARY == 0
             || secondary & (ENABLE_EPT | UNRESTRICTED_GUEST) != ENABLE_EPT | UNRESTRICTED_GUEST
             || exit & HOST_ADDRESS_SPACE_SIZE == 0
-            || entry & IA32E_GUEST == 0
+            || entry & IA32E_GUEST != 0
             || EptPointer(ept).root().is_err()
+            || value(0x6800)? & ((1 << 31) | 1) != 0
+            || value(0x6804)? & (1 << 5) != 0
+            || value(0x2806)? & ((1 << 10) | (1 << 8)) != 0
             || guest_rflags & 2 == 0
-            || !canonical(guest_rip)
+            || guest_rip > u16::MAX as u64
             || host_rsp == 0
             || !canonical(host_rsp)
             || host_rip == 0
@@ -501,8 +578,8 @@ pub trait VmxInstructions {
     fn vmxoff(&mut self) -> Result<(), VmxInstructionError>;
     fn vmclear(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
     fn vmptrld(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
-    fn vmlaunch(&mut self) -> Result<(), VmxInstructionError>;
-    fn vmresume(&mut self) -> Result<(), VmxInstructionError>;
+    fn vmlaunch(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError>;
+    fn vmresume(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError>;
     fn vmwrite(&mut self, field: VmcsField, value: u64) -> Result<(), VmxInstructionError>;
     fn vmread(&mut self, field: VmcsField) -> Result<u64, VmxInstructionError>;
     fn invept_single_context(&mut self, ept: EptPointer) -> Result<(), VmxInstructionError>;
@@ -585,6 +662,90 @@ unsafe fn native_vmptrld(operand: *const u64) -> u8 {
     failed
 }
 
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    r#"
+    .text
+    .p2align 4
+    .globl mrml_native_vmlaunch
+mrml_native_vmlaunch:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rax, 0x6c14
+    vmwrite rsp, rax
+    setna cl
+    test cl, cl
+    jnz 3f
+    lea rdx, [rip + 2f]
+    mov rax, 0x6c16
+    vmwrite rdx, rax
+    setna cl
+    test cl, cl
+    jnz 3f
+    vmlaunch
+    jmp 3f
+2:
+    xor eax, eax
+    jmp 4f
+3:
+    mov eax, 1
+4:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+
+    .p2align 4
+    .globl mrml_native_vmresume
+mrml_native_vmresume:
+    push rbp
+    push rbx
+    push r12
+    push r13
+    push r14
+    push r15
+    mov rax, 0x6c14
+    vmwrite rsp, rax
+    setna cl
+    test cl, cl
+    jnz 7f
+    lea rdx, [rip + 6f]
+    mov rax, 0x6c16
+    vmwrite rdx, rax
+    setna cl
+    test cl, cl
+    jnz 7f
+    vmresume
+    jmp 7f
+6:
+    xor eax, eax
+    jmp 8f
+7:
+    mov eax, 1
+8:
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    ret
+"#
+);
+
+#[cfg(target_arch = "x86_64")]
+unsafe extern "sysv64" {
+    fn mrml_native_vmlaunch() -> u8;
+    fn mrml_native_vmresume() -> u8;
+}
+
 impl VmxInstructions for NativeVmx {
     fn vmxon(&mut self, region: PhysAddr) -> Result<(), VmxInstructionError> {
         Self::physical_operand(native_vmxon, region)
@@ -615,35 +776,22 @@ impl VmxInstructions for NativeVmx {
         Self::physical_operand(native_vmptrld, vmcs)
     }
 
-    fn vmlaunch(&mut self) -> Result<(), VmxInstructionError> {
-        let failed: u8;
-        unsafe {
-            core::arch::asm!(
-                "vmlaunch",
-                "setna {failed}",
-                failed = lateout(reg_byte) failed,
-                options(nostack),
-            )
-        };
-        if failed == 0 {
-            Ok(())
+    fn vmlaunch(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+        // SAFETY: construction of NativeVmx requires CPL0 and a completely
+        // programmed active VMCS. The assembly routine preserves the SysV
+        // callee-saved registers and returns zero only through the host RIP
+        // installed immediately before VMLAUNCH.
+        if unsafe { mrml_native_vmlaunch() } == 0 {
+            Ok(VmxLaunchOutcome::VmExit)
         } else {
             Err(VmxInstructionError::Failed)
         }
     }
 
-    fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
-        let failed: u8;
-        unsafe {
-            core::arch::asm!(
-                "vmresume",
-                "setna {failed}",
-                failed = lateout(reg_byte) failed,
-                options(nostack),
-            )
-        };
-        if failed == 0 {
-            Ok(())
+    fn vmresume(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+        // SAFETY: identical host-stack and register contract to VMLAUNCH above.
+        if unsafe { mrml_native_vmresume() } == 0 {
+            Ok(VmxLaunchOutcome::VmExit)
         } else {
             Err(VmxInstructionError::Failed)
         }
@@ -788,10 +936,14 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
             return Err(VmxError::InvalidState);
         }
-        self.instructions
-            .vmlaunch()
-            .map_err(|_| VmxError::InstructionFailed)?;
-        self.state = VmxState::GuestRunning;
+        match self.instructions.vmlaunch() {
+            Ok(VmxLaunchOutcome::GuestRunning) => self.state = VmxState::GuestRunning,
+            Ok(VmxLaunchOutcome::VmExit) => self.state = VmxState::VmExitPending,
+            Err(_) => {
+                self.state = VmxState::Poisoned;
+                return Err(VmxError::InstructionFailed);
+            }
+        }
         Ok(())
     }
 
@@ -810,7 +962,7 @@ impl<I: VmxInstructions> VmxController<I> {
 
     /// Records a VM exit before exit handling reads guest-controlled state.
     pub fn record_vm_exit(&mut self) -> Result<(), VmxError> {
-        if self.state != VmxState::GuestRunning {
+        if !matches!(self.state, VmxState::GuestRunning | VmxState::VmExitPending) {
             return Err(VmxError::InvalidState);
         }
         self.state = VmxState::VmcsLoaded;
@@ -860,10 +1012,14 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
             return Err(VmxError::InvalidState);
         }
-        self.instructions
-            .vmresume()
-            .map_err(|_| VmxError::InstructionFailed)?;
-        self.state = VmxState::GuestRunning;
+        match self.instructions.vmresume() {
+            Ok(VmxLaunchOutcome::GuestRunning) => self.state = VmxState::GuestRunning,
+            Ok(VmxLaunchOutcome::VmExit) => self.state = VmxState::VmExitPending,
+            Err(_) => {
+                self.state = VmxState::Poisoned;
+                return Err(VmxError::InstructionFailed);
+            }
+        }
         Ok(())
     }
 
@@ -871,9 +1027,10 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.state == VmxState::GuestRunning || self.state == VmxState::Disabled {
             return Err(VmxError::InvalidState);
         }
-        self.instructions
-            .vmxoff()
-            .map_err(|_| VmxError::InstructionFailed)?;
+        if self.instructions.vmxoff().is_err() {
+            self.state = VmxState::Poisoned;
+            return Err(VmxError::InstructionFailed);
+        }
         self.active_vmcs = None;
         self.active_ept = None;
         self.state = VmxState::Disabled;
@@ -897,6 +1054,7 @@ mod tests {
         exit_qualification: u64,
         guest_physical: u64,
         guest_linear: u64,
+        exit_on_launch: bool,
     }
 
     impl EmulatedVmx {
@@ -922,11 +1080,21 @@ mod tests {
         fn vmptrld(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
             self.step(4)
         }
-        fn vmlaunch(&mut self) -> Result<(), VmxInstructionError> {
-            self.step(6)
+        fn vmlaunch(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+            self.step(6)?;
+            Ok(if self.exit_on_launch {
+                VmxLaunchOutcome::VmExit
+            } else {
+                VmxLaunchOutcome::GuestRunning
+            })
         }
-        fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
-            self.step(7)
+        fn vmresume(&mut self) -> Result<VmxLaunchOutcome, VmxInstructionError> {
+            self.step(7)?;
+            Ok(if self.exit_on_launch {
+                VmxLaunchOutcome::VmExit
+            } else {
+                VmxLaunchOutcome::GuestRunning
+            })
         }
         fn vmwrite(&mut self, _: VmcsField, _: u64) -> Result<(), VmxInstructionError> {
             self.step(8)
@@ -955,40 +1123,25 @@ mod tests {
     }
 
     fn minimal_launch(ept: EptPointer) -> MinimalVmcsLaunch {
-        let mut values = [0u64; VMCS_MINIMAL_LAUNCH_FIELDS];
-        values[..8].copy_from_slice(&[16, 8, 16, 16, 16, 16, 0, 24]);
-        values[8..15].copy_from_slice(&[16, 8, 16, 16, 0, 0, 24]);
-        values[15] = ept.bits();
-        values[16] = u64::MAX;
-        values[17] = 0x500;
-        values[18] = 0xd00;
-        values[19] = 0;
-        values[20] = 1 << 31;
-        values[21] = 0;
-        values[22] = 1 << 9;
-        values[23] = 1 << 9;
-        values[24] = (1 << 1) | (1 << 7);
-        values[25..33].copy_from_slice(&[
-            0xc093,
-            0xa09b,
-            0xc093,
-            0xc093,
-            0xc093,
-            0xc093,
-            1 << 16,
-            0x008b,
-        ]);
-        values[33..36].copy_from_slice(&[0x8001_0033, 0x30_0000, 0x20]);
-        values[36..39].copy_from_slice(&[0x40_1000, 0x40_0000, 2]);
-        values[39..42].copy_from_slice(&[0x8001_0033, 0x10_0000, 0x2020]);
-        values[42..47].copy_from_slice(&[
-            0xffff_8000_0000_3000,
-            0xffff_8000_0000_4000,
-            0xffff_8000_0000_5000,
-            0xffff_8000_0000_6000,
-            0xffff_8000_0000_7000,
-        ]);
-        MinimalVmcsLaunch::new(values, permissive_control_policy()).unwrap()
+        MinimalVmcsLaunch::unrestricted_real_mode(
+            ept,
+            permissive_control_policy(),
+            VmxHostState {
+                cr0: 0x8001_0033,
+                cr3: 0x10_0000,
+                cr4: 0x2020,
+                efer: 0xd00,
+                selectors: [16, 8, 16, 16, 0, 0, 24],
+                tr_base: 0xffff_8000_0000_3000,
+                gdtr_base: 0xffff_8000_0000_4000,
+                idtr_base: 0xffff_8000_0000_5000,
+                stack_pointer: 0xffff_8000_0000_6000,
+                instruction_pointer: 0xffff_8000_0000_7000,
+            },
+            0x1000,
+            0x3000,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1124,6 +1277,22 @@ mod tests {
         controller.launch().unwrap();
         let exit = controller.record_private_page_violation(private).unwrap();
         assert!(exit.attempted_read());
+        assert_eq!(controller.state(), VmxState::VmcsLoaded);
+
+        let instructions = EmulatedVmx {
+            exit_reason: 48,
+            exit_qualification: 1 | (1 << 7),
+            guest_physical: private.get(),
+            exit_on_launch: true,
+            ..EmulatedVmx::default()
+        };
+        let mut controller = VmxController::new(instructions, capabilities());
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        controller.launch().unwrap();
+        assert_eq!(controller.state(), VmxState::VmExitPending);
+        controller.record_private_page_violation(private).unwrap();
         assert_eq!(controller.state(), VmxState::VmcsLoaded);
 
         let instructions = EmulatedVmx {
