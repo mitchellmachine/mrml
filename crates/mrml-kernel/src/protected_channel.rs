@@ -3,9 +3,132 @@ use mrml_crypto::{Sha3_512, hmac_sha256};
 
 pub const LAUNCH_REQUEST_BYTES: usize = 184;
 pub const AUTHORITY_RECEIPT_BYTES: usize = 272;
+pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
 const REQUEST_MAGIC: [u8; 8] = *b"MRMLLR01";
 const RECEIPT_MAGIC: [u8; 8] = *b"MRMLAR01";
+const VBS_CONTEXT_MAGIC: [u8; 8] = *b"MRMLVC01";
 const VERSION: u16 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum VbsAuthorityOperation {
+    IssueReceipt = 1,
+    GenerateSealedKey = 2,
+    LoadSealedKey = 3,
+}
+
+impl VbsAuthorityOperation {
+    fn decode(value: u16) -> Result<Self, ProtectedChannelError> {
+        match value {
+            1 => Ok(Self::IssueReceipt),
+            2 => Ok(Self::GenerateSealedKey),
+            3 => Ok(Self::LoadSealedKey),
+            _ => Err(ProtectedChannelError::Malformed),
+        }
+    }
+}
+
+/// Canonical x86_64 host/enclave call descriptor. Addresses are untrusted
+/// integers until Vertdll validates them during an explicit boundary copy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VbsAuthorityContext {
+    operation: VbsAuthorityOperation,
+    input_address: u64,
+    input_bytes: u64,
+    output_address: u64,
+    output_bytes: u64,
+}
+
+impl VbsAuthorityContext {
+    pub fn new(
+        operation: VbsAuthorityOperation,
+        input_address: u64,
+        input_bytes: u64,
+        output_address: u64,
+        output_bytes: u64,
+    ) -> Result<Self, ProtectedChannelError> {
+        if input_address == 0 || input_bytes == 0 || output_address == 0 || output_bytes == 0 {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        Ok(Self {
+            operation,
+            input_address,
+            input_bytes,
+            output_address,
+            output_bytes,
+        })
+    }
+
+    pub const fn operation(self) -> VbsAuthorityOperation {
+        self.operation
+    }
+
+    pub const fn input_address(self) -> u64 {
+        self.input_address
+    }
+
+    pub const fn input_bytes(self) -> u64 {
+        self.input_bytes
+    }
+
+    pub const fn output_address(self) -> u64 {
+        self.output_address
+    }
+
+    pub const fn output_bytes(self) -> u64 {
+        self.output_bytes
+    }
+
+    pub fn encode(self) -> [u8; VBS_AUTHORITY_CONTEXT_BYTES] {
+        let mut encoded = [0; VBS_AUTHORITY_CONTEXT_BYTES];
+        encoded[..8].copy_from_slice(&VBS_CONTEXT_MAGIC);
+        encoded[8..10].copy_from_slice(&VERSION.to_le_bytes());
+        encoded[10..12].copy_from_slice(&(self.operation as u16).to_le_bytes());
+        encoded[16..24].copy_from_slice(&self.input_address.to_le_bytes());
+        encoded[24..32].copy_from_slice(&self.input_bytes.to_le_bytes());
+        encoded[32..40].copy_from_slice(&self.output_address.to_le_bytes());
+        encoded[40..48].copy_from_slice(&self.output_bytes.to_le_bytes());
+        encoded
+    }
+
+    pub fn decode(encoded: &[u8]) -> Result<Self, ProtectedChannelError> {
+        if encoded.len() != VBS_AUTHORITY_CONTEXT_BYTES
+            || encoded[..8] != VBS_CONTEXT_MAGIC
+            || encoded[8..10] != VERSION.to_le_bytes()
+            || encoded[12..16].iter().any(|byte| *byte != 0)
+        {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let operation = VbsAuthorityOperation::decode(read_u16(encoded, 10)?)?;
+        Self::new(
+            operation,
+            read_u64(encoded, 16)?,
+            read_u64(encoded, 24)?,
+            read_u64(encoded, 32)?,
+            read_u64(encoded, 40)?,
+        )
+    }
+}
+
+fn read_u16(encoded: &[u8], offset: usize) -> Result<u16, ProtectedChannelError> {
+    Ok(u16::from_le_bytes(
+        encoded
+            .get(offset..offset + 2)
+            .ok_or(ProtectedChannelError::Malformed)?
+            .try_into()
+            .map_err(|_| ProtectedChannelError::Malformed)?,
+    ))
+}
+
+fn read_u64(encoded: &[u8], offset: usize) -> Result<u64, ProtectedChannelError> {
+    Ok(u64::from_le_bytes(
+        encoded
+            .get(offset..offset + 8)
+            .ok_or(ProtectedChannelError::Malformed)?
+            .try_into()
+            .map_err(|_| ProtectedChannelError::Malformed)?,
+    ))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtectedChannelError {
@@ -277,6 +400,44 @@ mod tests {
                 .report()
                 .backend(),
             ProtectionBackend::Unprotected
+        );
+    }
+
+    #[test]
+    fn vbs_context_is_canonical_and_operation_bound() {
+        let context = VbsAuthorityContext::new(
+            VbsAuthorityOperation::IssueReceipt,
+            0x1000,
+            LAUNCH_REQUEST_BYTES as u64,
+            0x2000,
+            AUTHORITY_RECEIPT_BYTES as u64,
+        )
+        .unwrap();
+        let encoded = context.encode();
+        assert_eq!(VbsAuthorityContext::decode(&encoded), Ok(context));
+        let mut malformed = encoded;
+        malformed[12] = 1;
+        assert_eq!(
+            VbsAuthorityContext::decode(&malformed),
+            Err(ProtectedChannelError::Malformed)
+        );
+        malformed = encoded;
+        malformed[10..12].copy_from_slice(&99u16.to_le_bytes());
+        assert_eq!(
+            VbsAuthorityContext::decode(&malformed),
+            Err(ProtectedChannelError::Malformed)
+        );
+    }
+
+    #[test]
+    fn vbs_context_rejects_null_or_empty_buffers() {
+        assert_eq!(
+            VbsAuthorityContext::new(VbsAuthorityOperation::IssueReceipt, 0, 184, 2, 272),
+            Err(ProtectedChannelError::Malformed)
+        );
+        assert_eq!(
+            VbsAuthorityContext::new(VbsAuthorityOperation::IssueReceipt, 1, 184, 2, 0),
+            Err(ProtectedChannelError::Malformed)
         );
     }
 }

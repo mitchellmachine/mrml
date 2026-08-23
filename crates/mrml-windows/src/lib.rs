@@ -27,7 +27,7 @@ pub struct LocalTime {
 
 pub const ENCLAVE_TYPE_VBS: u32 = 0x10;
 pub const VBS_ENCLAVE_ALIGNMENT: usize = 2 * 1024 * 1024;
-pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 40;
+pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VbsEnclaveError {

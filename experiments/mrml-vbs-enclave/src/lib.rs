@@ -6,6 +6,8 @@ use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
     ProtectionBackend, ProtectionClaims, ProtectionReport,
 };
+#[cfg(target_os = "windows")]
+use mrml_kernel::{VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthorityOperation};
 
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
@@ -233,22 +235,6 @@ pub extern "system" fn mrml_authority_probe(context: *mut c_void) -> *mut c_void
     ((context as usize) ^ 0x4d52_4d4c) as *mut c_void
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-#[cfg(target_os = "windows")]
-pub struct AuthorityCall {
-    magic: u64,
-    request: *const u8,
-    request_bytes: usize,
-    receipt: *mut u8,
-    receipt_bytes: usize,
-}
-
-#[cfg(target_os = "windows")]
-const AUTHORITY_CALL_MAGIC: u64 = u64::from_le_bytes(*b"MRMLAC01");
-#[cfg(target_os = "windows")]
-const _: () = assert!(core::mem::size_of::<AuthorityCall>() == 40);
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
 #[cfg(target_os = "windows")]
@@ -288,40 +274,41 @@ fn process_authority_request(
 #[cfg(target_os = "windows")]
 #[unsafe(no_mangle)]
 pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_void {
-    let mut call = AuthorityCall {
-        magic: 0,
-        request: core::ptr::null(),
-        request_bytes: 0,
-        receipt: core::ptr::null_mut(),
-        receipt_bytes: 0,
-    };
-    // SAFETY: `call` is enclave-local writable memory. Vertdll validates and
+    let mut encoded_context = [0; VBS_AUTHORITY_CONTEXT_BYTES];
+    // SAFETY: `encoded_context` is enclave-local writable memory. Vertdll validates and
     // copies from the untrusted pointer without direct enclave dereference.
     if unsafe {
         EnclaveCopyIntoEnclave(
-            core::ptr::from_mut(&mut call).cast(),
+            encoded_context.as_mut_ptr().cast(),
             context.cast_const(),
-            core::mem::size_of::<AuthorityCall>(),
+            encoded_context.len(),
         )
     } != 0
     {
         return AuthorityStatus::ContextCopyFailed as usize as *mut c_void;
     }
-    if call.magic != AUTHORITY_CALL_MAGIC
-        || call.request.is_null()
-        || call.request_bytes != LAUNCH_REQUEST_BYTES
-        || call.receipt.is_null()
-        || call.receipt_bytes != AUTHORITY_RECEIPT_BYTES
+    let Ok(call) = VbsAuthorityContext::decode(&encoded_context) else {
+        return AuthorityStatus::InvalidContext as usize as *mut c_void;
+    };
+    if call.operation() != VbsAuthorityOperation::IssueReceipt
+        || call.input_bytes() != LAUNCH_REQUEST_BYTES as u64
+        || call.output_bytes() != AUTHORITY_RECEIPT_BYTES as u64
     {
         return AuthorityStatus::InvalidContext as usize as *mut c_void;
     }
+    let (Ok(request_address), Ok(receipt_address)) = (
+        usize::try_from(call.input_address()),
+        usize::try_from(call.output_address()),
+    ) else {
+        return AuthorityStatus::InvalidContext as usize as *mut c_void;
+    };
     let mut request = [0; LAUNCH_REQUEST_BYTES];
     // SAFETY: destination is enclave-local and exact-sized; source remains an
     // untrusted address handled exclusively by the Vertdll copy primitive.
     if unsafe {
         EnclaveCopyIntoEnclave(
             request.as_mut_ptr().cast(),
-            call.request.cast(),
+            (request_address as *const u8).cast(),
             request.len(),
         )
     } != 0
@@ -335,7 +322,11 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     // SAFETY: source is enclave-local and exact-sized; destination remains an
     // untrusted address handled exclusively by the Vertdll copy primitive.
     if unsafe {
-        EnclaveCopyOutOfEnclave(call.receipt.cast(), receipt.as_ptr().cast(), receipt.len())
+        EnclaveCopyOutOfEnclave(
+            (receipt_address as *mut u8).cast(),
+            receipt.as_ptr().cast(),
+            receipt.len(),
+        )
     } != 0
     {
         return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;

@@ -3,7 +3,10 @@
 
 use mrml_error::{Result, anyhow};
 #[cfg(windows)]
-use mrml_kernel::{AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest};
+use mrml_kernel::{
+    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
+    VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthorityOperation,
+};
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
 
@@ -15,7 +18,7 @@ const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
 
 #[cfg(windows)]
-const AUTHORITY_CALL_MAGIC: u64 = u64::from_le_bytes(*b"MRMLAC01");
+const _: () = assert!(VBS_AUTHORITY_CONTEXT_BYTES == mrml_windows::VBS_AUTHORITY_CONTEXT_BYTES);
 
 #[cfg(windows)]
 fn application_main() -> Result<()> {
@@ -61,12 +64,15 @@ fn application_main() -> Result<()> {
         .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
     let mut receipt = [0; AUTHORITY_RECEIPT_BYTES];
-    let mut call = [0; mrml_windows::VBS_AUTHORITY_CONTEXT_BYTES];
-    call[..8].copy_from_slice(&AUTHORITY_CALL_MAGIC.to_le_bytes());
-    call[8..16].copy_from_slice(&(encoded_request.as_ptr() as u64).to_le_bytes());
-    call[16..24].copy_from_slice(&(encoded_request.len() as u64).to_le_bytes());
-    call[24..32].copy_from_slice(&(receipt.as_mut_ptr() as u64).to_le_bytes());
-    call[32..40].copy_from_slice(&(receipt.len() as u64).to_le_bytes());
+    let context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::IssueReceipt,
+        encoded_request.as_ptr() as usize as u64,
+        encoded_request.len() as u64,
+        receipt.as_mut_ptr() as usize as u64,
+        receipt.len() as u64,
+    )
+    .map_err(|error| anyhow!("authority context rejected: {:?}", error))?;
+    let mut call = context.encode();
     let authority_status = enclave
         .call_authority(authority, &mut call)
         .map_err(|error| anyhow!("CallEnclave failed: {:?}", error))?;

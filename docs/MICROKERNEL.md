@@ -172,6 +172,28 @@ can forge it, so the report does not claim sealed keys or attestation. Productio
 admission remains blocked on an accepted image plus protected key provisioning
 and sealing inside VTL1.
 
+The host and enclave no longer duplicate a native pointer structure. The
+kernel protocol crate owns one 48-byte, pointer-free x86_64 descriptor with an
+eight-byte magic, version, explicit operation, zero-reserved bytes, and four
+little-endian 64-bit address/length fields. Construction rejects null or empty
+buffers, decoding rejects unknown operations and noncanonical reserved bytes,
+the Windows call wrapper accepts only that exact buffer size, and the enclave
+converts addresses to its native width only after canonical decoding. Receipt
+issuance accepts only the `IssueReceipt` operation and exact request/receipt
+lengths; key-generation and key-loading operation numbers are reserved but
+currently fail closed at the enclave dispatcher.
+
+Windows exposes `EnclaveSealData`, `EnclaveUnsealData`, and
+`EnclaveUsesAttestedKeys` in Vertdll, so protected persistence is feasible on
+supported Windows 11 systems. It is not yet implemented. Merely sealing the
+current symmetric receipt key would not complete authentication: an untrusted
+VTL0 verifier cannot safely hold the matching HMAC key, while a key generated
+only inside VTL1 is unknown to an independent verifier. Production design must
+therefore combine sealing with independently provisioned verifier trust or an
+attested asymmetric authority. Until that protocol exists, the embedded
+development key remains explicitly forgeable and `SEALED_KEYS` and
+`ATTESTATION` remain absent from reports.
+
 WHP now provides a fixed-capacity untrusted launch broker for that protocol.
 Generational tickets prevent a canceled or completed request from acquiring a
 reused slot; request and receipt transitions are one-way; messages must have
