@@ -590,6 +590,19 @@ format, ABI optimization, or persistent representation.
 Patent review: `NOT_TRIGGERED` — ordinary compiler use/definition bookkeeping
 and defensive invariant checking.
 
+## 2026-08-23 — assignment root-place read expectations
+
+MRML source: `crates/mrml-rustc`.
+
+The compiler applies its existing bounded place-syntax discovery to assignment
+RHS roots, resolves conventional symbol-table identities, and compares fixed-
+capacity read expectations with the ordinary emission recorder. This introduces
+no novel analysis algorithm, parser, object format, ABI optimization, or
+persistent representation.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler use bookkeeping and defensive
+invariant checking.
+
 ## 2026-08-23 — bounded loop-scope compiler declaration facts
 
 MRML source: `crates/mrml-rustc`.

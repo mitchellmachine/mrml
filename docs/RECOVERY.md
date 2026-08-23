@@ -231,6 +231,10 @@ expectations with stable identity, projections, type, access class, and span.
 Emission consumes exact expectations while retaining its separate true-order
 read/write ledger; this avoids reordering precomputed writes ahead of RHS reads.
 Missing, reordered, malformed, or identity-drifted expectations fail closed.
+Assignment RHS expressions whose root is a discoverable place reserve another
+fixed 256-entry read-expectation table. The root is resolved against the active
+scope and consumed through the ordinary identifier-read recorder. Reads nested
+inside non-place roots remain emission-time facts.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
@@ -242,8 +246,8 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. Expression reads are not yet preanalyzed, and parser-
-level IDs,
+classified as a borrow. Reads nested inside non-place expression roots and non-
+assignment body reads are not yet preanalyzed, and parser-level IDs,
 initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
 milestone is to expand the standalone table across scoped declarations and
