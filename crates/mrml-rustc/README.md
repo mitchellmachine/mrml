@@ -2594,6 +2594,11 @@ Same-loop `break` and `continue` statements work unconditionally or behind a
 Boolean condition. Both controls remove live iteration locals first; continue
 targets the condition backedge, while break joins the condition-false exit.
 Later operations remain reachable only on conditional-control fallthrough.
+Scalar returns may also occur directly or conditionally in a loop body. A taken
+return removes the iteration frame and the rest of the callee frame before
+joining caller execution; an untaken conditional return retains the iteration
+locals and proceeds to later operations or the normal backedge. A false loop
+condition still reaches the callee's later statements and tail.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2601,21 +2606,22 @@ skipping the remaining body, while a fallthrough tail performs the same cleanup
 once on its normal edge.
 Calls may nest to eight levels and are inlined into the selected exported
 function, so the object still contains one symbol and no call relocations.
-Forward calls, caller-local capture, unsafe or foreign-ABI callees, loop
-returns, cross-loop labeled controls, unconditional and nested loops,
-aggregates, references, and recursion fail closed. An original nested
+Forward calls, caller-local capture, unsafe or foreign-ABI callees, cross-loop
+labeled controls, unconditional and nested loops, aggregates, references, and
+recursion fail closed. An original nested
 statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
 object. A separate multi-return probe produced a 334-byte COFF object and a
 728-byte ELF64 object. A conditional-action probe produced 402-byte COFF and
 792-byte ELF64 objects. A mixed action/return probe produced 345-byte COFF and
 736-byte ELF64 objects. A normal-exit loop probe produced 274-byte COFF and
 664-byte ELF64 objects. A controlled-loop probe produced 398-byte COFF and
-792-byte ELF64 objects. Independent pinned-nightly callers exercised alternating
-continue edges, threshold break, zero, one, and 100 requested iterations,
-returning and falling-through action arms, all three mutation arms, scoped-local
-cleanup, persistent outer mutation, normal-tail and both early-return edges,
-caller-side result composition, Boolean branches, and inputs at narrow-width
-boundaries on Windows and Arch Linux WSL.
+792-byte ELF64 objects. A loop-return probe produced 314-byte COFF and 704-byte
+ELF64 objects. Independent pinned-nightly callers exercised taken and untaken
+loop returns, alternating continue edges, threshold break, zero, one, and 100
+requested iterations, returning and falling-through action arms, all three
+mutation arms, scoped-local cleanup, persistent outer mutation, normal-tail and
+both early-return edges, caller-side result composition, Boolean branches, and
+inputs at narrow-width boundaries on Windows and Arch Linux WSL.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

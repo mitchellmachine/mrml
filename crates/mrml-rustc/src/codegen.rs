@@ -6681,8 +6681,12 @@ impl<
                             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
                         self.emit_inline_while_loop::<MAX_NODES>(
                             &loop_statement,
+                            return_type,
                             return_type_name,
+                            checkpoint,
                             body_start,
+                            &mut return_patches,
+                            &mut return_count,
                         )?;
                     }
                 }
@@ -6914,11 +6918,16 @@ impl<
         Ok(false)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn emit_inline_while_loop<const MAX_NODES: usize>(
         &mut self,
         loop_statement: &crate::WhileLoop<'tree>,
+        expected_type: RuntimeExpressionType,
         operand_type: &str,
+        call_checkpoint: usize,
         body_start: usize,
+        return_patches: &mut [Option<usize>],
+        return_count: &mut usize,
     ) -> Result<(), CodegenError> {
         let condition = loop_statement
             .parse_condition::<MAX_NODES>()
@@ -6991,9 +7000,33 @@ impl<
                         body_start,
                     )?;
                 }
-                crate::LoopOperation::ConditionalReturn(_)
-                | crate::LoopOperation::ConditionalBlock(_)
-                | crate::LoopOperation::Return(_)
+                crate::LoopOperation::ConditionalReturn(conditional) => {
+                    let patch = self.emit_inline_conditional_return::<MAX_NODES>(
+                        conditional,
+                        expected_type,
+                        call_checkpoint,
+                        body_start,
+                    )?;
+                    *return_patches
+                        .get_mut(*return_count)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                    *return_count += 1;
+                }
+                crate::LoopOperation::Return(return_statement) => {
+                    let patch = self.emit_inline_return::<MAX_NODES>(
+                        return_statement,
+                        expected_type,
+                        call_checkpoint,
+                        body_start,
+                    )?;
+                    *return_patches
+                        .get_mut(*return_count)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                    *return_count += 1;
+                    terminated = true;
+                    break;
+                }
+                crate::LoopOperation::ConditionalBlock(_)
                 | crate::LoopOperation::NestedUnitLoop
                 | crate::LoopOperation::NestedBlock(_) => {
                     return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));

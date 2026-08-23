@@ -400,10 +400,16 @@ mod tests {
         assert!(compile(loop_continue, "answer", ObjectFormat::Coff).is_ok());
 
         let loop_return = "fn count(value: u64) -> u64 { let mut current: u64 = 0; while current < value { if current == 3 { return current; } current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
-        let error = compile(loop_return, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert!(compile(loop_return, "answer", ObjectFormat::Elf64).is_ok());
+
+        let direct_loop_return = "fn first(value: u64) -> u64 { while value > 0 { return value + 1; } 9 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { first(value) }";
+        assert!(compile(direct_loop_return, "answer", ObjectFormat::Coff).is_ok());
+
+        let wrong_loop_return = "fn count(value: u64) -> u64 { let mut current: u64 = 0; while current < value { if current == 3 { return false; } current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
+        let error = compile(wrong_loop_return, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
-            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
         let unconditional_loop = "fn spin(value: u64) -> u64 { loop {} } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
