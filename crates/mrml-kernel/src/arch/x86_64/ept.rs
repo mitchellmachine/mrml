@@ -243,11 +243,28 @@ mod tests {
         fn vmptrld(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
             Ok(())
         }
-        fn vmlaunch(&mut self) -> Result<(), VmxInstructionError> {
+        fn vmlaunch(
+            &mut self,
+        ) -> Result<crate::arch::x86_64::VmxLaunchOutcome, VmxInstructionError> {
+            Ok(crate::arch::x86_64::VmxLaunchOutcome::GuestRunning)
+        }
+        fn vmresume(
+            &mut self,
+        ) -> Result<crate::arch::x86_64::VmxLaunchOutcome, VmxInstructionError> {
+            Ok(crate::arch::x86_64::VmxLaunchOutcome::GuestRunning)
+        }
+        fn vmwrite(
+            &mut self,
+            _: crate::arch::x86_64::VmcsField,
+            _: u64,
+        ) -> Result<(), VmxInstructionError> {
             Ok(())
         }
-        fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
-            Ok(())
+        fn vmread(
+            &mut self,
+            _: crate::arch::x86_64::VmcsField,
+        ) -> Result<u64, VmxInstructionError> {
+            Ok(0)
         }
         fn invept_single_context(&mut self, _: EptPointer) -> Result<(), VmxInstructionError> {
             self.invalidations += 1;

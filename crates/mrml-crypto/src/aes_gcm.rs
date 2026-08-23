@@ -302,7 +302,8 @@ mod tests {
         let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
         let counter = hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
         let plain = hex::<32>("6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e51");
-        let expected = hex::<32>("874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff");
+        let expected =
+            hex::<32>("874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff");
         let mut encrypted = [0u8; 32];
         let next = aes128_ctr_xor(&key, counter, &plain, &mut encrypted).unwrap();
         assert_eq!(encrypted, expected);

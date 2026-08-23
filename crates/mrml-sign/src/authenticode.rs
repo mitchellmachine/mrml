@@ -18,10 +18,7 @@ pub enum AuthenticodeError {
 
 const FORCE_INTEGRITY: u16 = 0x0080;
 const GUARD_CF: u16 = 0x4000;
-// The enclave currently supplies an explicit valid-call-target table without
-// compiler-inserted dispatch checks. Do not certify IMAGE_GUARD_CF_INSTRUMENTED
-// until the load-config check and dispatch pointers are nonzero and validated.
-const REQUIRED_GUARD_FLAGS: u32 = 0x0000_0400 | 0x0000_0800;
+const REQUIRED_GUARD_FLAGS: u32 = 0x0000_0100 | 0x0000_0400 | 0x0000_0800;
 
 pub fn finalize_vbs_enclave(image: &[u8]) -> Result<Vector<u8>, AuthenticodeError> {
     let pe = pe_offset(image)?;
@@ -47,11 +44,34 @@ pub fn finalize_vbs_enclave(image: &[u8]) -> Result<Vector<u8>, AuthenticodeErro
     }
     let load = rva_file_offset(image, pe, optional, section_count, load_rva, 256, false)?;
     if read_u32(image, load)? != 256
-        || image[load + 4..load + 128].iter().any(|byte| *byte != 0)
+        || image[load + 4..load + 112].iter().any(|byte| *byte != 0)
+        || read_u64(image, load + 112)? != 0
         || image[load + 148..load + 248].iter().any(|byte| *byte != 0)
     {
         return Err(AuthenticodeError::InvalidEnclave);
     }
+    let dispatch_pointer_va = read_u64(image, load + 120)?;
+    if dispatch_pointer_va < image_base {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let dispatch_pointer_rva = u32::try_from(dispatch_pointer_va - image_base)
+        .map_err(|_| AuthenticodeError::InvalidEnclave)?;
+    let dispatch_pointer = rva_file_offset(
+        image,
+        pe,
+        optional,
+        section_count,
+        dispatch_pointer_rva,
+        8,
+        false,
+    )?;
+    let dispatch_va = read_u64(image, dispatch_pointer)?;
+    if dispatch_va < image_base {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let dispatch_rva =
+        u32::try_from(dispatch_va - image_base).map_err(|_| AuthenticodeError::InvalidEnclave)?;
+    rva_file_offset(image, pe, optional, section_count, dispatch_rva, 1, true)?;
     let guard_table_va = read_u64(image, load + 128)?;
     let guard_count = read_u64(image, load + 136)?;
     let guard_flags = read_u32(image, load + 144)?;
@@ -422,6 +442,7 @@ mod tests {
         image[load + 128..load + 136].copy_from_slice(&0x0001_8000_1400_u64.to_le_bytes());
         image[load + 136..load + 144].copy_from_slice(&2u64.to_le_bytes());
         image[load + 144..load + 148].copy_from_slice(&REQUIRED_GUARD_FLAGS.to_le_bytes());
+        image[load + 120..load + 128].copy_from_slice(&0x0001_8000_1500_u64.to_le_bytes());
         image[load + 248..load + 256].copy_from_slice(&0x0001_8000_1300_u64.to_le_bytes());
         let config = 0x500;
         image[config..config + 4].copy_from_slice(&80u32.to_le_bytes());
@@ -432,6 +453,7 @@ mod tests {
         image[config + 76..config + 80].copy_from_slice(&1u32.to_le_bytes());
         image[0x600..0x604].copy_from_slice(&0x1000u32.to_le_bytes());
         image[0x604..0x608].copy_from_slice(&0x1010u32.to_le_bytes());
+        image[0x700..0x708].copy_from_slice(&0x0001_8000_1508_u64.to_le_bytes());
         image
     }
 

@@ -123,6 +123,11 @@ unsafe extern "C" {
 #[cfg(target_os = "windows")]
 core::arch::global_asm!(
     r#"
+    .section .text$mrmlcfg,"xr"
+    .globl mrml_guard_dispatch_icall
+mrml_guard_dispatch_icall:
+    jmp rax
+
     .section .rdata$mrmlcfg,"dr"
     .p2align 2
     .globl mrml_guard_function_table
@@ -136,9 +141,15 @@ mrml_guard_function_table:
 #[cfg(target_os = "windows")]
 unsafe extern "C" {
     static mrml_guard_function_table: u32;
+    fn mrml_guard_dispatch_icall();
 }
 
-const ENCLAVE_BYTES: u64 = 2 * 1024 * 1024;
+#[cfg(target_os = "windows")]
+#[used]
+#[unsafe(no_mangle)]
+static __guard_dispatch_icall_fptr: unsafe extern "C" fn() = mrml_guard_dispatch_icall;
+
+const ENCLAVE_BYTES: u64 = 256 * 1024 * 1024;
 const IMAGE_ENCLAVE_POLICY_STRICT_MEMORY: u32 = 2;
 const IMAGE_ENCLAVE_FLAG_PRIMARY_IMAGE: u32 = 1;
 
@@ -384,7 +395,7 @@ struct ImageLoadConfigDirectory64 {
     se_handler_table: u64,
     se_handler_count: u64,
     guard_cf_check: u64,
-    guard_cf_dispatch: u64,
+    guard_cf_dispatch: *const unsafe extern "C" fn(),
     guard_cf_function_table: *const u32,
     guard_cf_function_count: u64,
     guard_flags: u32,
@@ -437,16 +448,19 @@ static _load_config_used: ImageLoadConfigDirectory64 = ImageLoadConfigDirectory6
     se_handler_table: 0,
     se_handler_count: 0,
     guard_cf_check: 0,
-    guard_cf_dispatch: 0,
+    #[cfg(target_os = "windows")]
+    guard_cf_dispatch: core::ptr::addr_of!(__guard_dispatch_icall_fptr),
+    #[cfg(not(target_os = "windows"))]
+    guard_cf_dispatch: core::ptr::null(),
     #[cfg(target_os = "windows")]
     guard_cf_function_table: core::ptr::addr_of!(mrml_guard_function_table),
     #[cfg(not(target_os = "windows"))]
     guard_cf_function_table: core::ptr::null(),
     guard_cf_function_count: 3,
-    // The image publishes a sorted valid-call-target table and deliberately
-    // does not claim compiler CFG instrumentation while the dispatch/check
-    // pointers above remain absent.
-    guard_flags: 0x0000_0400 | 0x0000_0800,
+    // LLVM instruments indirect calls through the x64 dispatch pointer above.
+    // The image also publishes its sorted valid-call-target table and declares
+    // the deliberately absent security cookie.
+    guard_flags: 0x0000_0100 | 0x0000_0400 | 0x0000_0800,
     code_integrity: ImageLoadConfigCodeIntegrity {
         flags: 0,
         catalog: 0,

@@ -27,6 +27,7 @@ pub struct LocalTime {
 
 pub const ENCLAVE_TYPE_VBS: u32 = 0x10;
 pub const VBS_ENCLAVE_ALIGNMENT: usize = 2 * 1024 * 1024;
+pub const VBS_ENCLAVE_BYTES: usize = 256 * 1024 * 1024;
 pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +39,8 @@ pub enum VbsEnclaveError {
     InvalidPath,
     LoadFailed(u32),
     InitializeFailed(u32),
+    ExportNotFound(u32),
+    ExportOutsideEnclave,
     CallFailed(u32),
 }
 
@@ -130,7 +133,7 @@ impl VbsEnclaveReservation {
             create(
                 process,
                 core::ptr::null_mut(),
-                VBS_ENCLAVE_ALIGNMENT,
+                VBS_ENCLAVE_BYTES,
                 0,
                 ENCLAVE_TYPE_VBS,
                 core::ptr::from_ref(&information).cast(),
@@ -142,7 +145,7 @@ impl VbsEnclaveReservation {
             .ok_or_else(|| VbsEnclaveError::CreateFailed(unsafe { GetLastError() }))?;
         Ok(Self {
             base,
-            size: VBS_ENCLAVE_ALIGNMENT,
+            size: VBS_ENCLAVE_BYTES,
             delete,
             load_image,
             initialize_enclave,
@@ -221,15 +224,31 @@ impl VbsEnclaveReservation {
     pub fn call_authority(
         &self,
         routine: VbsEnclaveRoutineRva,
+        export_name: &CStr,
         context: &mut [u8; VBS_AUTHORITY_CONTEXT_BYTES],
     ) -> Result<usize, VbsEnclaveError> {
         if self.state != VbsEnclaveState::Initialized
             || routine.get() == 0
             || routine.get() as usize >= self.size
+            || !routine.matches_name(export_name.to_bytes())
         {
             return Err(VbsEnclaveError::InvalidState);
         }
-        let routine_address = self.base.as_ptr().wrapping_add(routine.get() as usize);
+        // Windows' documented VBS call path resolves callable exports through
+        // GetProcAddress on the enclave base. The primary module need not be
+        // loaded at the reservation base, so its image RVA cannot be added to
+        // that address. The caller must nevertheless supply the independently
+        // parsed executable non-forwarded RVA for the same exact export name.
+        let routine_address =
+            unsafe { GetProcAddress(self.base.as_ptr().cast(), export_name.as_ptr()) };
+        if routine_address.is_null() {
+            return Err(VbsEnclaveError::ExportNotFound(unsafe { GetLastError() }));
+        }
+        let base = self.base.as_ptr() as usize;
+        let address = routine_address as usize;
+        if !address_is_inside_reservation(base, self.size, address) {
+            return Err(VbsEnclaveError::ExportOutsideEnclave);
+        }
         let mut result = core::ptr::null_mut();
         // SAFETY: the reservation is initialized, the RVA was produced by the
         // bounded PE export validator, the computed address stays within the
@@ -237,7 +256,7 @@ impl VbsEnclaveReservation {
         // synchronous, wait-for-thread call returns.
         if unsafe {
             (self.call_enclave)(
-                routine_address.cast(),
+                routine_address.cast_const(),
                 context.as_mut_ptr().cast(),
                 1,
                 &mut result,
@@ -248,6 +267,13 @@ impl VbsEnclaveReservation {
         }
         Ok(result as usize)
     }
+}
+
+fn address_is_inside_reservation(base: usize, size: usize, address: usize) -> bool {
+    size != 0
+        && address
+            .checked_sub(base)
+            .is_some_and(|offset| offset < size)
 }
 
 #[cfg(windows)]
@@ -2023,6 +2049,20 @@ mod tests {
     use core::alloc::{GlobalAlloc, Layout};
 
     #[test]
+    fn enclave_export_address_must_be_strictly_inside_bounded_reservation() {
+        assert!(super::address_is_inside_reservation(0x1000, 0x2000, 0x1000));
+        assert!(super::address_is_inside_reservation(0x1000, 0x2000, 0x2fff));
+        assert!(!super::address_is_inside_reservation(
+            0x1000, 0x2000, 0x3000
+        ));
+        assert!(!super::address_is_inside_reservation(
+            0x1000, 0x2000, 0x0fff
+        ));
+        assert!(!super::address_is_inside_reservation(usize::MAX - 7, 16, 4));
+        assert!(!super::address_is_inside_reservation(0x1000, 0, 0x1000));
+    }
+
+    #[test]
     fn windows_exposes_vbs_enclave_capability_query() {
         assert_ne!(
             super::vbs_enclave_support(),
@@ -2050,7 +2090,7 @@ mod tests {
     fn supported_vbs_can_reserve_and_delete_non_debug_enclave() {
         if super::vbs_enclave_support() == super::VbsEnclaveSupport::Supported {
             let reservation = super::VbsEnclaveReservation::reserve([0x42; 32]).unwrap();
-            assert_eq!(reservation.size(), super::VBS_ENCLAVE_ALIGNMENT);
+            assert_eq!(reservation.size(), super::VBS_ENCLAVE_BYTES);
             let _ = reservation.base();
             assert_eq!(reservation.state(), super::VbsEnclaveState::Reserved);
         }

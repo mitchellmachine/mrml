@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+#[cfg(feature = "vmx-root-probe")]
+mod vmx_probe;
+
 #[cfg(not(feature = "fault-probe"))]
 use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::arch::{asm, global_asm};
@@ -1884,6 +1887,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     uefi_service_trace(0xc0);
     smp_trace(0x02);
     if region_count != handoff.region_count() {
+        halt();
+    }
+    #[cfg(feature = "vmx-root-probe")]
+    if unsafe { vmx_probe::run() }.is_err() {
         halt();
     }
     if let Some(madt) = handoff.madt(encoded) {

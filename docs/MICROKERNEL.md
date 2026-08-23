@@ -1,9 +1,37 @@
 # MRML microkernel design
 
+This file is the detailed implementation and dated evidence ledger. Stable
+project direction is in [ARCHITECTURE.md](ARCHITECTURE.md), normative boundaries
+in [SECURITY.md](SECURITY.md), application direction in
+[APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md), dependency order in
+[ROADMAP.md](ROADMAP.md), and context-loss procedure in
+[RECOVERY.md](RECOVERY.md). Planned architecture in those documents must not be
+reported as implemented evidence here.
+
 This document records design intent, not a claim of production readiness. The
 kernel is new, original Rust intended for CC0 dedication. Research informs
 requirements and trade-offs; no third-party implementation is copied or
 adapted.
+
+The current UEFI filesystem calls load boot artifacts and the current GOP
+renderer supplies bounded bring-up diagnostics. They are not the planned native
+filesystem, compositor, surface/buffer protocol, or desktop graphics stack. The
+mediated VGPU work below supplies experimental resource/compute mechanisms; it
+does not define GUI semantics or prove accelerated presentation.
+
+Likewise, QEMU `virtio-rng-pci` and debug-console devices in recorded boot
+commands belong to the external QEMU test machine. MRML does not currently
+implement or advertise a VirtIO device. The common VMM exit/interrupt mechanisms
+and MRML-specific mediated GPU queues are foundations, not a complete virtual
+device model. A future VirtIO-GPU-compatible presentation path must coexist with
+rather than replace the authenticated signed-kernel CUDA compute path.
+
+The existing generational capability, IPC attenuation/rollback, task retirement,
+service restart, typed error, artifact-state, and protected secret-use mechanisms
+are foundations only. MRML does not yet implement a general authority provenance
+graph, introspection/explanation API, expiration service, secure file picker,
+disposable domain launcher, `SecretObject` service, credential broker, AI
+principal UI, structured diagnostic-object service, or scoped debugger.
 
 ## Security boundary
 
@@ -108,17 +136,16 @@ The Windows GNU/LLVM path dynamically resolves the documented
 delete enclave lifecycle from `kernel32.dll`. This avoids an MSVC SDK or import
 crate dependency and distinguishes missing ABI from unsupported VBS. Discovery
 does not create an enclave and does not upgrade a WHP launch's protection
-claims; signed enclave image construction, loading, and evidence verification
-remain incomplete.
+claims; capability discovery alone is not evidence verification.
 
 The feasibility backend now performs a real reservation test on supported
-Windows systems: it creates a non-debug, explicitly owned 2 MiB VBS enclave and
+Windows systems: it creates a non-debug, explicitly owned 256 MiB VBS enclave and
 deletes it through an owning RAII handle. ABI layout is asserted as the
 documented 36-byte create-information structure. Lifecycle symbols resolve
 from the enclave API-set DLL with a Kernel32 fallback, which is required on
-systems where forwarded exports are not directly visible. This proves enclave
-reservation on the tested Windows host, but no code has yet been loaded or
-initialized inside that enclave.
+systems where forwarded exports are not directly visible. Reservation alone
+still proves no code execution; the separate signed-image probe is described
+below.
 
 The owning Windows handle now models `Reserved -> ImageLoaded -> Initialized`
 as an explicit one-way state machine. It dynamically resolves
@@ -126,14 +153,14 @@ as an explicit one-way state machine. It dynamically resolves
 `InitializeEnclave`, rejects unterminated or embedded-NUL UTF-16 paths, rejects
 initialization before an accepted image, requires a nonzero thread count, and
 preserves the VBS initialization structure as mutable because Windows returns
-the actual created thread count through it. These transitions are implemented
-and malformed-state tested; an MRML enclave PE has not yet passed the load gate.
+the actual created thread count through it. These transitions are implemented,
+malformed-state tested, and exercised by the signed-image probe below.
 
 `experiments/mrml-vbs-enclave` is the first standalone enclave image source. It
 is original `no_std` Rust using only MRML crates and `core`, builds as a PE DLL
 with the Windows GNU/LLVM toolchain, and embeds an 80-byte x86_64 enclave
 configuration. The configuration is non-debug, uses strict containing-process
-memory isolation, declares one thread, a 2 MiB private range, explicit
+memory isolation, declares one thread, a 256 MiB private range, explicit
 family/image identities, security version one, and primary-image status. A
 custom Rust target omits MinGW CRT startup and ordinary Windows imports; the
 release PE imports only Microsoft's enclave-supported platform DLLs,
@@ -153,10 +180,10 @@ exact 256-byte x86_64 load configuration. Its relocated enclave pointer resolves
 to the 80-byte strict configuration in the built DLL. An image-relative CFG
 table contains the sorted RVAs of `DllMain`, the boundary probe, and the
 authority entry point. The load configuration binds its VA, exact count,
-valid-target-table flag, and unused-security-cookie declaration. It does not
-claim compiler CFG instrumentation because no nonzero CFG check/dispatch
-pointers have yet been wired; the finalizer rejects metadata that claims more
-than the image implements.
+valid-target-table flag, and unused-security-cookie declaration. LLVM now
+instruments indirect calls and the image supplies a nonzero x64 CFG dispatch
+pointer to an executable dispatch thunk. The finalizer resolves and validates
+that pointer and rejects metadata that claims more than the image implements.
 
 `mrml-sign finalize-vbs-enclave` is the original post-link validation gate. It
 accepts only unsigned PE32+ x86_64 images with one canonical 256-byte load
@@ -176,8 +203,11 @@ image, initializes one enclave thread, and then invokes the authority with
 `mrml_launch_authority` export using MRML's allocation-free PE parser. That
 parser caps section/export counts, checks every RVA translation, rejects
 forwarders and unterminated names, and accepts only an RVA inside an executable
-section. The owning lifecycle accepts that opaque validated-RVA type only after
-the `Initialized` state, keeps the call context mutably borrowed for the
+section. The opaque token also retains and rechecks the exact bounded export
+name. After initialization the lifecycle resolves that name with
+`GetProcAddress` on the enclave handle, rejects a null result or an address
+outside the checked reservation, and does not assume the primary DLL was loaded
+at the reservation base. It keeps the call context mutably borrowed for the
 synchronous wait-for-thread call, and returns either the enclave status or the
 exact Windows failure. The probe generates a fresh OS-cryptographic nonce,
 submits the canonical request, requires zero authority status, and verifies the
@@ -191,6 +221,32 @@ and load dispatch execute. The current probe also proves its real built-image
 export is structurally accepted before reaching that loader gate, but error 577
 prevents initialization and therefore prevents a real `CallEnclave` execution.
 It is not evidence that Windows has accepted or run the image.
+On 2026-08-23 the same source was rebuilt with the custom target, passed
+`mrml-sign finalize-vbs-enclave`, and was signed by Microsoft SignTool with
+`/ph /fd SHA256` using a disposable RSA-3072 development certificate carrying
+the documented Code Signing, VBS Enclave, and Author EKUs. The host again
+reported VBS support and reserved the non-debug 2 MiB enclave, but
+`LoadEnclaveImageW` returned error 193 (`ERROR_BAD_EXE_FORMAT`). This reaches a
+later PE/load-configuration gate than the earlier error 577; it still does not
+prove Windows initialization, VTL1 entry, receipt verification, attestation
+verification, or secret consumption. The temporary certificate and private key
+were removed after the test.
+Later on 2026-08-23, Windows 11 build 26200.9168 in test-signing mode accepted a
+fresh page-hash-signed, CFG-instrumented image and initialized separate
+non-debug authority and verifier enclaves with one thread each. A 2 MiB
+reservation initialized with error 8; matching the image and reservation at
+the bounded 256 MiB size succeeded. An initial call using reservation-base plus
+export RVA failed with error 127. Resolving the independently validated exact
+export through `GetProcAddress`, as required by Microsoft's host sample, showed
+that Windows had placed the primary module near the end of the reservation.
+With the returned address bounded to that reservation, the import-free probe
+entered VTL1 and returned its exact context-bound value. The next protected
+operation failed closed with enclave status 6 because
+`EnclaveUsesAttestedKeys` reported false on this test-mode system. This is
+controlled evidence of signed non-debug image load, initialization, and VTL1
+execution. It is not evidence of safe TPM-provisioned attested keys,
+authenticated receipts, verified local attestation, secret release, remote
+attestation, or resistance to VTL1/Hyper-V compromise.
 Enabling global test-signing or trusting a development code-signing root weakens
 the host policy and is never performed automatically by the build.
 
@@ -623,9 +679,125 @@ The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 contract requires locked feature-control policy, `CR4.VMXE`, valid revision
 headers, and complete VMCS host state. VMfail flags become explicit errors and
 physical-address operands remain live memory operands for the instructions.
-Both Windows and Linux LLVM assemblers accept the implementation. The
-instructions have not yet been executed by a bare-metal MRML boot, so this is
-not evidence of a successful hardware VM launch.
+The adapter now also provides typed `VMREAD` and `VMWRITE` operations and checks
+VMfail after `VMXOFF`. A bounded first-exit decoder accepts only a non-entry-
+failure EPT violation with a hardware-valid guest-physical address inside the
+exact expected 4 KiB monitor-private page. VMREAD failure, malformed access
+qualification, another exit reason, or an adjacent-page access leaves the
+controller outside `GuestRunning` and cannot resume uncertain state.
+Minimal launch programming is now one fixed 84-field VMCS specification. It
+preflights field widths, exact EPT identity, all five hardware control masks,
+long-mode entry/exit state, segment selectors and access rights, canonical
+entry/stack pointers, and the invalid guest-link sentinel before the first
+write. Callers cannot append optional fields or omit a required field. A
+partial `VMWRITE` poisons the controller; guest launch and resume remain denied
+while fail-closed `VMXOFF` teardown is still available.
+Native launch and resume no longer assume that a successful VM-entry
+instruction returns normally. Dedicated SysV assembly saves every callee-saved
+register, writes the live host RSP and a private return label into the VMCS,
+and distinguishes a VMfail return from hardware control transfer back through
+the configured host RIP. Rust receives an explicit running-versus-exit outcome;
+only the latter creates the one-use `VmExitPending` state accepted by the exit
+decoder. The canonical guest state is now a fully specified unrestricted
+real-mode context, including all segment selectors, limits, bases, access
+rights, and descriptor-table state, so the isolation probe needs no guest page
+tables before touching the denied GPA. Guest debug, PAT, performance,
+interruptibility, activity, and SYSENTER state and host PAT,
+performance, FS/GS bases, and SYSENTER state are also written explicitly;
+launch no longer relies on unspecified post-`VMCLEAR` contents. Host-loaded
+addresses must be canonical, host CS/TR must be nonzero ring-zero selectors,
+and every PAT entry is validated before the first `VMWRITE`. SMM-only SMBASE is
+deliberately omitted because it is not an ordinary guest-state component and
+may not exist in a non-SMM VMCS.
+The opt-in `vmx-root-probe` kernel image now provides eight statically owned,
+page-aligned pages and resolves their exact supervisor-writable physical
+backing through the active CR3. It rejects aliases and misalignment, builds a
+four-level EPT with one read/execute guest-code page, and deliberately leaves
+guest GPA `0x2000` absent while retaining a separate monitor-only backing page.
+After deriving capabilities and controls from the architectural MSRs, it
+validates the locked feature-control and fixed-bit requirements before setting
+`CR4.VMXE`. The four-byte real-mode guest reads `0x2000`; the probe accepts only
+the exact read-only EPT violation, requires successful `VMXOFF`, restores the
+original CR4, and emits a bounded debug-port stage trace. Any uncertain teardown
+state enters an interrupt-disabled halt loop instead of restoring or resuming.
+
+On 2026-08-23 the signed Windows WHP runner admitted the exact version-2 probe
+image and observed entry byte `d0`, followed by failure byte `e0`: WHP cleared
+CPUID.1 ECX VMX for this guest, so the kernel rejected the platform before any
+VMX MSR read or privileged VMX operation. QEMU 11.1 TCG also explicitly reported
+`TCG doesn't support requested feature: CPUID[eax=01h].ECX.vmx [bit 5]` for
+`-machine q35,accel=tcg -cpu max,+vmx`. A paused QEMU WHPX configuration still
+accepts the requested CPU option, but that does not override the WHP guest's
+missing VMX capability. These are controlled negative probes, not evidence of
+`VMXON`, guest launch, bare-metal execution, physical hardware, or remote
+attestation. The image and state machine are now wired for a platform that
+actually exposes nested VMX or for a physical boot. The Windows paths did not
+provide a successful VMX execution.
+The final signed version-12 image repeated the same Windows result: the runner
+expected `d1` after `d0` and instead received `e0`, exiting nonzero.
+
+The same version-2 kernel and an independently signed version-1 service were
+then booted through the repository-owned UEFI loader under QEMU 11.1 TCG with
+EDK2, `virtio-rng-pci`, a FAT boot directory, and the debug console at port
+`0xe9`. The exact trace was
+`a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3 d0 e0`: the loader authenticated and
+materialized both artifacts, constructed the bounded handoff and protected page
+tables, crossed `ExitBootServices`, transferred through the kernel trampoline,
+and reached the VMX probe before the same CPUID rejection. The command used
+`-machine q35,accel=tcg -m 512M -cpu max`, read-only
+`edk2-x86_64-code.fd`, a disposable writable vars image, the FAT directory as a
+raw drive, `virtio-rng-pci`, and `isa-debugcon.iobase=0xe9`. A repeat with
+`-machine q35,accel=whpx -cpu max,+vmx` produced only QEMU's
+`Ignoring request for interrupt vector 0` warning and no loader trace before it
+was terminated after 30 seconds. Neither controlled result is positive VMX or
+physical-hardware evidence.
+
+On the same date, Arch Linux under WSL2 kernel
+`6.18.33.2-microsoft-standard-WSL2` exposed `vmx`, writable `/dev/kvm`, loaded
+`kvm_intel`, and reported `nested=Y`, `ept=Y`, and
+`unrestricted_guest=Y`. QEMU 11.1 and `edk2-ovmf` were installed from the Arch
+repositories. The repository then built and Lamport-signed exact kernel
+version 12 and service version 1 artifacts, embedded their public-key digests
+and minimum versions in a freshly built loader, and booted them with:
+
+```text
+qemu-system-x86_64 -machine q35,accel=kvm -m 512M -cpu host \
+  -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE.4m.fd \
+  -drive if=pflash,format=raw,file=DISPOSABLE_OVMF_VARS.4m.fd \
+  -drive format=raw,file=fat:rw:SIGNED_BOOT_DIRECTORY \
+  -device virtio-rng-pci -debugcon file:TRACE \
+  -global isa-debugcon.iobase=0xe9 -display none -serial none \
+  -monitor none -no-reboot
+```
+
+Two independent boots of the exact version-12 files produced
+`a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3 d0 d1 d2 d3 d4 df`. The loader prefix
+proves signed kernel/service admission, materialization, handoff construction,
+`ExitBootServices`, protected page-table installation, and kernel transfer.
+For the VMX suffix, `d0` is probe entry, `d1` follows successful `VMXON`, `d2`
+follows `VMCLEAR`, `VMPTRLD`, `INVEPT`, and all 84 `VMWRITE`s, `d3` is reached
+only through the VM-exit host RIP after `VMLAUNCH`, `d4` follows strict typed
+validation, and `df` follows successful `VMXOFF` and restoration of the original
+CR4. An instrumented preceding build recorded raw exit reason `0x30`, low
+qualification `0x81` (read plus hardware-valid GPA), and GPA page `0x2000`
+before the same typed validator accepted it.
+
+Live execution exposed and corrected four defects that emulated instruction
+tests could not prove: VMX control MSR low halves are required-one masks rather
+than allowed-zero masks; LLVM's Intel-syntax `VMWRITE`/`VMREAD` operand order
+had been reversed, including the host-return trampoline; SMM-only SMBASE is not
+a portable ordinary VMCS component; and unrestricted guest mode relaxes only
+CR0.PE/PG, so remaining guest CR0/CR4 fixed-one bits must still be derived from
+the hardware MSRs. The controller now also retains only a bounded failed
+`VMWRITE` index while poisoned and clears it after successful teardown. A raw
+one-use exit snapshot is explicitly diagnostic input, not authenticated
+protection evidence.
+
+This is controlled nested-KVM execution under a Windows/Hyper-V-owned WSL2
+host. It proves that the native MRML instruction/state path executes through
+the requested VMX/EPT lifecycle in that environment. It is not a security
+boundary against the host, physical bare-metal validation, TPM/IOMMU evidence,
+remote attestation, or a production-readiness claim.
 
 VMX capability decisions are derived from raw `IA32_VMX_BASIC`, secondary
 processor-control, and EPT/VPID capability MSRs rather than host-supplied
@@ -2229,6 +2401,9 @@ erasure/reprovisioning and one bounded restart are complete for the hosted
 WHP/KVM proof.
 
 ## Milestones
+
+This historical list is retained for continuity. The current dependency-ordered
+plan and status vocabulary are authoritative in [ROADMAP.md](ROADMAP.md).
 
 1. Capability model, explicit directory grants, IPC wire format, and property
    tests. The fixed-size policy model and stable, versioned cross-VM control

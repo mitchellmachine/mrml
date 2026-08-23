@@ -36,6 +36,13 @@ remaining milestones live in [docs/MICROKERNEL.md](docs/MICROKERNEL.md). Keeping
 that detail outside this README makes the project overview readable while
 retaining the evidence needed for engineering work.
 
+The durable OS direction is split by purpose: [architecture](docs/ARCHITECTURE.md),
+[security boundaries](docs/SECURITY.md), [dependency-ordered roadmap](docs/ROADMAP.md),
+[application platform](docs/APPLICATION_PLATFORM.md), and
+[context-loss recovery](docs/RECOVERY.md). `docs/MICROKERNEL.md` remains the
+detailed implementation and evidence ledger. Architecture goals in those files
+are not completion claims.
+
 ## Design principles
 
 - Own the critical implementation and keep the trusted dependency surface
@@ -79,6 +86,9 @@ violates any rule must not be merged.
 - Review unsafe code, FFI, integer and buffer arithmetic, parsers, filesystem
   and process operations, network input, concurrency, and failure paths. Add
   adversarial and regression tests appropriate to the change.
+- When a workspace formatter changes otherwise unrelated tracked Rust files,
+  preserve those mechanical changes in a separate formatting-only commit so
+  the functional change remains independently reviewable.
 - Reject and rework security or measured performance regressions. Never waive
   a regression merely to make a feature pass.
 - Record Windows and Linux test commands, security checks, and relevant
@@ -197,6 +207,8 @@ The current x86_64 kernel has demonstrated:
 - user-fault retirement with domain and capability revocation;
 - resumption of a surviving CPL3 task after another task faults;
 - multiprocessor startup, per-CPU state, IPIs, migration, and load balancing;
+- controlled signed nested-KVM execution of VMX-root entry, a minimal non-root
+  guest, an exact EPT-denied monitor-private-page read exit, and VMXOFF teardown;
 - signed execution probes under QEMU/UEFI, nested Linux KVM, and Windows WHP.
 
 The kernel remains experimental. Storage, network, tool, inference, and GPU
@@ -286,8 +298,10 @@ not only self-round-trip tests.
 This section exists specifically to prevent a new AI session from overstating
 the repository or undoing its invariants.
 
-1. Read this README and [docs/MICROKERNEL.md](docs/MICROKERNEL.md) before
-   changing kernel, VMM, signing, GPU, or trust-boundary code.
+1. Read `AGENTS.md`, this README, the architecture, security, application
+   platform, roadmap, recovery, and
+   [microkernel evidence](docs/MICROKERNEL.md) documents before changing kernel,
+   VMM, signing, GPU, application, browser, GUI, or trust-boundary code.
 2. Treat the mandatory contribution rules above as hard acceptance gates.
 3. Inspect the current worktree before editing. Preserve unrelated staged,
    unstaged, and untracked user work; stage only the intended change.

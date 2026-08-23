@@ -132,11 +132,20 @@ impl Commit {
         let mut parents = Vector::new();
         let mut author = None;
         for line in headers.lines() {
-            if let Some(value) = line.strip_prefix("tree ") { tree = ObjectId::parse(value); }
-            else if let Some(value) = line.strip_prefix("parent ") { parents.push(ObjectId::parse(value).ok_or(ObjectError::InvalidHeader)?); }
-            else if let Some(value) = line.strip_prefix("author ") { author = Some(Text::from(value)); }
+            if let Some(value) = line.strip_prefix("tree ") {
+                tree = ObjectId::parse(value);
+            } else if let Some(value) = line.strip_prefix("parent ") {
+                parents.push(ObjectId::parse(value).ok_or(ObjectError::InvalidHeader)?);
+            } else if let Some(value) = line.strip_prefix("author ") {
+                author = Some(Text::from(value));
+            }
         }
-        Ok(Self { tree: tree.ok_or(ObjectError::InvalidHeader)?, parents, author: author.ok_or(ObjectError::InvalidHeader)?, message: message.into() })
+        Ok(Self {
+            tree: tree.ok_or(ObjectError::InvalidHeader)?,
+            parents,
+            author: author.ok_or(ObjectError::InvalidHeader)?,
+            message: message.into(),
+        })
     }
 }
 
@@ -144,20 +153,55 @@ pub fn parse_tree(contents: &[u8]) -> Result<Vector<TreeEntry>, ObjectError> {
     let mut entries = Vector::new();
     let mut cursor = 0usize;
     while cursor < contents.len() {
-        let space = contents[cursor..].iter().position(|byte| *byte == b' ').map(|offset| cursor + offset).ok_or(ObjectError::InvalidHeader)?;
-        let mode_text = core::str::from_utf8(&contents[cursor..space]).map_err(|_| ObjectError::InvalidHeader)?;
-        if mode_text.is_empty() || !mode_text.bytes().all(|byte| matches!(byte, b'0'..=b'7')) { return Err(ObjectError::InvalidHeader); }
+        let space = contents[cursor..]
+            .iter()
+            .position(|byte| *byte == b' ')
+            .map(|offset| cursor + offset)
+            .ok_or(ObjectError::InvalidHeader)?;
+        let mode_text = core::str::from_utf8(&contents[cursor..space])
+            .map_err(|_| ObjectError::InvalidHeader)?;
+        if mode_text.is_empty() || !mode_text.bytes().all(|byte| matches!(byte, b'0'..=b'7')) {
+            return Err(ObjectError::InvalidHeader);
+        }
         let mut mode = 0u32;
-        for byte in mode_text.bytes() { mode = mode.checked_mul(8).and_then(|value| value.checked_add((byte - b'0') as u32)).ok_or(ObjectError::InvalidHeader)?; }
+        for byte in mode_text.bytes() {
+            mode = mode
+                .checked_mul(8)
+                .and_then(|value| value.checked_add((byte - b'0') as u32))
+                .ok_or(ObjectError::InvalidHeader)?;
+        }
         cursor = space + 1;
-        let nul = contents[cursor..].iter().position(|byte| *byte == 0).map(|offset| cursor + offset).ok_or(ObjectError::Truncated)?;
-        let name = core::str::from_utf8(&contents[cursor..nul]).map_err(|_| ObjectError::InvalidHeader)?;
-        if name.is_empty() || matches!(name, "." | "..") || name.contains(['/', '\\']) || name.chars().any(char::is_control) { return Err(ObjectError::InvalidHeader); }
+        let nul = contents[cursor..]
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|offset| cursor + offset)
+            .ok_or(ObjectError::Truncated)?;
+        let name =
+            core::str::from_utf8(&contents[cursor..nul]).map_err(|_| ObjectError::InvalidHeader)?;
+        if name.is_empty()
+            || matches!(name, "." | "..")
+            || name.contains(['/', '\\'])
+            || name.chars().any(char::is_control)
+        {
+            return Err(ObjectError::InvalidHeader);
+        }
         cursor = nul + 1;
-        let id = ObjectId(contents.get(cursor..cursor + 20).ok_or(ObjectError::Truncated)?.try_into().map_err(|_| ObjectError::Truncated)?);
+        let id = ObjectId(
+            contents
+                .get(cursor..cursor + 20)
+                .ok_or(ObjectError::Truncated)?
+                .try_into()
+                .map_err(|_| ObjectError::Truncated)?,
+        );
         cursor += 20;
-        if !matches!(mode, 0o40000 | 0o100644 | 0o100755 | 0o120000 | 0o160000) { return Err(ObjectError::InvalidHeader); }
-        entries.push(TreeEntry { mode, name: name.into(), id });
+        if !matches!(mode, 0o40000 | 0o100644 | 0o100755 | 0o120000 | 0o160000) {
+            return Err(ObjectError::InvalidHeader);
+        }
+        entries.push(TreeEntry {
+            mode,
+            name: name.into(),
+            id,
+        });
     }
     Ok(entries)
 }
@@ -212,7 +256,9 @@ mod tests {
     fn parses_commit_graph_metadata() {
         let tree = "1111111111111111111111111111111111111111";
         let parent = "2222222222222222222222222222222222222222";
-        let text = mrml_runtime::mrml_format!("tree {tree}\nparent {parent}\nauthor MRML <mrml@example.invalid> 1 +0000\ncommitter MRML <mrml@example.invalid> 1 +0000\n\nmessage\n");
+        let text = mrml_runtime::mrml_format!(
+            "tree {tree}\nparent {parent}\nauthor MRML <mrml@example.invalid> 1 +0000\ncommitter MRML <mrml@example.invalid> 1 +0000\n\nmessage\n"
+        );
         let commit = Commit::parse(text.as_bytes()).unwrap();
         assert_eq!(commit.tree, ObjectId::parse(tree).unwrap());
         assert_eq!(commit.parents[0], ObjectId::parse(parent).unwrap());

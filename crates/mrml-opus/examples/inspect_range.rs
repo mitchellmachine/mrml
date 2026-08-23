@@ -4,9 +4,9 @@ use mrml_opus::{Decoder, Packet};
 
 fn main() -> Result<(), String> {
     let mut arguments = std::env::args_os().skip(1);
-    let first = arguments.next().ok_or_else(|| {
-        "usage: inspect_range <packet-hex> [<packet-hex> ...]".to_owned()
-    })?;
+    let first = arguments
+        .next()
+        .ok_or_else(|| "usage: inspect_range <packet-hex> [<packet-hex> ...]".to_owned())?;
     let mut packets = vec![first];
     packets.extend(arguments);
     for argument in packets {
