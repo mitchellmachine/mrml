@@ -8,19 +8,30 @@ Before changing kernel, VMM, boot, signing, protected-execution, capability,
 IPC, device, or security code, read completely:
 
 1. `README.md`
-2. `docs/ENGINEERING_CONSTITUTION.md`
-3. `docs/ARCHITECTURE.md`
-4. `docs/SECURITY.md`
-5. `docs/APPLICATION_PLATFORM.md`
-6. `docs/ROADMAP.md`
-7. `docs/RECOVERY.md`
-8. `docs/MICROKERNEL.md`
+2. `VALUES.md`
+3. `docs/ENGINEERING_CONSTITUTION.md`
+4. `docs/ARCHITECTURE.md`
+5. `docs/SECURITY.md`
+6. `docs/APPLICATION_PLATFORM.md`
+7. `docs/ACCESSIBILITY.md`
+8. `docs/ROADMAP.md`
+9. `docs/RECOVERY.md`
+10. `docs/MICROKERNEL.md`
 
 Treat `docs/ENGINEERING_CONSTITUTION.md` as normative before introducing major
 architecture. Apply its lightweight complexity score to major subsystem
 proposals, not routine work. If a proposal conflicts, identify the conflict and
 propose an explicit amendment rather than bypassing the rule. `EULOGY.md` is
 historical inspiration only and never overrides MRML's security architecture.
+
+Accessibility is foundational. A core interface is incomplete when essential
+operations depend on one sensory/physical mode despite practical semantic
+alternatives. Reuse the Semantic Scene Graph for visual, keyboard, Braille,
+speech, accessibility-device, automation, testing, and AI projections; do not
+create divergent authority or semantic systems. Preserve local accessibility,
+secret redaction, trusted nonvisual prompts, and separate semantic inspection,
+interaction, microphone, audio-route, HID/input-route, and raw-device rights.
+Never claim Braille/hardware or early-boot support beyond exact evidence.
 
 Treat the README contribution, testing, provenance, dependency, formatting,
 and claims rules as hard acceptance gates. Inspect `git status`, recent

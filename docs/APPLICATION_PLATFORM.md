@@ -242,6 +242,15 @@ rendering backend failure may replace buffers or presentation state; it must not
 destroy the semantic desktop used by accessibility, text-only AI, automation,
 or recovery.
 
+The graph is the canonical accessibility substrate. Visual GUI, keyboard,
+refreshable Braille, trusted speech input/output, switch and adaptive devices,
+automation, UI testing, and AI consume appropriate projections of the same
+roles, state, focus, actions, and host-owned security identity. Accessibility
+inspection and interaction remain explicit capabilities, secrets are redacted
+consistently, and essential trusted prompts cannot depend on vision, color,
+sound, or pointer coordinates alone. The planned contract is in
+[ACCESSIBILITY.md](ACCESSIBILITY.md).
+
 ## AI and multimodal access
 
 Semantic/text state is the default AI path. Screenshots, image bytes, or video
@@ -306,3 +315,8 @@ screenshots.
 Photographs, maps, canvas, WebGL, charts, games, and video appear as semantic
 media objects when ordinary semantics cannot represent them. Visual inspection
 is explicit, scoped, lazy, and capability checked.
+
+This sanitized tree is also the browser accessibility and keyboard foundation;
+avoid unrelated DOM, screen-reader, automation, and AI semantics where one
+validated projection suffices. Media semantics preserve available captions,
+transcripts, audio descriptions, chapters, language, and timing.

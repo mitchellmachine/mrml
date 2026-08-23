@@ -355,6 +355,11 @@ Playback and microphone capture are independent; capture is explicitly granted,
 revocable, audited, policy-scoped, and shown through compositor-owned trusted
 UI. VMs use a VirtIO-sound-compatible or MRML device connected to the service,
 not physical hardware unless separately granted passthrough authority.
+Application playback/capture, VM audio, system notifications, trusted
+accessibility speech output, and trusted accessibility speech input are distinct
+routes and authorities. Applications cannot capture trusted screen-reader audio
+by default. Local recognition and deterministic semantic commands remain
+possible without remote AI; remote speech processing is separately disclosed.
 
 USB is managed by userspace controller/class services where practical.
 Applications receive narrow class or interface objects rather than raw USB
@@ -364,11 +369,19 @@ host access first and makes reset, cleanup, DMA isolation, and reattachment
 explicit. Dedicated paravirtualized input, storage, network, and audio devices
 are preferred over emulating a USB controller merely to expose those functions.
 
+Refreshable Braille displays, adaptive keyboards, switch controls, alternative
+pointing devices, and other accessibility HID interfaces are explicit device
+use cases. Prefer interoperable protocols and narrow interface delegation to
+trusted accessibility/input services rather than raw USB.
+
 Trusted input services route keyboard, pointer, touch, pen, and gamepad events
 only to authorized native surfaces or selected VMs, optionally through
 VirtIO-input or an MRML device. A focused VM receives ordinary routed events,
 not global HID. Secure-attention sequences terminate in the trusted host and
 cannot be intercepted by applications or guests.
+Braille input and accessibility-device events use the same focus, isolation,
+secure-attention, and capability rules. A focused application or VM never gains
+global accessibility input. See [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
 ## Planned system services
 

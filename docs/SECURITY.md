@@ -131,6 +131,13 @@ draw or obscure the trusted portion of those surfaces. Semantic inspection,
 semantic interaction, media inspection, clipboard/capture, and global HID
 injection are distinct authorities.
 
+Trusted prompts and recovery/login decisions must eventually expose equivalent
+meaningful visual, keyboard, Braille, speech, and appropriate accessibility-
+device semantics. Security identity cannot depend on color, sound, icon,
+animation, position, or pixels alone. One redaction policy protects secrets
+across visual rendering, speech, Braille, automation, and AI; accessibility
+software receives no implicit secret or universal observation authority.
+
 WebAssembly remains inside the browser sandbox and cannot bypass application
 admission. The browser is no-JIT and W^X by design. Browser-level access to a
 device is not delegated to an origin without separate authorization. The
@@ -166,6 +173,11 @@ microphone capture is explicit, revocable, audited, and indicated by trusted
 compositor UI. Composite USB interfaces are authorized independently. Exclusive
 passthrough revokes conflicting host ownership before assignment and requires
 completed reset, DMA isolation, cleanup, and reattachment transitions.
+Trusted accessibility speech capture, application capture, VM capture, and AI
+capture are separate authorities. Trusted accessibility speech output is not an
+application-capturable playback stream by default. Braille and accessibility
+HID services receive narrow interface/input-route capabilities, not raw global
+USB or HID authority.
 
 All queue descriptors, feature bits, lengths, addresses, chains, indirect
 tables, indices, and device states are adversarial. Validation precedes host

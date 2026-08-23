@@ -37,6 +37,22 @@ architectures. Human GUI/CLI/SDK use, automation, local AI, and remote AI should
 operate on the same underlying objects. AI is another principal, never a hidden
 root automation channel.
 
+## Accessibility
+
+> A core MRML interface is incomplete if its essential operations are available
+> only through one sensory or physical interaction mode when the architecture
+> can reasonably expose equivalent semantic control.
+
+Equivalent meaningful access does not require literally identical interfaces.
+Accessibility is a platform and security property, not optional polish.
+Essential semantics and actions should support appropriate visual, keyboard,
+Braille, speech, accessibility-device, automation, and AI projections while
+preserving separate capabilities and secret redaction. Core accessibility must
+retain a viable local path. Accessibility work cannot be rejected merely because
+it adds implementation effort; control complexity through one shared semantic
+object system rather than duplicated representations. The canonical design is
+in [ACCESSIBILITY.md](ACCESSIBILITY.md).
+
 ## Memory safety and containment
 
 Ordinary native applications are memory-safe by admission policy, with safe

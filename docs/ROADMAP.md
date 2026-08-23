@@ -214,13 +214,17 @@ and tuning follow baseline correctness and measurement.
 
 Audio proceeds from capability-bound device/playback/capture/session objects and
 an explicit timing/format model to userspace mixing, basic output, capture,
-trusted capture indication, then VirtIO-sound or an MRML virtual-audio device
-connected to the host service. Latency/jitter measurement precedes advanced
-routing and multi-device work.
+trusted capture indication, trusted accessibility speech output, local trusted
+speech capture/control, then VirtIO-sound or an MRML virtual-audio device
+connected to the host service. Application playback/capture, accessibility
+speech, VM audio, and notifications retain separate capabilities and privacy
+boundaries. Latency/jitter measurement precedes advanced routing and
+multi-device work.
 
 USB proceeds from device/interface/endpoint capabilities and a host-controller
 abstraction through enumeration and bounded descriptor parsing, then HID and
-storage classes, other classes as needed, per-interface delegation, VM
+storage classes, refreshable Braille and accessibility HID protocols, other
+classes as needed, per-interface delegation, VM
 passthrough lifecycle, and physical IOMMU/DMA validation. Legacy controller
 emulation comes only with a demonstrated compatibility need.
 
@@ -253,7 +257,13 @@ Before trusted consent UI, establish the application-facing foundation:
    recovery; native physical GPU backends come later.
 11. Implement a bounded, generational semantic scene graph with authorized
    incremental subscriptions and resynchronization.
-12. Benchmark scene updates, input-to-action latency, composition, damage,
+12. Add deterministic focus order and keyboard semantic actions, then a bounded
+    accessibility semantic API with uniform secret redaction.
+13. Add basic trusted local speech output and a Braille representation/backend;
+    simulated evidence does not establish physical-device compatibility.
+14. Add Braille input/routing and local deterministic speech input/control over
+    semantic actions, preserving distinct microphone and device authorities.
+15. Benchmark scene updates, input-to-action latency, composition, damage,
     synchronization, scaling, takeover, and recovery.
 
 The graphics device may add VirtIO-GPU compatibility for guest display and 3D
@@ -267,7 +277,8 @@ ambient authority; VM transport cannot widen capabilities; applications cannot
 spoof trusted surfaces; stale semantic identities/deltas cannot target reused
 objects; surface/buffer ownership cannot become scanout or cross-process access;
 backend changes preserve validation; semantic inspection and raw input remain
-separate authority.
+separate authority; trusted prompts have nonvisual semantics; accessibility
+cannot bypass secret redaction or grant universal observation/input authority.
 
 ## Phase 4 — Browser and AI application control
 
@@ -275,16 +286,32 @@ separate authority.
 2. Keep WebAssembly inside the browser boundary and mediate every sensitive API
    per origin and capability.
 3. Expose a sanitized semantic document tree with deliberate bounded actions.
-4. Represent visual web/media content as lazy capability-controlled objects.
-5. Add cohort-normalized fingerprint surfaces and regression testing against
+4. Project that same tree to browser accessibility and keyboard operation.
+5. Represent visual web/media content as lazy capability-controlled objects
+   carrying captions, transcripts, audio descriptions, chapters, language, and
+   timing where available.
+6. Add authenticated application-VM semantic projection, then bounded bridges
+   from compatibility-guest accessibility APIs; guest content cannot assert
+   trusted host identity.
+7. Add cohort-normalized fingerprint surfaces and regression testing against
    independent fingerprinting suites.
-6. Add local/remote AI disclosure controls, incremental graph transport, and
+8. Add local/remote AI disclosure controls, incremental graph transport, and
    explicit visual-inspection requests.
 
 Security gate: web content cannot reach native admission, arbitrary JavaScript
 control, browser memory/debug authority, raw devices, or W+X execution; AI does
 not receive secrets, screenshots, media, HID injection, or global GUI control
 without the exact capability. Fingerprint claims require empirical evidence.
+
+Accessibility verification proceeds alongside Phases 3 and 4 rather than after
+the GUI is complete. Add semantic completeness, focus ordering, keyboard-only,
+Braille/speech representation, redaction, trusted-prompt, VM/browser projection,
+HiDPI/backend-independence, and capability tests. Dogfood core workflows without
+pointer or framebuffer inspection. Add physical Braille and alternative-device
+tests when hardware is available and label simulation separately. Extend
+accessible semantics into boot errors, rollback, login, recovery, and repair as
+early as service/hardware prerequisites permit without claiming unfinished
+early-boot support.
 
 ## Phase 5 — Authority, consent, and observation
 

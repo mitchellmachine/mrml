@@ -10,6 +10,15 @@ override MRML's security architecture. Preserve MRML's independent technical
 identity, memory safety, capabilities, isolation, userspace services, VM
 compartments, and modern hardware protection.
 
+Read `VALUES.md` and `docs/ACCESSIBILITY.md` before GUI, compositor, semantic
+graph, input/HID, USB, audio, browser, AI-control, trusted-prompt, boot, or
+recovery work. Accessibility is a platform property built on the shared semantic
+object system, not a later visual add-on. Preserve local/offline operation,
+uniform secret redaction, separate inspect/interact/microphone/device authority,
+and the roadmap order from semantic graph through keyboard actions, speech,
+Braille, VM/browser projection, and alternative devices. Do not claim physical
+Braille or early-boot accessibility from simulation or plans.
+
 Patent research is also durable repository state. Before repeating a search,
 read `docs/patents/README.md`, its status registers, and `REVIEW_LOG.md`.
 Resume from recorded mechanisms, claims, families, jurisdictions, official
