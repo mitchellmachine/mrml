@@ -6,11 +6,16 @@ use mrml_crypto::{Sha3_256, Sha3_512, hmac_sha256};
 
 pub const LAUNCH_REQUEST_BYTES: usize = 184;
 pub const AUTHORITY_RECEIPT_BYTES: usize = 272;
+pub const VBS_RECEIPT_VERIFICATION_INPUT_BYTES: usize =
+    LAUNCH_REQUEST_BYTES + AUTHORITY_RECEIPT_BYTES;
 pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
 pub const VBS_ATTESTATION_DATA_BYTES: usize = 64;
 pub const VBS_ATTESTATION_CHALLENGE_BYTES: usize = 32;
 pub const VBS_ATTESTATION_REPORT_MAX_BYTES: usize = 64 * 1024;
 pub const VBS_ATTESTATION_ENVELOPE_BYTES: usize = 8 + VBS_ATTESTATION_REPORT_MAX_BYTES;
+pub const VBS_SEALED_KEY_BLOB_MAX_BYTES: usize = 4096;
+pub const VBS_SEALED_KEY_ENVELOPE_BYTES: usize = 8 + VBS_SEALED_KEY_BLOB_MAX_BYTES;
+pub const VBS_SEALED_KEY_CONFIRMATION_BYTES: usize = 32;
 pub const VBS_REPORT_PACKAGE_HEADER_BYTES: usize = 24;
 pub const VBS_REPORT_SIGNED_STATEMENT_BYTES: usize = 224;
 pub const VBS_ENCLAVE_IDENTITY_BYTES: usize = 152;
@@ -28,6 +33,7 @@ pub enum VbsAuthorityOperation {
     IssueAttestationReport = 4,
     GenerateAttestationChallenge = 5,
     VerifyAttestationReport = 6,
+    VerifyReceipt = 7,
 }
 
 impl VbsAuthorityOperation {
@@ -39,6 +45,7 @@ impl VbsAuthorityOperation {
             4 => Ok(Self::IssueAttestationReport),
             5 => Ok(Self::GenerateAttestationChallenge),
             6 => Ok(Self::VerifyAttestationReport),
+            7 => Ok(Self::VerifyReceipt),
             _ => Err(ProtectedChannelError::Malformed),
         }
     }
@@ -56,6 +63,13 @@ pub struct VbsAttestationData {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VbsAttestationEnvelope<'a> {
     report: &'a [u8],
+}
+
+/// Host-transportable but opaque Windows VBS sealed-key blob. Canonical zero
+/// padding prevents VTL0 from smuggling mutable data alongside the blob.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VbsSealedKeyEnvelope<'a> {
+    blob: &'a [u8],
 }
 
 /// Parsed but cryptographically unverified VBS report identity. None of these
@@ -278,6 +292,37 @@ impl<'a> VbsAttestationEnvelope<'a> {
 
     pub const fn report(self) -> &'a [u8] {
         self.report
+    }
+}
+
+impl<'a> VbsSealedKeyEnvelope<'a> {
+    pub fn decode(input: &'a [u8]) -> Result<Self, ProtectedChannelError> {
+        if input.len() != VBS_SEALED_KEY_ENVELOPE_BYTES {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let blob_bytes = u64::from_le_bytes(
+            input[..8]
+                .try_into()
+                .map_err(|_| ProtectedChannelError::Malformed)?,
+        );
+        let blob_bytes =
+            usize::try_from(blob_bytes).map_err(|_| ProtectedChannelError::Malformed)?;
+        if blob_bytes == 0 || blob_bytes > VBS_SEALED_KEY_BLOB_MAX_BYTES {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let blob_end = 8usize
+            .checked_add(blob_bytes)
+            .ok_or(ProtectedChannelError::Malformed)?;
+        if input[blob_end..].iter().any(|byte| *byte != 0) {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        Ok(Self {
+            blob: &input[8..blob_end],
+        })
+    }
+
+    pub const fn blob(self) -> &'a [u8] {
+        self.blob
     }
 }
 
@@ -1100,6 +1145,32 @@ mod tests {
         encoded[..8].copy_from_slice(&0u64.to_le_bytes());
         assert_eq!(
             VbsAttestationEnvelope::decode(&encoded),
+            Err(ProtectedChannelError::Malformed)
+        );
+    }
+
+    #[test]
+    fn vbs_sealed_key_envelope_is_bounded_and_canonical() {
+        let mut encoded = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
+        encoded[..8].copy_from_slice(&4u64.to_le_bytes());
+        encoded[8..12].copy_from_slice(b"seal");
+        assert_eq!(
+            VbsSealedKeyEnvelope::decode(&encoded).unwrap().blob(),
+            b"seal"
+        );
+        encoded[12] = 1;
+        assert_eq!(
+            VbsSealedKeyEnvelope::decode(&encoded),
+            Err(ProtectedChannelError::Malformed)
+        );
+        encoded[12] = 0;
+        encoded[..8].copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            VbsSealedKeyEnvelope::decode(&encoded),
+            Err(ProtectedChannelError::Malformed)
+        );
+        assert_eq!(
+            VbsSealedKeyEnvelope::decode(&encoded[..encoded.len() - 1]),
             Err(ProtectedChannelError::Malformed)
         );
     }

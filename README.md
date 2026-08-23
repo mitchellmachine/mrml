@@ -128,8 +128,11 @@ only it can evaluate secret release, and then only for non-debug execution with
 measured sealed-key claims.
 The VBS authority also refuses receipt issuance unless Windows 11 24H2 reports
 safe TPM-provisioned attested keys with boot, kernel, and hypervisor debugging
-never enabled. This platform query does not make the embedded development MAC
-key secret or constitute remote attestation.
+never enabled. The production enclave image contains no fixed receipt key: its
+authority instance generates a random key in VTL1, seals it to exact enclave
+code with debug unsealing forbidden, and an independent verifier instance
+unseals it. VTL0 transports only the bounded opaque blob. This local key custody
+does not constitute remote attestation.
 The authority can emit a bounded Windows-signed local VBS report binding a fresh
 verifier nonce to a domain-separated digest of the exact canonical launch
 request and policy. Only another VBS enclave on the same machine can use

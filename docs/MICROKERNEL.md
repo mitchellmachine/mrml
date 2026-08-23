@@ -77,8 +77,9 @@ secret-release eligibility, which additionally requires non-debug execution and
 `SEALED_KEYS | MEASURED`. This makes an unauthenticated local report incapable of
 becoming release-capable through a future claim expansion. The authenticated
 type says only that the configured receipt key approved the decision; it is not
-hardware attestation, and the current embedded development key remains forgeable
-by design.
+hardware attestation. A fixed key exists only in pure tests; the production VBS
+image now generates and shares its receipt key exclusively through exact-code
+Windows sealing.
 
 The intended x86_64 layers are:
 
@@ -272,21 +273,27 @@ little-endian 64-bit address/length fields. Construction rejects null or empty
 buffers, decoding rejects unknown operations and noncanonical reserved bytes,
 the Windows call wrapper accepts only that exact buffer size, and the enclave
 converts addresses to its native width only after canonical decoding. Receipt
-issuance and local-attestation reporting each require their exact operation and
-fixed input/output sizes; key-generation and key-loading operation numbers are
-reserved but currently fail closed at the enclave dispatcher.
+Every operation requires its exact fixed input and output sizes. Key generation
+accepts an approved launch request and returns only a canonical 4 KiB-bounded
+opaque envelope; loading accepts exactly that envelope; receipt verification
+accepts one canonical request concatenated with one exact receipt.
 
 Windows exposes `EnclaveSealData`, `EnclaveUnsealData`, and
 `EnclaveUsesAttestedKeys` in Vertdll, so protected persistence is feasible on
-supported Windows 11 systems. The safe-attested-key query is now enforced for
-receipt issuance; blob sealing and unsealing are not yet implemented. Merely
-sealing the current symmetric receipt key would not complete authentication: an
-untrusted VTL0 verifier cannot safely hold the matching HMAC key, while a key
-generated only inside VTL1 is unknown to an independent verifier. Production
-design must therefore combine sealing with independently provisioned verifier
-trust or an attested asymmetric authority. Until that protocol exists, the
-embedded development key remains explicitly forgeable and `SEALED_KEYS` and
-`ATTESTATION` remain absent from reports.
+supported Windows 11 systems. The safe-attested-key query gates every protected
+operation. The authority generates a nonzero 256-bit key with
+`BCryptGenRandom`, seals it with `SEAL_EXACT_CODE` and runtime policy zero, and
+installs it only after the complete canonical blob reaches VTL0. The verifier
+copies that opaque blob into VTL1, rejects malformed padding, unseals exactly 32
+bytes, rejects stale-key flags, and installs the key once. It then authenticates
+and policy-admits the exact request/receipt pair inside VTL1. Plaintext key bytes
+are never copied to VTL0; host-visible confirmation markers are diagnostic only.
+The current probe creates a fresh session key rather than persistent storage,
+and a fixed key remains only under `cfg(test)`. This protects the local receipt
+key from VTL0 but is not remote attestation and does not protect against
+compromised Hyper-V or the secure kernel. `SEALED_KEYS` remains absent from the
+workload report until actual workload-secret consumption is confined to VTL1;
+`ATTESTATION` remains absent because local VBS reports are not remote evidence.
 
 WHP now provides a fixed-capacity untrusted launch broker for that protocol.
 Generational tickets prevent a canceled or completed request from acquiring a

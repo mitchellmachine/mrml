@@ -4,18 +4,18 @@
 use mrml_error::{Result, anyhow};
 #[cfg(windows)]
 use mrml_kernel::{
-    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectionBackend, ProtectionPolicy, ProtectionSession, VBS_ATTESTATION_CHALLENGE_BYTES,
-    VBS_ATTESTATION_DATA_BYTES, VBS_ATTESTATION_ENVELOPE_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
-    VbsAttestationData, VbsAttestationEnvelope, VbsAuthorityContext, VbsAuthorityOperation,
+    AUTHORITY_RECEIPT_BYTES, LAUNCH_REQUEST_BYTES, LaunchRequest, ProtectionBackend,
+    ProtectionPolicy, VBS_ATTESTATION_CHALLENGE_BYTES, VBS_ATTESTATION_DATA_BYTES,
+    VBS_ATTESTATION_ENVELOPE_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
+    VBS_RECEIPT_VERIFICATION_INPUT_BYTES, VBS_SEALED_KEY_CONFIRMATION_BYTES,
+    VBS_SEALED_KEY_ENVELOPE_BYTES, VbsAttestationData, VbsAttestationEnvelope, VbsAuthorityContext,
+    VbsAuthorityOperation, VbsSealedKeyEnvelope,
 };
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
 
 #[cfg(windows)]
 const MAX_ENCLAVE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
-#[cfg(windows)]
-const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 #[cfg(windows)]
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
 #[cfg(windows)]
@@ -107,6 +107,44 @@ fn application_main() -> Result<()> {
     let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, policy_measurement)
         .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
+    let mut sealed_key = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
+    let key_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::GenerateSealedKey,
+        encoded_request.as_ptr() as usize as u64,
+        encoded_request.len() as u64,
+        sealed_key.as_mut_ptr() as usize as u64,
+        sealed_key.len() as u64,
+    )
+    .map_err(|error| anyhow!("sealed-key context rejected: {:?}", error))?;
+    let mut key_call = key_context.encode();
+    let key_status = enclave
+        .call_authority(authority, &mut key_call)
+        .map_err(|error| anyhow!("sealed-key CallEnclave failed: {:?}", error))?;
+    if key_status != 0 || VbsSealedKeyEnvelope::decode(&sealed_key).is_err() {
+        return Err(anyhow!(
+            "VTL1 authority rejected sealed-key generation with status {}",
+            key_status
+        ));
+    }
+    let mut key_confirmation = [0; VBS_SEALED_KEY_CONFIRMATION_BYTES];
+    let load_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::LoadSealedKey,
+        sealed_key.as_ptr() as usize as u64,
+        sealed_key.len() as u64,
+        key_confirmation.as_mut_ptr() as usize as u64,
+        key_confirmation.len() as u64,
+    )
+    .map_err(|error| anyhow!("sealed-key load context rejected: {:?}", error))?;
+    let mut load_call = load_context.encode();
+    let load_status = verifier
+        .call_authority(authority, &mut load_call)
+        .map_err(|error| anyhow!("sealed-key load CallEnclave failed: {:?}", error))?;
+    if load_status != 0 || key_confirmation != [0xa5; VBS_SEALED_KEY_CONFIRMATION_BYTES] {
+        return Err(anyhow!(
+            "VTL1 verifier rejected sealed-key loading with status {}",
+            load_status
+        ));
+    }
     let mut receipt = [0; AUTHORITY_RECEIPT_BYTES];
     let context = VbsAuthorityContext::new(
         VbsAuthorityOperation::IssueReceipt,
@@ -126,23 +164,29 @@ fn application_main() -> Result<()> {
             authority_status
         ));
     }
-    let mut session = ProtectionSession::new(nonce)
-        .map_err(|error| anyhow!("protection session rejected: {:?}", error))?;
-    let admitted = AuthorityReceipt::verify_and_admit(
-        &AUTHORITY_KEY,
-        request,
-        &receipt,
-        policy_measurement,
-        &mut session,
-        policy,
+    let mut verification_input = [0; VBS_RECEIPT_VERIFICATION_INPUT_BYTES];
+    verification_input[..LAUNCH_REQUEST_BYTES].copy_from_slice(&encoded_request);
+    verification_input[LAUNCH_REQUEST_BYTES..].copy_from_slice(&receipt);
+    let mut receipt_confirmation = [0; VBS_SEALED_KEY_CONFIRMATION_BYTES];
+    let receipt_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::VerifyReceipt,
+        verification_input.as_ptr() as usize as u64,
+        verification_input.len() as u64,
+        receipt_confirmation.as_mut_ptr() as usize as u64,
+        receipt_confirmation.len() as u64,
     )
-    .map_err(|error| anyhow!("authority receipt admission failed: {:?}", error))?;
-    mrml_println!(
-        "verified VTL1 authority receipt: source={:?} backend={:?} claims={:?}",
-        admitted.evidence_source(),
-        admitted.backend(),
-        admitted.claims()
-    );
+    .map_err(|error| anyhow!("receipt verifier context rejected: {:?}", error))?;
+    let mut receipt_call = receipt_context.encode();
+    let receipt_status = verifier
+        .call_authority(authority, &mut receipt_call)
+        .map_err(|error| anyhow!("receipt verifier CallEnclave failed: {:?}", error))?;
+    if receipt_status != 0 || receipt_confirmation != [0x5a; VBS_SEALED_KEY_CONFIRMATION_BYTES] {
+        return Err(anyhow!(
+            "VTL1 verifier rejected authority receipt with status {}",
+            receipt_status
+        ));
+    }
+    mrml_println!("independent VTL1 enclave authenticated the exact authority receipt");
 
     let mut attestation = Vector::with_capacity(VBS_ATTESTATION_ENVELOPE_BYTES)
         .map_err(|_| anyhow!("failed to allocate bounded attestation envelope"))?;

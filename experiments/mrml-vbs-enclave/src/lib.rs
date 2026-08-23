@@ -6,17 +6,19 @@ use core::ffi::c_void;
 #[cfg(any(target_os = "windows", test))]
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport,
-    VBS_ATTESTATION_DATA_BYTES, VbsAttestationData,
+    ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport, ProtectionSession,
+    VBS_ATTESTATION_DATA_BYTES, VBS_RECEIPT_VERIFICATION_INPUT_BYTES, VbsAttestationData,
 };
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
     UnverifiedVbsAttestationReport, VBS_ATTESTATION_CHALLENGE_BYTES,
     VBS_ATTESTATION_ENVELOPE_BYTES, VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
-    VbsAttestationEnvelope, VbsAttestationExpectation, VbsAuthorityContext, VbsAuthorityOperation,
+    VBS_SEALED_KEY_BLOB_MAX_BYTES, VBS_SEALED_KEY_CONFIRMATION_BYTES,
+    VBS_SEALED_KEY_ENVELOPE_BYTES, VbsAttestationEnvelope, VbsAttestationExpectation,
+    VbsAuthorityContext, VbsAuthorityOperation, VbsSealedKeyEnvelope,
 };
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(test)]
 const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
@@ -32,6 +34,16 @@ fn authority_policy() -> ProtectionPolicy {
         AUTHORITY_SECURITY_VERSION,
         AUTHORITY_MEASUREMENT,
     )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn erase_secret(secret: &mut [u8]) {
+    for byte in secret {
+        // SAFETY: `byte` is an exclusively borrowed valid byte. Volatile writes
+        // make erasure observable to the abstract machine and resist removal.
+        unsafe { core::ptr::write_volatile(byte, 0) };
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
 
 #[cfg(target_os = "windows")]
@@ -62,6 +74,24 @@ unsafe extern "system" {
         enclave_type: u32,
         report: *const c_void,
         report_size: u32,
+    ) -> i32;
+    fn EnclaveSealData(
+        data: *const c_void,
+        data_size: u32,
+        identity_policy: u32,
+        runtime_policy: u32,
+        protected_blob: *mut c_void,
+        buffer_size: u32,
+        protected_blob_size: *mut u32,
+    ) -> i32;
+    fn EnclaveUnsealData(
+        protected_blob: *const c_void,
+        protected_blob_size: u32,
+        decrypted_data: *mut c_void,
+        buffer_size: u32,
+        decrypted_data_size: *mut u32,
+        sealing_identity: *mut c_void,
+        unsealing_flags: *mut u32,
     ) -> i32;
 }
 
@@ -142,6 +172,8 @@ const _: () = assert!(core::mem::offset_of!(EnclaveInformation, identity) == 24)
 const ENCLAVE_TYPE_VBS: u32 = 0x10;
 #[cfg(target_os = "windows")]
 const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 2;
+#[cfg(target_os = "windows")]
+const ENCLAVE_IDENTITY_POLICY_SEAL_EXACT_CODE: u32 = 1;
 
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy)]
@@ -190,6 +222,47 @@ unsafe impl Sync for ChallengeCell {}
 
 #[cfg(target_os = "windows")]
 static CHALLENGE_STATE: ChallengeCell = ChallengeCell(UnsafeCell::new(ChallengeState::new()));
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy)]
+struct AuthorityKeyState {
+    key: [u8; 32],
+    loaded: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl AuthorityKeyState {
+    const fn new() -> Self {
+        Self {
+            key: [0; 32],
+            loaded: false,
+        }
+    }
+
+    fn install(&mut self, key: [u8; 32]) -> Result<(), ()> {
+        if self.loaded || key == [0; 32] {
+            return Err(());
+        }
+        self.key = key;
+        self.loaded = true;
+        Ok(())
+    }
+
+    fn get(&self) -> Result<[u8; 32], ()> {
+        self.loaded.then_some(self.key).ok_or(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct AuthorityKeyCell(UnsafeCell<AuthorityKeyState>);
+
+// SAFETY: the signed enclave configuration permits one execution thread.
+#[cfg(target_os = "windows")]
+unsafe impl Sync for AuthorityKeyCell {}
+
+#[cfg(target_os = "windows")]
+static AUTHORITY_KEY_STATE: AuthorityKeyCell =
+    AuthorityKeyCell(UnsafeCell::new(AuthorityKeyState::new()));
 
 #[unsafe(no_mangle)]
 pub static __enclave_config: ImageEnclaveConfig64 = ImageEnclaveConfig64 {
@@ -359,6 +432,9 @@ enum AuthorityStatus {
     ChallengeMissing = 13,
     AttestationVerificationFailed = 14,
     AttestationIdentityRejected = 15,
+    KeySealFailed = 16,
+    KeyLoadFailed = 17,
+    KeyAlreadyLoaded = 18,
 }
 
 #[cfg(target_os = "windows")]
@@ -516,6 +592,7 @@ fn approved_request(encoded_request: &[u8; LAUNCH_REQUEST_BYTES]) -> Result<Laun
 fn process_authority_request(
     encoded_request: &[u8; LAUNCH_REQUEST_BYTES],
     uses_attested_keys: bool,
+    authority_key: &[u8; 32],
 ) -> Result<[u8; AUTHORITY_RECEIPT_BYTES], ()> {
     if !uses_attested_keys {
         return Err(());
@@ -532,7 +609,27 @@ fn process_authority_request(
         request.nonce(),
     )
     .map_err(|_| ())?;
-    AuthorityReceipt::seal(&AUTHORITY_KEY, request, report).map_err(|_| ())
+    AuthorityReceipt::seal(authority_key, request, report).map_err(|_| ())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn verify_authority_receipt(
+    input: &[u8; VBS_RECEIPT_VERIFICATION_INPUT_BYTES],
+    authority_key: &[u8; 32],
+) -> Result<(), ()> {
+    let request = LaunchRequest::decode(&input[..LAUNCH_REQUEST_BYTES]).map_err(|_| ())?;
+    approved_request(&request.encode())?;
+    let mut session = ProtectionSession::new(request.nonce()).map_err(|_| ())?;
+    AuthorityReceipt::verify_and_admit(
+        authority_key,
+        request,
+        &input[LAUNCH_REQUEST_BYTES..],
+        authority_policy().commitment(),
+        &mut session,
+        authority_policy(),
+    )
+    .map(|_| ())
+    .map_err(|_| ())
 }
 
 /// Strict-memory VTL1 authority entry. The host context and its buffers are
@@ -581,6 +678,15 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
         VbsAuthorityOperation::VerifyAttestationReport
             if call.input_bytes() == VBS_ATTESTATION_ENVELOPE_BYTES as u64
                 && call.output_bytes() == VBS_ATTESTATION_DATA_BYTES as u64 => {}
+        VbsAuthorityOperation::GenerateSealedKey
+            if call.input_bytes() == LAUNCH_REQUEST_BYTES as u64
+                && call.output_bytes() == VBS_SEALED_KEY_ENVELOPE_BYTES as u64 => {}
+        VbsAuthorityOperation::LoadSealedKey
+            if call.input_bytes() == VBS_SEALED_KEY_ENVELOPE_BYTES as u64
+                && call.output_bytes() == VBS_SEALED_KEY_CONFIRMATION_BYTES as u64 => {}
+        VbsAuthorityOperation::VerifyReceipt
+            if call.input_bytes() == VBS_RECEIPT_VERIFICATION_INPUT_BYTES as u64
+                && call.output_bytes() == VBS_SEALED_KEY_CONFIRMATION_BYTES as u64 => {}
         _ => return AuthorityStatus::InvalidContext as usize as *mut c_void,
     }
     let (Ok(request_address), Ok(receipt_address)) = (
@@ -673,6 +779,106 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
         return AuthorityStatus::Success as usize as *mut c_void;
     }
 
+    if call.operation() == VbsAuthorityOperation::LoadSealedKey {
+        let mut encoded = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
+        // SAFETY: destination is enclave-local and exact-sized; source is outside.
+        if unsafe {
+            EnclaveCopyIntoEnclave(
+                encoded.as_mut_ptr().cast(),
+                (request_address as *const u8).cast(),
+                encoded.len(),
+            )
+        } != 0
+        {
+            return AuthorityStatus::RequestCopyFailed as usize as *mut c_void;
+        }
+        let envelope = match VbsSealedKeyEnvelope::decode(&encoded) {
+            Ok(envelope) => envelope,
+            Err(_) => return AuthorityStatus::KeyLoadFailed as usize as *mut c_void,
+        };
+        let mut key = [0; 32];
+        let mut key_bytes = 0u32;
+        let mut flags = 0u32;
+        // SAFETY: the opaque blob and all outputs are enclave-local and bounded.
+        if unsafe {
+            EnclaveUnsealData(
+                envelope.blob().as_ptr().cast(),
+                envelope.blob().len() as u32,
+                key.as_mut_ptr().cast(),
+                key.len() as u32,
+                &mut key_bytes,
+                core::ptr::null_mut(),
+                &mut flags,
+            )
+        } != 0
+            || key_bytes != key.len() as u32
+            || flags != 0
+        {
+            erase_secret(&mut key);
+            return AuthorityStatus::KeyLoadFailed as usize as *mut c_void;
+        }
+        // SAFETY: the signed image declares exactly one enclave thread.
+        if unsafe { &mut *AUTHORITY_KEY_STATE.0.get() }
+            .install(key)
+            .is_err()
+        {
+            erase_secret(&mut key);
+            return AuthorityStatus::KeyAlreadyLoaded as usize as *mut c_void;
+        }
+        erase_secret(&mut key);
+        let confirmation = [0xa5; VBS_SEALED_KEY_CONFIRMATION_BYTES];
+        // The marker is diagnostic only; successful status plus VTL1-held state
+        // carries the security meaning, never these host-visible bytes.
+        if unsafe {
+            EnclaveCopyOutOfEnclave(
+                (receipt_address as *mut u8).cast(),
+                confirmation.as_ptr().cast(),
+                confirmation.len(),
+            )
+        } != 0
+        {
+            return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
+        }
+        return AuthorityStatus::Success as usize as *mut c_void;
+    }
+
+    if call.operation() == VbsAuthorityOperation::VerifyReceipt {
+        let mut input = [0; VBS_RECEIPT_VERIFICATION_INPUT_BYTES];
+        // SAFETY: destination is enclave-local and source was proven outside.
+        if unsafe {
+            EnclaveCopyIntoEnclave(
+                input.as_mut_ptr().cast(),
+                (request_address as *const u8).cast(),
+                input.len(),
+            )
+        } != 0
+        {
+            return AuthorityStatus::RequestCopyFailed as usize as *mut c_void;
+        }
+        // SAFETY: the signed image declares exactly one enclave thread.
+        let mut key = match unsafe { &*AUTHORITY_KEY_STATE.0.get() }.get() {
+            Ok(key) => key,
+            Err(()) => return AuthorityStatus::KeyLoadFailed as usize as *mut c_void,
+        };
+        let verified = verify_authority_receipt(&input, &key);
+        erase_secret(&mut key);
+        if verified.is_err() {
+            return AuthorityStatus::RequestRejected as usize as *mut c_void;
+        }
+        let confirmation = [0x5a; VBS_SEALED_KEY_CONFIRMATION_BYTES];
+        if unsafe {
+            EnclaveCopyOutOfEnclave(
+                (receipt_address as *mut u8).cast(),
+                confirmation.as_ptr().cast(),
+                confirmation.len(),
+            )
+        } != 0
+        {
+            return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
+        }
+        return AuthorityStatus::Success as usize as *mut c_void;
+    }
+
     let mut request = [0; LAUNCH_REQUEST_BYTES];
     // SAFETY: destination is enclave-local and exact-sized; source remains an
     // untrusted address handled exclusively by the Vertdll copy primitive.
@@ -688,10 +894,19 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     }
     match call.operation() {
         VbsAuthorityOperation::IssueReceipt => {
-            let receipt = match process_authority_request(&request, true) {
-                Ok(receipt) => receipt,
-                Err(()) => return AuthorityStatus::RequestRejected as usize as *mut c_void,
+            // SAFETY: the signed image declares exactly one enclave thread.
+            let mut key = match unsafe { &*AUTHORITY_KEY_STATE.0.get() }.get() {
+                Ok(key) => key,
+                Err(()) => return AuthorityStatus::UnsafeKeyPlatform as usize as *mut c_void,
             };
+            let receipt = match process_authority_request(&request, true, &key) {
+                Ok(receipt) => receipt,
+                Err(()) => {
+                    erase_secret(&mut key);
+                    return AuthorityStatus::RequestRejected as usize as *mut c_void;
+                }
+            };
+            erase_secret(&mut key);
             // SAFETY: source is enclave-local and exact-sized; destination remains an
             // untrusted address handled exclusively by the Vertdll copy primitive.
             if unsafe {
@@ -704,6 +919,69 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
             {
                 return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
             }
+        }
+        VbsAuthorityOperation::GenerateSealedKey => {
+            if approved_request(&request).is_err() {
+                return AuthorityStatus::RequestRejected as usize as *mut c_void;
+            }
+            // SAFETY: the signed image declares exactly one enclave thread.
+            if unsafe { &*AUTHORITY_KEY_STATE.0.get() }.get().is_ok() {
+                return AuthorityStatus::KeyAlreadyLoaded as usize as *mut c_void;
+            }
+            let mut key = [0; 32];
+            if unsafe {
+                BCryptGenRandom(
+                    core::ptr::null_mut(),
+                    key.as_mut_ptr(),
+                    key.len() as u32,
+                    BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+                )
+            } != 0
+                || key == [0; 32]
+            {
+                return AuthorityStatus::KeySealFailed as usize as *mut c_void;
+            }
+            let mut envelope = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
+            let mut blob_bytes = 0u32;
+            // Runtime policy zero forbids full and dynamic-debug unsealing.
+            if unsafe {
+                EnclaveSealData(
+                    key.as_ptr().cast(),
+                    key.len() as u32,
+                    ENCLAVE_IDENTITY_POLICY_SEAL_EXACT_CODE,
+                    0,
+                    envelope[8..].as_mut_ptr().cast(),
+                    VBS_SEALED_KEY_BLOB_MAX_BYTES as u32,
+                    &mut blob_bytes,
+                )
+            } != 0
+                || blob_bytes == 0
+                || blob_bytes as usize > VBS_SEALED_KEY_BLOB_MAX_BYTES
+            {
+                erase_secret(&mut key);
+                return AuthorityStatus::KeySealFailed as usize as *mut c_void;
+            }
+            envelope[..8].copy_from_slice(&(blob_bytes as u64).to_le_bytes());
+            if unsafe {
+                EnclaveCopyOutOfEnclave(
+                    (receipt_address as *mut u8).cast(),
+                    envelope.as_ptr().cast(),
+                    envelope.len(),
+                )
+            } != 0
+            {
+                erase_secret(&mut key);
+                return AuthorityStatus::ReceiptCopyFailed as usize as *mut c_void;
+            }
+            // SAFETY: the signed image declares exactly one enclave thread.
+            if unsafe { &mut *AUTHORITY_KEY_STATE.0.get() }
+                .install(key)
+                .is_err()
+            {
+                erase_secret(&mut key);
+                return AuthorityStatus::KeyAlreadyLoaded as usize as *mut c_void;
+            }
+            erase_secret(&mut key);
         }
         VbsAuthorityOperation::IssueAttestationReport => {
             let Ok(launch) = approved_request(&request) else {
@@ -841,7 +1119,7 @@ mod tests {
             authority_policy().commitment(),
         )
         .unwrap();
-        let receipt = process_authority_request(&request.encode(), true).unwrap();
+        let receipt = process_authority_request(&request.encode(), true, &AUTHORITY_KEY).unwrap();
         let verified = AuthorityReceipt::verify(&AUTHORITY_KEY, request, &receipt).unwrap();
         assert_eq!(verified.report().backend(), ProtectionBackend::VbsEnclave);
         assert_eq!(
@@ -851,19 +1129,44 @@ mod tests {
     }
 
     #[test]
+    fn independent_vtl1_receipt_verifier_rejects_host_mutation() {
+        let request = LaunchRequest::new(
+            9,
+            [0xa2; 32],
+            AUTHORITY_MEASUREMENT,
+            authority_policy().commitment(),
+        )
+        .unwrap();
+        let receipt = process_authority_request(&request.encode(), true, &AUTHORITY_KEY).unwrap();
+        let mut input = [0; VBS_RECEIPT_VERIFICATION_INPUT_BYTES];
+        input[..LAUNCH_REQUEST_BYTES].copy_from_slice(&request.encode());
+        input[LAUNCH_REQUEST_BYTES..].copy_from_slice(&receipt);
+        assert_eq!(verify_authority_receipt(&input, &AUTHORITY_KEY), Ok(()));
+        input[LAUNCH_REQUEST_BYTES + AUTHORITY_RECEIPT_BYTES - 1] ^= 1;
+        assert_eq!(verify_authority_receipt(&input, &AUTHORITY_KEY), Err(()));
+        assert_eq!(verify_authority_receipt(&input, &[0x72; 32]), Err(()));
+    }
+
+    #[test]
     fn authority_rejects_unapproved_measurement_and_malformed_request() {
         let wrong =
             LaunchRequest::new(9, [0xa2; 32], [0x52; 64], authority_policy().commitment()).unwrap();
-        assert_eq!(process_authority_request(&wrong.encode(), true), Err(()));
+        assert_eq!(
+            process_authority_request(&wrong.encode(), true, &AUTHORITY_KEY),
+            Err(())
+        );
         let wrong_policy =
             LaunchRequest::new(9, [0xa2; 32], AUTHORITY_MEASUREMENT, [0x73; 64]).unwrap();
         assert_eq!(
-            process_authority_request(&wrong_policy.encode(), true),
+            process_authority_request(&wrong_policy.encode(), true, &AUTHORITY_KEY),
             Err(())
         );
         let mut malformed = wrong.encode();
         malformed[0] ^= 1;
-        assert_eq!(process_authority_request(&malformed, true), Err(()));
+        assert_eq!(
+            process_authority_request(&malformed, true, &AUTHORITY_KEY),
+            Err(())
+        );
     }
 
     #[test]
@@ -875,7 +1178,10 @@ mod tests {
             authority_policy().commitment(),
         )
         .unwrap();
-        assert_eq!(process_authority_request(&request.encode(), false), Err(()));
+        assert_eq!(
+            process_authority_request(&request.encode(), false, &AUTHORITY_KEY),
+            Err(())
+        );
     }
 
     #[test]
@@ -927,5 +1233,18 @@ mod tests {
         assert_eq!(state.take(), Ok(binding));
         assert_eq!(state.take(), Err(()));
         assert_eq!(state.binding, [0; VBS_ATTESTATION_DATA_BYTES]);
+    }
+
+    #[test]
+    fn authority_key_state_is_nonzero_install_once_and_never_encoded() {
+        let mut state = AuthorityKeyState::new();
+        assert_eq!(state.get(), Err(()));
+        assert_eq!(state.install([0; 32]), Err(()));
+        assert_eq!(state.install([0x73; 32]), Ok(()));
+        assert_eq!(state.get(), Ok([0x73; 32]));
+        assert_eq!(state.install([0x74; 32]), Err(()));
+        let mut working_copy = state.get().unwrap();
+        erase_secret(&mut working_copy);
+        assert_eq!(working_copy, [0; 32]);
     }
 }
