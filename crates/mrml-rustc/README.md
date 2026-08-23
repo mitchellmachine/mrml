@@ -1198,12 +1198,16 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 537 Windows library, conformance, rustc-nightly-replacement, and driver
+The 539 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
 outer-addition overflow as `None`, and inner-multiplication overflow as `None`
 on Windows and Arch Linux WSL.
+A checked-option `or_else` probe emitted a 224-byte COFF object and a 616-byte
+ELF64 object. Independent pinned-nightly callers proved that `Some` skips the
+fallback, `None` can recover to `Some`, and a second failure remains `None` on
+both hosts.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.
@@ -2462,6 +2466,13 @@ composed without materializing Rust's public enum ABI, and the resulting
 integer payload type may differ from the input type. Chained producers feed the
 same maps, filters, inspections, predicates, and terminal consumers as direct
 checked operations.
+
+Checked integer options also support lazy `Option::or_else`. Its bounded
+zero-argument closure executes only for `None`, may capture runtime parameters
+and locals, and must return another supported checked producer with the same
+integer payload type. A present outer value is preserved without evaluating
+the fallback, while a fallback failure retains `None` for later composition or
+terminal consumption.
 
 Checked integer options also support composable `Option::inspect`. Its closure
 receives an immutable reference to a present candidate, must return unit, and
