@@ -2927,6 +2927,12 @@ binding enters the active environment. Reads in a shadowing initializer retain
 the previous binding's stable ID; the replacement binding receives its new ID
 afterward. Aggregate and fat-reference initializer materialization remains an
 emission-time fact family.
+Supported scalar expression statements now use that visitor at top level,
+inside conditional arms, in direct and nested loop actions, and after loops.
+Their reads are reserved in exact scoped emission order without introducing a
+second name-resolution or access-classification path. Conditions, control
+values, scalar tails, method/call families, and aggregate materialization remain
+outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
@@ -2956,6 +2962,13 @@ parameter and local identities across initializer-before-binding shadowing and
 a lazy conditional initializer. Existing branch and loop fact tests now include
 their initializer reads. Its original replacement emits both COFF and ELF64
 objects through the same shadowing and conditional shapes.
+
+The expression-statement read milestone passed all 580 compiler and driver
+tests on Windows gnullvm and all 580 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves 12
+exact parameter and stable-local identities across initializer, conditional-arm,
+loop, nested-scope, and post-loop statement order. Its original replacement
+emits both COFF and ELF64 objects through the same scoped statement shapes.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

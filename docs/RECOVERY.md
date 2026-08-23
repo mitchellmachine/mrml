@@ -288,9 +288,12 @@ scalar compound RHS expressions recursively visit casts, ascriptions, unary
 wrappers, return/break values, sequences, binary operands, and conditional
 condition/arms in exact emission order. Typed nested indexes distinguish
 reference-base reads, constant local-array element reads, and runtime local-
-array element materialization before the runtime index. Compound array bases,
-method/call and aggregate families, and non-assignment body reads remain
-emission-time facts.
+array element materialization before the runtime index. Compound array bases and
+method/call and aggregate families remain emission-time facts. Supported scalar
+expression statements at top level, in conditional arms, in direct and nested
+loop actions, and after loops now use the same bounded read visitor in exact
+scoped emission order. Conditions/control values, scalar tails, and other body
+reads remain outside preanalysis.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
@@ -302,11 +305,12 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. Compound array-base, method/call, aggregate, and non-
-assignment body reads are not yet preanalyzed, and parser-level IDs,
+classified as a borrow. Compound array-base, method/call, aggregate,
+condition/control, scalar-tail, and other body reads are not yet preanalyzed,
+and parser-level IDs,
 initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
-milestone is supported non-assignment body reads before CFG and
+milestone is supported condition/control and scalar-tail reads before CFG and
 initialization/move facts.
 
 Forward-looking compiler policy does not make Cargo's experimental

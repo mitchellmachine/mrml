@@ -862,3 +862,16 @@ cryptographic construction, or storage optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional transactional directory metadata
 staging.
+
+## 2026-08-23 — scalar initializer and expression-statement read planning
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+The compiler applies its existing bounded recursive expression visitor before
+binding activation and across supported scoped expression statements, retaining
+stable local identities and emitter order in fixed-capacity fact tables. This
+adds no novel parsing, ownership, borrowing, optimization, code-generation, or
+compiler-analysis technique.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded compiler fact collection
+and source-order traversal.
