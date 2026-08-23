@@ -2364,7 +2364,7 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `checked_div_exact`, generic
 `checked_cast::<T>`, and same-width checked sign-cast results with
 `Option::unwrap_or` and
-`Option::unwrap_or_default`, or observe them with `Option::is_some` and
+`Option::unwrap_or_default`, extract them with `Option::unwrap`, or observe them with `Option::is_some` and
 `Option::is_none`. Non-overflowing arithmetic, valid divisions and remainders,
 exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
@@ -2398,7 +2398,9 @@ Unsigned `checked_signed_diff` returns the same-width signed counterpart when
 the mathematical difference lies within its complete `MIN..=MAX` range.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
-type. These consumers share one value-plus-validity emitter while
+type. `Option::unwrap` returns the checked value when present and reaches the
+compiler's shared invalid-operation trap when the checked operation produces
+`None`. These consumers share one value-plus-validity emitter while
 direct `Option` returns, option locals, other option consumers, and constant
 evaluation remain outside this milestone until their enum ABI and value
 representation are implemented.

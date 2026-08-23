@@ -2327,7 +2327,9 @@ fn validate_runtime_inline_const<
                 recurse(argument)?;
             }
         }
-        ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+        ExprKind::IntegerOptionUnwrapOr {
+            option, fallback, ..
+        } => {
             recurse(option)?;
             if let Some(fallback) = fallback {
                 recurse(fallback)?;
@@ -3317,7 +3319,9 @@ fn runtime_expression_type_with_locals<
         ExprKind::CheckedIntegerOption { .. } => {
             Err(CodegenErrorKind::RuntimeExpressionUnsupported)
         }
-        ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+        ExprKind::IntegerOptionUnwrapOr {
+            option, fallback, ..
+        } => {
             let option = tree
                 .expression(option)
                 .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
@@ -6100,18 +6104,27 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             ExprKind::CheckedIntegerOption { .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
-            ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+            ExprKind::IntegerOptionUnwrapOr {
+                option,
+                fallback,
+                trap,
+            } => {
                 let (operand_width, previous_width) =
                     self.emit_checked_integer_option(tree, option, depth + 1)?;
-                self.emit(&[0x50, 0x41, 0x50])?;
-                self.evaluation_depth += 2;
-                if let Some(fallback) = fallback {
-                    self.emit_expression(tree, fallback, depth + 1)?;
+                if trap {
+                    self.emit(&[0x4d, 0x85, 0xc0])?;
+                    self.emit_trap_branch(0x84)?;
                 } else {
-                    self.emit(&[0x31, 0xc0])?;
+                    self.emit(&[0x50, 0x41, 0x50])?;
+                    self.evaluation_depth += 2;
+                    if let Some(fallback) = fallback {
+                        self.emit_expression(tree, fallback, depth + 1)?;
+                    } else {
+                        self.emit(&[0x31, 0xc0])?;
+                    }
+                    self.emit(&[0x41, 0x58, 0x59, 0x4d, 0x85, 0xc0, 0x48, 0x0f, 0x45, 0xc1])?;
+                    self.evaluation_depth -= 2;
                 }
-                self.emit(&[0x41, 0x58, 0x59, 0x4d, 0x85, 0xc0, 0x48, 0x0f, 0x45, 0xc1])?;
-                self.evaluation_depth -= 2;
                 self.width = operand_width;
                 self.emit_normalize()?;
                 self.width = previous_width;
@@ -16819,6 +16832,47 @@ mod tests {
                     &function,
                     &NoConstants,
                     X86_64Abi::SystemV
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unwraps_checked_integer_options_or_traps() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).unwrap() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: i64) -> i64 { a.checked_div(b).unwrap() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> i64 { a.checked_signed_diff(b).unwrap() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i16 { input.checked_truncate::<i16>().unwrap() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.checked_ilog2().unwrap() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.unwrap() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).unwrap() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
                 )
                 .is_err(),
                 "{source}"

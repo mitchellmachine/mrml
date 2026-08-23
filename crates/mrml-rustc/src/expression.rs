@@ -538,6 +538,7 @@ pub enum ExprKind<'source> {
     IntegerOptionUnwrapOr {
         option: ExprId,
         fallback: Option<ExprId>,
+        trap: bool,
     },
     IntegerOptionPredicate {
         option: ExprId,
@@ -2686,7 +2687,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     self.substitute_identifier(argument, name, replacement, depth + 1)?;
                 }
             }
-            ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+            ExprKind::IntegerOptionUnwrapOr {
+                option, fallback, ..
+            } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
                 if let Some(fallback) = fallback {
                     self.substitute_identifier(fallback, name, replacement, depth + 1)?;
@@ -4475,6 +4478,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
+                        | "unwrap"
                         | "unwrap_or"
                         | "unwrap_or_default"
                         | "is_some"
@@ -5081,10 +5085,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     fallback: Some(argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?),
+                    trap: false,
                 },
                 "unwrap_or_default" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
                     fallback: None,
+                    trap: false,
+                },
+                "unwrap" => ExprKind::IntegerOptionUnwrapOr {
+                    option: base,
+                    fallback: None,
+                    trap: true,
                 },
                 "is_some" | "is_none" => ExprKind::IntegerOptionPredicate {
                     option: base,

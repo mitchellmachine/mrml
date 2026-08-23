@@ -3155,6 +3155,25 @@ fn rustc_generic_checked_truncation_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_integer_option_unwrap_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.checked_add(b).unwrap() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, b: i64) -> i64 { a.checked_div(b).unwrap() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64) -> i64 { a.checked_signed_diff(b).unwrap() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i16 { input.checked_truncate::<i16>().unwrap() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> u32 { input.checked_ilog2().unwrap() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_sign_cast_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, fallback: i32) -> i32 { input.checked_cast_signed().unwrap_or(fallback) }",
