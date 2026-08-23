@@ -577,6 +577,19 @@ object format, ABI optimization, or persistent representation.
 Patent review: `NOT_TRIGGERED` — ordinary compiler scope and definition
 bookkeeping.
 
+## 2026-08-23 — bounded assignment access expectations
+
+MRML source: `crates/mrml-rustc`.
+
+The compiler records conventional pre-resolved assignment use/definition facts
+in a fixed-capacity table and compares them with assignment sites during its
+existing emission traversal. A separate emitted-access ledger preserves actual
+read/write order. This introduces no novel analysis algorithm, parser, object
+format, ABI optimization, or persistent representation.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler use/definition bookkeeping
+and defensive invariant checking.
+
 ## 2026-08-23 — bounded loop-scope compiler declaration facts
 
 MRML source: `crates/mrml-rustc`.

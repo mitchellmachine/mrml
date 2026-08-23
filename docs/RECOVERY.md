@@ -223,6 +223,11 @@ preassigned declaration once. Helper parameters and later scoped locals
 append to the dynamic fact tail and cannot inherit those reserved IDs. The table
 is bounded ephemeral compiler state and includes expanded inlined helper bodies;
 it is not serialized IR or a claim of whole-program analysis.
+That traversal also stores up to 256 pre-resolved non-wildcard assignment
+expectations with stable identity, projections, type, access class, and span.
+Emission consumes exact expectations while retaining its separate true-order
+read/write ledger; this avoids reordering precomputed writes ahead of RHS reads.
+Missing, reordered, malformed, or identity-drifted expectations fail closed.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
@@ -234,7 +239,7 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. General accesses are not yet preanalyzed, and parser-
+classified as a borrow. Expression reads are not yet preanalyzed, and parser-
 level IDs,
 initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
