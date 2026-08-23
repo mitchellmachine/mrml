@@ -3365,6 +3365,26 @@ fn runtime_expression_type_with_locals<
                 {
                     base_type
                 }
+                crate::expression::CheckedIntegerOptionOperation::Shift { .. }
+                    if argument.is_some_and(|argument| {
+                        matches!(
+                            runtime_expression_type_with_locals(
+                                function,
+                                resolver,
+                                locals,
+                                tree,
+                                argument,
+                                depth + 1,
+                            ),
+                            Ok(RuntimeExpressionType::Integer(None))
+                                | Ok(RuntimeExpressionType::Integer(Some(
+                                    crate::IntegerType::U32
+                                )))
+                        )
+                    }) =>
+                {
+                    base_type
+                }
                 crate::expression::CheckedIntegerOptionOperation::SignCast { signed }
                     if argument.is_none() =>
                 {
@@ -3463,6 +3483,23 @@ fn runtime_expression_type_with_locals<
                     argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed())
                 }
+                crate::expression::CheckedIntegerOptionOperation::Shift { .. } => argument
+                    .is_some_and(|argument| {
+                        matches!(
+                            runtime_expression_type_with_locals(
+                                function,
+                                resolver,
+                                locals,
+                                tree,
+                                argument,
+                                depth + 1,
+                            ),
+                            Ok(RuntimeExpressionType::Integer(None))
+                                | Ok(RuntimeExpressionType::Integer(Some(
+                                    crate::IntegerType::U32
+                                )))
+                        )
+                    }),
                 crate::expression::CheckedIntegerOptionOperation::Cast(_) => argument.is_none(),
                 crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
                     argument.is_none()
@@ -10737,6 +10774,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             crate::expression::CheckedIntegerOptionOperation::Division { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Arithmetic(_) => None,
             crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => None,
+            crate::expression::CheckedIntegerOptionOperation::Shift { .. } => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -10856,6 +10894,25 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             } else {
                 self.emit(&[0x48, 0xf7, 0xd8])?;
             }
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
+        }
+        if let crate::expression::CheckedIntegerOptionOperation::Shift { left } = operation {
+            let argument =
+                argument.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+            self.emit_expression(tree, argument, depth + 1)?;
+            self.emit(&[0x48, 0x83, 0xf8, source_width.bits])?;
+            self.emit(&[0x41, 0x0f, 0x92, 0xc0, 0x48, 0x89, 0xc1, 0x58])?;
+            self.evaluation_depth -= 1;
+            self.emit(if left {
+                &[0x48, 0xd3, 0xe0]
+            } else if source_width.signed {
+                &[0x48, 0xd3, 0xf8]
+            } else {
+                &[0x48, 0xd3, 0xe8]
+            })?;
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
         }
@@ -15689,6 +15746,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.checked_neg().unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32) -> bool { a.checked_abs().is_some() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_neg() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_shift_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u32, fallback: u8) -> u8 { a.checked_shl(n).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, n: u32) -> i64 { a.checked_shr(n).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16, n: u32) -> bool { a.checked_shl(n).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, n: u32) -> bool { a.checked_shr(n).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u16) -> u8 { a.checked_shl(n).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, n: i32) -> bool { a.checked_shr(n).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, n: u32) -> u64 { a.checked_shl(n) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

@@ -168,6 +168,7 @@ pub enum CheckedIntegerOptionOperation {
     Division { remainder: bool },
     Arithmetic(BinaryOperator),
     SignedUnary { absolute: bool },
+    Shift { left: bool },
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4441,6 +4442,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_rem"
                         | "checked_neg"
                         | "checked_abs"
+                        | "checked_shl"
+                        | "checked_shr"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4617,6 +4620,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_div_exact"
                     | "checked_div"
                     | "checked_rem"
+                    | "checked_shl"
+                    | "checked_shr"
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
@@ -4943,6 +4948,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     argument: None,
                     operation: CheckedIntegerOptionOperation::SignedUnary {
                         absolute: method.text == "checked_abs",
+                    },
+                },
+                "checked_shl" | "checked_shr" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    operation: CheckedIntegerOptionOperation::Shift {
+                        left: method.text == "checked_shl",
                     },
                 },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {

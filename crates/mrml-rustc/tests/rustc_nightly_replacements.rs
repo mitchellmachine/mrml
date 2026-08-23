@@ -2937,6 +2937,24 @@ fn rustc_checked_signed_unary_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_shift_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, n: u32, fallback: u8) -> u8 { a.checked_shl(n).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, n: u32) -> i64 { a.checked_shr(n).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i16, n: u32) -> bool { a.checked_shl(n).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u32, n: u32) -> bool { a.checked_shr(n).is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_generic_checked_cast_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, fallback: u8) -> u8 { input.checked_cast::<u8>().unwrap_or(fallback) }",
