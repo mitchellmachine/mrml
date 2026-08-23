@@ -236,6 +236,14 @@ it, so the report does not claim sealed keys or attestation. Production admissio
 remains blocked on an accepted image plus protected key provisioning and sealing
 inside VTL1.
 
+Boundary-copy APIs alone are not treated as pointer provenance. On every entry,
+VTL1 calls `EnclaveGetEnclaveInformation`, validates the returned VBS type,
+reserved field, base, size, and non-overflowing end, then proves the context and
+its complete input/output ranges lie wholly outside that enclave interval before
+any copy. Zero-length, overlapping, boundary-straddling, and wrapping ranges fail
+closed with a distinct status. This follows Microsoft's hostile-VTL0 guidance
+and remains enforced even though the image also requests strict-memory policy.
+
 The host and enclave no longer duplicate a native pointer structure. The
 kernel protocol crate owns one 48-byte, pointer-free x86_64 descriptor with an
 eight-byte magic, version, explicit operation, zero-reserved bytes, and four

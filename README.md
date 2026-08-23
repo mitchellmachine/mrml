@@ -138,6 +138,9 @@ An allocation-free parser validates the complete signed-statement layout and can
 compare exact code/signer identities, debug state, and security-version floors,
 but its type remains explicitly unverified until a separate verifier enclave
 authenticates the same report bytes through Windows.
+Every enclave entry obtains its own runtime address interval and rejects context,
+input, or output ranges that overlap or wrap into VTL1 before invoking explicit
+boundary-copy APIs.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.

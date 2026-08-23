@@ -50,6 +50,10 @@ unsafe extern "system" {
         buffer_size: u32,
         output_size: *mut u32,
     ) -> i32;
+    fn EnclaveGetEnclaveInformation(
+        information_size: u32,
+        enclave_information: *mut EnclaveInformation,
+    ) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -106,6 +110,21 @@ pub struct ImageEnclaveConfig64 {
 }
 
 const _: () = assert!(core::mem::size_of::<ImageEnclaveConfig64>() == 80);
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct EnclaveInformation {
+    enclave_type: u32,
+    reserved: u32,
+    base_address: *mut c_void,
+    size: usize,
+    identity: [u8; 152],
+}
+
+const _: () = assert!(core::mem::size_of::<EnclaveInformation>() == 176);
+const _: () = assert!(core::mem::offset_of!(EnclaveInformation, identity) == 24);
+#[cfg(target_os = "windows")]
+const ENCLAVE_TYPE_VBS: u32 = 0x10;
 
 #[unsafe(no_mangle)]
 pub static __enclave_config: ImageEnclaveConfig64 = ImageEnclaveConfig64 {
@@ -268,6 +287,53 @@ enum AuthorityStatus {
     UnsafeKeyPlatform = 6,
     AttestationFailed = 7,
     AttestationCopyFailed = 8,
+    EnclaveInformationFailed = 9,
+    PointerAliasesEnclave = 10,
+}
+
+#[cfg(target_os = "windows")]
+fn current_enclave_range() -> Result<(usize, usize), AuthorityStatus> {
+    let mut information = EnclaveInformation {
+        enclave_type: 0,
+        reserved: 0,
+        base_address: core::ptr::null_mut(),
+        size: 0,
+        identity: [0; 152],
+    };
+    // SAFETY: the output structure is enclave-local, correctly sized, aligned,
+    // exclusively borrowed, and fully initialized before the platform writes it.
+    if unsafe {
+        EnclaveGetEnclaveInformation(
+            core::mem::size_of::<EnclaveInformation>() as u32,
+            &mut information,
+        )
+    } != 0
+        || information.enclave_type != ENCLAVE_TYPE_VBS
+        || information.reserved != 0
+        || information.base_address.is_null()
+        || information.size == 0
+    {
+        return Err(AuthorityStatus::EnclaveInformationFailed);
+    }
+    let start = information.base_address as usize;
+    let end = start
+        .checked_add(information.size)
+        .ok_or(AuthorityStatus::EnclaveInformationFailed)?;
+    Ok((start, end))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn range_is_outside_enclave(
+    address: usize,
+    bytes: usize,
+    enclave_start: usize,
+    enclave_end: usize,
+) -> bool {
+    bytes != 0
+        && enclave_start < enclave_end
+        && address
+            .checked_add(bytes)
+            .is_some_and(|end| end <= enclave_start || address >= enclave_end)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -309,6 +375,18 @@ fn process_authority_request(
 #[cfg(target_os = "windows")]
 #[unsafe(no_mangle)]
 pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_void {
+    let enclave_range = match current_enclave_range() {
+        Ok(range) => range,
+        Err(status) => return status as usize as *mut c_void,
+    };
+    if !range_is_outside_enclave(
+        context as usize,
+        VBS_AUTHORITY_CONTEXT_BYTES,
+        enclave_range.0,
+        enclave_range.1,
+    ) {
+        return AuthorityStatus::PointerAliasesEnclave as usize as *mut c_void;
+    }
     let mut encoded_context = [0; VBS_AUTHORITY_CONTEXT_BYTES];
     // SAFETY: `encoded_context` is enclave-local writable memory. Vertdll validates and
     // copies from the untrusted pointer without direct enclave dereference.
@@ -341,6 +419,19 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     ) else {
         return AuthorityStatus::InvalidContext as usize as *mut c_void;
     };
+    if !range_is_outside_enclave(
+        request_address,
+        call.input_bytes() as usize,
+        enclave_range.0,
+        enclave_range.1,
+    ) || !range_is_outside_enclave(
+        receipt_address,
+        call.output_bytes() as usize,
+        enclave_range.0,
+        enclave_range.1,
+    ) {
+        return AuthorityStatus::PointerAliasesEnclave as usize as *mut c_void;
+    }
     let mut request = [0; LAUNCH_REQUEST_BYTES];
     // SAFETY: destination is enclave-local and exact-sized; source remains an
     // untrusted address handled exclusively by the Vertdll copy primitive.
@@ -529,5 +620,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(process_authority_request(&request.encode(), false), Err(()));
+    }
+
+    #[test]
+    fn untrusted_ranges_must_be_wholly_outside_enclave() {
+        let enclave_start = 0x20_0000;
+        let enclave_end = 0x40_0000;
+        assert!(range_is_outside_enclave(
+            0x10_0000,
+            4096,
+            enclave_start,
+            enclave_end
+        ));
+        assert!(range_is_outside_enclave(
+            enclave_end,
+            4096,
+            enclave_start,
+            enclave_end
+        ));
+        for (address, bytes) in [
+            (enclave_start - 1, 2),
+            (enclave_start, 1),
+            (enclave_end - 1, 2),
+            (usize::MAX, 2),
+            (0x10_0000, 0),
+        ] {
+            assert!(!range_is_outside_enclave(
+                address,
+                bytes,
+                enclave_start,
+                enclave_end
+            ));
+        }
     }
 }
