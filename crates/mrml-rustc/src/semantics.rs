@@ -2352,6 +2352,7 @@ fn evaluate_call_aware_integer<
             argument,
             operator,
             euclidean,
+            euclidean_wrapping,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -2364,8 +2365,15 @@ fn evaluate_call_aware_integer<
             let left = recurse(base)?;
             let right = recurse(argument)?;
             if euclidean {
-                return euclidean_integer_arithmetic(left, right, bits, ty.is_signed(), operator)
-                    .map_err(arithmetic_error);
+                return euclidean_integer_arithmetic(
+                    left,
+                    right,
+                    bits,
+                    ty.is_signed(),
+                    operator,
+                    euclidean_wrapping,
+                )
+                .map_err(arithmetic_error);
             }
             match operator {
                 BinaryOperator::Add => left.overflowing_add(right).0 & mask,
@@ -3347,6 +3355,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             argument,
             operator,
             euclidean,
+            euclidean_wrapping,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3359,8 +3368,15 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             let left = recurse(base)?;
             let right = recurse(argument)?;
             if euclidean {
-                return euclidean_integer_arithmetic(left, right, bits, true, operator)
-                    .map_err(ExecutionError::Arithmetic);
+                return euclidean_integer_arithmetic(
+                    left,
+                    right,
+                    bits,
+                    true,
+                    operator,
+                    euclidean_wrapping,
+                )
+                .map_err(ExecutionError::Arithmetic);
             }
             match operator {
                 BinaryOperator::Add => left.overflowing_add(right).0,
@@ -3532,6 +3548,7 @@ fn euclidean_integer_arithmetic(
     bits: u8,
     signed: bool,
     operator: BinaryOperator,
+    wrapping: bool,
 ) -> Result<u128, ConstEvalError> {
     let mask = signed_mask(bits);
     let right = right & mask;
@@ -3547,6 +3564,13 @@ fn euclidean_integer_arithmetic(
     }
     let left = decode_signed(left & mask, bits);
     let right = decode_signed(right, bits);
+    if wrapping && left == -(1_i128 << (bits - 1)) && right == -1 {
+        return Ok(if operator == BinaryOperator::Divide {
+            left as u128 & mask
+        } else {
+            0
+        });
+    }
     let value = if operator == BinaryOperator::Divide {
         left.checked_div_euclid(right)
     } else {

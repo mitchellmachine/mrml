@@ -1930,6 +1930,11 @@ one trap.
 Four System V objects matched pinned Rust across every operand-sign pairing,
 unsigned extrema, and a signed-minimum ordinary divisor. Separate zero-divisor
 and signed-overflow probes terminated with MRML trap instructions.
+The `wrapping_div_euclid` and `wrapping_rem_euclid` variants retain identical
+zero-divisor and signed correction behavior, but map signed minimum divided by
+negative one to the minimum quotient and zero remainder instead of trapping.
+Two System V objects matched pinned Rust across all divisor/dividend sign
+pairings and both results of the signed minimum/negative-one exception.
 Signed integers support `signum`, `is_positive`, and `is_negative` in constants
 and runtime functions. `signum` preserves the receiver type and produces
 negative one, zero, or one; both predicates return Boolean and treat zero as

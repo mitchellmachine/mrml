@@ -1849,10 +1849,14 @@ fn rustc_euclidean_integer_division_reaches_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, rhs: i16) -> i16 { input.rem_euclid(rhs) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.div_euclid(rhs) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.rem_euclid(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8, rhs: i8) -> i8 { input.wrapping_div_euclid(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.wrapping_rem_euclid(rhs) }",
         "const VALUE: i8 = (-7i8).div_euclid(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
         "const VALUE: i16 = (-7i16).rem_euclid(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
         "const VALUE: i32 = 7i32.div_euclid(-4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
         "const VALUE: u64 = 7u64.rem_euclid(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+        "const VALUE: i8 = (-128i8).wrapping_div_euclid(-1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i64 = (-9223372036854775808i64).wrapping_rem_euclid(-1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
     ];
     for source in sources {
         assert_eq!(

@@ -393,6 +393,7 @@ pub enum ExprKind<'source> {
         argument: ExprId,
         operator: BinaryOperator,
         euclidean: bool,
+        euclidean_wrapping: bool,
     },
     SaturatingArithmetic {
         base: ExprId,
@@ -3858,6 +3859,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "pow"
                         | "div_euclid"
                         | "rem_euclid"
+                        | "wrapping_div_euclid"
+                        | "wrapping_rem_euclid"
                         | "signum"
                         | "is_positive"
                         | "is_negative"
@@ -3961,6 +3964,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "saturating_div"
                     | "div_euclid"
                     | "rem_euclid"
+                    | "wrapping_div_euclid"
+                    | "wrapping_rem_euclid"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -4062,19 +4067,23 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         _ => unreachable!(),
                     },
                     euclidean: false,
+                    euclidean_wrapping: false,
                 },
-                "div_euclid" | "rem_euclid" => ExprKind::WrappingArithmetic {
-                    base,
-                    argument: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    operator: if method.text == "div_euclid" {
-                        BinaryOperator::Divide
-                    } else {
-                        BinaryOperator::Remainder
-                    },
-                    euclidean: true,
-                },
+                "div_euclid" | "rem_euclid" | "wrapping_div_euclid" | "wrapping_rem_euclid" => {
+                    ExprKind::WrappingArithmetic {
+                        base,
+                        argument: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        operator: if matches!(method.text, "div_euclid" | "wrapping_div_euclid") {
+                            BinaryOperator::Divide
+                        } else {
+                            BinaryOperator::Remainder
+                        },
+                        euclidean: true,
+                        euclidean_wrapping: method.text.starts_with("wrapping_"),
+                    }
+                }
                 "saturating_add" | "saturating_sub" | "saturating_mul" | "saturating_div" => {
                     ExprKind::SaturatingArithmetic {
                         base,

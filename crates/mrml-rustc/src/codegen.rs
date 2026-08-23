@@ -3091,6 +3091,7 @@ fn runtime_expression_type_with_locals<
             argument,
             operator,
             euclidean,
+            euclidean_wrapping: _,
         } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -5018,6 +5019,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 argument,
                 operator,
                 euclidean,
+                euclidean_wrapping,
             } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
@@ -5063,7 +5065,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     self.evaluation_depth -= 1;
                     self.emit(&[0x59])?;
                     let result = if euclidean {
-                        self.emit_euclidean_division(operator)
+                        self.emit_euclidean_division(operator, euclidean_wrapping)
                     } else if matches!(
                         operator,
                         crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder
@@ -8831,6 +8833,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
     fn emit_euclidean_division(
         &mut self,
         operator: crate::BinaryOperator,
+        wrapping: bool,
     ) -> Result<(), CodegenError> {
         use crate::BinaryOperator::{Divide, Remainder};
         debug_assert!(matches!(operator, Divide | Remainder));
@@ -8848,10 +8851,41 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.emit(&[0x49, 0xb9])?;
         self.emit(&(self.width.minimum as u64).to_le_bytes())?;
         self.emit(&[0x4c, 0x39, 0xc8])?;
+        if wrapping {
+            let ordinary_dividend = self.emit_forward_branch(0x85)?;
+            if operator == Remainder {
+                self.emit(&[0x31, 0xc0])?;
+            }
+            let wrapped = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(ordinary_dividend)?;
+            self.patch_forward_branch(ordinary_divisor)?;
+            self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9, 0x48, 0x85, 0xd2])?;
+            let nonnegative = self.emit_forward_branch(0x89)?;
+            self.emit_euclidean_adjustment(operator)?;
+            self.patch_forward_branch(nonnegative)?;
+            if operator == Remainder {
+                self.emit(&[0x48, 0x89, 0xd0])?;
+            }
+            self.patch_forward_branch(wrapped)?;
+            return self.emit_normalize();
+        }
         self.emit_trap_branch(0x84)?;
         self.patch_forward_branch(ordinary_divisor)?;
         self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9, 0x48, 0x85, 0xd2])?;
         let nonnegative = self.emit_forward_branch(0x89)?;
+        self.emit_euclidean_adjustment(operator)?;
+        self.patch_forward_branch(nonnegative)?;
+        if operator == Remainder {
+            self.emit(&[0x48, 0x89, 0xd0])?;
+        }
+        self.emit_normalize()
+    }
+
+    fn emit_euclidean_adjustment(
+        &mut self,
+        operator: crate::BinaryOperator,
+    ) -> Result<(), CodegenError> {
+        use crate::BinaryOperator::Divide;
         self.emit(&[0x48, 0x85, 0xc9])?;
         let negative_divisor = self.emit_forward_branch(0x88)?;
         if operator == Divide {
@@ -8867,11 +8901,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.emit(&[0x48, 0x29, 0xca])?;
         }
         self.patch_forward_branch(adjusted)?;
-        self.patch_forward_branch(nonnegative)?;
-        if operator == Remainder {
-            self.emit(&[0x48, 0x89, 0xd0])?;
-        }
-        self.emit_normalize()
+        Ok(())
     }
 
     fn emit_wrapping_division(
@@ -12242,6 +12272,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, rhs: i16) -> i16 { input.rem_euclid(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, rhs: u32) -> u32 { input.rem_euclid(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.div_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8, rhs: i8) -> i8 { input.wrapping_div_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.wrapping_rem_euclid(rhs) }",
         ];
         for source in sources {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
@@ -12258,6 +12290,7 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.div_euclid(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.rem_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8, rhs: i16) -> i8 { input.wrapping_div_euclid(rhs) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
