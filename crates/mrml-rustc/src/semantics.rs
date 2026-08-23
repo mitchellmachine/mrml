@@ -211,6 +211,7 @@ pub fn analyze_constants<
                     ExprKind::WrappingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerWrappingShift { .. }
+                        | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
                         | ExprKind::IntegerBitCount { .. }
                 )
@@ -1909,6 +1910,7 @@ fn evaluate_integer_const_expression<
             ExprKind::WrappingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerWrappingShift { .. }
+                | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
                 | ExprKind::IntegerBitCount { .. }
         )
@@ -2047,6 +2049,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
+        ExprKind::IntegerWrappingPower { base, exponent } => {
+            recurse(base, inside_inline_const) || recurse(exponent, inside_inline_const)
+        }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base, inside_inline_const),
         ExprKind::IntegerBitCount { base, .. } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
@@ -2152,6 +2157,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
+        ExprKind::IntegerWrappingPower { base, exponent } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
         ExprKind::IntegerBitCount { base, .. } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
@@ -2416,6 +2422,27 @@ fn evaluate_call_aware_integer<
                 depth,
             )?;
             wrapping_shift_integer_bits(value, distance, bits, left, ty.is_signed())
+        }
+        ExprKind::IntegerWrappingPower { base, exponent } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || integer_expression_type(context, symbol_count, tree, exponent, constants)
+                    .is_some_and(|exponent_type| exponent_type != crate::IntegerType::U32)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)?;
+            let exponent = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                exponent,
+                crate::IntegerType::U32,
+                constants,
+                depth,
+            )?;
+            wrapping_power_integer_bits(value, exponent, bits)
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
@@ -3150,6 +3177,21 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .map_err(ExecutionError::Arithmetic)?;
             wrapping_shift_integer_bits(value, distance, bits, left, true)
         }
+        ExprKind::IntegerWrappingPower { base, exponent } => {
+            let base_type = expression_integer_type(tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || expression_integer_type(tree, exponent, constants)
+                    .is_some_and(|exponent_type| exponent_type != crate::IntegerType::U32)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)?;
+            let exponent = tree
+                .evaluate_at(exponent, constants)
+                .map_err(ExecutionError::Arithmetic)?;
+            wrapping_power_integer_bits(value, exponent, bits)
+        }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3231,6 +3273,9 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
+        ExprKind::IntegerWrappingPower { base, .. } => {
+            expression_integer_type(tree, base, constants)
+        }
         ExprKind::IntegerBitTransform { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
@@ -3265,6 +3310,20 @@ fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u12
     } else {
         ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
     }
+}
+
+fn wrapping_power_integer_bits(value: u128, mut exponent: u128, bits: u8) -> u128 {
+    let mask = signed_mask(bits);
+    let mut base = value & mask;
+    let mut result = 1_u128;
+    while exponent != 0 {
+        if exponent & 1 != 0 {
+            result = result.wrapping_mul(base) & mask;
+        }
+        base = base.wrapping_mul(base) & mask;
+        exponent >>= 1;
+    }
+    result
 }
 
 fn wrapping_shift_integer_bits(

@@ -2303,6 +2303,10 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(distance)?;
         }
+        ExprKind::IntegerWrappingPower { base, exponent } => {
+            recurse(base)?;
+            recurse(exponent)?;
+        }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base)?,
         ExprKind::IntegerBitCount { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
@@ -3140,6 +3144,33 @@ fn runtime_expression_type_with_locals<
                         locals,
                         tree,
                         distance,
+                        depth + 1,
+                    )?,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
+        }
+        ExprKind::IntegerWrappingPower { base, exponent } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || !matches!(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        exponent,
                         depth + 1,
                     )?,
                     RuntimeExpressionType::Integer(None)
@@ -5016,6 +5047,43 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 } else {
                     self.emit(&[0x48, 0xd3, 0xe8])?;
                 }
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerWrappingPower { base, exponent } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.width = runtime_width("u32")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, exponent, depth + 1)?;
+                self.emit(&[0x49, 0x89, 0xc0, 0x59, 0xb8, 1, 0, 0, 0])?;
+                self.evaluation_depth -= 1;
+                self.width = operand_width;
+                let loop_start = self.length;
+                self.emit(&[0x4d, 0x85, 0xc0])?;
+                let done = self.emit_forward_branch(0x84)?;
+                self.emit(&[0x41, 0xf6, 0xc0, 1])?;
+                let even = self.emit_forward_branch(0x84)?;
+                self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
+                self.emit_normalize()?;
+                self.patch_forward_branch(even)?;
+                self.emit(&[0x48, 0x0f, 0xaf, 0xc9, 0x49, 0xd1, 0xe8])?;
+                self.emit_backward_branch(loop_start)?;
+                self.patch_forward_branch(done)?;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -11823,6 +11891,48 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn wraps_primitive_integer_powers() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, exponent: u32) -> u8 { input.wrapping_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, exponent: u32) -> i16 { input.wrapping_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, exponent: u32) -> u32 { input.wrapping_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, exponent: u32) -> i64 { input.wrapping_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, exponent: u32) -> usize { input.wrapping_pow(exponent) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, exponent: u16) -> u8 { input.wrapping_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, exponent: u32) -> bool { input.wrapping_pow(exponent) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
