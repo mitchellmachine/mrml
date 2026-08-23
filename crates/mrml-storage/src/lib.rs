@@ -19,7 +19,8 @@ mod transaction;
 
 pub use allocation::{
     ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationChange, AllocationError,
-    AllocationImage, AllocationIndex, AllocationKind, AllocationRecord, MAX_ALLOCATION_BLOCKS,
+    AllocationImage, AllocationIndex, AllocationKind, AllocationRecord, AllocationUpdateError,
+    AllocationWriteBackend, MAX_ALLOCATION_BLOCKS, PreparedAllocationUpdate,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
@@ -55,5 +56,5 @@ pub use recovery::{
 };
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,
-    TransactionPublishError, TransactionReceipt,
+    TransactionPublishError, TransactionReceipt, TransactionResource,
 };

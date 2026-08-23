@@ -1,6 +1,6 @@
 use crate::{
     CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, CowPublishError,
-    PreparedFileWrite, StorageObjectId, StorageObjectKind,
+    PreparedAllocationUpdate, PreparedFileWrite, StorageObjectId, StorageObjectKind, VolumeId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,10 +18,18 @@ impl StorageTransactionId {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransactionParticipant {
-    object: StorageObjectId,
-    kind: StorageObjectKind,
+    resource: TransactionResource,
     old_generation: u64,
     new_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransactionResource {
+    Object {
+        object: StorageObjectId,
+        kind: StorageObjectKind,
+    },
+    Allocation(VolumeId),
 }
 
 impl TransactionParticipant {
@@ -38,15 +46,32 @@ impl TransactionParticipant {
             return Err(TransactionError::InvalidGeneration);
         }
         Ok(Self {
-            object,
-            kind,
+            resource: TransactionResource::Object { object, kind },
             old_generation,
             new_generation,
         })
     }
 
-    pub const fn object(self) -> StorageObjectId {
-        self.object
+    pub fn allocation(
+        volume: VolumeId,
+        old_generation: u64,
+        new_generation: u64,
+    ) -> Result<Self, TransactionError> {
+        if old_generation == 0
+            || new_generation == 0
+            || old_generation.checked_add(1) != Some(new_generation)
+        {
+            return Err(TransactionError::InvalidGeneration);
+        }
+        Ok(Self {
+            resource: TransactionResource::Allocation(volume),
+            old_generation,
+            new_generation,
+        })
+    }
+
+    pub const fn resource(self) -> TransactionResource {
+        self.resource
     }
 
     pub const fn new_generation(self) -> u64 {
@@ -84,6 +109,16 @@ impl<const P: usize, const W: usize> StorageTransaction<P, W> {
     pub fn admit_file<const N: usize>(
         &mut self,
         prepared: &PreparedFileWrite<N>,
+    ) -> Result<(), TransactionError> {
+        self.admit_parts(
+            prepared.transaction_participant()?,
+            prepared.metadata_images(),
+        )
+    }
+
+    pub fn admit_allocation<const N: usize>(
+        &mut self,
+        prepared: &PreparedAllocationUpdate<N>,
     ) -> Result<(), TransactionError> {
         self.admit_parts(
             prepared.transaction_participant()?,
@@ -129,7 +164,7 @@ impl<const P: usize, const W: usize> StorageTransaction<P, W> {
         if self.participants[..self.participant_count]
             .iter()
             .flatten()
-            .any(|current| current.object == participant.object)
+            .any(|current| current.resource == participant.resource)
         {
             return Err(TransactionError::DuplicateObject);
         }

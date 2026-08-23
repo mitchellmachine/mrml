@@ -1,6 +1,9 @@
 use mrml_crypto::Sha3_256;
 
-use crate::{ExtentKind, ExtentRecord, MetadataPointer, StorageObjectId, VolumeHeader, VolumeId};
+use crate::{
+    CowMetadataImage, ExtentKind, ExtentRecord, MetadataPointer, StorageObjectId, TransactionError,
+    TransactionParticipant, TransactionReceipt, VolumeHeader, VolumeId,
+};
 
 pub const ALLOCATION_RECORD_BYTES: usize = 112;
 pub const ALLOCATION_IMAGE_HEADER_BYTES: usize = 96;
@@ -388,6 +391,48 @@ pub enum AllocationChange {
     Free(AllocationRecord),
 }
 
+pub struct PreparedAllocationUpdate<const N: usize> {
+    old_generation: u64,
+    successor: AllocationImage<N>,
+    metadata: CowMetadataImage,
+}
+
+impl<const N: usize> PreparedAllocationUpdate<N> {
+    pub const fn generation(&self) -> u64 {
+        self.successor.generation
+    }
+
+    pub const fn pointer(&self) -> MetadataPointer {
+        self.successor.pointer
+    }
+
+    pub const fn metadata_image(&self) -> CowMetadataImage {
+        self.metadata
+    }
+
+    pub(crate) fn transaction_participant(
+        &self,
+    ) -> Result<TransactionParticipant, TransactionError> {
+        TransactionParticipant::allocation(
+            self.successor.volume,
+            self.old_generation,
+            self.successor.generation,
+        )
+    }
+
+    pub(crate) const fn metadata_images(&self) -> [CowMetadataImage; 1] {
+        [self.metadata]
+    }
+
+    pub fn commit_transaction<const P: usize>(
+        self,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<AllocationImage<N>, TransactionError> {
+        receipt.consume(self.transaction_participant()?)?;
+        Ok(self.successor)
+    }
+}
+
 impl<const N: usize> AllocationImage<N> {
     pub fn build(
         header: VolumeHeader,
@@ -619,6 +664,37 @@ impl<const N: usize> AllocationImage<N> {
         })
     }
 
+    pub fn prepare_successor<B: AllocationWriteBackend>(
+        &self,
+        header: VolumeHeader,
+        root: StorageObjectId,
+        next_pointer: MetadataPointer,
+        changes: &[AllocationChange],
+        encoded: &mut [u8],
+        backend: &mut B,
+    ) -> Result<PreparedAllocationUpdate<N>, AllocationUpdateError<B::Error>> {
+        let successor = self
+            .successor(header, root, next_pointer, changes)
+            .map_err(AllocationUpdateError::Planning)?;
+        successor
+            .encode(encoded)
+            .map_err(AllocationUpdateError::Planning)?;
+        let mut digest = Sha3_256::new();
+        digest.update(encoded);
+        let metadata = CowMetadataImage::new(next_pointer, digest.finalize());
+        backend
+            .stage_allocation_image(metadata, encoded)
+            .map_err(AllocationUpdateError::Backend)?;
+        backend
+            .flush_allocation_image()
+            .map_err(AllocationUpdateError::Backend)?;
+        Ok(PreparedAllocationUpdate {
+            old_generation: self.generation,
+            successor,
+            metadata,
+        })
+    }
+
     pub fn encode(&self, output: &mut [u8]) -> Result<(), AllocationError> {
         if output.len() != self.encoded_len {
             return Err(AllocationError::Truncated);
@@ -668,6 +744,33 @@ pub enum AllocationError {
     NotFound,
     DuplicateChange,
     ReusesLiveRange,
+}
+
+/// Persistence boundary for a complete unreachable allocation successor image.
+///
+/// # Safety
+///
+/// Implementations must write the complete supplied bytes to the exact range in
+/// `image`, verify those bytes against its digest, keep the range unreachable
+/// from the active root, and make the entire image durable before
+/// `flush_allocation_image` succeeds. They must not redirect, shorten, merge, or
+/// acknowledge a stale or partially written image.
+pub unsafe trait AllocationWriteBackend {
+    type Error;
+
+    fn stage_allocation_image(
+        &mut self,
+        image: CowMetadataImage,
+        encoded: &[u8],
+    ) -> Result<(), Self::Error>;
+
+    fn flush_allocation_image(&mut self) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AllocationUpdateError<E> {
+    Planning(AllocationError),
+    Backend(E),
 }
 
 fn contains(record: AllocationRecord, block: u64) -> bool {
@@ -776,6 +879,10 @@ fn get_u64(input: &[u8], offset: usize) -> Result<u64, AllocationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, StorageTransaction,
+        StorageTransactionId, Superblock,
+    };
 
     fn volume() -> VolumeId {
         VolumeId::new([8; 16]).unwrap()
@@ -957,5 +1064,138 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded.index().len(), 3);
+    }
+
+    struct WriteBackend {
+        staged: usize,
+        flushed: bool,
+    }
+
+    unsafe impl AllocationWriteBackend for WriteBackend {
+        type Error = ();
+
+        fn stage_allocation_image(
+            &mut self,
+            image: CowMetadataImage,
+            encoded: &[u8],
+        ) -> Result<(), Self::Error> {
+            let mut digest = Sha3_256::new();
+            digest.update(encoded);
+            if image.digest() != digest.finalize() {
+                return Err(());
+            }
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn flush_allocation_image(&mut self) -> Result<(), Self::Error> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    struct PublishBackend {
+        verified: usize,
+        replaced: usize,
+    }
+
+    unsafe impl CowPublicationBackend for PublishBackend {
+        type Error = ();
+
+        fn verify_new_metadata(&mut self, _write: CowMetadataWrite) -> Result<(), Self::Error> {
+            self.verified += 1;
+            Ok(())
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            _encoded: &[u8; crate::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            assert_eq!(block, 2);
+            self.replaced += 1;
+            Ok(())
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn staged_allocation_successor_commits_only_from_transaction_receipt() {
+        let root_metadata =
+            AllocationRecord::new(object(1), 2, 10, 1, AllocationKind::ObjectMetadata).unwrap();
+        let active_self =
+            AllocationRecord::new(object(1), 5, 20, 1, AllocationKind::AllocationMetadata).unwrap();
+        let active = AllocationImage::<3>::build(
+            header(),
+            5,
+            MetadataPointer::new(20, 1).unwrap(),
+            &[root_metadata, active_self],
+        )
+        .unwrap();
+        let mut encoded = [0; 4096];
+        let mut writer = WriteBackend {
+            staged: 0,
+            flushed: false,
+        };
+        let prepared = active
+            .prepare_successor(
+                header(),
+                object(1),
+                MetadataPointer::new(50, 1).unwrap(),
+                &[],
+                &mut encoded,
+                &mut writer,
+            )
+            .unwrap();
+        assert_eq!((writer.staged, writer.flushed), (1, true));
+        assert_eq!(prepared.generation(), 6);
+
+        let mut transaction = StorageTransaction::<1, 1>::new(
+            StorageTransactionId::new(20).unwrap(),
+            prepared.generation(),
+        )
+        .unwrap();
+        transaction.admit_allocation(&prepared).unwrap();
+        let active_superblock = Superblock::new(
+            header(),
+            5,
+            4,
+            object(1),
+            MetadataPointer::new(10, 1).unwrap(),
+            MetadataPointer::new(20, 1).unwrap(),
+        )
+        .unwrap();
+        let root = CowMetadataWrite::new(MetadataPointer::new(60, 1).unwrap(), 6, [7; 32]).unwrap();
+        let allocation = prepared.metadata_image().bind(6).unwrap();
+        let plan = CowPublicationPlan::<2>::build(
+            header(),
+            1,
+            active_superblock,
+            object(1),
+            root.pointer(),
+            allocation.pointer(),
+            &[root, allocation],
+            &[
+                MetadataPointer::new(10, 1).unwrap(),
+                MetadataPointer::new(20, 1).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut publisher = PublishBackend {
+            verified: 0,
+            replaced: 0,
+        };
+        let mut receipt = transaction.publish(&plan, &mut publisher).unwrap();
+        let committed = prepared.commit_transaction(&mut receipt).unwrap();
+        assert_eq!(committed.generation(), 6);
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!((publisher.verified, publisher.replaced), (2, 1));
     }
 }

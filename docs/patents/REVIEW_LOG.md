@@ -816,6 +816,18 @@ construction, or storage optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional COW allocation bookkeeping.
 
+## 2026-08-23 — staged transactional allocation images
+
+MRML source: `crates/mrml-storage/src/allocation.rs` and `transaction.rs`.
+
+The service uses conventional complete-image staging, SHA3-256 corruption
+detection, durable flush ordering, typed transaction participants, exact COW
+plan membership, and one-use commit receipts. This adds no novel allocator,
+transaction protocol, persistence technique, cryptographic construction, or
+storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional transactional metadata staging.
+
 ## 2026-08-23 — bounded assignment-expression read traversal
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.
