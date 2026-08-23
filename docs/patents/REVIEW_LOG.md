@@ -954,6 +954,18 @@ transaction, or cryptographic technique.
 
 Patent review: `NOT_TRIGGERED` — conventional allocator recovery validation.
 
+## 2026-08-23 — exact directory-create parent binding
+
+MRML source: `crates/mrml-storage/src/directory.rs` and `create.rs`.
+
+The service conventionally retains the parent encoded in new directory
+metadata, compares it with the unique parent successor containing the new
+generation-1 namespace entry, and returns that parent with committed state.
+This adds no novel directory, namespace, capability, transaction, or persistence
+technique.
+
+Patent review: `NOT_TRIGGERED` — conventional directory parent validation.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

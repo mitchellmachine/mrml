@@ -33,8 +33,8 @@ pub use cow::{
     CowPublishError,
 };
 pub use create::{
-    CommittedCreate, CreateCommitError, InitialObjectState, PreparedCreate, PreparedCreateError,
-    PreparedInitialObject,
+    CommittedCreate, CreateCommitError, InitialDirectoryState, InitialObjectState, PreparedCreate,
+    PreparedCreateError, PreparedInitialObject,
 };
 pub use directory::{
     CommittedDirectoryMovePlan, DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend,

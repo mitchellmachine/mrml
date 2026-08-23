@@ -755,6 +755,31 @@ impl<const C: usize, const E: usize> PreparedDirectoryMovePlan<C, E> {
         }
     }
 
+    pub(crate) fn creation_parent(
+        &self,
+        child: StorageObjectId,
+        kind: StorageObjectKind,
+    ) -> Option<StorageObjectId> {
+        let mut parent = None;
+        for update in self.updates[..self.count].iter().flatten() {
+            if update.successor.entries[..update.successor.count]
+                .iter()
+                .flatten()
+                .any(|entry| {
+                    entry.object() == child
+                        && entry.kind() == kind
+                        && entry.metadata_generation() == 1
+                })
+            {
+                if parent.is_some() {
+                    return None;
+                }
+                parent = Some(update.object());
+            }
+        }
+        parent
+    }
+
     pub fn transaction<const P: usize, const W: usize>(
         &self,
         identity: StorageTransactionId,
@@ -1641,6 +1666,7 @@ pub fn prepare_initial_directory<B: DirectoryWriteBackend>(
         .map_err(DirectoryUpdateError::Backend)?;
     Ok(PreparedInitialDirectory {
         state,
+        parent,
         metadata,
         entries,
     })
@@ -1648,6 +1674,7 @@ pub fn prepare_initial_directory<B: DirectoryWriteBackend>(
 
 pub struct PreparedInitialDirectory {
     state: DirectoryState<0>,
+    parent: StorageObjectId,
     metadata: CowMetadataImage,
     entries: CowMetadataImage,
 }
@@ -1659,6 +1686,10 @@ impl PreparedInitialDirectory {
 
     pub const fn state(&self) -> &DirectoryState<0> {
         &self.state
+    }
+
+    pub const fn parent(&self) -> StorageObjectId {
+        self.parent
     }
 
     pub const fn metadata_image(&self) -> CowMetadataImage {
@@ -1687,8 +1718,8 @@ impl PreparedInitialDirectory {
         Ok(self.state)
     }
 
-    pub(crate) fn into_state(self) -> DirectoryState<0> {
-        self.state
+    pub(crate) fn into_state(self) -> (DirectoryState<0>, StorageObjectId) {
+        (self.state, self.parent)
     }
 }
 

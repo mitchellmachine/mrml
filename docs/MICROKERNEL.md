@@ -2805,8 +2805,12 @@ The resulting closure reuses the move path's whole-plan preflight: exact entry
 buffer extent, volume bounds, reserved-block exclusion, and pairwise range
 disjointness are established before the first backend call. All directory
 successors then stage child-before-parent and are admitted to one bounded
-transaction. Full child/allocator/allocation/authority publication remains a
-later gate.
+transaction. The complete coordinator binds the child, directory closure,
+allocator, allocation image, and inactive authority in one publication. For a
+directory child it additionally retains the canonical parent, requires it to
+equal the unique successor containing the generation-1 namespace entry, and
+preserves it in committed state. Focused scenarios exercise both empty-file and
+empty-directory creation.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and
@@ -2979,7 +2983,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-four focused unit tests and strict crate-local clippy pass on Windows
+Seventy-five focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, interrupted-create recovery,
 complete crash recovery, snapshots, a block-device service, and
@@ -2992,7 +2996,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 74 tests, and both strict crate-local clippy
+Both current unit-test runs pass 75 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3024,7 +3028,10 @@ substitution fail closed, and the anchor conveys no authority. Authority reserva
 inactive until exact activation, reject guessed/stale tokens, and retire their
 generation on cancellation. Initial children bind exact type, identity, parent
 where applicable, generation 1, canonical empty subordinate images, and an
-unambiguous creation participant. General mutation closure construction binds
+unambiguous creation participant. Directory create assembly additionally
+requires that retained parent to equal the unique inserting successor; a
+different canonical parent or duplicate/missing namespace insertion fails
+before transaction exposure. General mutation closure construction binds
 the exact target-to-root predecessor chain and fails closed on stale parent
 entries or incomplete propagation; shared staging rejects every cross-successor
 range overlap before I/O. Grouped receipt consumption preflights the variable

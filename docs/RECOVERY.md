@@ -173,10 +173,12 @@ explicitly and downgrade the status rather than guessing.
   admitted to one directory transaction. A bounded coordinator now combines
   that closure with the exact initial child, persistent ID reservation,
   purpose-owned allocation successor, and inactive authority reservation in
-  one COW publication and one atomic receipt activation. Focused evidence covers
-  an empty-file create in memory. Recovery traversal of interrupted creates,
-  concrete block durability, and a separate empty-directory end-to-end scenario
-  remain pending.
+  one COW publication and one atomic receipt activation. Focused in-memory
+  evidence covers both empty-file and empty-directory creates. The directory
+  child's retained canonical parent must equal the unique directory successor
+  containing its generation-1 entry and remains available after commit.
+  Recovery traversal of interrupted creates and concrete block durability remain
+  pending.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

@@ -316,9 +316,12 @@ directory transaction. The coordinator requires exact ownership for every
 directory, child, and allocator image; admits the closure, typed child,
 object-ID allocator, and allocation successor to one transaction; builds one
 COW-root publication; and atomically consumes all participants before exposing
-successor states or activating authority. A focused empty-file create exercises
-this path. Concrete block integration, interrupted-create/recovery evidence,
-and a separate end-to-end empty-directory create scenario remain pending.
+successor states or activating authority. Focused empty-file and empty-directory
+creates exercise both admitted child kinds. Directory preparation retains its
+exact parent, the coordinator requires that parent to be the unique directory
+successor containing the generation-1 child entry, and the committed child state
+preserves it. Concrete block integration and interrupted-create/recovery
+evidence remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

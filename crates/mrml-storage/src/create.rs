@@ -72,14 +72,32 @@ impl PreparedInitialObject {
     fn into_state(self) -> InitialObjectState {
         match self {
             Self::File(file) => InitialObjectState::File(file.into_state()),
-            Self::Directory(directory) => InitialObjectState::Directory(directory.into_state()),
+            Self::Directory(directory) => {
+                let (state, parent) = directory.into_state();
+                InitialObjectState::Directory(InitialDirectoryState { state, parent })
+            }
         }
     }
 }
 
 pub enum InitialObjectState {
     File(FileState<0>),
-    Directory(DirectoryState<0>),
+    Directory(InitialDirectoryState),
+}
+
+pub struct InitialDirectoryState {
+    state: DirectoryState<0>,
+    parent: StorageObjectId,
+}
+
+impl InitialDirectoryState {
+    pub const fn state(&self) -> &DirectoryState<0> {
+        &self.state
+    }
+
+    pub const fn parent(&self) -> StorageObjectId {
+        self.parent
+    }
 }
 
 pub struct PreparedCreate<const C: usize, const E: usize, const A: usize> {
@@ -98,10 +116,18 @@ impl<const C: usize, const E: usize, const A: usize> PreparedCreate<C, E, A> {
         allocation: PreparedAllocationUpdate<A>,
         authority: StorageAuthorityReservation,
     ) -> Result<Self, PreparedCreateError> {
+        let creation_parent = directories.creation_parent(child.object(), child.kind());
+        let parent_matches = match &child {
+            PreparedInitialObject::File(_) => creation_parent.is_some(),
+            PreparedInitialObject::Directory(directory) => {
+                creation_parent == Some(directory.parent())
+            }
+        };
         if directories.is_empty()
             || child.object() != object_id.allocated()
             || authority.object() != child.object()
             || authority.kind() != child.kind()
+            || !parent_matches
         {
             return Err(PreparedCreateError::InvalidBinding);
         }
@@ -324,7 +350,8 @@ mod tests {
         CowPublicationBackend, DirectoryAncestryBackend, DirectoryEntry, DirectoryMetadata,
         DirectorySuccessorBackend, DirectorySuccessorLayout, DirectoryWriteBackend,
         InitialFileWriteBackend, ObjectIdAllocatorWriteBackend, StorageName, StoragePrincipal,
-        StorageRights, VolumeId, prepare_initial_file, prove_directory_mutation_ancestry,
+        StorageRights, VolumeId, prepare_initial_directory, prepare_initial_file,
+        prove_directory_mutation_ancestry,
     };
 
     fn volume() -> VolumeId {
@@ -486,6 +513,121 @@ mod tests {
         fn flush_superblock(&mut self) -> Result<(), Self::Error> {
             Ok(())
         }
+    }
+
+    fn prepared_directory_create(
+        metadata_parent: StorageObjectId,
+    ) -> Result<
+        (
+            PreparedCreate<1, 2, 8>,
+            StorageAuthorityTable<2>,
+            Backend,
+            StoragePrincipal,
+        ),
+        PreparedCreateError,
+    > {
+        let root = object(1);
+        let child = object(10);
+        let mut backend = Backend {
+            root: DirectoryState::new(root, 5, &[]).unwrap(),
+            staged: 0,
+            verified: 0,
+            replaced: 0,
+        };
+        let proof = prove_directory_mutation_ancestry::<1, _>(root, root, 5, &mut backend).unwrap();
+        let entry = DirectoryEntry::new(
+            StorageName::new("created-directory").unwrap(),
+            child,
+            StorageObjectKind::Directory,
+            1,
+        )
+        .unwrap();
+        let successor = proof
+            .construct_create_successors::<1, 2, _>(entry, &mut backend)
+            .unwrap();
+        let mut directory_metadata = [[0; crate::DIRECTORY_METADATA_BYTES]; 1];
+        let mut directory_entries = [[0; 4096]; 1];
+        let directories = successor
+            .stage(
+                header(),
+                &[DirectorySuccessorLayout::new(pointer(60), pointer(61))],
+                &mut directory_metadata,
+                &mut directory_entries,
+                &mut backend,
+            )
+            .unwrap();
+        let mut child_metadata = [0; crate::DIRECTORY_METADATA_BYTES];
+        let mut child_entries = [0; 4096];
+        let initial_directory = prepare_initial_directory(
+            header(),
+            child,
+            metadata_parent,
+            pointer(62),
+            pointer(63),
+            &mut child_metadata,
+            &mut child_entries,
+            &mut backend,
+        )
+        .unwrap();
+        let active_object_ids =
+            ObjectIdAllocatorImage::build(header(), 5, Some(10), pointer(30)).unwrap();
+        let mut object_id_output = [0; 4096];
+        let object_id = active_object_ids
+            .prepare_reservation(header(), pointer(64), &mut object_id_output, &mut backend)
+            .unwrap();
+        let active_allocation = AllocationImage::<8>::build(
+            header(),
+            5,
+            pointer(20),
+            &[
+                AllocationRecord::new(root, 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+                AllocationRecord::new(root, 5, 20, 1, AllocationKind::AllocationMetadata).unwrap(),
+            ],
+        )
+        .unwrap();
+        let changes = [
+            AllocationChange::Allocate(
+                AllocationRecord::new(root, 6, 60, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(root, 6, 61, 1, AllocationKind::DirectoryEntries).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(child, 1, 62, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(child, 1, 63, 1, AllocationKind::DirectoryEntries).unwrap(),
+            ),
+            AllocationChange::Allocate(
+                AllocationRecord::new(root, 6, 64, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                    .unwrap(),
+            ),
+        ];
+        let mut allocation_output = [0; 4096];
+        let allocation = active_allocation
+            .prepare_successor(
+                header(),
+                root,
+                pointer(65),
+                &changes,
+                &mut allocation_output,
+                &mut backend,
+            )
+            .unwrap();
+        let principal = StoragePrincipal::new(9).unwrap();
+        let rights = StorageRights::LOOKUP.union(StorageRights::ENUMERATE);
+        let mut authorities = StorageAuthorityTable::<2>::new();
+        let authority = authorities
+            .reserve_insert(child, StorageObjectKind::Directory, rights, principal)
+            .unwrap();
+        PreparedCreate::new(
+            directories,
+            PreparedInitialObject::Directory(initial_directory),
+            object_id,
+            allocation,
+            authority,
+        )
+        .map(|prepared| (prepared, authorities, backend, principal))
     }
 
     #[test]
@@ -657,5 +799,52 @@ mod tests {
             Ok(child)
         );
         assert!(matches!(committed.child, InitialObjectState::File(_)));
+    }
+
+    #[test]
+    fn complete_directory_create_binds_parent_and_activates_directory_rights() {
+        assert!(matches!(
+            prepared_directory_create(object(2)),
+            Err(PreparedCreateError::InvalidBinding)
+        ));
+
+        let (prepared, mut authorities, mut backend, principal) =
+            prepared_directory_create(object(1)).unwrap();
+        let transaction = prepared
+            .transaction::<4, 6>(StorageTransactionId::new(52).unwrap(), 6)
+            .unwrap();
+        let active = Superblock::new(header(), 5, 4, object(1), pointer(10), pointer(20)).unwrap();
+        let publication = prepared
+            .publication_plan::<6>(
+                header(),
+                1,
+                active,
+                object(1),
+                &[pointer(10), pointer(20), pointer(30)],
+            )
+            .unwrap();
+        let mut receipt = transaction.publish(&publication, &mut backend).unwrap();
+        let committed = match prepared.commit(&mut receipt, &mut authorities) {
+            Ok(committed) => committed,
+            Err((_, error)) => panic!("directory create commit failed: {error:?}"),
+        };
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!((backend.verified, backend.replaced), (6, 1));
+        assert_eq!(
+            authorities.authorize(
+                committed.handle,
+                principal,
+                StorageObjectKind::Directory,
+                StorageRights::LOOKUP,
+            ),
+            Ok(object(10))
+        );
+        let InitialObjectState::Directory(directory) = committed.child else {
+            panic!("directory create returned the wrong child type");
+        };
+        assert_eq!(directory.parent(), object(1));
+        assert_eq!(directory.state().object(), object(10));
+        assert_eq!(directory.state().generation(), 1);
+        assert!(directory.state().is_empty());
     }
 }

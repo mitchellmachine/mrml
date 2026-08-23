@@ -285,9 +285,11 @@ authority; unrelated domains continue.
    successor. It admits all four resource classes to one transaction, requires
    exact purpose-specific allocation ownership, builds one COW-root plan, and
    exposes successors plus the new handle only after atomic receipt consumption
-   and authority activation. An empty-file create is covered end to end in the
-   in-memory model. Concrete block integration, interrupted-create recovery,
-   and separate end-to-end empty-directory coverage remain pending.
+   and authority activation. Empty-file and empty-directory creates are covered
+   end to end in the in-memory model. Directory child metadata retains its exact
+   parent; the coordinator requires it to equal the unique inserting directory
+   successor and preserves it in committed state. Concrete block integration
+   and interrupted-create recovery remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
