@@ -3208,6 +3208,23 @@ fn rustc_checked_integer_option_unwrap_unchecked_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_checked_integer_option_unwrap_or_else_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, fallback: u8) -> u8 { a.checked_add(b).unwrap_or_else(|| fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, b: i64) -> i64 { a.checked_div(b).unwrap_or_else(|| -1) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, fallback: i16) -> i16 { input.checked_truncate::<i16>().unwrap_or_else(|| fallback) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_sign_cast_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, fallback: i32) -> i32 { input.checked_cast_signed().unwrap_or(fallback) }",

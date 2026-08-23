@@ -2363,7 +2363,7 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `checked_ilog10`, and `checked_next_multiple_of`, pinned-nightly
 `checked_div_exact`, generic
 `checked_cast::<T>`, and same-width checked sign-cast results with
-`Option::unwrap_or` and
+`Option::unwrap_or`, `Option::unwrap_or_else`, and
 `Option::unwrap_or_default`, extract them with `Option::unwrap` or
 `Option::expect`, or extract them in an unsafe function with
 `Option::unwrap_unchecked`; callers can observe them with `Option::is_some` and
@@ -2415,6 +2415,14 @@ value-plus-validity emitter while
 direct `Option` returns, option locals, other option consumers, and constant
 evaluation remain outside this milestone until their enum ABI and value
 representation are implemented.
+
+Checked integer options additionally support lazy `Option::unwrap_or_else`
+with a bounded zero-argument closure. The closure body may capture existing
+runtime parameters and locals through the compiler's lexical environment. It
+is emitted only on the `None` edge, so traps and other checked evaluation in a
+fallback remain skipped for `Some`. Zero-argument closures now have a distinct
+expression node; using one as a first-class runtime value remains unsupported
+until closure layout and callable ABI support are implemented.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

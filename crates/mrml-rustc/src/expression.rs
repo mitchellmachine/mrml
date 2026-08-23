@@ -541,6 +541,7 @@ pub enum ExprKind<'source> {
         trap: bool,
         message: bool,
         unchecked: bool,
+        lazy: bool,
     },
     IntegerOptionPredicate {
         option: ExprId,
@@ -610,6 +611,9 @@ pub enum ExprKind<'source> {
     Bool(bool),
     Char(u32),
     String(&'source str),
+    Closure {
+        body: ExprId,
+    },
     Identifier(&'source str),
     Call {
         callee: &'source str,
@@ -907,6 +911,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::String(_)
+            | ExprKind::Closure { .. }
             | ExprKind::Identifier(_)
             | ExprKind::Call { .. }
             | ExprKind::Cast { .. } => false,
@@ -1195,6 +1200,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
             ExprKind::String(_) => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::Closure { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Identifier(name) => resolver
                 .resolve(name)
                 .ok_or(ConstEvalError::UnknownIdentifier),
@@ -1854,6 +1860,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 kind: ExprKind::String(token.text),
                 span: token.span,
             }),
+            Some(token) if token.kind == TokenKind::Operator && token.text == "||" => {
+                let body = self.expression(0, depth + 1)?;
+                self.push(Expr {
+                    kind: ExprKind::Closure { body },
+                    span: Span {
+                        start: token.span.start,
+                        end: self.node_span(body)?.end,
+                    },
+                })
+            }
             Some(token) if token.text == "if" => self.if_expression(token, depth + 1),
             Some(token) if token.text == "match" => self.match_expression(token, depth + 1),
             Some(token) if token.text == "loop" => {
@@ -2706,6 +2722,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerOptionPredicate { option, .. } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
+            }
+            ExprKind::Closure { body } => {
+                self.substitute_identifier(body, name, replacement, depth + 1)?;
             }
             ExprKind::SaturatingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -4492,6 +4511,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unwrap"
                         | "unwrap_unchecked"
                         | "unwrap_or"
+                        | "unwrap_or_else"
                         | "unwrap_or_default"
                         | "is_some"
                         | "is_none"
@@ -4681,6 +4701,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_mul"
                     | "expect"
                     | "unwrap_or"
+                    | "unwrap_or_else"
                     | "strict_add"
                     | "strict_sub"
                     | "strict_add_signed"
@@ -5101,6 +5122,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     trap: false,
                     message: false,
                     unchecked: false,
+                    lazy: false,
                 },
                 "unwrap_or_default" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
@@ -5108,6 +5130,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     trap: false,
                     message: false,
                     unchecked: false,
+                    lazy: false,
                 },
                 "unwrap" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
@@ -5115,6 +5138,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     trap: true,
                     message: false,
                     unchecked: false,
+                    lazy: false,
                 },
                 "expect" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
@@ -5124,6 +5148,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     trap: true,
                     message: true,
                     unchecked: false,
+                    lazy: false,
                 },
                 "unwrap_unchecked" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
@@ -5131,6 +5156,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     trap: false,
                     message: false,
                     unchecked: true,
+                    lazy: false,
+                },
+                "unwrap_or_else" => ExprKind::IntegerOptionUnwrapOr {
+                    option: base,
+                    fallback: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    trap: false,
+                    message: false,
+                    unchecked: false,
+                    lazy: true,
                 },
                 "is_some" | "is_none" => ExprKind::IntegerOptionPredicate {
                     option: base,
