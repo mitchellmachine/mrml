@@ -1,6 +1,6 @@
 use core::sync::atomic::{Ordering, compiler_fence};
 
-use crate::{GranuleHardwareOutcome, PhysAddr};
+use crate::{DeviceAddress, GranuleHardwareOutcome, PhysAddr};
 
 use super::DmaIsolation;
 
@@ -44,6 +44,81 @@ pub enum DmarError {
     PathTooDeep,
     AmbiguousUnit,
     MissingUnit,
+    ConfigReadFailed,
+    MissingDevice,
+    NotPciBridge,
+    InvalidBusRange,
+    NoRemappingUnit,
+}
+
+pub trait PciConfigSpace {
+    fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32>;
+}
+
+/// One uniquely mapped PCIe ECAM segment window.
+pub struct NativeEcamSegment {
+    base: *const u8,
+    bytes: usize,
+    segment: u16,
+    start_bus: u8,
+    end_bus: u8,
+}
+
+impl NativeEcamSegment {
+    /// # Safety
+    ///
+    /// `base..base + bytes` must remain a mapped, uncached ECAM window for the
+    /// stated segment and inclusive bus range. Configuration access must be
+    /// serialized against removal and firmware ownership changes.
+    pub unsafe fn new(
+        base: *const u8,
+        bytes: usize,
+        segment: u16,
+        start_bus: u8,
+        end_bus: u8,
+    ) -> Result<Self, DmarError> {
+        let buses = usize::from(end_bus)
+            .checked_sub(usize::from(start_bus))
+            .and_then(|span| span.checked_add(1))
+            .ok_or(DmarError::InvalidBusRange)?;
+        let required = buses
+            .checked_mul(1 << 20)
+            .ok_or(DmarError::InvalidBusRange)?;
+        if base.is_null() || !(base as usize).is_multiple_of(4096) || bytes < required {
+            return Err(DmarError::InvalidBusRange);
+        }
+        Ok(Self {
+            base,
+            bytes,
+            segment,
+            start_bus,
+            end_bus,
+        })
+    }
+}
+
+impl PciConfigSpace for NativeEcamSegment {
+    fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
+        if address.segment() != self.segment
+            || address.bus() < self.start_bus
+            || address.bus() > self.end_bus
+            || offset > 4092
+            || !offset.is_multiple_of(4)
+        {
+            return None;
+        }
+        let relative_bus = usize::from(address.bus() - self.start_bus);
+        let location = (relative_bus << 20)
+            | (usize::from(address.device()) << 15)
+            | (usize::from(address.function()) << 12)
+            | usize::from(offset);
+        if location > self.bytes.saturating_sub(4) {
+            return None;
+        }
+        // SAFETY: construction establishes the mapped ECAM window and the
+        // checked location is naturally aligned within a 4 KiB function.
+        Some(unsafe { self.base.add(location).cast::<u32>().read_volatile() })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +220,78 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         let start = unit.scope_start as usize;
         let end = start + unit.scope_len as usize;
         self.scopes[start..end].iter().flatten()
+    }
+
+    pub fn resolve_scope<C: PciConfigSpace>(
+        &self,
+        segment: u16,
+        scope: &DmarDeviceScope,
+        config: &mut C,
+    ) -> Result<DeviceAddress, DmarError> {
+        let mut bus = scope.start_bus;
+        let path = &scope.path[..scope.path_len as usize];
+        for (index, element) in path.iter().enumerate() {
+            let address = DeviceAddress::new(segment, bus, element.device, element.function)
+                .map_err(|_| DmarError::InvalidScope)?;
+            let identity = config
+                .read_u32(address, 0)
+                .ok_or(DmarError::ConfigReadFailed)?;
+            if identity & 0xffff == 0xffff {
+                return Err(DmarError::MissingDevice);
+            }
+            if index + 1 != path.len() {
+                let header = config
+                    .read_u32(address, 0x0c)
+                    .ok_or(DmarError::ConfigReadFailed)?;
+                if (header >> 16) as u8 & 0x7f != 1 {
+                    return Err(DmarError::NotPciBridge);
+                }
+                let buses = config
+                    .read_u32(address, 0x18)
+                    .ok_or(DmarError::ConfigReadFailed)?;
+                let primary = buses as u8;
+                let secondary = (buses >> 8) as u8;
+                let subordinate = (buses >> 16) as u8;
+                if primary != bus || secondary == 0 || secondary > subordinate {
+                    return Err(DmarError::InvalidBusRange);
+                }
+                bus = secondary;
+            }
+        }
+        DeviceAddress::new(
+            segment,
+            bus,
+            path.last().ok_or(DmarError::InvalidScope)?.device,
+            path.last().ok_or(DmarError::InvalidScope)?.function,
+        )
+        .map_err(|_| DmarError::InvalidScope)
+    }
+
+    /// Selects the unique DRHD covering `requester`. Explicit device scopes
+    /// take precedence over a segment's include-all fallback.
+    pub fn unit_for_requester<C: PciConfigSpace>(
+        &self,
+        requester: DeviceAddress,
+        config: &mut C,
+    ) -> Result<&DmarUnit, DmarError> {
+        let mut explicit = None;
+        let mut fallback = None;
+        for unit in self
+            .units()
+            .filter(|unit| unit.segment == requester.segment())
+        {
+            if unit.include_all && fallback.replace(unit).is_some() {
+                return Err(DmarError::AmbiguousUnit);
+            }
+            for scope in self.scopes(unit) {
+                if self.resolve_scope(unit.segment, scope, config)? == requester
+                    && explicit.replace(unit).is_some()
+                {
+                    return Err(DmarError::AmbiguousUnit);
+                }
+            }
+        }
+        explicit.or(fallback).ok_or(DmarError::NoRemappingUnit)
     }
 
     fn parse_drhd(&mut self, bytes: &[u8]) -> Result<(), DmarError> {
@@ -506,6 +653,42 @@ mod tests {
         table
     }
 
+    fn routing_dmar() -> [u8; 90] {
+        let mut table = [0u8; 90];
+        table[..4].copy_from_slice(b"DMAR");
+        table[4..8].copy_from_slice(&90u32.to_le_bytes());
+        table[36] = 47;
+        table[48..50].copy_from_slice(&0u16.to_le_bytes());
+        table[50..52].copy_from_slice(&26u16.to_le_bytes());
+        table[54..56].copy_from_slice(&0u16.to_le_bytes());
+        table[56..64].copy_from_slice(&0xfed9_0000u64.to_le_bytes());
+        table[64..74].copy_from_slice(&[1, 10, 0, 0, 0, 2, 3, 0, 1, 0]);
+        table[74..76].copy_from_slice(&0u16.to_le_bytes());
+        table[76..78].copy_from_slice(&16u16.to_le_bytes());
+        table[78] = 1;
+        table[80..82].copy_from_slice(&0u16.to_le_bytes());
+        table[82..90].copy_from_slice(&0xfeda_0000u64.to_le_bytes());
+        finalize_table(&mut table);
+        table
+    }
+
+    struct Config {
+        bridge_header: u32,
+    }
+
+    impl PciConfigSpace for Config {
+        fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
+            let bridge = DeviceAddress::new(0, 2, 3, 0).unwrap();
+            let endpoint = DeviceAddress::new(0, 5, 1, 0).unwrap();
+            match (address, offset) {
+                (address, 0) if address == bridge || address == endpoint => Some(0x1234_8086),
+                (address, 0x0c) if address == bridge => Some(self.bridge_header),
+                (address, 0x18) if address == bridge => Some(2 | (5 << 8) | (5 << 16)),
+                _ => None,
+            }
+        }
+    }
+
     #[test]
     fn parses_checked_drhd_and_complete_pci_path() {
         let topology = DmarTopology::<2, 4>::parse(&dmar()).unwrap();
@@ -550,6 +733,44 @@ mod tests {
         assert_eq!(
             DmarTopology::<2, 4>::parse(&duplicate),
             Err(DmarError::AmbiguousUnit)
+        );
+    }
+
+    #[test]
+    fn resolves_bridge_paths_and_prefers_explicit_unit() {
+        let topology = DmarTopology::<2, 2>::parse(&routing_dmar()).unwrap();
+        let mut config = Config {
+            bridge_header: 1 << 16,
+        };
+        let endpoint = DeviceAddress::new(0, 5, 1, 0).unwrap();
+        assert_eq!(
+            topology
+                .unit_for_requester(endpoint, &mut config)
+                .unwrap()
+                .register_base
+                .get(),
+            0xfed9_0000
+        );
+        let fallback = DeviceAddress::new(0, 7, 2, 0).unwrap();
+        assert_eq!(
+            topology
+                .unit_for_requester(fallback, &mut config)
+                .unwrap()
+                .register_base
+                .get(),
+            0xfeda_0000
+        );
+    }
+
+    #[test]
+    fn rejects_firmware_path_through_non_bridge_function() {
+        let topology = DmarTopology::<2, 2>::parse(&routing_dmar()).unwrap();
+        let unit = topology.units().next().unwrap();
+        let scope = topology.scopes(unit).next().unwrap();
+        let mut config = Config { bridge_header: 0 };
+        assert_eq!(
+            topology.resolve_scope(0, scope, &mut config),
+            Err(DmarError::NotPciBridge)
         );
     }
 

@@ -289,8 +289,18 @@ and every PCI bridge-path device/function pair. Duplicate register blocks,
 duplicate PCI routes, multiple include-all units for one segment, missing DRHD
 units, excessive path depth, and capacity exhaustion are rejected. Unknown
 non-DRHD structures remain skipped only after their length is validated.
-Multi-unit runtime assembly, PCI bridge resolution, fault-record handling, and
-real-hardware validation remain required before stronger claims are enabled.
+The runtime topology layer also has a narrow PCI configuration-space interface
+and a native, bounds-checked ECAM segment reader. Scope resolution verifies
+that every intermediate function exists, is a type-one PCI bridge, reports the
+expected primary bus, and has a nonzero ordered secondary/subordinate range
+before following the next path element. A requester selects an exact explicit
+scope first and may use only the unique include-all DRHD for its segment as a
+fallback. Missing devices, configuration read failures, malformed bridges,
+uncovered requesters, and multiple matches fail closed. Because PCI topology
+can change through hot-plug, launch-time resolution must be serialized and
+revalidated when ownership changes. MCFG discovery, multi-unit MMIO assembly,
+fault-record handling, and real-hardware validation remain required before
+stronger claims are enabled.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 
