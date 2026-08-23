@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 427 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 429 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1991,6 +1991,12 @@ zero. Its native lowering derives the rounding increment from the hardware
 remainder without risking an overflowing numerator adjustment. Three linked
 System V objects matched pinned Rust across exact and inexact quotients, zero,
 narrow/full-width maxima, and large divisors; a zero-divisor probe trapped.
+Stable unsigned primitive `next_multiple_of` returns the smallest multiple of a
+same-typed nonzero divisor that is at least the receiver. Constant overflow is
+rejected; checked runtime objects trap, while `-C overflow-checks=no` objects
+wrap at receiver width. Linked System V objects matched pinned Rust across
+zero, exact and inexact multiples, narrow/full-width extrema, wrapping
+overflow, checked-overflow trapping, and divisor-zero trapping.
 Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and

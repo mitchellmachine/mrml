@@ -525,6 +525,7 @@ pub enum IntegerPairTransform {
     AbsoluteDifference,
     Midpoint,
     DivideCeiling,
+    NextMultiple,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3912,6 +3913,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "abs_diff"
                         | "midpoint"
                         | "div_ceil"
+                        | "next_multiple_of"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -4012,6 +4014,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "abs_diff"
                     | "midpoint"
                     | "div_ceil"
+                    | "next_multiple_of"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -4178,18 +4181,21 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
-                "abs_diff" | "midpoint" | "div_ceil" => ExprKind::IntegerPairTransform {
-                    base,
-                    other: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    transform: match method.text {
-                        "abs_diff" => IntegerPairTransform::AbsoluteDifference,
-                        "midpoint" => IntegerPairTransform::Midpoint,
-                        "div_ceil" => IntegerPairTransform::DivideCeiling,
-                        _ => unreachable!(),
-                    },
-                },
+                "abs_diff" | "midpoint" | "div_ceil" | "next_multiple_of" => {
+                    ExprKind::IntegerPairTransform {
+                        base,
+                        other: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        transform: match method.text {
+                            "abs_diff" => IntegerPairTransform::AbsoluteDifference,
+                            "midpoint" => IntegerPairTransform::Midpoint,
+                            "div_ceil" => IntegerPairTransform::DivideCeiling,
+                            "next_multiple_of" => IntegerPairTransform::NextMultiple,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
                 "swap_bytes"
                 | "reverse_bits"
                 | "to_be"

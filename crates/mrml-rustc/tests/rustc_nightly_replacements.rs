@@ -2039,6 +2039,27 @@ fn rustc_unsigned_div_ceil_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_unsigned_next_multiple_of_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.next_multiple_of(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u16, right: u16) -> u16 { left.next_multiple_of(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u64, right: u64) -> u64 { left.next_multiple_of(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: usize, right: usize) -> usize { left.next_multiple_of(right) }",
+        "const VALUE: u8 = 0u8.next_multiple_of(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u16 = 23u16.next_multiple_of(8); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+        "const VALUE: u64 = 18446744073709551614u64.next_multiple_of(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_rotations_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.rotate_left(distance) }",

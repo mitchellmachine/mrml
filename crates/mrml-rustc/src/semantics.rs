@@ -2584,8 +2584,11 @@ fn evaluate_call_aware_integer<
                 .unwrap_or(crate::IntegerType::I32);
             if integer_expression_type(context, symbol_count, tree, other, constants)
                 .is_some_and(|other_type| other_type != base_type)
-                || (transform == crate::expression::IntegerPairTransform::DivideCeiling
-                    && base_type.is_signed())
+                || (matches!(
+                    transform,
+                    crate::expression::IntegerPairTransform::DivideCeiling
+                        | crate::expression::IntegerPairTransform::NextMultiple
+                ) && base_type.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
@@ -2628,6 +2631,9 @@ fn evaluate_call_aware_integer<
                 }
                 crate::expression::IntegerPairTransform::DivideCeiling => {
                     unsigned_divide_ceiling(left, right).map_err(arithmetic_error)?
+                }
+                crate::expression::IntegerPairTransform::NextMultiple => {
+                    unsigned_next_multiple(left, right, base_bits).map_err(arithmetic_error)?
                 }
             }
         }
@@ -3736,6 +3742,19 @@ fn unsigned_divide_ceiling(left: u128, right: u128) -> Result<u128, ConstEvalErr
         return Err(ConstEvalError::DivisionByZero);
     }
     Ok(left / right + u128::from(!left.is_multiple_of(right)))
+}
+
+fn unsigned_next_multiple(left: u128, right: u128, bits: u8) -> Result<u128, ConstEvalError> {
+    if right == 0 {
+        return Err(ConstEvalError::DivisionByZero);
+    }
+    let remainder = left % right;
+    if remainder == 0 {
+        return Ok(left);
+    }
+    left.checked_add(right - remainder)
+        .filter(|value| *value <= signed_mask(bits))
+        .ok_or(ConstEvalError::Overflow)
 }
 
 fn integer_power_bits(
