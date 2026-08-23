@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 413 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 415 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1922,6 +1922,14 @@ instead of taking x86-64's division-overflow fault.
 Four emitted System V objects matched pinned Rust across signed and unsigned
 ordinary cases and the signed minimum/negative-one exception at narrow and
 full widths.
+Primitive signed and unsigned integers support `div_euclid` and `rem_euclid`
+with exact-type arguments in constants and runtime functions. Signed negative
+remainders are corrected into the nonnegative Euclidean range with the quotient
+adjusted by divisor sign; zero divisors and signed minimum divided by negative
+one trap.
+Four System V objects matched pinned Rust across every operand-sign pairing,
+unsigned extrema, and a signed-minimum ordinary divisor. Separate zero-divisor
+and signed-overflow probes terminated with MRML trap instructions.
 Signed integers support `signum`, `is_positive`, and `is_negative` in constants
 and runtime functions. `signum` preserves the receiver type and produces
 negative one, zero, or one; both predicates return Boolean and treat zero as

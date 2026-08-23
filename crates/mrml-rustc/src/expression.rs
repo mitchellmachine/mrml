@@ -392,6 +392,7 @@ pub enum ExprKind<'source> {
         base: ExprId,
         argument: ExprId,
         operator: BinaryOperator,
+        euclidean: bool,
     },
     SaturatingArithmetic {
         base: ExprId,
@@ -3855,6 +3856,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_pow"
                         | "saturating_pow"
                         | "pow"
+                        | "div_euclid"
+                        | "rem_euclid"
                         | "signum"
                         | "is_positive"
                         | "is_negative"
@@ -3956,6 +3959,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "saturating_sub"
                     | "saturating_mul"
                     | "saturating_div"
+                    | "div_euclid"
+                    | "rem_euclid"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -4056,6 +4061,19 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "wrapping_rem" => BinaryOperator::Remainder,
                         _ => unreachable!(),
                     },
+                    euclidean: false,
+                },
+                "div_euclid" | "rem_euclid" => ExprKind::WrappingArithmetic {
+                    base,
+                    argument: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    operator: if method.text == "div_euclid" {
+                        BinaryOperator::Divide
+                    } else {
+                        BinaryOperator::Remainder
+                    },
+                    euclidean: true,
                 },
                 "saturating_add" | "saturating_sub" | "saturating_mul" | "saturating_div" => {
                     ExprKind::SaturatingArithmetic {

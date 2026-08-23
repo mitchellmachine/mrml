@@ -2351,6 +2351,7 @@ fn evaluate_call_aware_integer<
             base,
             argument,
             operator,
+            euclidean,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -2362,6 +2363,10 @@ fn evaluate_call_aware_integer<
             }
             let left = recurse(base)?;
             let right = recurse(argument)?;
+            if euclidean {
+                return euclidean_integer_arithmetic(left, right, bits, ty.is_signed(), operator)
+                    .map_err(arithmetic_error);
+            }
             match operator {
                 BinaryOperator::Add => left.overflowing_add(right).0 & mask,
                 BinaryOperator::Subtract => left.overflowing_sub(right).0 & mask,
@@ -3341,6 +3346,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             base,
             argument,
             operator,
+            euclidean,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3352,6 +3358,10 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             }
             let left = recurse(base)?;
             let right = recurse(argument)?;
+            if euclidean {
+                return euclidean_integer_arithmetic(left, right, bits, true, operator)
+                    .map_err(ExecutionError::Arithmetic);
+            }
             match operator {
                 BinaryOperator::Add => left.overflowing_add(right).0,
                 BinaryOperator::Subtract => left.overflowing_sub(right).0,
@@ -3514,6 +3524,36 @@ fn saturating_integer_arithmetic(
             _ => unreachable!(),
         }
     }
+}
+
+fn euclidean_integer_arithmetic(
+    left: u128,
+    right: u128,
+    bits: u8,
+    signed: bool,
+    operator: BinaryOperator,
+) -> Result<u128, ConstEvalError> {
+    let mask = signed_mask(bits);
+    let right = right & mask;
+    if right == 0 {
+        return Err(ConstEvalError::DivisionByZero);
+    }
+    if !signed {
+        return Ok(if operator == BinaryOperator::Divide {
+            (left & mask) / right
+        } else {
+            (left & mask) % right
+        });
+    }
+    let left = decode_signed(left & mask, bits);
+    let right = decode_signed(right, bits);
+    let value = if operator == BinaryOperator::Divide {
+        left.checked_div_euclid(right)
+    } else {
+        left.checked_rem_euclid(right)
+    }
+    .ok_or(ConstEvalError::Overflow)?;
+    Ok(value as u128 & mask)
 }
 
 fn absolute_difference_integer_bits(left: u128, right: u128, bits: u8, signed: bool) -> u128 {

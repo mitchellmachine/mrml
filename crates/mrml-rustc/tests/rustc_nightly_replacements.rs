@@ -1843,6 +1843,28 @@ fn rustc_wrapping_integer_methods_reach_native_objects() {
 }
 
 #[test]
+fn rustc_euclidean_integer_division_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, rhs: i16) -> i16 { input.rem_euclid(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.div_euclid(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.rem_euclid(rhs) }",
+        "const VALUE: i8 = (-7i8).div_euclid(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i16 = (-7i16).rem_euclid(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: i32 = 7i32.div_euclid(-4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
+        "const VALUE: u64 = 7u64.rem_euclid(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_saturating_integer_unary_methods_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> i8 { input.saturating_neg() }",

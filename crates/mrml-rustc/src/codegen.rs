@@ -3090,6 +3090,7 @@ fn runtime_expression_type_with_locals<
             base,
             argument,
             operator,
+            euclidean,
         } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -3109,14 +3110,16 @@ fn runtime_expression_type_with_locals<
             )?;
             match base_type {
                 RuntimeExpressionType::RawPointer { .. }
-                    if matches!(
-                        operator,
-                        crate::BinaryOperator::Add | crate::BinaryOperator::Subtract
-                    ) && matches!(
-                        argument_type,
-                        RuntimeExpressionType::Integer(None)
-                            | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
-                    ) =>
+                    if !euclidean
+                        && matches!(
+                            operator,
+                            crate::BinaryOperator::Add | crate::BinaryOperator::Subtract
+                        )
+                        && matches!(
+                            argument_type,
+                            RuntimeExpressionType::Integer(None)
+                                | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+                        ) =>
                 {
                     Ok(base_type)
                 }
@@ -5014,6 +5017,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 base,
                 argument,
                 operator,
+                euclidean,
             } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
@@ -5058,7 +5062,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     right?;
                     self.evaluation_depth -= 1;
                     self.emit(&[0x59])?;
-                    let result = if matches!(
+                    let result = if euclidean {
+                        self.emit_euclidean_division(operator)
+                    } else if matches!(
                         operator,
                         crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder
                     ) {
@@ -8822,6 +8828,52 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.emit_normalize()
     }
 
+    fn emit_euclidean_division(
+        &mut self,
+        operator: crate::BinaryOperator,
+    ) -> Result<(), CodegenError> {
+        use crate::BinaryOperator::{Divide, Remainder};
+        debug_assert!(matches!(operator, Divide | Remainder));
+        self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x85, 0xc9])?;
+        self.emit_trap_branch(0x84)?;
+        if !self.width.signed {
+            self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
+            if operator == Remainder {
+                self.emit(&[0x48, 0x89, 0xd0])?;
+            }
+            return self.emit_normalize();
+        }
+        self.emit(&[0x48, 0x83, 0xf9, 0xff])?;
+        let ordinary_divisor = self.emit_forward_branch(0x85)?;
+        self.emit(&[0x49, 0xb9])?;
+        self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+        self.emit(&[0x4c, 0x39, 0xc8])?;
+        self.emit_trap_branch(0x84)?;
+        self.patch_forward_branch(ordinary_divisor)?;
+        self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9, 0x48, 0x85, 0xd2])?;
+        let nonnegative = self.emit_forward_branch(0x89)?;
+        self.emit(&[0x48, 0x85, 0xc9])?;
+        let negative_divisor = self.emit_forward_branch(0x88)?;
+        if operator == Divide {
+            self.emit(&[0x48, 0xff, 0xc8])?;
+        } else {
+            self.emit(&[0x48, 0x01, 0xca])?;
+        }
+        let adjusted = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(negative_divisor)?;
+        if operator == Divide {
+            self.emit(&[0x48, 0xff, 0xc0])?;
+        } else {
+            self.emit(&[0x48, 0x29, 0xca])?;
+        }
+        self.patch_forward_branch(adjusted)?;
+        self.patch_forward_branch(nonnegative)?;
+        if operator == Remainder {
+            self.emit(&[0x48, 0x89, 0xd0])?;
+        }
+        self.emit_normalize()
+    }
+
     fn emit_wrapping_division(
         &mut self,
         operator: crate::BinaryOperator,
@@ -12172,6 +12224,47 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn divides_primitive_integers_euclideanly() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, rhs: i16) -> i16 { input.rem_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, rhs: u32) -> u32 { input.rem_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.div_euclid(rhs) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.div_euclid(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.rem_euclid(rhs) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
