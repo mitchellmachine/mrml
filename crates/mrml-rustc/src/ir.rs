@@ -338,6 +338,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerWidthCast { .. }
             | ExprKind::UncheckedIntegerOperation { .. }
+            | ExprKind::CheckedIntegerOption { .. }
+            | ExprKind::IntegerOptionUnwrapOr { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }

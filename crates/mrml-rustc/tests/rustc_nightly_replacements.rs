@@ -2853,6 +2853,33 @@ fn rustc_unchecked_integer_operations_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_exact_division_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u32, b: u32, fallback: u32) -> u32 { a.checked_div_exact(b).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, b: i64, fallback: i64) -> i64 { a.checked_div_exact(b).unwrap_or(fallback) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+
+    assert!(compile_wide(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u16) -> u8 { a.checked_div_exact(b).unwrap_or(0) }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+    assert!(compile_wide(
+        "const VALUE: u8 = 84u8.checked_div_exact(2).unwrap_or(0); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+}
+
+#[test]
 fn rustc_signed_clamp_magnitude_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i8, limit: u8) -> i8 { value.clamp_magnitude(limit) }",

@@ -2321,6 +2321,14 @@ fn validate_runtime_inline_const<
                 recurse(second_argument)?;
             }
         }
+        ExprKind::CheckedIntegerOption { base, argument, .. } => {
+            recurse(base)?;
+            recurse(argument)?;
+        }
+        ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+            recurse(option)?;
+            recurse(fallback)?;
+        }
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base)?;
             recurse(argument)?;
@@ -3297,6 +3305,54 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             if disjoint && integer_type.is_signed() {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
+        }
+        ExprKind::CheckedIntegerOption { .. } => {
+            Err(CodegenErrorKind::RuntimeExpressionUnsupported)
+        }
+        ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+            let option = tree
+                .expression(option)
+                .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+            let ExprKind::CheckedIntegerOption {
+                base,
+                argument,
+                exact_division: true,
+            } = option.kind
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    argument,
+                    depth + 1,
+                )? != base_type
+                || !runtime_types_compatible(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        fallback,
+                        depth + 1,
+                    )?,
+                    base_type,
+                )
+            {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
@@ -5700,6 +5756,73 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     }
                 }
                 self.width = operand_width;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::CheckedIntegerOption { .. } => {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+                let option = tree
+                    .expression(option)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                let ExprKind::CheckedIntegerOption {
+                    base,
+                    argument,
+                    exact_division: true,
+                } = option.kind
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                };
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, argument, depth + 1)?;
+                self.emit(&[0x59, 0x45, 0x31, 0xc0, 0x48, 0x85, 0xc0])?;
+                self.evaluation_depth -= 1;
+                let zero_divisor = self.emit_forward_branch(0x84)?;
+                let mut signed_overflow = None;
+                if operand_width.signed {
+                    self.emit(&[0x48, 0x83, 0xf8, 0xff])?;
+                    let ordinary_divisor = self.emit_forward_branch(0x85)?;
+                    self.emit(&[0x48, 0xba])?;
+                    self.emit(&(operand_width.minimum as u64).to_le_bytes())?;
+                    self.emit(&[0x48, 0x39, 0xd1])?;
+                    signed_overflow = Some(self.emit_forward_branch(0x84)?);
+                    self.patch_forward_branch(ordinary_divisor)?;
+                }
+                self.emit(&[0x48, 0x87, 0xc1])?;
+                if operand_width.signed {
+                    self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9])?;
+                } else {
+                    self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
+                }
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                let remainder = self.emit_forward_branch(0x85)?;
+                self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
+                self.patch_forward_branch(zero_divisor)?;
+                if let Some(signed_overflow) = signed_overflow {
+                    self.patch_forward_branch(signed_overflow)?;
+                }
+                self.patch_forward_branch(remainder)?;
+                self.emit(&[0x50, 0x41, 0x50])?;
+                self.evaluation_depth += 2;
+                self.emit_expression(tree, fallback, depth + 1)?;
+                self.emit(&[0x41, 0x58, 0x59, 0x4d, 0x85, 0xc0, 0x48, 0x0f, 0x45, 0xc1])?;
+                self.evaluation_depth -= 2;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -15100,6 +15223,44 @@ mod tests {
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_exact_division_options_with_unwrap_or() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, b: u32, fallback: u32) -> u32 { a.checked_div_exact(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: i64, fallback: i64) -> i64 { a.checked_div_exact(b).unwrap_or(fallback) }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div_exact(b).unwrap_or(0) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_div_exact(b).unwrap_or(0) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
                 )
                 .is_err(),
                 "{source}"

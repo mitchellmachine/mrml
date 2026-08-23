@@ -2350,6 +2350,15 @@ receiver/argument types, invalid arity, unsigned negation, and signed disjoint
 bit-or are rejected; unsafe blocks are not accepted as a substitute because
 this bounded parser does not yet represent their safety context.
 
+Runtime integer expressions can consume pinned-nightly `checked_div_exact`
+results with `Option::unwrap_or`. Exact nonzero divisions return their quotient;
+inexact divisions, zero divisors, and signed `MIN / -1` select the eagerly
+evaluated fallback without trapping. Signed and unsigned receivers require a
+same-type divisor and fallback. This establishes explicit checked-integer
+option producer and consumer nodes while direct `Option` returns, option locals,
+other option consumers, and constant evaluation remain outside this milestone
+until their enum ABI and value representation are implemented.
+
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
 Windows development host and 0.005 seconds under Arch Linux WSL2. These are

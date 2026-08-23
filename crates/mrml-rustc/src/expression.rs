@@ -510,6 +510,15 @@ pub enum ExprKind<'source> {
         disjoint: bool,
         funnel: bool,
     },
+    CheckedIntegerOption {
+        base: ExprId,
+        argument: ExprId,
+        exact_division: bool,
+    },
+    IntegerOptionUnwrapOr {
+        option: ExprId,
+        fallback: ExprId,
+    },
     IntegerClampMagnitude {
         base: ExprId,
         limit: ExprId,
@@ -851,6 +860,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerWidthCast { .. }
             | ExprKind::UncheckedIntegerOperation { .. }
+            | ExprKind::CheckedIntegerOption { .. }
+            | ExprKind::IntegerOptionUnwrapOr { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1131,9 +1142,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerFunnelShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerWidthCast { .. }
-            | ExprKind::UncheckedIntegerOperation { .. } => {
-                Err(ConstEvalError::InvalidExpressionTree)
-            }
+            | ExprKind::UncheckedIntegerOperation { .. }
+            | ExprKind::CheckedIntegerOption { .. }
+            | ExprKind::IntegerOptionUnwrapOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2642,6 +2653,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 if let Some(second_argument) = second_argument {
                     self.substitute_identifier(second_argument, name, replacement, depth + 1)?;
                 }
+            }
+            ExprKind::CheckedIntegerOption { base, argument, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(argument, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
+                self.substitute_identifier(fallback, name, replacement, depth + 1)?;
             }
             ExprKind::SaturatingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -4382,6 +4401,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unchecked_funnel_shl"
                         | "unchecked_funnel_shr"
                         | "unchecked_disjoint_bitor"
+                        | "checked_div_exact"
+                        | "unwrap_or"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4548,6 +4569,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "unchecked_funnel_shl"
                     | "unchecked_funnel_shr"
                     | "unchecked_disjoint_bitor"
+                    | "checked_div_exact"
+                    | "unwrap_or"
                     | "strict_add"
                     | "strict_sub"
                     | "strict_add_signed"
@@ -4841,6 +4864,19 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "unchecked_disjoint_bitor" => BinaryOperator::BitOr,
                         _ => unreachable!(),
                     },
+                },
+                "checked_div_exact" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    exact_division: true,
+                },
+                "unwrap_or" => ExprKind::IntegerOptionUnwrapOr {
+                    option: base,
+                    fallback: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
                 },
                 "clamp_magnitude" => ExprKind::IntegerClampMagnitude {
                     base,
