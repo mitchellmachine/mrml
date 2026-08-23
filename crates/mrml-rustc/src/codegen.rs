@@ -3029,6 +3029,205 @@ fn preanalyze_runtime_loop_actions<
 }
 
 #[allow(clippy::too_many_arguments)]
+fn preanalyze_runtime_nested_loop_block<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    block: &crate::NestedLoopBlock<'source>,
+    operand_type: &str,
+    body_start: usize,
+    facts: &mut RuntimeBodyFacts<'source>,
+    outer_locals: &[Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
+    outer_local_count: usize,
+) -> Result<(), CodegenError> {
+    let mut locals = *outer_locals;
+    let mut local_count = outer_local_count;
+    if let Some(condition) = block.entry_condition {
+        preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            facts,
+            &locals[..local_count],
+            function,
+            resolver,
+            condition.condition,
+            condition.condition_span,
+            body_start,
+        )?;
+    }
+    let control_count = block
+        .conditional_returns()
+        .len()
+        .checked_add(block.conditional_continues().len())
+        .and_then(|count| count.checked_add(block.conditional_breaks().len()))
+        .and_then(|count| count.checked_add(block.unconditional_controls().len()))
+        .ok_or(CodegenError {
+            kind: CodegenErrorKind::OutputTooSmall,
+            span: function.name_span,
+        })?;
+    for action_index in 0..=block.action_count() {
+        for control_order in 0..control_count {
+            for ((control, stored_action_index), stored_order) in block
+                .unconditional_controls()
+                .iter()
+                .flatten()
+                .zip(block.unconditional_control_action_indices())
+                .zip(block.unconditional_control_orders())
+            {
+                if action_index != *stored_action_index || control_order != *stored_order {
+                    continue;
+                }
+                if let crate::NestedLoopUnconditionalControl::Return(value) = control {
+                    preanalyze_runtime_source_expression_reads::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        facts,
+                        &locals[..local_count],
+                        function,
+                        resolver,
+                        value.value,
+                        value.value_span,
+                        body_start,
+                    )?;
+                }
+            }
+            for ((condition, stored_action_index), stored_order) in block
+                .conditional_breaks()
+                .iter()
+                .flatten()
+                .zip(block.conditional_break_action_indices())
+                .zip(block.conditional_break_control_orders())
+            {
+                if action_index == *stored_action_index && control_order == *stored_order {
+                    preanalyze_runtime_source_expression_reads::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        facts,
+                        &locals[..local_count],
+                        function,
+                        resolver,
+                        condition.condition,
+                        condition.condition_span,
+                        body_start,
+                    )?;
+                }
+            }
+            for ((conditional, stored_action_index), stored_order) in block
+                .conditional_returns()
+                .iter()
+                .flatten()
+                .zip(block.conditional_return_action_indices())
+                .zip(block.conditional_return_control_orders())
+            {
+                if action_index != *stored_action_index || control_order != *stored_order {
+                    continue;
+                }
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    conditional.condition,
+                    conditional.condition_span,
+                    body_start,
+                )?;
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    conditional.value,
+                    conditional.value_span,
+                    body_start,
+                )?;
+            }
+            for ((condition, stored_action_index), stored_order) in block
+                .conditional_continues()
+                .iter()
+                .flatten()
+                .zip(block.conditional_continue_action_indices())
+                .zip(block.conditional_continue_control_orders())
+            {
+                if action_index == *stored_action_index && control_order == *stored_order {
+                    preanalyze_runtime_source_expression_reads::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        facts,
+                        &locals[..local_count],
+                        function,
+                        resolver,
+                        condition.condition,
+                        condition.condition_span,
+                        body_start,
+                    )?;
+                }
+            }
+        }
+        if action_index == block.action_count() {
+            break;
+        }
+        let action = block.actions()[action_index].ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+            span: function.name_span,
+        })?;
+        match action {
+            crate::ConditionalLoopAction::Local(local) => {
+                preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                    function,
+                    resolver,
+                    local,
+                    operand_type,
+                    body_start,
+                    facts,
+                    &mut locals,
+                    &mut local_count,
+                )?;
+            }
+            crate::ConditionalLoopAction::Assignment(assignment) => {
+                preanalyze_runtime_assignment_access::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    &assignment,
+                )?;
+            }
+            crate::ConditionalLoopAction::Expression(statement) => {
+                preanalyze_runtime_expression_statement_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    &statement,
+                    body_start,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn preanalyze_runtime_loop_declarations<
     'source,
     R: ConstantResolver,
@@ -3085,10 +3284,10 @@ fn preanalyze_runtime_loop_declarations<
                     kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                     span: function.name_span,
                 })?;
-                let _ = preanalyze_runtime_loop_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                preanalyze_runtime_nested_loop_block::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     function,
                     resolver,
-                    block.actions(),
+                    &block,
                     operand_type,
                     body_start,
                     facts,
@@ -18353,6 +18552,60 @@ mod tests {
         ]) {
             assert_eq!(fact.unwrap().base, identity);
         }
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_follow_interleaved_nested_loop_control_order() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(limit: u16, gate: bool, stop: u16) -> u16 { let mut outer: u16 = 0; while outer < limit { outer += 1; let seed: u16 = outer + limit; while seed < stop { if gate && seed == outer { continue; } let inner: u16 = seed + outer; if inner == stop { break; } if gate && inner == limit { return inner + outer; } outer += inner; break; } } outer }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(facts.assignment_access_count, 2);
+        assert_eq!(facts.assignment_read_count, 20);
+        for (fact, identity) in facts.assignment_reads[..20].iter().zip([
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
         }

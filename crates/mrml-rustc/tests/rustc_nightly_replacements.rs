@@ -3665,6 +3665,13 @@ fn rustc_scalar_let_shadowing_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_interleaved_nested_loop_controls_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u16, gate: bool, stop: u16) -> u16 { let mut outer: u16 = 0; while outer < limit { outer += 1; let seed: u16 = outer + limit; while seed < stop { if gate && seed == outer { continue; } let inner: u16 = seed + outer; if inner == stop { break; } if gate && inner == limit { return inner + outer; } outer += inner; break; } } outer }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
