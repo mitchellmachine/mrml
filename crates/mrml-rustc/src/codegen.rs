@@ -2331,6 +2331,7 @@ fn validate_runtime_inline_const<
             recurse(limit)?;
         }
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value)?,
+        ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes)?,
         ExprKind::IntegerAssociatedConstant { .. } => {}
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
@@ -3371,6 +3372,32 @@ fn runtime_expression_type_with_locals<
             if value_type != RuntimeExpressionType::Integer(None)
                 && value_type != RuntimeExpressionType::Integer(Some(integer_type))
             {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Integer(Some(integer_type)))
+        }
+        ExprKind::IntegerFromBytes {
+            bytes,
+            integer_type,
+            ..
+        } => {
+            let count = integer_type
+                .bits(64)
+                .map(|bits| usize::from(bits / 8))
+                .ok_or(CodegenErrorKind::UnsupportedRuntimeType)?;
+            let expected = RuntimeExpressionType::Array {
+                element: RuntimeArrayElementType::Integer(Some(crate::IntegerType::U8)),
+                count,
+            };
+            let actual = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                bytes,
+                depth + 1,
+            )?;
+            if !runtime_types_compatible(actual, expected) {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(RuntimeExpressionType::Integer(Some(integer_type)))
@@ -5660,6 +5687,43 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_expression(tree, value, depth + 1)?;
                 if !little {
                     match self.width.bits {
+                        8 => {}
+                        16 => self.emit(&[0x66, 0xc1, 0xc8, 8])?,
+                        32 => self.emit(&[0x0f, 0xc8])?,
+                        64 => self.emit(&[0x48, 0x0f, 0xc8])?,
+                        _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                    }
+                }
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerFromBytes {
+                bytes,
+                integer_type,
+                order,
+            } => {
+                let width = runtime_width(integer_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let count = usize::from(width.bits / 8);
+                let previous_width = self.width;
+                self.width = runtime_width("u8")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_array_to_stack(tree, bytes, count)?;
+                self.emit_pack_array_word(
+                    RuntimeArrayElementType::Integer(Some(crate::IntegerType::U8)),
+                    count,
+                    1,
+                    0,
+                )?;
+                self.evaluation_depth -= count;
+                self.emit_stack_cleanup_bytes(
+                    count
+                        .checked_mul(8)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                )?;
+                self.width = width;
+                if order == crate::expression::IntegerByteOrder::Big {
+                    match width.bits {
                         8 => {}
                         16 => self.emit(&[0x66, 0xc1, 0xc8, 8])?,
                         32 => self.emit(&[0x0f, 0xc8])?,
@@ -14773,6 +14837,47 @@ mod tests {
             compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn constructs_integers_from_byte_arrays() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u8; 1]) -> u8 { u8::from_be_bytes(bytes) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u8; 2]) -> i16 { i16::from_le_bytes(bytes) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u8; 4]) -> u32 { u32::from_be_bytes(bytes) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u8; 8]) -> i64 { i64::from_ne_bytes(bytes) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u8; 8]) -> usize { usize::from_le_bytes(bytes) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u8; 3]) -> u32 { u32::from_be_bytes(bytes) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(bytes: [u16; 2]) -> u32 { u32::from_le_bytes(bytes) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1536, 2, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
     }
 
     #[test]

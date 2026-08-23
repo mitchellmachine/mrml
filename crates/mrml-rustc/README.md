@@ -2124,6 +2124,12 @@ Signed and unsigned primitive `from_be` and `from_le` associated functions
 accept one exact-type integer in constants and runtime functions. On the
 supported little-endian targets, `from_be` reverses the primitive's bytes while
 `from_le` preserves them; both retain the declared signed representation.
+The parallel `from_be_bytes`, `from_le_bytes`, and `from_ne_bytes` constructors
+require an exact `[u8; size_of::<Self>()]` value. Fixed-array literals and native
+array parameters are packed without allocation; big-endian input reverses the
+packed word on the supported little-endian targets, while little and native
+orders preserve it. Constant evaluation supports the full 16-byte `u128` and
+`i128` forms even though native scalar exports remain bounded to 64 bits.
 All twelve primitive integer types expose their stable `MIN`, `MAX`, and `BITS`
 associated constants. `MIN` and `MAX` retain the named primitive type, including
 the target pointer width and signed two's-complement boundary, while `BITS`

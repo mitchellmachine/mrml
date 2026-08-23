@@ -215,6 +215,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerSignCast { .. }
                         | ExprKind::IntegerClampMagnitude { .. }
                         | ExprKind::IntegerEndianFrom { .. }
+                        | ExprKind::IntegerFromBytes { .. }
                         | ExprKind::IntegerAssociatedConstant { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
@@ -1924,6 +1925,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerSignCast { .. }
                 | ExprKind::IntegerClampMagnitude { .. }
                 | ExprKind::IntegerEndianFrom { .. }
+                | ExprKind::IntegerFromBytes { .. }
                 | ExprKind::IntegerAssociatedConstant { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
@@ -2085,6 +2087,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const) || recurse(limit, inside_inline_const)
         }
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value, inside_inline_const),
+        ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes, inside_inline_const),
         ExprKind::IntegerAssociatedConstant { .. } => false,
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
@@ -2224,6 +2227,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerSignCast { base, .. } => recurse(base),
         ExprKind::IntegerClampMagnitude { base, limit } => recurse(base) || recurse(limit),
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value),
+        ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes),
         ExprKind::IntegerAssociatedConstant { .. } => false,
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
@@ -2720,6 +2724,19 @@ fn evaluate_call_aware_integer<
                     crate::expression::IntegerBitTransform::ToBigEndian
                 },
             )
+        }
+        ExprKind::IntegerFromBytes {
+            bytes: byte_array,
+            integer_type,
+            order,
+        } => {
+            if ty != integer_type {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = tree
+                .evaluate_byte_array(byte_array, usize::from(bits / 8), constants)
+                .map_err(arithmetic_error)?;
+            integer_from_packed_bytes(value, bits, order)
         }
         ExprKind::IntegerAssociatedConstant {
             integer_type,
@@ -3787,6 +3804,19 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 },
             )
         }
+        ExprKind::IntegerFromBytes {
+            bytes: byte_array,
+            integer_type,
+            order,
+        } => {
+            if ty != integer_type {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let value = tree
+                .evaluate_byte_array(byte_array, usize::from(bits / 8), constants)
+                .map_err(ExecutionError::Arithmetic)?;
+            integer_from_packed_bytes(value, bits, order)
+        }
         ExprKind::IntegerAssociatedConstant {
             integer_type,
             constant,
@@ -4013,6 +4043,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
             expression_integer_type(tree, base, constants)
         }
         ExprKind::IntegerEndianFrom { integer_type, .. } => Some(integer_type),
+        ExprKind::IntegerFromBytes { integer_type, .. } => Some(integer_type),
         ExprKind::IntegerAssociatedConstant {
             integer_type,
             constant,
@@ -4241,6 +4272,24 @@ fn integer_bits_less_than(left: u128, right: u128, bits: u8, signed: bool) -> bo
     } else {
         left < right
     }
+}
+
+fn integer_from_packed_bytes(
+    value: u128,
+    bits: u8,
+    order: crate::expression::IntegerByteOrder,
+) -> u128 {
+    if order != crate::expression::IntegerByteOrder::Big {
+        return value;
+    }
+    let bytes = bits / 8;
+    let mut result = 0u128;
+    let mut index = 0u8;
+    while index < bytes {
+        result |= (value >> (u32::from(index) * 8) & 0xff) << (u32::from(bytes - index - 1) * 8);
+        index += 1;
+    }
+    result
 }
 
 fn midpoint_integer_bits(left: u128, right: u128, bits: u8, signed: bool) -> u128 {

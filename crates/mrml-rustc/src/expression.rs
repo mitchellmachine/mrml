@@ -441,6 +441,11 @@ pub enum ExprKind<'source> {
         integer_type: IntegerType,
         little: bool,
     },
+    IntegerFromBytes {
+        bytes: ExprId,
+        integer_type: IntegerType,
+        order: IntegerByteOrder,
+    },
     IntegerAssociatedConstant {
         integer_type: IntegerType,
         constant: IntegerAssociatedConstant,
@@ -539,6 +544,13 @@ pub enum IntegerAssociatedConstant {
     Minimum,
     Maximum,
     Bits,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerByteOrder {
+    Big,
+    Little,
+    Native,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -757,6 +769,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
+            | ExprKind::IntegerFromBytes { .. }
             | ExprKind::IntegerAssociatedConstant { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
@@ -1034,6 +1047,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerSignCast { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerAssociatedConstant { .. } => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
@@ -1250,6 +1264,26 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Sequence { then, .. } => self.array_length(then, depth + 1),
             _ => None,
         }
+    }
+
+    pub(crate) fn evaluate_byte_array<R: ConstantResolver>(
+        &self,
+        id: ExprId,
+        count: usize,
+        resolver: &R,
+    ) -> Result<u128, ConstEvalError> {
+        if self.array_length(id, 0) != Some(count) {
+            return Err(ConstEvalError::InvalidExpressionTree);
+        }
+        let mut value = 0u128;
+        let mut index = 0usize;
+        while index < count {
+            let byte = self.evaluate_array_element(id, index, resolver, 0)?;
+            let byte = u8::try_from(byte).map_err(|_| ConstEvalError::Overflow)?;
+            value |= u128::from(byte) << (index * 8);
+            index += 1;
+        }
+        Ok(value)
     }
 }
 
@@ -1689,7 +1723,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                             },
                         });
                     }
-                    if !matches!(member.text, "from_be" | "from_le") {
+                    if !matches!(
+                        member.text,
+                        "from_be" | "from_le" | "from_be_bytes" | "from_le_bytes" | "from_ne_bytes"
+                    ) {
                         return Err(
                             self.error(ExpressionErrorKind::ExpectedExpression, Some(member))
                         );
@@ -1704,12 +1741,31 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     else {
                         return Err(self.error(ExpressionErrorKind::ExpectedCloseParen, close));
                     };
-                    return self.push(Expr {
-                        kind: ExprKind::IntegerEndianFrom {
+                    let kind = match member.text {
+                        "from_be" | "from_le" => ExprKind::IntegerEndianFrom {
                             value,
                             integer_type,
                             little: member.text == "from_le",
                         },
+                        "from_be_bytes" => ExprKind::IntegerFromBytes {
+                            bytes: value,
+                            integer_type,
+                            order: IntegerByteOrder::Big,
+                        },
+                        "from_le_bytes" => ExprKind::IntegerFromBytes {
+                            bytes: value,
+                            integer_type,
+                            order: IntegerByteOrder::Little,
+                        },
+                        "from_ne_bytes" => ExprKind::IntegerFromBytes {
+                            bytes: value,
+                            integer_type,
+                            order: IntegerByteOrder::Native,
+                        },
+                        _ => unreachable!(),
+                    };
+                    return self.push(Expr {
+                        kind,
                         span: Span {
                             start: token.span.start,
                             end: close.span.end,
@@ -2444,6 +2500,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerEndianFrom { value, .. } => {
                 self.substitute_identifier(value, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerFromBytes { bytes, .. } => {
+                self.substitute_identifier(bytes, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerAssociatedConstant { .. } => {}
             ExprKind::IntegerWrappingShift { base, distance, .. } => {

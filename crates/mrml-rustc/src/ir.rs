@@ -338,6 +338,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
+            | ExprKind::IntegerFromBytes { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }

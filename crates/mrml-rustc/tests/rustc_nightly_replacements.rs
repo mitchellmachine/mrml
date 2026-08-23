@@ -2511,6 +2511,27 @@ fn rustc_integer_endian_constructors_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_byte_array_constructors_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(bytes: [u8; 1]) -> u8 { u8::from_be_bytes(bytes) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(bytes: [u8; 2]) -> i16 { i16::from_le_bytes(bytes) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(bytes: [u8; 4]) -> u32 { u32::from_be_bytes(bytes) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(bytes: [u8; 8]) -> i64 { i64::from_ne_bytes(bytes) }",
+        "const VALUE: u32 = u32::from_be_bytes([0x12, 0x34, 0x56, 0x78]); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: i64 = i64::from_le_bytes([0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+        "const VALUE: u128 = u128::from_be_bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE as u64 }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_associated_constants_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { u8::MIN }",
