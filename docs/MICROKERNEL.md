@@ -96,10 +96,26 @@ tests pass and the resulting DLL passes MRML's Authenticode PE parser.
 
 The bundled LLVM GNU linker does not implement Microsoft's `/ENCLAVE` linker
 switch (while LLVM's MSVC-flavor linker is incompatible with the installed GNU
-target). Therefore this DLL is not yet loadable as a VBS enclave. MRML must
-finish the equivalent PE load-configuration metadata itself, validate it
-structurally, set force-integrity semantics, and attach a Windows-accepted
-enclave signature before claiming the image-load milestone.
+target). MRML therefore emits the equivalent load configuration and finalizes
+the integrity characteristics itself. The DLL is still not loadable until its
+finalized bytes carry a Windows-accepted enclave signature.
+
+The GNU/LLVM image now supplies the reserved `_load_config_used` symbol as an
+exact 256-byte x86_64 load configuration. Its relocated enclave pointer resolves
+to the 80-byte strict configuration in the built DLL. An image-relative CFG
+table contains the sorted RVAs of `DllMain` and the authority entry point; the
+load configuration binds its VA, exact count, instrumentation/table flags, and
+unused-security-cookie declaration. Rust is built with Windows CFG checks.
+
+`mrml-sign finalize-vbs-enclave` is the original post-link validation gate. It
+accepts only unsigned PE32+ x86_64 images with one canonical 256-byte load
+configuration, zero reserved fields, a strict non-debug primary enclave,
+2-MiB-multiple private size, nonzero thread count, and a bounded sorted CFG
+table whose targets reside in executable sections. Only after those checks does
+it set `IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY` and
+`IMAGE_DLLCHARACTERISTICS_GUARD_CF` and recompute the PE checksum. The produced
+image passes the independent MRML Authenticode digest parser. A Windows-accepted
+certificate signature is still required before the real load test.
 
 The untrusted broker protocol uses fixed-size canonical launch requests and
 authority receipts. A request binds a fresh nonce and sequence to the exact

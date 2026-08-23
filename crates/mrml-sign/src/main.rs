@@ -1,5 +1,6 @@
 #![no_std]
 #![cfg_attr(not(test), no_main)]
+#![cfg_attr(test, allow(dead_code))]
 
 use mrml_crypto::{
     LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, Sha3_512,
@@ -43,11 +44,24 @@ fn application_main() -> Result<()> {
         Some("attach-authenticode") if args.len() == 5 => {
             attach_authenticode(&args[2], &args[3], &args[4])
         }
+        Some("finalize-vbs-enclave") if args.len() == 4 => finalize_vbs_enclave(&args[2], &args[3]),
         Some("manifest") if args.len() == 10 => manifest(&args),
         _ => Err(anyhow!(
-            "usage:\n  mrml-sign keygen PRIVATE PUBLIC\n  mrml-sign sign KIND VERSION ARTIFACT PRIVATE SIGNATURE\n  mrml-sign sign-bundle KIND VERSION ARTIFACT PRIVATE OUTPUT\n  mrml-sign key-digest PUBLIC\n  mrml-sign authenticode-digest IMAGE.efi\n  mrml-sign attach-authenticode IMAGE.efi SIGNATURE.p7b OUTPUT.efi\n  mrml-sign manifest VERSION OUTPUT NEXT_ROOT KERNEL VM SERVICE CUDA POLICY"
+            "usage:\n  mrml-sign keygen PRIVATE PUBLIC\n  mrml-sign sign KIND VERSION ARTIFACT PRIVATE SIGNATURE\n  mrml-sign sign-bundle KIND VERSION ARTIFACT PRIVATE OUTPUT\n  mrml-sign key-digest PUBLIC\n  mrml-sign authenticode-digest IMAGE.efi\n  mrml-sign attach-authenticode IMAGE.efi SIGNATURE.p7b OUTPUT.efi\n  mrml-sign finalize-vbs-enclave INPUT.dll OUTPUT.dll\n  mrml-sign manifest VERSION OUTPUT NEXT_ROOT KERNEL VM SERVICE CUDA POLICY"
         )),
     }
+}
+
+fn finalize_vbs_enclave(input_path: &str, output_path: &str) -> Result<()> {
+    if mrml_runtime::path_exists(output_path) {
+        return Err(anyhow!("refusing to overwrite finalized enclave image"));
+    }
+    let image = mrml_runtime::read_file_bounded(input_path, MAX_ARTIFACT)?;
+    let output = authenticode::finalize_vbs_enclave(&image)
+        .map_err(|_| anyhow!("invalid or noncanonical VBS enclave PE image"))?;
+    mrml_runtime::write_file(output_path, &output)?;
+    println!("validated VBS load configuration and finalized PE integrity flags");
+    Ok(())
 }
 
 fn attach_authenticode(image_path: &str, certificate_path: &str, output_path: &str) -> Result<()> {

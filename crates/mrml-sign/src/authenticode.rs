@@ -13,13 +13,164 @@ pub enum AuthenticodeError {
     UnalignedImage,
     EmptyCertificate,
     Allocation,
+    InvalidEnclave,
+}
+
+const FORCE_INTEGRITY: u16 = 0x0080;
+const GUARD_CF: u16 = 0x4000;
+const REQUIRED_GUARD_FLAGS: u32 = 0x0000_0100 | 0x0000_0400 | 0x0000_0800;
+
+pub fn finalize_vbs_enclave(image: &[u8]) -> Result<Vector<u8>, AuthenticodeError> {
+    let pe = pe_offset(image)?;
+    let optional = pe.checked_add(24).ok_or(AuthenticodeError::Overflow)?;
+    let section_count = read_u16(image, pe + 6)? as usize;
+    let optional_size = read_u16(image, pe + 20)? as usize;
+    if read_u16(image, optional)? != 0x020b
+        || optional_size < 240
+        || section_count == 0
+        || section_count > 32
+    {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let image_base = read_u64(image, optional + 24)?;
+    let security = optional + 144;
+    if read_u32(image, security)? != 0 || read_u32(image, security + 4)? != 0 {
+        return Err(AuthenticodeError::AlreadySigned);
+    }
+    let load_directory = optional + 192;
+    let load_rva = read_u32(image, load_directory)?;
+    if read_u32(image, load_directory + 4)? != 256 {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let load = rva_file_offset(image, pe, optional, section_count, load_rva, 256, false)?;
+    if read_u32(image, load)? != 256
+        || image[load + 4..load + 128].iter().any(|byte| *byte != 0)
+        || image[load + 148..load + 248].iter().any(|byte| *byte != 0)
+    {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let guard_table_va = read_u64(image, load + 128)?;
+    let guard_count = read_u64(image, load + 136)?;
+    let guard_flags = read_u32(image, load + 144)?;
+    if guard_count == 0
+        || guard_count > 4096
+        || guard_flags != REQUIRED_GUARD_FLAGS
+        || guard_table_va < image_base
+    {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let guard_bytes = usize::try_from(guard_count)
+        .ok()
+        .and_then(|count| count.checked_mul(4))
+        .ok_or(AuthenticodeError::Overflow)?;
+    let guard_table_rva = u32::try_from(guard_table_va - image_base)
+        .map_err(|_| AuthenticodeError::InvalidEnclave)?;
+    let guard_table = rva_file_offset(
+        image,
+        pe,
+        optional,
+        section_count,
+        guard_table_rva,
+        guard_bytes,
+        false,
+    )?;
+    let mut previous = None;
+    for index in 0..guard_count as usize {
+        let target = read_u32(image, guard_table + index * 4)?;
+        if target == 0 || previous.is_some_and(|value| target <= value) {
+            return Err(AuthenticodeError::InvalidEnclave);
+        }
+        rva_file_offset(image, pe, optional, section_count, target, 1, true)?;
+        previous = Some(target);
+    }
+    let enclave_va = read_u64(image, load + 248)?;
+    if enclave_va < image_base {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let enclave_rva =
+        u32::try_from(enclave_va - image_base).map_err(|_| AuthenticodeError::InvalidEnclave)?;
+    let enclave = rva_file_offset(image, pe, optional, section_count, enclave_rva, 80, false)?;
+    if read_u32(image, enclave)? != 80
+        || read_u32(image, enclave + 4)? != 80
+        || read_u32(image, enclave + 8)? != 2
+        || read_u32(image, enclave + 12)? != 0
+        || read_u32(image, enclave + 16)? != 0
+        || read_u32(image, enclave + 20)? != 0
+        || read_u64(image, enclave + 64)? == 0
+        || !read_u64(image, enclave + 64)?.is_multiple_of(2 * 1024 * 1024)
+        || read_u32(image, enclave + 72)? == 0
+        || read_u32(image, enclave + 76)? != 1
+    {
+        return Err(AuthenticodeError::InvalidEnclave);
+    }
+    let mut output = Vector::new();
+    output
+        .try_extend_from_slice(image)
+        .map_err(|_| AuthenticodeError::Allocation)?;
+    let characteristics = read_u16(&output, optional + 70)? | FORCE_INTEGRITY | GUARD_CF;
+    output[optional + 70..optional + 72].copy_from_slice(&characteristics.to_le_bytes());
+    write_checksum(&mut output)?;
+    Ok(output)
+}
+
+fn pe_offset(image: &[u8]) -> Result<usize, AuthenticodeError> {
+    if read_u16(image, 0)? != 0x5a4d {
+        return Err(AuthenticodeError::InvalidPe);
+    }
+    let pe = read_u32(image, 0x3c)? as usize;
+    if read_u32(image, pe)? != 0x0000_4550 || read_u16(image, pe + 4)? != 0x8664 {
+        return Err(AuthenticodeError::InvalidPe);
+    }
+    Ok(pe)
+}
+
+fn rva_file_offset(
+    image: &[u8],
+    pe: usize,
+    optional: usize,
+    section_count: usize,
+    rva: u32,
+    length: usize,
+    require_executable: bool,
+) -> Result<usize, AuthenticodeError> {
+    let section_table = optional
+        .checked_add(read_u16(image, pe + 20)? as usize)
+        .ok_or(AuthenticodeError::Overflow)?;
+    for index in 0..section_count {
+        let section = section_table
+            .checked_add(index.checked_mul(40).ok_or(AuthenticodeError::Overflow)?)
+            .ok_or(AuthenticodeError::Overflow)?;
+        let virtual_address = read_u32(image, section + 12)?;
+        let raw_size = read_u32(image, section + 16)?;
+        let raw_offset = read_u32(image, section + 20)?;
+        let characteristics = read_u32(image, section + 36)?;
+        let relative = match rva.checked_sub(virtual_address) {
+            Some(value) => value,
+            None => continue,
+        };
+        let end = (relative as usize)
+            .checked_add(length)
+            .ok_or(AuthenticodeError::Overflow)?;
+        if end <= raw_size as usize && (!require_executable || characteristics & 0x2000_0000 != 0) {
+            let at = (raw_offset as usize)
+                .checked_add(relative as usize)
+                .ok_or(AuthenticodeError::Overflow)?;
+            if at
+                .checked_add(length)
+                .is_some_and(|value| value <= image.len())
+            {
+                return Ok(at);
+            }
+        }
+    }
+    Err(AuthenticodeError::InvalidEnclave)
 }
 
 pub fn attach_pkcs7(image: &[u8], certificate: &[u8]) -> Result<Vector<u8>, AuthenticodeError> {
     if certificate.is_empty() {
         return Err(AuthenticodeError::EmptyCertificate);
     }
-    if image.len() % 8 != 0 {
+    if !image.len().is_multiple_of(8) {
         return Err(AuthenticodeError::UnalignedImage);
     }
     // Full parsing also rejects overlays, malformed sections, and existing
@@ -150,7 +301,7 @@ pub fn sha256(image: &[u8]) -> Result<[u8; 32], AuthenticodeError> {
         .checked_add(optional_size)
         .ok_or(AuthenticodeError::Overflow)?;
     let mut sections = [(0usize, 0usize); 32];
-    for index in 0..section_count {
+    for (index, slot) in sections.iter_mut().enumerate().take(section_count) {
         let at = section_table
             .checked_add(index.checked_mul(40).ok_or(AuthenticodeError::Overflow)?)
             .ok_or(AuthenticodeError::Overflow)?;
@@ -160,7 +311,7 @@ pub fn sha256(image: &[u8]) -> Result<[u8; 32], AuthenticodeError> {
         if size != 0 && (start < headers_size || end > content_end) {
             return Err(AuthenticodeError::InvalidSection);
         }
-        sections[index] = (start, size);
+        *slot = (start, size);
     }
     sections[..section_count].sort_unstable_by_key(|section| section.0);
     let mut previous_end = headers_size;
@@ -213,6 +364,16 @@ fn read_u32(bytes: &[u8], at: usize) -> Result<u32, AuthenticodeError> {
     ))
 }
 
+fn read_u64(bytes: &[u8], at: usize) -> Result<u64, AuthenticodeError> {
+    Ok(u64::from_le_bytes(
+        bytes
+            .get(at..at + 8)
+            .ok_or(AuthenticodeError::Truncated)?
+            .try_into()
+            .unwrap(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,6 +391,44 @@ mod tests {
         image[0x198..0x19c].copy_from_slice(&512u32.to_le_bytes());
         image[0x19c..0x1a0].copy_from_slice(&512u32.to_le_bytes());
         image[512..].fill(0x5a);
+        image
+    }
+
+    fn enclave_image() -> [u8; 2048] {
+        let mut image = [0u8; 2048];
+        image[..2].copy_from_slice(&0x5a4d_u16.to_le_bytes());
+        image[0x3c..0x40].copy_from_slice(&0x80_u32.to_le_bytes());
+        image[0x80..0x84].copy_from_slice(&0x0000_4550_u32.to_le_bytes());
+        image[0x84..0x86].copy_from_slice(&0x8664_u16.to_le_bytes());
+        image[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
+        image[0x94..0x96].copy_from_slice(&240u16.to_le_bytes());
+        image[0x98..0x9a].copy_from_slice(&0x020b_u16.to_le_bytes());
+        image[0xb0..0xb8].copy_from_slice(&0x0001_8000_0000_u64.to_le_bytes());
+        image[0xd4..0xd8].copy_from_slice(&512u32.to_le_bytes());
+        image[0x158..0x15c].copy_from_slice(&0x1100u32.to_le_bytes());
+        image[0x15c..0x160].copy_from_slice(&256u32.to_le_bytes());
+        let section = 0x188;
+        image[section..section + 6].copy_from_slice(b".rdata");
+        image[section + 8..section + 12].copy_from_slice(&1536u32.to_le_bytes());
+        image[section + 12..section + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[section + 16..section + 20].copy_from_slice(&1536u32.to_le_bytes());
+        image[section + 20..section + 24].copy_from_slice(&512u32.to_le_bytes());
+        image[section + 36..section + 40].copy_from_slice(&0x6000_0020u32.to_le_bytes());
+        let load = 0x300;
+        image[load..load + 4].copy_from_slice(&256u32.to_le_bytes());
+        image[load + 128..load + 136].copy_from_slice(&0x0001_8000_1400_u64.to_le_bytes());
+        image[load + 136..load + 144].copy_from_slice(&2u64.to_le_bytes());
+        image[load + 144..load + 148].copy_from_slice(&REQUIRED_GUARD_FLAGS.to_le_bytes());
+        image[load + 248..load + 256].copy_from_slice(&0x0001_8000_1300_u64.to_le_bytes());
+        let config = 0x500;
+        image[config..config + 4].copy_from_slice(&80u32.to_le_bytes());
+        image[config + 4..config + 8].copy_from_slice(&80u32.to_le_bytes());
+        image[config + 8..config + 12].copy_from_slice(&2u32.to_le_bytes());
+        image[config + 64..config + 72].copy_from_slice(&(2u64 * 1024 * 1024).to_le_bytes());
+        image[config + 72..config + 76].copy_from_slice(&1u32.to_le_bytes());
+        image[config + 76..config + 80].copy_from_slice(&1u32.to_le_bytes());
+        image[0x600..0x604].copy_from_slice(&0x1000u32.to_le_bytes());
+        image[0x604..0x608].copy_from_slice(&0x1010u32.to_le_bytes());
         image
     }
 
@@ -264,5 +463,25 @@ mod tests {
             attach_pkcs7(&attached, &[1]),
             Err(AuthenticodeError::AlreadySigned)
         ));
+    }
+
+    #[test]
+    fn finalizes_only_a_canonical_strict_vbs_image() {
+        let image = enclave_image();
+        let finalized = finalize_vbs_enclave(&image).unwrap();
+        assert_eq!(read_u16(&finalized, 0xde).unwrap() & 0x4080, 0x4080);
+        assert_ne!(read_u32(&finalized, 0xd8).unwrap(), 0);
+        let mut unsorted = image;
+        unsorted[0x604..0x608].copy_from_slice(&0x0ff0u32.to_le_bytes());
+        assert_eq!(
+            finalize_vbs_enclave(&unsorted),
+            Err(AuthenticodeError::InvalidEnclave)
+        );
+        let mut debug = image;
+        debug[0x508..0x50c].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(
+            finalize_vbs_enclave(&debug),
+            Err(AuthenticodeError::InvalidEnclave)
+        );
     }
 }
