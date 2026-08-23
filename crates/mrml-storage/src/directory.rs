@@ -13,27 +13,61 @@ const DIRECTORY_IMAGE_MAGIC: [u8; 8] = *b"MRDEI001";
 const DIRECTORY_IMAGE_VERSION: u16 = 1;
 const DIRECTORY_IMAGE_DIGEST_OFFSET: usize = 64;
 
-pub struct DirectoryAncestryProof {
+pub struct DirectoryAncestryProof<const N: usize> {
     source: StorageObjectId,
+    source_generation: u64,
     moved: StorageObjectId,
     moved_generation: u64,
     destination: StorageObjectId,
     destination_generation: u64,
+    source_path: DirectoryAncestryPath<N>,
+    destination_path: DirectoryAncestryPath<N>,
 }
 
-impl DirectoryAncestryProof {
-    fn matches<const N: usize>(
+struct DirectoryAncestryPath<const N: usize> {
+    objects: [Option<StorageObjectId>; N],
+    count: usize,
+}
+
+impl<const N: usize> DirectoryAncestryProof<N> {
+    fn matches<const M: usize>(
         &self,
         source: StorageObjectId,
+        source_generation: u64,
         moved: StorageObjectId,
         moved_generation: u64,
-        destination: &DirectoryState<N>,
+        destination: &DirectoryState<M>,
     ) -> bool {
         self.source == source
+            && self.source_generation == source_generation
             && self.moved == moved
             && self.moved_generation == moved_generation
             && self.destination == destination.object
             && self.destination_generation == destination.generation
+    }
+
+    pub const fn source_path_len(&self) -> usize {
+        self.source_path.count
+    }
+
+    pub const fn destination_path_len(&self) -> usize {
+        self.destination_path.count
+    }
+
+    pub const fn source_ancestor(&self, index: usize) -> Option<StorageObjectId> {
+        if index < self.source_path.count {
+            self.source_path.objects[index]
+        } else {
+            None
+        }
+    }
+
+    pub const fn destination_ancestor(&self, index: usize) -> Option<StorageObjectId> {
+        if index < self.destination_path.count {
+            self.destination_path.objects[index]
+        } else {
+            None
+        }
     }
 }
 
@@ -54,19 +88,22 @@ pub unsafe trait DirectoryAncestryBackend {
     ) -> Result<DirectoryMetadata, Self::Error>;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend>(
     root: StorageObjectId,
     source: StorageObjectId,
+    source_generation: u64,
     moved: StorageObjectId,
     moved_generation: u64,
     destination: StorageObjectId,
     destination_generation: u64,
     backend: &mut B,
-) -> Result<DirectoryAncestryProof, DirectoryAncestryError<B::Error>> {
+) -> Result<DirectoryAncestryProof<N>, DirectoryAncestryError<B::Error>> {
     if N == 0
         || root.volume() != source.volume()
         || root.volume() != moved.volume()
         || root.volume() != destination.volume()
+        || source_generation == 0
         || moved_generation == 0
         || destination_generation == 0
     {
@@ -81,14 +118,33 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
     {
         return Err(DirectoryAncestryError::InvalidProof);
     }
+    let source_path = load_ancestry_path::<N, B>(root, source, source_generation, moved, backend)?;
+    let destination_path =
+        load_ancestry_path::<N, B>(root, destination, destination_generation, moved, backend)?;
+    Ok(DirectoryAncestryProof {
+        source,
+        source_generation,
+        moved,
+        moved_generation,
+        destination,
+        destination_generation,
+        source_path,
+        destination_path,
+    })
+}
+
+fn load_ancestry_path<const N: usize, B: DirectoryAncestryBackend>(
+    root: StorageObjectId,
+    start: StorageObjectId,
+    start_generation: u64,
+    forbidden: StorageObjectId,
+    backend: &mut B,
+) -> Result<DirectoryAncestryPath<N>, DirectoryAncestryError<B::Error>> {
     let mut visited = [None; N];
     let mut count = 0;
-    let mut current = destination;
+    let mut current = start;
     loop {
-        if current == moved {
-            return Err(DirectoryAncestryError::Cycle);
-        }
-        if visited[..count].contains(&Some(current)) {
+        if current == forbidden || visited[..count].contains(&Some(current)) {
             return Err(DirectoryAncestryError::Cycle);
         }
         if count == N {
@@ -101,7 +157,7 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
             .map_err(DirectoryAncestryError::Backend)?;
         if metadata.object() != current
             || metadata.object().volume() != root.volume()
-            || (current == destination && metadata.generation() != destination_generation)
+            || (current == start && metadata.generation() != start_generation)
         {
             return Err(DirectoryAncestryError::InvalidProof);
         }
@@ -111,12 +167,9 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
             _ => return Err(DirectoryAncestryError::InvalidProof),
         }
     }
-    Ok(DirectoryAncestryProof {
-        source,
-        moved,
-        moved_generation,
-        destination,
-        destination_generation,
+    Ok(DirectoryAncestryPath {
+        objects: visited,
+        count,
     })
 }
 
@@ -415,7 +468,7 @@ impl<const N: usize> DirectoryState<N> {
         old_name: StorageName,
         new_name: StorageName,
     ) -> Result<DirectoryEntry, DirectoryError> {
-        self.move_to_inner(
+        self.move_to_inner::<M, A, 1>(
             source_authority,
             destination,
             destination_authority,
@@ -428,7 +481,7 @@ impl<const N: usize> DirectoryState<N> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn move_to_with_ancestry<const M: usize, const A: usize>(
+    pub fn move_to_with_ancestry<const M: usize, const A: usize, const H: usize>(
         &mut self,
         source_authority: StorageHandle,
         destination: &mut DirectoryState<M>,
@@ -437,7 +490,7 @@ impl<const N: usize> DirectoryState<N> {
         principal: StoragePrincipal,
         old_name: StorageName,
         new_name: StorageName,
-        ancestry: &DirectoryAncestryProof,
+        ancestry: &DirectoryAncestryProof<H>,
     ) -> Result<DirectoryEntry, DirectoryError> {
         self.move_to_inner(
             source_authority,
@@ -452,7 +505,7 @@ impl<const N: usize> DirectoryState<N> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn move_to_inner<const M: usize, const A: usize>(
+    fn move_to_inner<const M: usize, const A: usize, const H: usize>(
         &mut self,
         source_authority: StorageHandle,
         destination: &mut DirectoryState<M>,
@@ -461,7 +514,7 @@ impl<const N: usize> DirectoryState<N> {
         principal: StoragePrincipal,
         old_name: StorageName,
         new_name: StorageName,
-        ancestry: Option<&DirectoryAncestryProof>,
+        ancestry: Option<&DirectoryAncestryProof<H>>,
     ) -> Result<DirectoryEntry, DirectoryError> {
         if self.object == destination.object {
             return Err(DirectoryError::SameDirectory);
@@ -484,6 +537,7 @@ impl<const N: usize> DirectoryState<N> {
             && !ancestry.is_some_and(|proof| {
                 proof.matches(
                     self.object,
+                    self.generation,
                     old.object(),
                     old.metadata_generation(),
                     destination,
@@ -979,7 +1033,7 @@ mod tests {
     }
 
     struct AncestryBackend {
-        records: [Option<DirectoryMetadata>; 4],
+        records: [Option<DirectoryMetadata>; 5],
     }
 
     unsafe impl DirectoryAncestryBackend for AncestryBackend {
@@ -1480,6 +1534,7 @@ mod tests {
             records: [
                 Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(3), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
             ],
@@ -1487,6 +1542,7 @@ mod tests {
         let proof = prove_directory_move_ancestry::<2, _>(
             object(1),
             object(3),
+            1,
             object(9),
             1,
             object(2),
@@ -1494,6 +1550,26 @@ mod tests {
             &mut backend,
         )
         .unwrap();
+        assert_eq!(proof.source_path_len(), 2);
+        assert_eq!(proof.source_ancestor(0), Some(object(3)));
+        assert_eq!(proof.source_ancestor(1), Some(object(1)));
+        assert_eq!(proof.source_ancestor(2), None);
+        assert_eq!(proof.destination_path_len(), 2);
+        assert_eq!(proof.destination_ancestor(0), Some(object(2)));
+        assert_eq!(proof.destination_ancestor(1), Some(object(1)));
+        assert!(matches!(
+            prove_directory_move_ancestry::<2, _>(
+                object(1),
+                object(3),
+                2,
+                object(9),
+                1,
+                object(2),
+                1,
+                &mut backend,
+            ),
+            Err(DirectoryAncestryError::InvalidProof)
+        ));
         let moved = source
             .move_to_with_ancestry(
                 source_handle,
@@ -1517,6 +1593,7 @@ mod tests {
             records: [
                 Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 1, Some(object(9)))),
+                Some(directory_metadata(object(3), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
             ],
@@ -1525,6 +1602,7 @@ mod tests {
             prove_directory_move_ancestry::<4, _>(
                 object(1),
                 object(3),
+                1,
                 object(9),
                 1,
                 object(2),
@@ -1538,6 +1616,7 @@ mod tests {
             records: [
                 Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 2, Some(object(1)))),
+                Some(directory_metadata(object(3), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
             ],
@@ -1546,6 +1625,7 @@ mod tests {
             prove_directory_move_ancestry::<2, _>(
                 object(1),
                 object(3),
+                1,
                 object(9),
                 1,
                 object(2),
@@ -1559,6 +1639,7 @@ mod tests {
             records: [
                 Some(directory_metadata(object(9), 2, Some(object(4)))),
                 Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(3), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
             ],
@@ -1567,6 +1648,7 @@ mod tests {
             prove_directory_move_ancestry::<2, _>(
                 object(1),
                 object(3),
+                1,
                 object(9),
                 1,
                 object(2),
@@ -1580,6 +1662,7 @@ mod tests {
             records: [
                 Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(3), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
             ],
@@ -1588,6 +1671,7 @@ mod tests {
             prove_directory_move_ancestry::<1, _>(
                 object(1),
                 object(3),
+                1,
                 object(9),
                 1,
                 object(2),

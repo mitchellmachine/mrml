@@ -2725,7 +2725,10 @@ chain, repeated objects, wrong or broken links, stale destination state, backend
 failure, and capacity exhaustion. It separately loads the moved directory's
 canonical metadata, binds its exact generation, and requires its current parent
 to equal the source directory. Reusing a proof after either bound generation
-advances fails. This makes only the bounded in-memory namespace transition
+advances fails. The proof retains fixed-capacity source-to-root and destination-
+to-root object paths, and exposes only bounded indexed access to them. Both path
+starts bind their independently loaded exact generations. This makes only the
+bounded in-memory namespace transition
 cycle-safe. Transactional publication must propagate every changed directory
 generation through its parent entry and continue through the complete affected
 ancestor closure to the root; publishing only source, destination, and child
@@ -2924,7 +2927,7 @@ The ancestry increment also passed the two repository reviews. The
 publisher veto, DRM, accessibility exclusion, or first-party bypass; object IDs
 remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
 metadata record and parent link as hostile and requires exact immutable-
-generation binding, bounded traversal, duplicate/cycle rejection, and fail-
+generation binding, bounded source/destination traversal, duplicate/cycle rejection, and fail-
 closed backend uncertainty. This agent review is not independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without

@@ -229,7 +229,9 @@ authority; unrelated domains continue.
    rejects the moved directory anywhere in that chain, repeated ancestors,
    broken links, stale state, backend failure, and capacity exhaustion. It also
    requires the moved directory's exact generation and current source-parent
-   link. Transactional publication must propagate each changed child generation
+   link. The proof retains the exact bounded source and destination paths to the
+   root, including their independently checked starting generations.
+   Transactional publication must propagate each changed child generation
    through the complete affected ancestor closure to the root; a three-object
    source/destination/child shortcut would fail recovery validation. That
    propagation and allocator persistence remain pending, so directory operations
