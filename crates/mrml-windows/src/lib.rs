@@ -22,6 +22,44 @@ pub struct LocalTime {
     pub milliseconds: u16,
 }
 
+pub const ENCLAVE_TYPE_VBS: u32 = 0x10;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VbsEnclaveSupport {
+    /// The enclave query ABI is absent (including all non-Windows builds).
+    ApiUnavailable,
+    /// Windows implements the ABI, but VBS enclaves are not enabled/supported.
+    Unsupported,
+    /// Windows reports VBS enclave support. This is capability discovery only,
+    /// not launch evidence or attestation.
+    Supported,
+}
+
+#[cfg(windows)]
+pub fn vbs_enclave_support() -> VbsEnclaveSupport {
+    type IsEnclaveTypeSupported = unsafe extern "system" fn(u32) -> i32;
+
+    let Some(library) = DynamicLibrary::open(c"kernel32.dll") else {
+        return VbsEnclaveSupport::ApiUnavailable;
+    };
+    let Some(symbol) = library.symbol(c"IsEnclaveTypeSupported") else {
+        return VbsEnclaveSupport::ApiUnavailable;
+    };
+    // SAFETY: the symbol is resolved from Kernel32 by its documented name and
+    // invoked with the documented Win32 ABI and DWORD argument.
+    let query: IsEnclaveTypeSupported = unsafe { core::mem::transmute(symbol) };
+    if unsafe { query(ENCLAVE_TYPE_VBS) } == 0 {
+        VbsEnclaveSupport::Unsupported
+    } else {
+        VbsEnclaveSupport::Supported
+    }
+}
+
+#[cfg(not(windows))]
+pub const fn vbs_enclave_support() -> VbsEnclaveSupport {
+    VbsEnclaveSupport::ApiUnavailable
+}
+
 #[repr(C)]
 #[cfg(windows)]
 struct FileTime {
@@ -1196,6 +1234,12 @@ fn resolve_kernelbase<T: Copy>(cache: &AtomicPtr<c_void>, symbol: &'static [u8])
 }
 
 #[cfg(windows)]
+/// Starts a native thread and relinquishes its handle immediately.
+///
+/// # Safety
+///
+/// `context` must remain valid for every access made by `start`, and `start`
+/// must obey the Windows thread-entry ABI for the lifetime of the new thread.
 pub unsafe fn spawn_detached_thread(
     context: *mut c_void,
     start: unsafe extern "system" fn(*mut c_void) -> u32,
@@ -1326,6 +1370,10 @@ impl NativeFile {
     pub fn len(&self) -> Option<u64> {
         let mut size = 0i64;
         (unsafe { GetFileSizeEx(self.0, &mut size) } != 0 && size >= 0).then_some(size as u64)
+    }
+
+    pub fn is_empty(&self) -> Option<bool> {
+        self.len().map(|length| length == 0)
     }
 
     pub fn raw_handle(&self) -> *mut c_void {
@@ -1522,6 +1570,12 @@ pub fn exit_process(exit_code: i32) -> ! {
 }
 
 #[cfg(windows)]
+/// Maps `len` read-only bytes from a valid native file handle.
+///
+/// # Safety
+///
+/// `file` must be a live Windows file handle that remains valid for this call.
+/// The returned mapping must be released exactly once with `unmap_file`.
 pub unsafe fn map_file_read_only(file: *mut c_void, len: usize) -> Option<NonNull<u8>> {
     const PAGE_READONLY: u32 = 2;
     const FILE_MAP_READ: u32 = 4;
@@ -1544,6 +1598,12 @@ pub unsafe fn map_file_read_only(file: *mut c_void, len: usize) -> Option<NonNul
 }
 
 #[cfg(windows)]
+/// Releases a mapping previously returned by `map_file_read_only`.
+///
+/// # Safety
+///
+/// `address` must identify a live mapping returned by `map_file_read_only`, and
+/// no code may access that mapping after this function succeeds.
 pub unsafe fn unmap_file(address: NonNull<u8>, _: usize) -> bool {
     unsafe { UnmapViewOfFile(address.as_ptr().cast()) != 0 }
 }
@@ -1675,6 +1735,14 @@ pub fn local_time() -> LocalTime {
 #[cfg(all(test, windows))]
 mod tests {
     use core::alloc::{GlobalAlloc, Layout};
+
+    #[test]
+    fn windows_exposes_vbs_enclave_capability_query() {
+        assert_ne!(
+            super::vbs_enclave_support(),
+            super::VbsEnclaveSupport::ApiUnavailable
+        );
+    }
 
     #[test]
     fn native_local_time_has_valid_calendar_fields() {
