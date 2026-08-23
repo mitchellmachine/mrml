@@ -61,7 +61,7 @@ pub use vmx::{
 pub use vtd::{
     DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamSegments, McfgAllocation, McfgError,
     McfgTopology, NativeEcamSegment, NativeVtdMmio, PciConfigSpace, PciPathElement,
-    VtdDmaIsolation, VtdError, VtdFaultSnapshot, VtdInvalidator, VtdRegisterIo,
+    VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot, VtdInvalidator, VtdRegisterIo,
 };
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;

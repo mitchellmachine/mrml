@@ -38,6 +38,8 @@ pub enum VtdError {
     InvalidFaultLayout,
     FaultPending,
     FaultChanged,
+    UnitTableFull,
+    WrongGranule,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -905,13 +907,15 @@ impl<'a, R: VtdRegisterIo> VtdDmaIsolation<'a, R> {
     pub fn into_parts(self) -> (&'a mut u64, VtdInvalidator<R>) {
         (self.leaf, self.invalidator)
     }
-}
 
-impl<R: VtdRegisterIo> DmaIsolation for VtdDmaIsolation<'_, R> {
-    fn deny_and_invalidate(&mut self, physical: PhysAddr) -> GranuleHardwareOutcome {
-        if physical != self.physical || self.invalidator.ready().is_err() {
-            return GranuleHardwareOutcome::Rejected;
+    fn preflight(&mut self, physical: PhysAddr) -> Result<(), VtdError> {
+        if physical != self.physical {
+            return Err(VtdError::WrongGranule);
         }
+        self.invalidator.ready()
+    }
+
+    fn revoke_leaf(&mut self) {
         // SAFETY: construction requires the unique live leaf reference.
         unsafe {
             core::ptr::write_volatile(
@@ -920,7 +924,95 @@ impl<R: VtdRegisterIo> DmaIsolation for VtdDmaIsolation<'_, R> {
             )
         };
         compiler_fence(Ordering::SeqCst);
-        if self.invalidator.invalidate_global().is_err() {
+    }
+
+    fn invalidate_after_revoke(&mut self) -> Result<(), VtdError> {
+        self.invalidator.invalidate_global()
+    }
+}
+
+impl<R: VtdRegisterIo> DmaIsolation for VtdDmaIsolation<'_, R> {
+    fn deny_and_invalidate(&mut self, physical: PhysAddr) -> GranuleHardwareOutcome {
+        if self.preflight(physical).is_err() {
+            return GranuleHardwareOutcome::Rejected;
+        }
+        self.revoke_leaf();
+        if self.invalidate_after_revoke().is_err() {
+            GranuleHardwareOutcome::FailStop
+        } else {
+            GranuleHardwareOutcome::Applied
+        }
+    }
+}
+
+/// Coordinates revocation of one granule across every VT-d remapping unit that
+/// can route DMA to it.
+pub struct VtdDmaSet<'a, R, const UNITS: usize> {
+    physical: PhysAddr,
+    units: [Option<VtdDmaIsolation<'a, R>>; UNITS],
+    count: usize,
+}
+
+impl<'a, R: VtdRegisterIo, const UNITS: usize> VtdDmaSet<'a, R, UNITS> {
+    pub fn new(physical: PhysAddr) -> Self {
+        Self {
+            physical,
+            units: core::array::from_fn(|_| None),
+            count: 0,
+        }
+    }
+
+    /// # Safety
+    ///
+    /// Every pushed unit must be a distinct remapping unit, and the completed
+    /// set must contain every unit through which any requester can reach this
+    /// granule. The caller must not execute a transition until the set is
+    /// complete according to the checked DMAR/PCI topology.
+    pub unsafe fn push(&mut self, unit: VtdDmaIsolation<'a, R>) -> Result<(), VtdError> {
+        if unit.physical != self.physical {
+            return Err(VtdError::WrongGranule);
+        }
+        if self.count == UNITS {
+            return Err(VtdError::UnitTableFull);
+        }
+        self.units[self.count] = Some(unit);
+        self.count += 1;
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn into_units(self) -> [Option<VtdDmaIsolation<'a, R>>; UNITS] {
+        self.units
+    }
+}
+
+impl<R: VtdRegisterIo, const UNITS: usize> DmaIsolation for VtdDmaSet<'_, R, UNITS> {
+    fn deny_and_invalidate(&mut self, physical: PhysAddr) -> GranuleHardwareOutcome {
+        if physical != self.physical || self.is_empty() {
+            return GranuleHardwareOutcome::Rejected;
+        }
+        if self.units[..self.count]
+            .iter_mut()
+            .flatten()
+            .any(|unit| unit.preflight(physical).is_err())
+        {
+            return GranuleHardwareOutcome::Rejected;
+        }
+        for unit in self.units[..self.count].iter_mut().flatten() {
+            unit.revoke_leaf();
+        }
+        let mut failed = false;
+        for unit in self.units[..self.count].iter_mut().flatten() {
+            failed |= unit.invalidate_after_revoke().is_err();
+        }
+        if failed {
             GranuleHardwareOutcome::FailStop
         } else {
             GranuleHardwareOutcome::Applied
@@ -1243,6 +1335,87 @@ mod tests {
         assert_eq!(
             dma.deny_and_invalidate(physical),
             GranuleHardwareOutcome::FailStop
+        );
+    }
+
+    #[test]
+    fn multi_unit_preflight_failure_preserves_every_leaf() {
+        let physical = PhysAddr::new(0xa0_0000).unwrap();
+        let mut first_leaf = physical.get() | VTD_PERMISSION_MASK;
+        let mut second_leaf = physical.get() | VTD_PERMISSION_MASK;
+        let first = unsafe {
+            VtdDmaIsolation::new(
+                physical,
+                &mut first_leaf,
+                VtdInvalidator::new(Registers::new(false), 4).unwrap(),
+            )
+            .unwrap()
+        };
+        let mut unhealthy = Registers::new(false);
+        unhealthy.fault_status = 1 << 6;
+        let second = unsafe {
+            VtdDmaIsolation::new(
+                physical,
+                &mut second_leaf,
+                VtdInvalidator::new(unhealthy, 4).unwrap(),
+            )
+            .unwrap()
+        };
+        let mut set = VtdDmaSet::<_, 2>::new(physical);
+        unsafe {
+            set.push(first).unwrap();
+            set.push(second).unwrap();
+        }
+        assert_eq!(
+            set.deny_and_invalidate(physical),
+            GranuleHardwareOutcome::Rejected
+        );
+        let mut units = set.into_units();
+        let (first_leaf, _) = units[0].take().unwrap().into_parts();
+        let (second_leaf, _) = units[1].take().unwrap().into_parts();
+        assert_eq!(*first_leaf & VTD_PERMISSION_MASK, VTD_PERMISSION_MASK);
+        assert_eq!(*second_leaf & VTD_PERMISSION_MASK, VTD_PERMISSION_MASK);
+    }
+
+    #[test]
+    fn multi_unit_failure_revokes_all_and_attempts_remaining_flushes() {
+        let physical = PhysAddr::new(0xb0_0000).unwrap();
+        let mut first_leaf = physical.get() | VTD_PERMISSION_MASK;
+        let mut second_leaf = physical.get() | VTD_PERMISSION_MASK;
+        let first = unsafe {
+            VtdDmaIsolation::new(
+                physical,
+                &mut first_leaf,
+                VtdInvalidator::new(Registers::new(true), 2).unwrap(),
+            )
+            .unwrap()
+        };
+        let second = unsafe {
+            VtdDmaIsolation::new(
+                physical,
+                &mut second_leaf,
+                VtdInvalidator::new(Registers::new(false), 2).unwrap(),
+            )
+            .unwrap()
+        };
+        let mut set = VtdDmaSet::<_, 2>::new(physical);
+        unsafe {
+            set.push(first).unwrap();
+            set.push(second).unwrap();
+        }
+        assert_eq!(
+            set.deny_and_invalidate(physical),
+            GranuleHardwareOutcome::FailStop
+        );
+        let mut units = set.into_units();
+        let (first_leaf, _) = units[0].take().unwrap().into_parts();
+        let (second_leaf, second_invalidator) = units[1].take().unwrap().into_parts();
+        assert_eq!(*first_leaf & VTD_PERMISSION_MASK, 0);
+        assert_eq!(*second_leaf & VTD_PERMISSION_MASK, 0);
+        let second_registers = second_invalidator.into_registers();
+        assert_ne!(
+            (second_registers.values[0x208 / 8] >> IOTLB_ACTUAL_SHIFT) & ACTUAL_MASK,
+            0
         );
     }
 }

@@ -323,6 +323,20 @@ Acknowledgement is explicit, rejects a changed record, clears the record's
 write-one-to-clear validity bit first, and then acknowledges only status bits
 present in the captured snapshot. Fault evidence must be logged by monitor
 policy before acknowledgement; merely clearing it does not authorize resume.
+
+One granule can be reachable through more than one remapping unit, so the DMA
+adapter now provides a fixed-capacity all-unit transaction. Construction is an
+unsafe topology boundary requiring distinct units and complete checked DMAR/PCI
+coverage. Execution first preflights the physical identity, health, and idle
+commands of every unit without changing a leaf. Only after every preflight
+succeeds does it revoke DMA permissions in every leaf. It then attempts the
+context-cache and IOTLB flush on every unit even if an earlier unit fails, and
+aggregates any failure into `FailStop`. Thus a clean preflight rejection leaves
+all leaves untouched, while partial post-revocation completion never masquerades
+as rollback. Tests cover both cases and verify that later-unit flushes are still
+attempted after an earlier timeout. Binding discovered units to their actual
+page-table leaves and mapped MMIO ranges remains a platform boot integration
+task, not an inferred protection claim.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 
