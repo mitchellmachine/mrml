@@ -127,9 +127,10 @@ explicitly and downgrade the status rather than guessing.
   enumeration, create, rename, remove, and cross-directory file moves, but its
   object-ID allocator is volatile. Cross-directory directory moves require a
   bounded immutable-generation ancestry proof that reaches the selected root
-  without encountering the moved object; transactional child-parent metadata
-  publication remains pending. Capability-authorized bounded file reads resolve the
-  exact extent generation, synthesize holes, and require full-extent digest
+  without encountering the moved object and binds the moved generation's current
+  source parent. Transactional publication must still propagate exact generation
+  changes through every affected ancestor to the root. Capability-authorized
+  bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
   complete disjoint successor image, flush it, and remain unpublished until a
   matching canonical file-metadata digest and zero-padded extent-list digest are

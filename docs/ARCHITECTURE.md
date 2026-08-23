@@ -255,8 +255,10 @@ existing object capabilities, and rename preserves identity. Cross-directory
 directory moves now require a bounded proof that walks canonical directory
 metadata from the exact destination generation to the selected root, rejecting
 the moved object, repeated ancestors, stale destination state, broken parent
-links, backend uncertainty, and capacity exhaustion. This authorizes only the
-in-memory namespace transition; transactional child-parent metadata update and
+links, backend uncertainty, and capacity exhaustion. The proof now also loads
+the moved directory's exact generation and requires its current parent to be the
+source directory. This authorizes only the in-memory namespace transition;
+transactional successor propagation through every affected ancestor and
 crash-safe identity allocation remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to

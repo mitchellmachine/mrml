@@ -227,10 +227,13 @@ authority; unrelated domains continue.
    ancestry proof loaded through one immutable selected-generation backend. The
    proof binds the exact destination generation, reaches the selected root, and
    rejects the moved directory anywhere in that chain, repeated ancestors,
-   broken links, stale state, backend failure, and capacity exhaustion.
-   Transactional publication of the moved child's new parent metadata and
-   allocator persistence remain pending, so directory operations are not yet
-   complete or crash-safe.
+   broken links, stale state, backend failure, and capacity exhaustion. It also
+   requires the moved directory's exact generation and current source-parent
+   link. Transactional publication must propagate each changed child generation
+   through the complete affected ancestor closure to the root; a three-object
+   source/destination/child shortcut would fail recovery validation. That
+   propagation and allocator persistence remain pending, so directory operations
+   are not yet complete or crash-safe.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

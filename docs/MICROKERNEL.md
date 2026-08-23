@@ -2722,12 +2722,16 @@ directory metadata from one immutable completely validated selected generation.
 Proof construction starts at the destination's exact generation, follows parent
 links to the selected root, and rejects the moved directory anywhere in the
 chain, repeated objects, wrong or broken links, stale destination state, backend
-failure, and capacity exhaustion. Reusing a proof after the destination advances
-fails its generation binding. This makes only the bounded in-memory namespace
-transition cycle-safe; publishing the moved child's new parent metadata in the
-same transaction remains pending. The object-ID allocator is volatile simulation
-state and must be persisted in the same future transaction before create becomes
-crash-safe.
+failure, and capacity exhaustion. It separately loads the moved directory's
+canonical metadata, binds its exact generation, and requires its current parent
+to equal the source directory. Reusing a proof after either bound generation
+advances fails. This makes only the bounded in-memory namespace transition
+cycle-safe. Transactional publication must propagate every changed directory
+generation through its parent entry and continue through the complete affected
+ancestor closure to the root; publishing only source, destination, and child
+would be rejected by reachable-tree validation. That propagation remains
+pending. The object-ID allocator is volatile simulation state and must be
+persisted in the same future transaction before create becomes crash-safe.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and

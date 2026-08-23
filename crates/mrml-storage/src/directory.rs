@@ -14,7 +14,9 @@ const DIRECTORY_IMAGE_VERSION: u16 = 1;
 const DIRECTORY_IMAGE_DIGEST_OFFSET: usize = 64;
 
 pub struct DirectoryAncestryProof {
+    source: StorageObjectId,
     moved: StorageObjectId,
+    moved_generation: u64,
     destination: StorageObjectId,
     destination_generation: u64,
 }
@@ -22,10 +24,14 @@ pub struct DirectoryAncestryProof {
 impl DirectoryAncestryProof {
     fn matches<const N: usize>(
         &self,
+        source: StorageObjectId,
         moved: StorageObjectId,
+        moved_generation: u64,
         destination: &DirectoryState<N>,
     ) -> bool {
-        self.moved == moved
+        self.source == source
+            && self.moved == moved
+            && self.moved_generation == moved_generation
             && self.destination == destination.object
             && self.destination_generation == destination.generation
     }
@@ -50,15 +56,28 @@ pub unsafe trait DirectoryAncestryBackend {
 
 pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend>(
     root: StorageObjectId,
+    source: StorageObjectId,
     moved: StorageObjectId,
+    moved_generation: u64,
     destination: StorageObjectId,
     destination_generation: u64,
     backend: &mut B,
 ) -> Result<DirectoryAncestryProof, DirectoryAncestryError<B::Error>> {
     if N == 0
+        || root.volume() != source.volume()
         || root.volume() != moved.volume()
         || root.volume() != destination.volume()
+        || moved_generation == 0
         || destination_generation == 0
+    {
+        return Err(DirectoryAncestryError::InvalidProof);
+    }
+    let moved_metadata = backend
+        .load_directory_metadata(moved)
+        .map_err(DirectoryAncestryError::Backend)?;
+    if moved_metadata.object() != moved
+        || moved_metadata.generation() != moved_generation
+        || moved_metadata.parent() != Some(source)
     {
         return Err(DirectoryAncestryError::InvalidProof);
     }
@@ -93,7 +112,9 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
         }
     }
     Ok(DirectoryAncestryProof {
+        source,
         moved,
+        moved_generation,
         destination,
         destination_generation,
     })
@@ -460,7 +481,14 @@ impl<const N: usize> DirectoryState<N> {
         let source_index = self.find_name(old_name).ok_or(DirectoryError::NotFound)?;
         let old = self.entries[source_index].ok_or(DirectoryError::InvalidState)?;
         if old.kind() == StorageObjectKind::Directory
-            && !ancestry.is_some_and(|proof| proof.matches(old.object(), destination))
+            && !ancestry.is_some_and(|proof| {
+                proof.matches(
+                    self.object,
+                    old.object(),
+                    old.metadata_generation(),
+                    destination,
+                )
+            })
         {
             return Err(DirectoryError::AncestryRequired);
         }
@@ -1450,15 +1478,22 @@ mod tests {
 
         let mut backend = AncestryBackend {
             records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
-                None,
             ],
         };
-        let proof =
-            prove_directory_move_ancestry::<2, _>(object(1), object(9), object(2), 1, &mut backend)
-                .unwrap();
+        let proof = prove_directory_move_ancestry::<2, _>(
+            object(1),
+            object(3),
+            object(9),
+            1,
+            object(2),
+            1,
+            &mut backend,
+        )
+        .unwrap();
         let moved = source
             .move_to_with_ancestry(
                 source_handle,
@@ -1480,8 +1515,8 @@ mod tests {
     fn ancestry_proof_rejects_descendants_stale_state_and_capacity() {
         let mut descendant = AncestryBackend {
             records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 1, Some(object(9)))),
-                Some(directory_metadata(object(9), 4, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
                 None,
             ],
@@ -1489,7 +1524,9 @@ mod tests {
         assert!(matches!(
             prove_directory_move_ancestry::<4, _>(
                 object(1),
+                object(3),
                 object(9),
+                1,
                 object(2),
                 1,
                 &mut descendant
@@ -1499,27 +1536,64 @@ mod tests {
 
         let mut stale = AncestryBackend {
             records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 2, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
-                None,
                 None,
             ],
         };
         assert!(matches!(
-            prove_directory_move_ancestry::<2, _>(object(1), object(9), object(2), 1, &mut stale),
+            prove_directory_move_ancestry::<2, _>(
+                object(1),
+                object(3),
+                object(9),
+                1,
+                object(2),
+                1,
+                &mut stale
+            ),
+            Err(DirectoryAncestryError::InvalidProof)
+        ));
+
+        let mut wrong_child = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(9), 2, Some(object(4)))),
+                Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+            ],
+        };
+        assert!(matches!(
+            prove_directory_move_ancestry::<2, _>(
+                object(1),
+                object(3),
+                object(9),
+                1,
+                object(2),
+                1,
+                &mut wrong_child
+            ),
             Err(DirectoryAncestryError::InvalidProof)
         ));
 
         let mut deep = AncestryBackend {
             records: [
+                Some(directory_metadata(object(9), 1, Some(object(3)))),
                 Some(directory_metadata(object(2), 1, Some(object(1)))),
                 Some(directory_metadata(object(1), 5, None)),
-                None,
                 None,
             ],
         };
         assert!(matches!(
-            prove_directory_move_ancestry::<1, _>(object(1), object(9), object(2), 1, &mut deep),
+            prove_directory_move_ancestry::<1, _>(
+                object(1),
+                object(3),
+                object(9),
+                1,
+                object(2),
+                1,
+                &mut deep
+            ),
             Err(DirectoryAncestryError::Capacity)
         ));
     }
