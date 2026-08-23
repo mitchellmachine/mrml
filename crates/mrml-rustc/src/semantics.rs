@@ -2129,6 +2129,10 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             option,
             alternative,
         } => recurse(option, inside_inline_const) || recurse(alternative, inside_inline_const),
+        ExprKind::IntegerOptionXor {
+            option,
+            alternative,
+        } => recurse(option, inside_inline_const) || recurse(alternative, inside_inline_const),
         ExprKind::IntegerOptionInspect { option, closure } => {
             recurse(option, inside_inline_const) || recurse(closure, inside_inline_const)
         }
@@ -2324,6 +2328,10 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerOptionAndThen { option, closure } => recurse(option) || recurse(closure),
         ExprKind::IntegerOptionOrElse { option, closure } => recurse(option) || recurse(closure),
         ExprKind::IntegerOptionOr {
+            option,
+            alternative,
+        } => recurse(option) || recurse(alternative),
+        ExprKind::IntegerOptionXor {
             option,
             alternative,
         } => recurse(option) || recurse(alternative),

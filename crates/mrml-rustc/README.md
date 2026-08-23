@@ -1198,7 +1198,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 541 Windows library, conformance, rustc-nightly-replacement, and driver
+The 543 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1212,6 +1212,10 @@ An eager checked-option `or` probe emitted a 244-byte COFF object and a
 640-byte ELF64 object. Independent pinned-nightly callers observed first-`Some`
 preference, recovery from an outer `None`, and propagation when both producers
 returned `None` on Windows and Arch Linux WSL.
+An eager checked-option `xor` probe emitted a 272-byte COFF object and a
+664-byte ELF64 object. Independent pinned-nightly callers exercised the full
+validity truth table: left-only and right-only `Some` selected their respective
+values, while both-`Some` and both-`None` produced `None` on both hosts.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.
@@ -2484,6 +2488,12 @@ alternative are evaluated in source order regardless of receiver validity,
 then the receiver is selected when present and the alternative otherwise.
 This preserves Rust's eager argument semantics while retaining the internal
 value-plus-validity representation for further composition.
+
+Checked integer options support eager `Option::xor` between two checked
+producers with the same integer payload type. Both operands are evaluated in
+source order, and the result remains present only when exactly one operand is
+present. If both succeed or both fail, the result is `None`; otherwise the
+successful operand's value remains available to later option combinators.
 
 Checked integer options also support composable `Option::inspect`. Its closure
 receives an immutable reference to a present candidate, must return unit, and
