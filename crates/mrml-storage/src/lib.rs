@@ -32,7 +32,8 @@ pub use cow::{
 };
 pub use directory::{
     DIRECTORY_IMAGE_HEADER_BYTES, DirectoryError, DirectoryImage, DirectoryImageError,
-    DirectoryState, StorageObjectAllocator,
+    DirectoryState, DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryUpdate,
+    StorageObjectAllocator,
 };
 pub use extent::{
     EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,

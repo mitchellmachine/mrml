@@ -316,10 +316,12 @@ through a narrow unsafe durability contract. The service derives SHA3-256 over
 the exact staged bytes and admits a distinct volume-allocation resource to the
 multi-object transaction; it cannot collide with the root directory object's
 participant identity. The successor becomes visible only after its exact image
-is present in the COW plan and its one-use receipt is consumed. The concrete
-block backend,
-directory/allocator
-participants, snapshots, power-loss testing, and persistent anti-rollback state
+is present in the COW plan and its one-use receipt is consumed. Directory
+successors now stage exact canonical directory and entry images, bind both
+images to a directory transaction participant, and expose the new immutable
+state only after its one-use publication receipt is consumed. The concrete
+block backend, allocator participant integration, snapshots, power-loss
+testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import

@@ -312,8 +312,13 @@ authority; unrelated domains continue.
    unsafe backend contract, and returned only as a prepared update. Transactions
    model volume-allocation state as a resource distinct from directory/file
    objects, require the exact derived image in the publication plan, and return
-   the successor only after its one-use receipt is consumed. Concrete block
-   integration and directory participation remain pending.
+   the successor only after its one-use receipt is consumed. Directory
+   successors now encode and stage the exact canonical directory metadata and
+   entry-list images, flush both through one narrow durability contract, bind
+   both ranges to a directory transaction participant, and expose the immutable
+   next object generation only after its one-use publication receipt is
+   consumed. Persistent object-ID allocation, concrete block integration, and
+   physical power-loss evidence remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

@@ -1,6 +1,7 @@
 use crate::{
     CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, CowPublishError,
-    PreparedAllocationUpdate, PreparedFileWrite, StorageObjectId, StorageObjectKind, VolumeId,
+    PreparedAllocationUpdate, PreparedDirectoryUpdate, PreparedFileWrite, StorageObjectId,
+    StorageObjectKind, VolumeId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,6 +120,16 @@ impl<const P: usize, const W: usize> StorageTransaction<P, W> {
     pub fn admit_allocation<const N: usize>(
         &mut self,
         prepared: &PreparedAllocationUpdate<N>,
+    ) -> Result<(), TransactionError> {
+        self.admit_parts(
+            prepared.transaction_participant()?,
+            prepared.metadata_images(),
+        )
+    }
+
+    pub fn admit_directory<const N: usize>(
+        &mut self,
+        prepared: &PreparedDirectoryUpdate<N>,
     ) -> Result<(), TransactionError> {
         self.admit_parts(
             prepared.transaction_participant()?,

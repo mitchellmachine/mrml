@@ -134,8 +134,10 @@ explicitly and downgrade the status rather than guessing.
   included in the COW root plan; the complete logical-file digest is verified
   before data flush. Fixed-capacity transactions group multiple prepared file
   successors under one independently generated COW root publication and return
-  one-use activation receipts; directory/allocator transaction participants and
-  concrete block/allocation integration are not yet implemented. Redundant-root
+  one-use activation receipts. Directory successors now stage canonical object
+  metadata and entry-list images and activate only through a directory
+  transaction receipt; persistent allocator participation and concrete
+  block/allocation integration are not yet implemented. Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming

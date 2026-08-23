@@ -849,3 +849,16 @@ array-index lowering paths. This adds no novel type system, array
 representation, bounds check, optimization, or compiler-analysis technique.
 
 Patent review: `NOT_TRIGGERED` — conventional type-directed compiler traversal.
+
+## 2026-08-23 — staged transactional directory images
+
+MRML source: `crates/mrml-storage/src/directory.rs` and `transaction.rs`.
+
+The service uses conventional canonical directory metadata and entry-list
+encoding, SHA3-256 corruption detection, copy-on-write staging, durable flush
+ordering, exact transaction membership, and one-use publication receipts. This
+adds no novel namespace structure, transaction protocol, persistence technique,
+cryptographic construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional transactional directory metadata
+staging.

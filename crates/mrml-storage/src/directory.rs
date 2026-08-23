@@ -1,9 +1,10 @@
 use mrml_crypto::Sha3_256;
 
 use crate::{
-    DirectoryEntry, DirectoryMetadata, MetadataPointer, StorageAuthorityError,
+    CowMetadataImage, DirectoryEntry, DirectoryMetadata, MetadataPointer, StorageAuthorityError,
     StorageAuthorityTable, StorageHandle, StorageName, StorageObjectId, StorageObjectKind,
-    StoragePrincipal, StorageRights, VolumeHeader, VolumeId,
+    StoragePrincipal, StorageRights, TransactionError, TransactionParticipant, TransactionReceipt,
+    VolumeHeader, VolumeId,
 };
 
 pub const DIRECTORY_IMAGE_HEADER_BYTES: usize = 96;
@@ -43,6 +44,7 @@ impl StorageObjectAllocator {
     }
 }
 
+#[derive(Clone)]
 pub struct DirectoryState<const N: usize> {
     object: StorageObjectId,
     generation: u64,
@@ -117,6 +119,54 @@ impl<const N: usize> DirectoryState<N> {
         } else {
             None
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_successor<B: DirectoryWriteBackend>(
+        &self,
+        header: VolumeHeader,
+        parent: Option<StorageObjectId>,
+        successor: DirectoryState<N>,
+        metadata_pointer: MetadataPointer,
+        entries_pointer: MetadataPointer,
+        metadata_output: &mut [u8; crate::DIRECTORY_METADATA_BYTES],
+        entries_output: &mut [u8],
+        backend: &mut B,
+    ) -> Result<PreparedDirectoryUpdate<N>, DirectoryUpdateError<B::Error>> {
+        if successor.object != self.object
+            || self.generation.checked_add(1) != Some(successor.generation)
+            || !metadata_pointer_valid(header, metadata_pointer)
+            || !metadata_pointer_valid(header, entries_pointer)
+            || pointers_overlap(metadata_pointer, entries_pointer)
+        {
+            return Err(DirectoryUpdateError::InvalidSuccessor);
+        }
+        let metadata = successor
+            .metadata(header, parent, entries_pointer)
+            .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
+        metadata.encode(metadata_output);
+        let entries = DirectoryImage::from_state(header, entries_pointer, successor.clone())
+            .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
+        entries
+            .encode(entries_output)
+            .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
+        let metadata_image = CowMetadataImage::new(metadata_pointer, digest(metadata_output));
+        let entries_image = CowMetadataImage::new(entries_pointer, digest(entries_output));
+        backend
+            .stage_directory_metadata(metadata_image, metadata_output)
+            .map_err(DirectoryUpdateError::Backend)?;
+        backend
+            .stage_directory_entries(entries_image, entries_output)
+            .map_err(DirectoryUpdateError::Backend)?;
+        backend
+            .flush_directory_update()
+            .map_err(DirectoryUpdateError::Backend)?;
+        Ok(PreparedDirectoryUpdate {
+            old_generation: self.generation,
+            successor,
+            metadata: metadata_image,
+            entries: entries_image,
+        })
     }
 
     pub fn metadata(
@@ -356,7 +406,80 @@ pub struct DirectoryImage<const N: usize> {
     state: DirectoryState<N>,
 }
 
+pub struct PreparedDirectoryUpdate<const N: usize> {
+    old_generation: u64,
+    successor: DirectoryState<N>,
+    metadata: CowMetadataImage,
+    entries: CowMetadataImage,
+}
+
+impl<const N: usize> PreparedDirectoryUpdate<N> {
+    pub const fn generation(&self) -> u64 {
+        self.successor.generation
+    }
+
+    pub const fn object(&self) -> StorageObjectId {
+        self.successor.object
+    }
+
+    pub const fn metadata_image(&self) -> CowMetadataImage {
+        self.metadata
+    }
+
+    pub const fn entries_image(&self) -> CowMetadataImage {
+        self.entries
+    }
+
+    pub(crate) fn transaction_participant(
+        &self,
+    ) -> Result<TransactionParticipant, TransactionError> {
+        TransactionParticipant::new(
+            self.successor.object,
+            StorageObjectKind::Directory,
+            self.old_generation,
+            self.successor.generation,
+        )
+    }
+
+    pub(crate) const fn metadata_images(&self) -> [CowMetadataImage; 2] {
+        [self.metadata, self.entries]
+    }
+
+    pub fn commit_transaction<const P: usize>(
+        self,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<DirectoryState<N>, TransactionError> {
+        receipt.consume(self.transaction_participant()?)?;
+        Ok(self.successor)
+    }
+}
+
 impl<const N: usize> DirectoryImage<N> {
+    fn from_state(
+        header: VolumeHeader,
+        pointer: MetadataPointer,
+        state: DirectoryState<N>,
+    ) -> Result<Self, DirectoryImageError> {
+        if !pointer_fits(header, pointer) || state.object.volume() != header.volume() {
+            return Err(DirectoryImageError::InvalidImage);
+        }
+        let encoded_len = image_bytes(header, pointer)?;
+        let used = state
+            .len()
+            .checked_mul(crate::DIRECTORY_ENTRY_BYTES)
+            .and_then(|bytes| bytes.checked_add(DIRECTORY_IMAGE_HEADER_BYTES))
+            .ok_or(DirectoryImageError::Arithmetic)?;
+        if used > encoded_len {
+            return Err(DirectoryImageError::Capacity);
+        }
+        Ok(Self {
+            volume: header.volume(),
+            pointer,
+            encoded_len,
+            state,
+        })
+    }
+
     pub fn build(
         header: VolumeHeader,
         object: StorageObjectId,
@@ -502,6 +625,45 @@ pub enum DirectoryImageError {
     Arithmetic,
 }
 
+/// Persistence boundary for an unreachable directory metadata successor.
+///
+/// # Safety
+///
+/// Implementations must write each complete supplied image to its exact range,
+/// verify the complete bytes against the supplied digest, keep both ranges
+/// unreachable from the active root, and make both images durable before
+/// `flush_directory_update` succeeds. They must not redirect, shorten, merge,
+/// reorder, or acknowledge stale or partially written images.
+pub unsafe trait DirectoryWriteBackend {
+    type Error;
+
+    fn stage_directory_metadata(
+        &mut self,
+        image: CowMetadataImage,
+        encoded: &[u8; crate::DIRECTORY_METADATA_BYTES],
+    ) -> Result<(), Self::Error>;
+
+    fn stage_directory_entries(
+        &mut self,
+        image: CowMetadataImage,
+        encoded: &[u8],
+    ) -> Result<(), Self::Error>;
+
+    fn flush_directory_update(&mut self) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryUpdateError<E> {
+    InvalidSuccessor,
+    Backend(E),
+}
+
+fn digest(input: &[u8]) -> [u8; 32] {
+    let mut digest = Sha3_256::new();
+    digest.update(input);
+    digest.finalize()
+}
+
 fn image_digest(input: &[u8]) -> [u8; 32] {
     let mut digest = Sha3_256::new();
     digest.update(&input[..DIRECTORY_IMAGE_DIGEST_OFFSET]);
@@ -530,6 +692,15 @@ fn pointer_fits(header: VolumeHeader, pointer: MetadataPointer) -> bool {
         && !pointer_contains(pointer, 0)
         && !pointer_contains(pointer, header.primary_superblock())
         && !pointer_contains(pointer, header.secondary_superblock())
+}
+
+fn metadata_pointer_valid(header: VolumeHeader, pointer: MetadataPointer) -> bool {
+    pointer_fits(header, pointer)
+}
+
+fn pointers_overlap(left: MetadataPointer, right: MetadataPointer) -> bool {
+    left.block() < right.block() + u64::from(right.blocks())
+        && right.block() < left.block() + u64::from(left.blocks())
 }
 
 fn pointer_contains(pointer: MetadataPointer, block: u64) -> bool {
@@ -599,6 +770,10 @@ pub enum DirectoryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, StorageTransaction,
+        StorageTransactionId, Superblock,
+    };
 
     fn volume() -> VolumeId {
         VolumeId::new([4; 16]).unwrap()
@@ -623,6 +798,136 @@ mod tests {
             .union(StorageRights::CREATE_DIRECTORY)
             .union(StorageRights::RENAME_CHILD)
             .union(StorageRights::REMOVE_CHILD)
+    }
+
+    struct UpdateBackend {
+        staged: usize,
+        flushed: bool,
+        verified: usize,
+    }
+
+    unsafe impl DirectoryWriteBackend for UpdateBackend {
+        type Error = ();
+
+        fn stage_directory_metadata(
+            &mut self,
+            _image: CowMetadataImage,
+            _encoded: &[u8; crate::DIRECTORY_METADATA_BYTES],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn stage_directory_entries(
+            &mut self,
+            _image: CowMetadataImage,
+            _encoded: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn flush_directory_update(&mut self) -> Result<(), Self::Error> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    unsafe impl CowPublicationBackend for UpdateBackend {
+        type Error = ();
+
+        fn verify_new_metadata(&mut self, _write: CowMetadataWrite) -> Result<(), Self::Error> {
+            self.verified += 1;
+            Ok(())
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            _encoded: &[u8; crate::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            assert_eq!(block, 2);
+            Ok(())
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn directory_successor_is_staged_and_activated_by_one_use_receipt() {
+        let header = VolumeHeader::new(volume(), 4096, 100, 1, 2).unwrap();
+        let active = DirectoryState::<2>::new(object(1), 1, &[]).unwrap();
+        let entry =
+            DirectoryEntry::new(name("file"), object(2), StorageObjectKind::File, 1).unwrap();
+        let successor = DirectoryState::<2>::new(object(1), 2, &[entry]).unwrap();
+        let metadata_pointer = MetadataPointer::new(60, 1).unwrap();
+        let entries_pointer = MetadataPointer::new(61, 1).unwrap();
+        let mut metadata = [0; crate::DIRECTORY_METADATA_BYTES];
+        let mut entries = [0; 4096];
+        let mut backend = UpdateBackend {
+            staged: 0,
+            flushed: false,
+            verified: 0,
+        };
+        let prepared = active
+            .prepare_successor(
+                header,
+                None,
+                successor,
+                metadata_pointer,
+                entries_pointer,
+                &mut metadata,
+                &mut entries,
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!((backend.staged, backend.flushed), (2, true));
+
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(30).unwrap(), 6).unwrap();
+        transaction.admit_directory(&prepared).unwrap();
+        let active_root = Superblock::new(
+            header,
+            5,
+            4,
+            object(1),
+            MetadataPointer::new(10, 1).unwrap(),
+            MetadataPointer::new(20, 1).unwrap(),
+        )
+        .unwrap();
+        let allocation =
+            CowMetadataWrite::new(MetadataPointer::new(50, 1).unwrap(), 6, [9; 32]).unwrap();
+        let plan = CowPublicationPlan::<3>::build(
+            header,
+            1,
+            active_root,
+            object(1),
+            metadata_pointer,
+            allocation.pointer(),
+            &[
+                prepared.metadata_image().bind(6).unwrap(),
+                prepared.entries_image().bind(6).unwrap(),
+                allocation,
+            ],
+            &[
+                MetadataPointer::new(10, 1).unwrap(),
+                MetadataPointer::new(11, 1).unwrap(),
+                MetadataPointer::new(20, 1).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut receipt = transaction.publish(&plan, &mut backend).unwrap();
+        let committed = prepared.commit_transaction(&mut receipt).unwrap();
+        assert_eq!(committed.generation(), 2);
+        assert_eq!(committed.entry(0), Some(entry));
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(backend.verified, 3);
     }
 
     #[test]

@@ -2863,9 +2863,31 @@ object/kind participants, so allocation and the root directory may coexist in
 one future transaction. Admission requires the exact allocation image in the COW
 plan; only a one-use successful publication receipt exposes the successor.
 
-Fifty-eight focused unit tests and strict crate-local clippy pass on Windows
+Directory mutation now has the matching publication boundary. Preparation
+requires the exact next object generation, valid disjoint unreachable metadata
+and entry-list ranges, canonical encodings, and complete-image SHA3-256 digests.
+The unsafe backend must stage both exact images and durably flush them before a
+prepared update exists. Transaction admission binds the directory object and
+both images to one volume publication generation, and only the participant's
+one-use receipt exposes the immutable successor. A focused simulation publishes
+the root directory metadata, entry image, and allocation image in one COW plan.
+The allocation image in that test is a plan write rather than a prepared
+allocator participant; persistent object-ID allocation remains unimplemented.
+
+The `DIGITAL-RIGHTS REVIEW` found no new collection, retention, correlation,
+remote disclosure, tracking identity, publisher control, DRM, accessibility
+exclusion, cloud dependency, or first-party bypass. Stable object identity
+remains non-authorizing. The `HOSTILE SECURITY REVIEW` treats pointers, lengths,
+generations, canonical bytes, transaction membership, backend outcomes, and
+recovery images as hostile; exact binding, checked ranges, disjoint COW storage,
+complete-image digests, capacity preflight, and one-use receipts fail closed on
+stale, missing, duplicate, or substituted state. This agent review does not
+replace independent human implementer, reviewer, adversary, or physical-device
+review.
+
+Fifty-nine focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
-complete directory hierarchy/lifetime handling, directory/allocator transaction
+complete directory hierarchy/lifetime handling, allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
 configuration-checkpoint persistence remain unimplemented.
 
@@ -2876,10 +2898,14 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 58 tests, and both strict crate-local clippy
+Both current unit-test runs pass 59 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
+
+Patent review: `NOT_TRIGGERED` — conventional canonical directory metadata
+staging and transactional COW publication; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
