@@ -2389,6 +2389,8 @@ signed `MIN`, unsigned underflow, and unsigned overflow boundaries.
 Signed receivers support the complementary `checked_add_unsigned` and
 `checked_sub_unsigned` methods, using exact distance-to-`MIN`/`MAX` checks even
 when a `u64` operand cannot be represented as signed.
+Signed `checked_isqrt` returns the integer floor root for nonnegative receivers
+and `None` for negatives, sharing the direct `isqrt` backend without its trap.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while

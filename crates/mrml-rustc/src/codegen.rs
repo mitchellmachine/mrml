@@ -3366,6 +3366,12 @@ fn runtime_expression_type_with_locals<
                 {
                     base_type
                 }
+                crate::expression::CheckedIntegerOptionOperation::SquareRoot
+                    if argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed()) =>
+                {
+                    base_type
+                }
                 crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo
                     if argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !source.is_signed()) =>
@@ -3557,6 +3563,10 @@ fn runtime_expression_type_with_locals<
                 crate::expression::CheckedIntegerOptionOperation::SignedUnary { absolute } => {
                     argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !absolute || source.is_signed())
+                }
+                crate::expression::CheckedIntegerOptionOperation::SquareRoot => {
+                    argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed())
                 }
                 crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo => {
                     argument.is_none()
@@ -6816,29 +6826,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                             self.emit(&[0x48, 0x85, 0xc0])?;
                             self.emit_trap_branch(0x88)?;
                         }
-                        self.emit(&[0x45, 0x31, 0xc0, 0x49, 0xb9])?;
-                        self.emit(&(1_u64 << (operand_width.bits - 2)).to_le_bytes())?;
-                        let align = self.length;
-                        self.emit(&[0x4c, 0x39, 0xc8])?;
-                        let aligned = self.emit_forward_branch(0x83)?;
-                        self.emit(&[0x49, 0xc1, 0xe9, 2])?;
-                        self.emit_backward_branch(align)?;
-                        self.patch_forward_branch(aligned)?;
-                        let root = self.length;
-                        self.emit(&[0x4d, 0x85, 0xc9])?;
-                        let done = self.emit_forward_branch(0x84)?;
-                        self.emit(&[0x4d, 0x89, 0xc2, 0x4d, 0x01, 0xca])?;
-                        self.emit(&[0x4c, 0x39, 0xd0])?;
-                        let below = self.emit_forward_branch(0x82)?;
-                        self.emit(&[0x4c, 0x29, 0xd0, 0x49, 0xd1, 0xe8, 0x4d, 0x01, 0xc8])?;
-                        let shifted = self.emit_unconditional_forward_branch()?;
-                        self.patch_forward_branch(below)?;
-                        self.emit(&[0x49, 0xd1, 0xe8])?;
-                        self.patch_forward_branch(shifted)?;
-                        self.emit(&[0x49, 0xc1, 0xe9, 2])?;
-                        self.emit_backward_branch(root)?;
-                        self.patch_forward_branch(done)?;
-                        self.emit(&[0x4c, 0x89, 0xc0])?;
+                        self.emit_integer_square_root(operand_width)?;
                     }
                     IntegerBitTransform::Signum => {
                         self.emit(&[
@@ -10849,6 +10837,32 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.emit_normalize()
     }
 
+    fn emit_integer_square_root(&mut self, width: RuntimeWidth) -> Result<(), CodegenError> {
+        self.emit(&[0x45, 0x31, 0xc0, 0x49, 0xb9])?;
+        self.emit(&(1_u64 << (width.bits - 2)).to_le_bytes())?;
+        let align = self.length;
+        self.emit(&[0x4c, 0x39, 0xc8])?;
+        let aligned = self.emit_forward_branch(0x83)?;
+        self.emit(&[0x49, 0xc1, 0xe9, 2])?;
+        self.emit_backward_branch(align)?;
+        self.patch_forward_branch(aligned)?;
+        let root = self.length;
+        self.emit(&[0x4d, 0x85, 0xc9])?;
+        let done = self.emit_forward_branch(0x84)?;
+        self.emit(&[0x4d, 0x89, 0xc2, 0x4d, 0x01, 0xca])?;
+        self.emit(&[0x4c, 0x39, 0xd0])?;
+        let below = self.emit_forward_branch(0x82)?;
+        self.emit(&[0x4c, 0x29, 0xd0, 0x49, 0xd1, 0xe8, 0x4d, 0x01, 0xc8])?;
+        let shifted = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(below)?;
+        self.emit(&[0x49, 0xd1, 0xe8])?;
+        self.patch_forward_branch(shifted)?;
+        self.emit(&[0x49, 0xc1, 0xe9, 2])?;
+        self.emit_backward_branch(root)?;
+        self.patch_forward_branch(done)?;
+        self.emit(&[0x4c, 0x89, 0xc0])
+    }
+
     fn emit_checked_multiply_branches(
         &mut self,
         width: RuntimeWidth,
@@ -10940,6 +10954,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 ..
             } => None,
             crate::expression::CheckedIntegerOptionOperation::SignedMixedArithmetic { .. } => None,
+            crate::expression::CheckedIntegerOptionOperation::SquareRoot => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -11220,6 +11235,18 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             } else {
                 self.emit(&[0x48, 0xf7, 0xd8])?;
             }
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
+        }
+        if operation == crate::expression::CheckedIntegerOptionOperation::SquareRoot {
+            if argument.is_some() || !source_width.signed {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit(&[0x45, 0x31, 0xc0, 0x48, 0x85, 0xc0])?;
+            let negative = self.emit_forward_branch(0x88)?;
+            self.emit_integer_square_root(source_width)?;
+            self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
+            self.patch_forward_branch(negative)?;
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
         }
@@ -16461,6 +16488,46 @@ mod tests {
             };
             assert!(
                 compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_integer_square_root_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8, fallback: i8) -> i8 { a.checked_isqrt().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_isqrt().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: isize) -> bool { a.checked_isqrt().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16) -> bool { a.checked_isqrt().is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.checked_isqrt().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64) -> bool { a.checked_isqrt().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_isqrt() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 2048, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::SystemV,
