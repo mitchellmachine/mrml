@@ -1605,6 +1605,28 @@ retirement chain. The final bounded-policy artifact completed both generations
 in 390 microseconds on WHP (`verify=1910us`, `prepare=3428us`, `total=7630us`)
 and 570 microseconds on nested KVM (`verify=4018us`, `prepare=1358us`,
 `total=9797us`) after the CPU-private descriptor refactor.
+
+The 2026-08-23 cleanup-gated revision replaces that out-of-band pair reset with
+four synchronous per-slot handshakes across two generations. At each clean exit
+or fault, the signed service image emits only the retired page-table root's slot
+request while the vCPU is stopped. The runner rejects substitution with the
+valid kernel executable, contaminates that slot's stack, reprovisions only the
+requested authenticated service image, and verifies zeroed bytes plus the
+expected entry and root before resuming. Only then does the guest complete the
+one-use cleanup ticket. Fault recovery uses the retired context solely for
+erasure binding and requires a separately constructed initial entry/stack/root
+context for the fresh generation; the first live KVM attempt caught and drove
+the correction of a fault-context reuse bug. If the retained scheduler cursor
+selects the replacement sender first, the kernel explicitly yields to the
+replacement receiver so empty-receive blocking remains the first service
+action. The rebuilt pair repeats block, send, cleanup-gated clean sender exit,
+receiver wakeup, CPL3 breakpoint, cleanup-gated fault retirement, and permanent
+restart-budget rejection. Fresh signed artifacts completed this path under Arch
+Linux/WSL2 `/dev/kvm` (`verify=21616us`, `prepare=3030us`, `execute=1056us`,
+`total=49464us`) and Windows WHP (`verify=18846us`, `prepare=3888us`,
+`execute=567us`, `total=26846us`). These are controlled hosted-probe results;
+the host remains trusted.
+
 Every registration now binds a validated restart policy containing a nonzero
 maximum restart count, base delay, and maximum delay. Retirement computes the
 next eligible scheduler tick with checked arithmetic; delay doubles after each
@@ -1633,7 +1655,8 @@ failure retains completed obligations for retry and continues to block restart.
 orchestration boundary: it retires the exact current service, allowing
 `TaskRuntime` to publish typed peer death and revoke task authority, completes
 the supplied composite eraser, then creates a fresh service/task generation
-before returning the peer scheduling outcome. Cleanup failure keeps the exact
+from an independently validated context before returning the peer scheduling
+outcome. Cleanup failure keeps the exact
 ticket queryable for retry; a restart authorization or policy failure occurs
 only after cleanup and leaves a clean stopped service that can be restarted
 separately. Windows gnullvm passes 298 kernel tests. Focused cases cover
@@ -1641,9 +1664,9 @@ surviving peers, typed fault identity, stale service generations, wrong-task
 substitution, final-reference reporting, native failure, host-resource failure,
 eraser failure, exact-ticket retry, rejected-restart retry, and a composite
 native mapping/binding/host-resource/address-space cleanup followed by fresh
-generation creation. The existing signed backend probes exercise
-reprovisioning, but have not yet exercised this composite task-owned
-shared-resource path live.
+generation creation. The signed backend probes now exercise cleanup-gated
+address-space reprovisioning, but have not yet exercised the full task-owned
+shared-binding and host-resource path live.
 
 Each `TaskRuntime` domain now owns a fixed two-message inbox in addition to its
 context and capability space. `receive_or_block_current` dequeues immediately

@@ -46,9 +46,13 @@ obligations survive retry across host-resource or address-space erasure failure.
 The supervisor now exposes one bounded recovery operation that retires the
 faulted task, publishes typed peer death, completes the caller-supplied
 task-resource/address-space eraser, and creates a fresh service/task generation
-before returning the surviving peer's scheduling outcome. Cleanup failure
-retains the exact ticket for retry; restart rejection leaves a clean stopped
-service that can be authorized and retried separately.
+from an independently validated context before returning the surviving peer's
+scheduling outcome. Cleanup failure retains the exact ticket for retry; restart
+rejection leaves a clean stopped service that can be authorized and retried
+separately. Freshly signed WHP and KVM runs now exercise cleanup-ticket-gated
+per-slot address-space reprovisioning across clean exit, fault, restart, and
+restart-budget exhaustion. The task-owned shared-binding/host-resource
+composition remains simulation-tested rather than live-probe evidence.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
@@ -80,8 +84,10 @@ confidentiality.
    notification, task-domain revocation, native-first task-owned shared-resource
    cleanup, final host-handle retirement, exact erasure gating, and bounded
    restart are coupled through one supervised recovery operation. Cleanup and
-   restart failures retain retryable fail-closed state. A signed live composite
-   cleanup probe remains evidence work rather than a missing mechanism.
+   restart failures retain retryable fail-closed state. Signed KVM and WHP runs
+   exercise exact per-slot address-space cleanup before restart; the broader
+   task-owned shared-binding/host-resource composition remains outstanding live
+   evidence rather than a missing kernel mechanism.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
    **IMPLEMENTED:** release microbenchmarks cover backend-neutral

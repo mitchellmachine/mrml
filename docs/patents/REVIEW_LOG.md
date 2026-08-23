@@ -209,6 +209,21 @@ construction, or optimization.
 Patent review: `NOT_TRIGGERED` — conventional fail-closed service lifecycle
 composition.
 
+## 2026-08-23 — hosted cleanup-ticket service reset handshake
+
+MRML source: `crates/mrml-kernel-image/src/main.rs` and
+`crates/mrml-{kvm,whp}-run/src/main.rs`.
+
+The signed hosted probe now pauses on an exact service-slot cleanup request,
+uses the existing authenticated reprovisioning operation, verifies erased state,
+and resumes cleanup-ticket completion before fresh-generation restart. This is
+ordinary synchronous test-harness coordination and lifecycle ordering; it adds
+no novel algorithm, device protocol, codec, cryptographic construction, or
+optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional hosted reset orchestration and
+verification.
+
 ## 2026-08-23 — diverging Rust helper signatures
 
 MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.

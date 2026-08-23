@@ -93,7 +93,8 @@ use mrml_kernel::{
 };
 #[cfg(feature = "service-probe")]
 use mrml_kernel::{
-    Capability, CapabilitySpace, RestartPolicy, ServiceError, ServiceId, ServiceSupervisor,
+    Capability, CapabilitySpace, RestartPolicy, ServiceAddressSpaceEraser, ServiceError, ServiceId,
+    ServiceSupervisor,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -343,6 +344,37 @@ static mut SERVICE_CONTROLS: Option<[Capability; 2]> = None;
 static mut SERVICE_IDS: Option<[ServiceId; 2]> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESTARTED: bool = false;
+
+#[cfg(feature = "service-probe")]
+struct HostedServiceEraser;
+
+#[cfg(feature = "service-probe")]
+impl ServiceAddressSpaceEraser for HostedServiceEraser {
+    type Error = ();
+
+    fn erase(
+        &mut self,
+        _task: mrml_kernel::TaskId,
+        context: UserContext,
+    ) -> Result<(), Self::Error> {
+        let stage = if context.page_table().get() == SERVICE_ROOT {
+            0x20u32
+        } else if context.page_table().get() == SERVICE_B_ROOT {
+            0x21u32
+        } else {
+            return Err(());
+        };
+        unsafe {
+            asm!(
+                "out dx, eax",
+                in("dx") SERVICE_PROBE_PORT,
+                in("eax") stage,
+                options(nomem, nostack)
+            )
+        };
+        Ok(())
+    }
+}
 
 global_asm!(
     r#"
@@ -722,6 +754,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 if terminated.task != current || runtime.context(current).is_ok() {
                     halt();
                 }
+                supervisor
+                    .complete_cleanup(terminated.cleanup, &mut HostedServiceEraser)
+                    .unwrap_or_else(|_| halt());
                 match terminated.next {
                     ScheduleOutcome::Switch { to, .. } => {
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
@@ -1270,13 +1305,16 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
                 .as_mut()
                 .unwrap_or_else(|| halt());
-            let fault = supervisor
-                .fault_current(runtime, _disposition)
-                .unwrap_or_else(|_| halt());
-            if !matches!(fault.retirement.next, ScheduleOutcome::Idle) {
-                halt();
-            }
             if core::ptr::addr_of!(SERVICE_RESTARTED).read() {
+                let fault = supervisor
+                    .fault_current(runtime, _disposition)
+                    .unwrap_or_else(|_| halt());
+                if !matches!(fault.retirement.next, ScheduleOutcome::Idle) {
+                    halt();
+                }
+                supervisor
+                    .complete_cleanup(fault.cleanup, &mut HostedServiceEraser)
+                    .unwrap_or_else(|_| halt());
                 verify_restart_budget_exhausted(runtime, supervisor);
                 asm!(
                     "out dx, eax",
@@ -1286,13 +1324,38 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                 );
                 halt();
             }
+            let management = (*core::ptr::addr_of!(SERVICE_MANAGEMENT))
+                .as_ref()
+                .unwrap_or_else(|| halt());
+            let controls = (*core::ptr::addr_of!(SERVICE_CONTROLS)).unwrap_or_else(|| halt());
+            let fresh_context = UserContext::new(
+                PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
+                SERVICE_ENTRY,
+                SERVICE_STACK_TOP,
+            )
+            .unwrap_or_else(|_| halt());
+            let recovery = supervisor
+                .recover_current_fault(
+                    runtime,
+                    _disposition,
+                    0,
+                    &mut HostedServiceEraser,
+                    management,
+                    controls[0],
+                    Priority::NORMAL,
+                    fresh_context,
+                )
+                .unwrap_or_else(|_| halt());
+            if !matches!(recovery.next, ScheduleOutcome::Idle) {
+                halt();
+            }
             asm!(
                 "out dx, eax",
                 in("dx") SERVICE_PROBE_PORT,
                 in("eax") 3u32,
                 options(nomem, nostack)
             );
-            restart_service_pair(runtime, supervisor);
+            restart_service_pair(runtime, supervisor, recovery.replacement);
         };
     }
     halt()
@@ -2432,6 +2495,7 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 unsafe fn restart_service_pair(
     runtime: &mut TaskRuntime<2, 1>,
     supervisor: &mut ServiceSupervisor<2>,
+    receiver_service: ServiceId,
 ) -> ! {
     let management = unsafe {
         (*core::ptr::addr_of!(SERVICE_MANAGEMENT))
@@ -2440,21 +2504,16 @@ unsafe fn restart_service_pair(
     };
     let controls = unsafe { (*core::ptr::addr_of!(SERVICE_CONTROLS)).unwrap_or_else(|| halt()) };
     let retired = unsafe { (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt()) };
-    let receiver_context = UserContext::new(
-        PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
-        SERVICE_ENTRY,
-        SERVICE_STACK_TOP,
-    )
-    .unwrap_or_else(|_| halt());
     let sender_context = UserContext::new(
         PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
         SERVICE_SENDER_ENTRY,
         SERVICE_STACK_TOP,
     )
     .unwrap_or_else(|_| halt());
-    // Recreate the sender first so the scheduler's retained round-robin cursor
-    // selects the receiver slot. This preserves the proof that an empty receive
-    // blocks before the replacement sender is allowed to run.
+    // Recovery has already created the receiver generation. Recreate the
+    // sender, then explicitly yield to the receiver if the retained scheduler
+    // cursor initially selects the sender. This preserves the proof that an
+    // empty receive blocks before the replacement sender is allowed to run.
     let sender_service = supervisor
         .restart(
             retired[1],
@@ -2466,16 +2525,11 @@ unsafe fn restart_service_pair(
         )
         .unwrap_or_else(|_| halt());
     unsafe { service_restart_stage(0x31) };
-    let receiver_service = supervisor
-        .restart(
-            retired[0],
-            management,
-            controls[0],
-            runtime,
-            Priority::NORMAL,
-            receiver_context,
-        )
-        .unwrap_or_else(|_| halt());
+    if supervisor.state(receiver_service) != Ok(mrml_kernel::ServiceState::Running)
+        || supervisor.pending_cleanup(receiver_service) != Ok(None)
+    {
+        halt();
+    }
     unsafe { service_restart_stage(0x32) };
     let receiver = supervisor
         .task(receiver_service)
@@ -2505,8 +2559,15 @@ unsafe fn restart_service_pair(
     sender_context.r13 = capability.token();
     sender_context.r14 = receiver.token();
     unsafe { service_restart_stage(0x37) };
-    if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver) {
-        halt();
+    match runtime.start() {
+        ScheduleOutcome::Switch { from: None, to } if to == receiver => {}
+        ScheduleOutcome::Switch { from: None, to } if to == sender => {
+            if !matches!(runtime.yield_current(), Ok(ScheduleOutcome::Switch { to, .. }) if to == receiver)
+            {
+                halt();
+            }
+        }
+        _ => halt(),
     }
     unsafe {
         core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([receiver_service, sender_service]));

@@ -1288,6 +1288,7 @@ mod tests {
                     &management,
                     control,
                     Priority::NORMAL,
+                    context,
                 )
                 .unwrap()
         };

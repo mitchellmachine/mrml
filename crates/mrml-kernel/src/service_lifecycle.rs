@@ -341,10 +341,12 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
     }
 
     /// Retires a recoverable user fault, completes all caller-supplied cleanup,
-    /// and creates one fresh service generation before returning control to the
-    /// dispatch loop. A successful call does not expose the scheduler outcome
-    /// until cleanup and restart have both succeeded; failures retain a typed
-    /// stopped-service state for explicit retry or fail-stop handling.
+    /// and creates one fresh service generation from the caller's independently
+    /// validated context before returning control to the dispatch loop. The
+    /// retired context is used only to bind cleanup. A successful call does not
+    /// expose the scheduler outcome until cleanup and restart have both
+    /// succeeded; failures retain a typed stopped-service state for explicit
+    /// retry or fail-stop handling.
     #[allow(clippy::too_many_arguments)]
     pub fn recover_current_fault<
         E: ServiceAddressSpaceEraser,
@@ -360,6 +362,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         management: &CapabilitySpace<MANAGEMENT_CAPS>,
         control: Capability,
         priority: Priority,
+        fresh_context: UserContext,
     ) -> Result<ServiceRecovery, ServiceRecoveryError<E::Error>> {
         let fault = self
             .fault_current_at(runtime, disposition, now)
@@ -376,7 +379,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
                 control,
                 runtime,
                 priority,
-                fault.cleanup.context,
+                fresh_context,
                 now,
             )
             .map_err(|error| ServiceRecoveryError::Restart {
@@ -831,6 +834,9 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == faulted));
+        let retired_context = context(0x20_0000, 0x41_0000);
+        *runtime.context_mut(faulted).unwrap() = retired_context;
+        let fresh_context = context(0x20_0000, 0x40_0000);
         let mut supervisor = ServiceSupervisor::<1>::new();
         let retired = supervisor.register(object, faulted).unwrap();
         let mut management = CapabilitySpace::<1>::new();
@@ -849,6 +855,7 @@ mod tests {
                 &management,
                 control,
                 Priority::NORMAL,
+                fresh_context,
             )
             .unwrap();
 
@@ -857,10 +864,8 @@ mod tests {
         assert_ne!(recovery.task, faulted);
         assert!(matches!(recovery.next, ScheduleOutcome::Switch { to, .. } if to == observer));
         assert_eq!(runtime.current(), Some(observer));
-        assert_eq!(
-            eraser.erased,
-            Some((faulted, context(0x20_0000, 0x40_0000)))
-        );
+        assert_eq!(eraser.erased, Some((faulted, retired_context)));
+        assert_eq!(runtime.context(recovery.task), Ok(&fresh_context));
         let ControlEvent::PeerDied(death) = runtime.receive_control(observer).unwrap() else {
             panic!("expected typed peer death");
         };
@@ -908,6 +913,7 @@ mod tests {
                 &management,
                 control,
                 Priority::NORMAL,
+                context(0x20_0000, 0x40_0000),
             )
             .unwrap_err();
         let ServiceRecoveryError::Cleanup {
@@ -974,6 +980,7 @@ mod tests {
                 &management,
                 wrong,
                 Priority::NORMAL,
+                saved,
             ),
             Err(ServiceRecoveryError::Restart {
                 service,

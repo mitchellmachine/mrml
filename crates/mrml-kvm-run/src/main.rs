@@ -11,7 +11,7 @@ use mrml_kernel::{
     ArtifactKind, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity,
     GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
     GpuVmmQueueBridge, ResourceCommand, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VerifiedGpuKernelBundle, VmBackend, VmExit, verify_gpu_kernel_bundle,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VmBackend, VmExit, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -609,23 +609,52 @@ fn application_main() -> Result<()> {
         {
             return Err(anyhow!("isolated receiver did not block: {:?}", exit));
         }
-        for stage in [2u32, 3] {
-            exit = VmBackend::run(&mut guest, 0)
-                .map_err(|error| anyhow!("KVM execution during service IPC failed: {:?}", error))?;
-            if exit
-                != (VmExit::Io {
-                    port: SERVICE_CALL_PORT,
-                    size: 4,
-                    write: true,
-                    value: stage,
-                })
-            {
-                return Err(anyhow!(
-                    "isolated service IPC stage {} failed: {:?}",
-                    stage,
-                    exit
-                ));
-            }
+        exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("KVM execution during service send failed: {:?}", error))?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_CALL_PORT,
+                size: 4,
+                write: true,
+                value: 2,
+            })
+        {
+            return Err(anyhow!("isolated service send failed: {:?}", exit));
+        }
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!("KVM execution entering sender cleanup failed: {:?}", error)
+        })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x21,
+            })
+        {
+            return Err(anyhow!("KVM sender cleanup request mismatch: {:?}", exit));
+        }
+        complete_kvm_service_cleanup(
+            &mut guest,
+            1,
+            SERVICE_B_STACK_PHYSICAL,
+            SERVICE_B_TABLE_PHYSICAL,
+            &executable,
+            service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified service executable"))?,
+        )?;
+        exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("KVM execution after sender cleanup failed: {:?}", error))?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_CALL_PORT,
+                size: 4,
+                write: true,
+                value: 3,
+            })
+        {
+            return Err(anyhow!("isolated service receive failed: {:?}", exit));
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution after service IPC failed: {:?}", error))?;
@@ -644,10 +673,32 @@ fn application_main() -> Result<()> {
         }
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!(
-                "KVM execution after service frame proof failed: {:?}",
+                "KVM execution entering receiver cleanup failed: {:?}",
                 error
             )
         })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x20,
+            })
+        {
+            return Err(anyhow!("KVM receiver cleanup request mismatch: {:?}", exit));
+        }
+        complete_kvm_service_cleanup(
+            &mut guest,
+            0,
+            SERVICE_STACK_PHYSICAL,
+            SERVICE_TABLE_PHYSICAL,
+            &executable,
+            service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified service executable"))?,
+        )?;
+        exit = VmBackend::run(&mut guest, 0)
+            .map_err(|error| anyhow!("KVM execution after receiver cleanup failed: {:?}", error))?;
         if exit
             != (VmExit::Io {
                 port: SERVICE_PROBE_PORT,
@@ -668,44 +719,6 @@ fn application_main() -> Result<()> {
                 state.fault_address(),
                 state.page_table_root()
             ));
-        }
-        if guest
-            .reprovision_isolated_service_at(0, &executable)
-            .is_ok()
-        {
-            return Err(anyhow!(
-                "KVM service reprovision accepted a different signed executable"
-            ));
-        }
-        let service = service_executable
-            .as_ref()
-            .ok_or_else(|| anyhow!("missing verified service executable"))?;
-        for (slot, stack, expected_root) in [
-            (0, SERVICE_STACK_PHYSICAL, SERVICE_TABLE_PHYSICAL),
-            (1, SERVICE_B_STACK_PHYSICAL, SERVICE_B_TABLE_PHYSICAL),
-        ] {
-            VmBackend::write_guest(&mut guest, stack, &[0xa5; 32]).map_err(|error| {
-                anyhow!(
-                    "failed to contaminate stopped KVM service state: {:?}",
-                    error
-                )
-            })?;
-            let (entry, root) = guest
-                .reprovision_isolated_service_at(slot, service)
-                .map_err(|error| anyhow!("KVM service reprovision failed: {:?}", error))?;
-            let mut erased = [0xff; 32];
-            VmBackend::read_guest(&guest, stack, &mut erased)
-                .map_err(|error| anyhow!("failed to inspect KVM service reset: {:?}", error))?;
-            if erased != [0; 32]
-                || entry != SERVICE_VIRTUAL + 0x1000
-                || root
-                    != PhysAddr::new(expected_root)
-                        .map_err(|_| anyhow!("invalid fixed KVM service root"))?
-            {
-                return Err(anyhow!(
-                    "KVM service reprovision did not publish clean state"
-                ));
-            }
         }
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!(
@@ -728,7 +741,7 @@ fn application_main() -> Result<()> {
                 anyhow!("KVM execution during service restart failed: {:?}", error)
             })?;
         }
-        for stage in [1u32, 2, 3] {
+        for stage in [1u32, 2] {
             if exit
                 != (VmExit::Io {
                     port: SERVICE_CALL_PORT,
@@ -752,6 +765,48 @@ fn application_main() -> Result<()> {
         }
         if exit
             != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x21,
+            })
+        {
+            return Err(anyhow!(
+                "restarted KVM sender cleanup request mismatch: {:?}",
+                exit
+            ));
+        }
+        complete_kvm_service_cleanup(
+            &mut guest,
+            1,
+            SERVICE_B_STACK_PHYSICAL,
+            SERVICE_B_TABLE_PHYSICAL,
+            &executable,
+            service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified service executable"))?,
+        )?;
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!(
+                "KVM execution after restarted sender cleanup failed: {:?}",
+                error
+            )
+        })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_CALL_PORT,
+                size: 4,
+                write: true,
+                value: 3,
+            })
+        {
+            return Err(anyhow!("restarted KVM receive mismatch: {:?}", exit));
+        }
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!("KVM execution after restarted receive failed: {:?}", error)
+        })?;
+        if exit
+            != (VmExit::Io {
                 port: SERVICE_FRAME_PORT,
                 size: 4,
                 write: true,
@@ -760,8 +815,41 @@ fn application_main() -> Result<()> {
         {
             return Err(anyhow!("restarted KVM service frame mismatch: {:?}", exit));
         }
-        exit = VmBackend::run(&mut guest, 0)
-            .map_err(|error| anyhow!("KVM execution after restarted frame failed: {:?}", error))?;
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!(
+                "KVM execution entering final receiver cleanup failed: {:?}",
+                error
+            )
+        })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x20,
+            })
+        {
+            return Err(anyhow!(
+                "final KVM receiver cleanup request mismatch: {:?}",
+                exit
+            ));
+        }
+        complete_kvm_service_cleanup(
+            &mut guest,
+            0,
+            SERVICE_STACK_PHYSICAL,
+            SERVICE_TABLE_PHYSICAL,
+            &executable,
+            service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified service executable"))?,
+        )?;
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!(
+                "KVM execution after final receiver cleanup failed: {:?}",
+                error
+            )
+        })?;
         if exit
             != (VmExit::Io {
                 port: SERVICE_PROBE_PORT,
@@ -896,6 +984,43 @@ fn handoff_entropy(handoff: &[u8]) -> Result<[u8; 32]> {
     let decoded = mrml_kernel::BootHandoff::decode(handoff, |_| {})
         .map_err(|_| anyhow!("invalid benchmark handoff"))?;
     Ok(*decoded.evidence().entropy())
+}
+
+#[cfg(target_os = "linux")]
+fn complete_kvm_service_cleanup<const N: usize>(
+    guest: &mut mrml_kvm::PreparedKvmGuest<N>,
+    slot: usize,
+    stack: u64,
+    expected_root: u64,
+    wrong: &VerifiedExecutable<'_>,
+    service: &VerifiedExecutable<'_>,
+) -> Result<()> {
+    if guest.reprovision_isolated_service_at(slot, wrong).is_ok() {
+        return Err(anyhow!(
+            "KVM service cleanup accepted a different signed executable"
+        ));
+    }
+    VmBackend::write_guest(guest, stack, &[0xa5; 32]).map_err(|error| {
+        anyhow!(
+            "failed to contaminate stopped KVM service state: {:?}",
+            error
+        )
+    })?;
+    let (entry, root) = guest
+        .reprovision_isolated_service_at(slot, service)
+        .map_err(|error| anyhow!("KVM service cleanup failed: {:?}", error))?;
+    let mut erased = [0xff; 32];
+    VmBackend::read_guest(guest, stack, &mut erased)
+        .map_err(|error| anyhow!("failed to inspect KVM service cleanup: {:?}", error))?;
+    if erased != [0; 32]
+        || entry != SERVICE_VIRTUAL + 0x1000
+        || root
+            != PhysAddr::new(expected_root)
+                .map_err(|_| anyhow!("invalid fixed KVM service root"))?
+    {
+        return Err(anyhow!("KVM service cleanup did not publish clean state"));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
