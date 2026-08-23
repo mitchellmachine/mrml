@@ -57,6 +57,7 @@ pub enum GranuleState {
     Private,
     Shared,
     ScrubRequired,
+    HardwareUncertain,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,19 +103,36 @@ impl GranuleTransition {
 }
 
 /// Privileged adapter that applies one validated transition to EPT and IOMMU
-/// state. Implementing this trait asserts hardware ordering and rollback
-/// invariants that safe Rust cannot inspect.
+/// Result reported by the privileged hardware transition implementation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GranuleHardwareOutcome {
+    Applied,
+    Rejected,
+    FailStop,
+}
+
+#[cfg(test)]
+impl From<bool> for GranuleHardwareOutcome {
+    fn from(value: bool) -> Self {
+        if value { Self::Applied } else { Self::Rejected }
+    }
+}
+
+/// Applies ownership transitions to CPU and device translation hardware.
 ///
 /// # Safety
 ///
-/// On `true`, the exact transition must be fully applied and all required CPU
-/// and IOMMU translation invalidations must be complete. Old access must be
-/// revoked before new access is granted. `CompleteScrub` must additionally
-/// overwrite the complete granule before host access is restored. On `false`,
-/// no new access may remain visible; partial work must be rolled back or left
-/// more restrictive than the pre-transition state.
+/// Implementing this trait asserts hardware ordering and rollback invariants
+/// that safe Rust cannot inspect. `Applied` means the exact transition is fully
+/// applied and every required CPU and IOMMU translation invalidation completed.
+/// Old access must be revoked before new access is granted. `CompleteScrub`
+/// must additionally overwrite the complete granule before host access is
+/// restored. `Rejected` means no new access remains visible and partial work
+/// was rolled back or left more restrictive than the pre-transition state.
+/// `FailStop` is mandatory when stale permissive translations or partially
+/// granted access may remain.
 pub unsafe trait GranuleHardware {
-    fn apply_transition(&mut self, transition: GranuleTransition) -> bool;
+    fn apply_transition(&mut self, transition: GranuleTransition) -> GranuleHardwareOutcome;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,6 +152,8 @@ pub enum MonitorError {
     TransitionPending,
     StaleTransition,
     DomainHasPendingTransition,
+    DomainHasUncertainGranule,
+    HardwareStateUncertain,
     InvalidSecurityVersion,
     Report(ProtectionError),
 }
@@ -223,6 +243,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
         }
+        if self.domain_has_uncertain_granule(id) {
+            return Err(MonitorError::DomainHasUncertainGranule);
+        }
         let domain = self.domain_mut(id)?;
         if domain.state != DomainState::Building {
             return Err(MonitorError::InvalidDomainState);
@@ -236,6 +259,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
         }
+        if self.domain_has_uncertain_granule(id) {
+            return Err(MonitorError::DomainHasUncertainGranule);
+        }
         let domain = self.domain_mut(id)?;
         if !matches!(domain.state, DomainState::Measured | DomainState::Stopped) {
             return Err(MonitorError::InvalidDomainState);
@@ -248,6 +274,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
         }
+        if self.domain_has_uncertain_granule(id) {
+            return Err(MonitorError::DomainHasUncertainGranule);
+        }
         let domain = self.domain_mut(id)?;
         if domain.state != DomainState::Runnable {
             return Err(MonitorError::InvalidDomainState);
@@ -259,6 +288,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
     pub fn destroy_domain(&mut self, id: DomainId) -> Result<(), MonitorError> {
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
+        }
+        if self.domain_has_uncertain_granule(id) {
+            return Err(MonitorError::DomainHasUncertainGranule);
         }
         let domain = self.domain(id)?;
         if domain.state == DomainState::Runnable {
@@ -406,17 +438,25 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         hardware: &mut H,
     ) -> Result<(), MonitorError> {
         self.validate_transition(transition)?;
-        let hardware_succeeded = hardware.apply_transition(transition);
-        self.complete_transition(transition, hardware_succeeded)
+        let outcome = hardware.apply_transition(transition);
+        self.complete_transition(transition, outcome)
     }
 
-    fn complete_transition(
+    fn complete_transition<O: Into<GranuleHardwareOutcome>>(
         &mut self,
         transition: GranuleTransition,
-        hardware_succeeded: bool,
+        outcome: O,
     ) -> Result<(), MonitorError> {
+        let outcome = outcome.into();
         let pending = self.validate_transition(transition)?;
-        if !hardware_succeeded {
+        if outcome == GranuleHardwareOutcome::FailStop {
+            let granule = self.granule_mut(transition.granule)?;
+            granule.pending = None;
+            granule.state = GranuleState::HardwareUncertain;
+            granule.owner = transition.to_owner.or(transition.from_owner);
+            return Err(MonitorError::HardwareStateUncertain);
+        }
+        if outcome == GranuleHardwareOutcome::Rejected {
             self.granule_mut(transition.granule)?.pending = None;
             return Err(if pending.kind == GranuleTransitionKind::CompleteScrub {
                 MonitorError::ScrubFailed
@@ -459,6 +499,9 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
     ) -> Result<ProtectionReport, MonitorError> {
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
+        }
+        if self.domain_has_uncertain_granule(id) {
+            return Err(MonitorError::DomainHasUncertainGranule);
         }
         let domain = *self.domain(id)?;
         if !matches!(domain.state, DomainState::Measured | DomainState::Runnable) {
@@ -567,6 +610,12 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         })
     }
 
+    fn domain_has_uncertain_granule(&self, id: DomainId) -> bool {
+        self.granules.iter().flatten().any(|granule| {
+            granule.owner == Some(id) && granule.state == GranuleState::HardwareUncertain
+        })
+    }
+
     fn domain(&self, id: DomainId) -> Result<&Domain, MonitorError> {
         self.domains
             .get(id.index())
@@ -611,7 +660,7 @@ mod tests {
     use super::*;
 
     struct RecordingHardware {
-        succeed: bool,
+        outcome: GranuleHardwareOutcome,
         calls: usize,
         last: Option<GranuleTransition>,
     }
@@ -619,10 +668,10 @@ mod tests {
     // SAFETY: this deterministic test adapter models an atomic hardware
     // transaction and records no partial state when configured to fail.
     unsafe impl GranuleHardware for RecordingHardware {
-        fn apply_transition(&mut self, transition: GranuleTransition) -> bool {
+        fn apply_transition(&mut self, transition: GranuleTransition) -> GranuleHardwareOutcome {
             self.calls += 1;
             self.last = Some(transition);
-            self.succeed
+            self.outcome
         }
     }
 
@@ -845,7 +894,7 @@ mod tests {
         assert_eq!(transition.from_owner(), None);
         assert_eq!(transition.to_owner(), None);
         let mut hardware = RecordingHardware {
-            succeed: true,
+            outcome: GranuleHardwareOutcome::Applied,
             calls: 0,
             last: None,
         };
@@ -878,7 +927,7 @@ mod tests {
             .unwrap();
         let transition = monitor.prepare_delegate(granule).unwrap();
         let mut hardware = RecordingHardware {
-            succeed: false,
+            outcome: GranuleHardwareOutcome::Rejected,
             calls: 0,
             last: None,
         };
@@ -893,5 +942,70 @@ mod tests {
             Err(MonitorError::StaleTransition)
         );
         assert_eq!(hardware.calls, 1);
+    }
+
+    #[test]
+    fn uncertain_hardware_state_quarantines_granule_and_domain() {
+        let mut monitor = ProtectedMonitor::<1, 1>::new();
+        let domain = monitor.create_domain().unwrap();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0xa0_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        let transition = monitor.prepare_assign_private(granule, domain).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        monitor.seal_domain(domain, [0xc1; 64]).unwrap();
+        let transition = monitor.prepare_share(granule, domain).unwrap();
+        let mut hardware = RecordingHardware {
+            outcome: GranuleHardwareOutcome::FailStop,
+            calls: 0,
+            last: None,
+        };
+        assert_eq!(
+            monitor.execute_transition(transition, &mut hardware),
+            Err(MonitorError::HardwareStateUncertain)
+        );
+        assert_eq!(
+            monitor.granule_state(granule),
+            Ok(GranuleState::HardwareUncertain)
+        );
+        assert_eq!(
+            monitor.start_domain(domain),
+            Err(MonitorError::DomainHasUncertainGranule)
+        );
+        assert_eq!(
+            monitor.issue_report(domain, [6; 32]),
+            Err(MonitorError::DomainHasUncertainGranule)
+        );
+        assert_eq!(
+            monitor.prepare_reclaim(granule, domain),
+            Err(MonitorError::InvalidGranuleState)
+        );
+    }
+
+    #[test]
+    fn uncertain_assignment_quarantines_the_target_domain() {
+        let mut monitor = ProtectedMonitor::<1, 1>::new();
+        let domain = monitor.create_domain().unwrap();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0xb0_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        let transition = monitor.prepare_assign_private(granule, domain).unwrap();
+        let mut hardware = RecordingHardware {
+            outcome: GranuleHardwareOutcome::FailStop,
+            calls: 0,
+            last: None,
+        };
+        assert_eq!(
+            monitor.execute_transition(transition, &mut hardware),
+            Err(MonitorError::HardwareStateUncertain)
+        );
+        assert_eq!(
+            monitor.seal_domain(domain, [0xc2; 64]),
+            Err(MonitorError::DomainHasUncertainGranule)
+        );
     }
 }

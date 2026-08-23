@@ -239,8 +239,15 @@ delegate, private assignment, share, make-private, reclaim, and scrub-complete
 operation first creates a generational single-use transition ticket containing
 the exact granule, physical address, operation, and sequence. The EPT/IOMMU
 adapter performs the corresponding hardware change and then completes that
-ticket with success or failure. Policy state remains unchanged on hardware
-failure; failed tickets are consumed and retries receive a fresh sequence.
+ticket with `Applied`, `Rejected`, or `FailStop`. A clean rejection leaves
+policy state unchanged; rejected tickets are consumed and retries receive a
+fresh sequence. `FailStop` is required when a page-table update occurred but a
+CPU or IOMMU invalidation failed, or whenever stale permissive translations or
+partially granted access may remain. It permanently quarantines the granule as
+`HardwareUncertain` instead of falsely claiming rollback.
+The quarantine is conservatively associated with the transition's target
+domain (or its source when no target exists), so a partially completed grant
+cannot leave the target domain operational.
 Forged, replayed, mismatched, or already completed tickets cannot mutate state.
 Production callers cannot submit a bare success Boolean: completion is routed
 through an explicitly unsafe `GranuleHardware` implementation whose contract
@@ -253,8 +260,11 @@ adapter, and revalidates it before policy commit.
 Only one transition may be pending per granule, and a pending transition that
 mentions a domain blocks that domain's seal/start/stop/destroy and evidence
 operations. This prevents domain lifecycle progress or protection reports
-while hardware and policy ownership may disagree. The ticket protocol does not
-prove that an adapter truthfully reported success; the eventual native EPT and
+while hardware and policy ownership may disagree. An uncertain granule likewise
+blocks its owner's lifecycle and evidence operations and cannot be reclaimed,
+reassigned, or reused by normal transitions; recovery requires a platform reset
+or a future independently verified hardware-recovery path. The ticket protocol
+does not prove that an adapter truthfully reported success; the eventual native EPT and
 IOMMU adapter remains inside the trusted bare-metal monitor boundary and must
 be validated on hardware before stronger claims are enabled.
 
