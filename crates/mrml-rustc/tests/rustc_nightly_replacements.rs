@@ -2883,6 +2883,24 @@ fn rustc_checked_exact_division_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_generic_checked_cast_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, fallback: u8) -> u8 { input.checked_cast::<u8>().unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> u32 { input.checked_cast::<u32>().unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> bool { input.checked_cast::<i32>().is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> bool { input.checked_cast::<u64>().is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_signed_clamp_magnitude_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i8, limit: u8) -> i8 { value.clamp_magnitude(limit) }",

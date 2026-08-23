@@ -2333,9 +2333,9 @@ Pinned-nightly generic `saturating_cast::<T>`, `wrapping_cast::<T>`, and
 `strict_cast::<T>` support every integer source/target pair exposed by
 `BoundedCastFromInt` and `CheckedCastFromInt`. Runtime and constant paths apply
 numeric-bound saturation, Rust `as` wrapping, and unconditional strict overflow
-traps across signedness and width changes. The `Option`-returning `checked_cast`
-`checked_cast` remains outside this scalar milestone until `Option` results can
-be represented without partial behavior. Unsafe functions can additionally use
+traps across signedness and width changes. Runtime expressions can additionally
+consume the `Option`-returning `checked_cast::<T>` through the supported option
+consumers described below. Unsafe functions can additionally use
 `unchecked_cast::<T>` for every integer pair; safe functions and constants
 reject it, and valid callers receive the direct representability-assuming cast.
 
@@ -2350,13 +2350,15 @@ receiver/argument types, invalid arity, unsigned negation, and signed disjoint
 bit-or are rejected; unsafe blocks are not accepted as a substitute because
 this bounded parser does not yet represent their safety context.
 
-Runtime integer expressions can consume pinned-nightly `checked_div_exact`
-results with `Option::unwrap_or` and `Option::unwrap_or_default`, or observe them
-with `Option::is_some` and `Option::is_none`. Exact nonzero divisions return
-their quotient or `Some`; inexact divisions, zero divisors, and signed
-`MIN / -1` select the eagerly evaluated fallback, zero default, or `None`
-without trapping. Signed and unsigned receivers require a same-type divisor and
-explicit fallback. These consumers share one value-plus-validity emitter while
+Runtime integer expressions can consume pinned-nightly `checked_div_exact` and
+generic `checked_cast::<T>` results with `Option::unwrap_or` and
+`Option::unwrap_or_default`, or observe them with `Option::is_some` and
+`Option::is_none`. Exact nonzero divisions and representable casts return
+their quotient, converted value, or `Some`; inexact divisions, zero divisors,
+signed `MIN / -1`, and out-of-range casts select the eagerly evaluated fallback,
+zero default, or `None` without trapping. Signed and unsigned division receivers
+require a same-type divisor, and explicit fallbacks match the option's result
+type. These consumers share one value-plus-validity emitter while
 direct `Option` returns, option locals, other option consumers, and constant
 evaluation remain outside this milestone until their enum ABI and value
 representation are implemented.

@@ -163,6 +163,12 @@ pub enum IntegerWidthCastMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckedIntegerOptionOperation {
+    ExactDivision,
+    Cast(IntegerType),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
     Integer(IntegerType),
     Bool,
@@ -512,8 +518,8 @@ pub enum ExprKind<'source> {
     },
     CheckedIntegerOption {
         base: ExprId,
-        argument: ExprId,
-        exact_division: bool,
+        argument: Option<ExprId>,
+        operation: CheckedIntegerOptionOperation,
     },
     IntegerOptionUnwrapOr {
         option: ExprId,
@@ -2662,7 +2668,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::CheckedIntegerOption { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
-                self.substitute_identifier(argument, name, replacement, depth + 1)?;
+                if let Some(argument) = argument {
+                    self.substitute_identifier(argument, name, replacement, depth + 1)?;
+                }
             }
             ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
@@ -4276,6 +4284,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_cast"
                         | "wrapping_cast"
                         | "strict_cast"
+                        | "checked_cast"
                         | "unchecked_cast"
                 )
             }) {
@@ -4308,22 +4317,31 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 let Some(close) = close.filter(|token| token.kind == TokenKind::CloseParen) else {
                     return Err(self.error(ExpressionErrorKind::ExpectedExpression, close));
                 };
-                let mode = match method.text {
-                    "truncate" => IntegerWidthCastMode::Truncate,
-                    "saturating_truncate" => IntegerWidthCastMode::SaturatingTruncate,
-                    "widen" => IntegerWidthCastMode::Widen,
-                    "saturating_cast" => IntegerWidthCastMode::Saturating,
-                    "wrapping_cast" => IntegerWidthCastMode::Wrapping,
-                    "strict_cast" => IntegerWidthCastMode::Strict,
-                    "unchecked_cast" => IntegerWidthCastMode::Unchecked,
-                    _ => unreachable!(),
-                };
-                base = self.push(Expr {
-                    kind: ExprKind::IntegerWidthCast {
+                let kind = if method.text == "checked_cast" {
+                    ExprKind::CheckedIntegerOption {
+                        base,
+                        argument: None,
+                        operation: CheckedIntegerOptionOperation::Cast(target_type),
+                    }
+                } else {
+                    let mode = match method.text {
+                        "truncate" => IntegerWidthCastMode::Truncate,
+                        "saturating_truncate" => IntegerWidthCastMode::SaturatingTruncate,
+                        "widen" => IntegerWidthCastMode::Widen,
+                        "saturating_cast" => IntegerWidthCastMode::Saturating,
+                        "wrapping_cast" => IntegerWidthCastMode::Wrapping,
+                        "strict_cast" => IntegerWidthCastMode::Strict,
+                        "unchecked_cast" => IntegerWidthCastMode::Unchecked,
+                        _ => unreachable!(),
+                    };
+                    ExprKind::IntegerWidthCast {
                         base,
                         target: target_type,
                         mode,
-                    },
+                    }
+                };
+                base = self.push(Expr {
+                    kind,
                     span: Span {
                         start: self.node_span(base)?.start,
                         end: close.span.end,
@@ -4881,10 +4899,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 },
                 "checked_div_exact" => ExprKind::CheckedIntegerOption {
                     base,
-                    argument: argument.ok_or_else(|| {
+                    argument: Some(argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    exact_division: true,
+                    })?),
+                    operation: CheckedIntegerOptionOperation::ExactDivision,
                 },
                 "unwrap_or" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,

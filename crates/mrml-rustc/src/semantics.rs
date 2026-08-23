@@ -2079,7 +2079,8 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
                 || second_argument.is_some_and(|argument| recurse(argument, inside_inline_const))
         }
         ExprKind::CheckedIntegerOption { base, argument, .. } => {
-            recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
+            recurse(base, inside_inline_const)
+                || argument.is_some_and(|argument| recurse(argument, inside_inline_const))
         }
         ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
             recurse(option, inside_inline_const)
@@ -2245,7 +2246,9 @@ fn expression_contains_call<const MAX_NODES: usize>(
             second_argument,
             ..
         } => recurse(base) || argument.is_some_and(recurse) || second_argument.is_some_and(recurse),
-        ExprKind::CheckedIntegerOption { base, argument, .. } => recurse(base) || recurse(argument),
+        ExprKind::CheckedIntegerOption { base, argument, .. } => {
+            recurse(base) || argument.is_some_and(recurse)
+        }
         ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
             recurse(option) || fallback.is_some_and(recurse)
         }
