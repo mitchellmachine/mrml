@@ -173,6 +173,7 @@ pub enum CheckedIntegerOptionOperation {
     NextPowerOfTwo,
     Logarithm { binary: bool },
     NextMultiple,
+    UnsignedMixedArithmetic { subtract: bool },
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4456,6 +4457,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_ilog2"
                         | "checked_ilog10"
                         | "checked_next_multiple_of"
+                        | "checked_add_signed"
+                        | "checked_sub_signed"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4639,6 +4642,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_pow"
                     | "checked_ilog"
                     | "checked_next_multiple_of"
+                    | "checked_add_signed"
+                    | "checked_sub_signed"
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
@@ -5012,6 +5017,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?),
                     operation: CheckedIntegerOptionOperation::NextMultiple,
+                },
+                "checked_add_signed" | "checked_sub_signed" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    operation: CheckedIntegerOptionOperation::UnsignedMixedArithmetic {
+                        subtract: method.text == "checked_sub_signed",
+                    },
                 },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {
                     base,

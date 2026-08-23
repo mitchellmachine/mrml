@@ -2381,6 +2381,9 @@ Checked Euclidean division uses a nonnegative remainder for signed receivers,
 while retaining the checked zero-divisor and signed `MIN / -1` behavior.
 Checked next-multiple preserves Rust's signed rounding semantics and returns
 `None` for a zero divisor or an unrepresentable rounded result.
+Unsigned receivers additionally support `checked_add_signed` and
+`checked_sub_signed` with their exact same-width signed counterparts, including
+signed `MIN`, unsigned underflow, and unsigned overflow boundaries.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while
