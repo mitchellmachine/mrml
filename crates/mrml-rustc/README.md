@@ -1918,10 +1918,12 @@ the receiver width and signed bit pattern in constants and native functions.
 The current little-endian targets use byte reversal for big-endian conversion
 and identity for little-endian conversion. Five linked System V artifacts
 matched pinned Rust across 8-, 16-, 32-, and 64-bit boundary values.
-The `count_ones`, `count_zeros`, `leading_zeros`, and `trailing_zeros` methods
+The `count_ones`, `count_zeros`, `leading_zeros`, `trailing_zeros`,
+`leading_ones`, and `trailing_ones` methods
 evaluate each signed or unsigned receiver in its own width and return `u32`, as
-Rust requires. Four native objects matched pinned Rust for zero, all-ones,
-sign-bit, and sparse-bit cases, including the full-width zero results.
+Rust requires. Six native objects matched pinned Rust for zero, all-ones,
+sign-bit, and sparse-bit cases, including the full-width zero results and
+signed narrow representation masks.
 The cast/conditional slice emitted 552-byte signed and 520-byte Boolean ELF
 objects. A separate nightly-built caller linked and executed both successfully.
 The compound-comparison replacement emitted a 552-byte ELF object and passed

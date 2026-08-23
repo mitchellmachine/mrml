@@ -4997,14 +4997,35 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                             self.emit(&[0x29, 0xc1, 0x89, 0xc8])?;
                         }
                     }
-                    IntegerBitCount::LeadingZeros | IntegerBitCount::TrailingZeros => {
+                    IntegerBitCount::LeadingZeros
+                    | IntegerBitCount::TrailingZeros
+                    | IntegerBitCount::LeadingOnes
+                    | IntegerBitCount::TrailingOnes => {
+                        let operand_mask = if operand_width.bits == 64 {
+                            u64::MAX
+                        } else {
+                            (1_u64 << operand_width.bits) - 1
+                        };
                         if operand_width.bits < 64 {
                             self.emit(&[0x48, 0x25])?;
-                            self.emit(&(operand_width.maximum as u32).to_le_bytes())?;
+                            self.emit(&(operand_mask as u32).to_le_bytes())?;
+                        }
+                        if matches!(
+                            count,
+                            IntegerBitCount::LeadingOnes | IntegerBitCount::TrailingOnes
+                        ) {
+                            if operand_width.bits == 64 {
+                                self.emit(&[0x48])?;
+                            }
+                            self.emit(&[0x35])?;
+                            self.emit(&(operand_mask as u32).to_le_bytes())?;
                         }
                         self.emit(&[0x48, 0x85, 0xc0])?;
                         let zero = self.emit_forward_branch(0x84)?;
-                        if count == IntegerBitCount::LeadingZeros {
+                        if matches!(
+                            count,
+                            IntegerBitCount::LeadingZeros | IntegerBitCount::LeadingOnes
+                        ) {
                             self.emit(&[0x48, 0x0f, 0xbd, 0xc8, 0xb8])?;
                             self.emit(&u32::from(operand_width.bits - 1).to_le_bytes())?;
                             self.emit(&[0x29, 0xc8])?;
@@ -11640,6 +11661,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> u32 { input.count_zeros() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { input.leading_zeros() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> u32 { input.trailing_zeros() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u32 { input.leading_ones() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.trailing_ones() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> u32 { input.count_ones() }",
         ];
         for source in sources {

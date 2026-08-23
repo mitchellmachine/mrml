@@ -470,6 +470,8 @@ pub enum IntegerBitCount {
     Zeros,
     LeadingZeros,
     TrailingZeros,
+    LeadingOnes,
+    TrailingOnes,
 }
 
 impl AsciiPredicate {
@@ -3767,6 +3769,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "count_zeros"
                         | "leading_zeros"
                         | "trailing_zeros"
+                        | "leading_ones"
+                        | "trailing_ones"
                         | "offset"
                         | "wrapping_offset"
                         | "offset_from"
@@ -3945,18 +3949,19 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         },
                     }
                 }
-                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros" => {
-                    ExprKind::IntegerBitCount {
-                        base,
-                        count: match method.text {
-                            "count_ones" => IntegerBitCount::Ones,
-                            "count_zeros" => IntegerBitCount::Zeros,
-                            "leading_zeros" => IntegerBitCount::LeadingZeros,
-                            "trailing_zeros" => IntegerBitCount::TrailingZeros,
-                            _ => unreachable!(),
-                        },
-                    }
-                }
+                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
+                | "leading_ones" | "trailing_ones" => ExprKind::IntegerBitCount {
+                    base,
+                    count: match method.text {
+                        "count_ones" => IntegerBitCount::Ones,
+                        "count_zeros" => IntegerBitCount::Zeros,
+                        "leading_zeros" => IntegerBitCount::LeadingZeros,
+                        "trailing_zeros" => IntegerBitCount::TrailingZeros,
+                        "leading_ones" => IntegerBitCount::LeadingOnes,
+                        "trailing_ones" => IntegerBitCount::TrailingOnes,
+                        _ => unreachable!(),
+                    },
+                },
                 "is_ascii"
                 | "is_ascii_alphabetic"
                 | "is_ascii_uppercase"

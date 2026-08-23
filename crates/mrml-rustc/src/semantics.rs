@@ -3195,6 +3195,12 @@ fn count_integer_bits(value: u128, bits: u8, count: crate::expression::IntegerBi
         IntegerBitCount::Zeros => u32::from(bits) - value.count_ones(),
         IntegerBitCount::LeadingZeros => (value << (128 - bits)).leading_zeros(),
         IntegerBitCount::TrailingZeros => value.trailing_zeros().min(u32::from(bits)),
+        IntegerBitCount::LeadingOnes => {
+            ((!value & signed_mask(bits)) << (128 - bits)).leading_zeros()
+        }
+        IntegerBitCount::TrailingOnes => (!value & signed_mask(bits))
+            .trailing_zeros()
+            .min(u32::from(bits)),
     }
 }
 

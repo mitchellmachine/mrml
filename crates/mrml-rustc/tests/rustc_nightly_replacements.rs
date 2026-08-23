@@ -1883,10 +1883,14 @@ fn rustc_integer_bit_counts_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> u32 { input.count_zeros() }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> u32 { input.leading_zeros() }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> u32 { input.trailing_zeros() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> u32 { input.leading_ones() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> u32 { input.trailing_ones() }",
         "const VALUE: u32 = 0x81u8.count_ones(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
         "const VALUE: u32 = (-1i16).count_zeros(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
         "const VALUE: u32 = 0x00100000u32.leading_zeros(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
         "const VALUE: u32 = 0i64.trailing_zeros(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: u32 = (-2i8).leading_ones(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: u32 = 7u64.trailing_ones(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
     ];
     for source in sources {
         assert_eq!(
