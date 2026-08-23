@@ -411,6 +411,7 @@ pub enum ExprKind<'source> {
     IntegerWrappingPower {
         base: ExprId,
         exponent: ExprId,
+        saturating: bool,
     },
     IntegerBitTransform {
         base: ExprId,
@@ -2241,7 +2242,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;
             }
-            ExprKind::IntegerWrappingPower { base, exponent } => {
+            ExprKind::IntegerWrappingPower { base, exponent, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(exponent, name, replacement, depth + 1)?;
             }
@@ -3845,6 +3846,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_shl"
                         | "wrapping_shr"
                         | "wrapping_pow"
+                        | "saturating_pow"
                         | "signum"
                         | "is_positive"
                         | "is_negative"
@@ -3951,6 +3953,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_shl"
                     | "wrapping_shr"
                     | "wrapping_pow"
+                    | "saturating_pow"
                     | "abs_diff"
                     | "offset"
                     | "wrapping_offset"
@@ -4074,11 +4077,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                     left: method.text == "wrapping_shl",
                 },
-                "wrapping_pow" => ExprKind::IntegerWrappingPower {
+                "wrapping_pow" | "saturating_pow" => ExprKind::IntegerWrappingPower {
                     base,
                     exponent: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
+                    saturating: method.text == "saturating_pow",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
                 "abs_diff" => ExprKind::IntegerAbsoluteDifference {

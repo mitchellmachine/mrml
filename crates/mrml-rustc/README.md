@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 409 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 411 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1983,6 +1983,12 @@ width-normalized constant evaluator. Exponent zero returns one, and each
 intermediate product wraps to the receiver width.
 Four emitted System V objects matched pinned Rust across signed and unsigned
 8-, 16-, 32-, and 64-bit bases with zero through `u32::MAX` exponents.
+The parallel `saturating_pow(u32)` method clamps every intermediate product to
+the receiver's signed or unsigned range. It preserves exponent-zero and
+negative-base parity semantics in both constants and runtime functions.
+Four System V objects matched pinned Rust across 8-, 16-, and 64-bit signed and
+unsigned bases, zero and maximum exponents, ordinary products, and positive or
+negative saturation.
 The unary `swap_bytes`, `reverse_bits`, `to_be`, and `to_le` methods now retain
 the receiver width and signed bit pattern in constants and native functions.
 The current little-endian targets use byte reversal for big-endian conversion

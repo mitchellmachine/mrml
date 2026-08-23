@@ -2059,7 +2059,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
-        ExprKind::IntegerWrappingPower { base, exponent } => {
+        ExprKind::IntegerWrappingPower { base, exponent, .. } => {
             recurse(base, inside_inline_const) || recurse(exponent, inside_inline_const)
         }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base, inside_inline_const),
@@ -2173,7 +2173,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
-        ExprKind::IntegerWrappingPower { base, exponent } => recurse(base) || recurse(exponent),
+        ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
         ExprKind::IntegerUnsignedAbsolute { base } => recurse(base),
         ExprKind::IntegerAbsoluteDifference { base, other } => recurse(base) || recurse(other),
@@ -2461,7 +2461,11 @@ fn evaluate_call_aware_integer<
             )?;
             wrapping_shift_integer_bits(value, distance, bits, left, ty.is_signed())
         }
-        ExprKind::IntegerWrappingPower { base, exponent } => {
+        ExprKind::IntegerWrappingPower {
+            base,
+            exponent,
+            saturating,
+        } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
@@ -2480,7 +2484,7 @@ fn evaluate_call_aware_integer<
                 constants,
                 depth,
             )?;
-            wrapping_power_integer_bits(value, exponent, bits)
+            integer_power_bits(value, exponent, bits, ty.is_signed(), saturating)
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
@@ -3297,7 +3301,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .map_err(ExecutionError::Arithmetic)?;
             wrapping_shift_integer_bits(value, distance, bits, left, true)
         }
-        ExprKind::IntegerWrappingPower { base, exponent } => {
+        ExprKind::IntegerWrappingPower {
+            base,
+            exponent,
+            saturating,
+        } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
@@ -3310,7 +3318,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             let exponent = tree
                 .evaluate_at(exponent, constants)
                 .map_err(ExecutionError::Arithmetic)?;
-            wrapping_power_integer_bits(value, exponent, bits)
+            integer_power_bits(value, exponent, bits, true, saturating)
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = expression_integer_type(tree, base, constants);
@@ -3522,15 +3530,29 @@ fn absolute_difference_integer_bits(left: u128, right: u128, bits: u8, signed: b
     }
 }
 
-fn wrapping_power_integer_bits(value: u128, mut exponent: u128, bits: u8) -> u128 {
+fn integer_power_bits(
+    value: u128,
+    mut exponent: u128,
+    bits: u8,
+    signed: bool,
+    saturating: bool,
+) -> u128 {
     let mask = signed_mask(bits);
     let mut base = value & mask;
     let mut result = 1_u128;
     while exponent != 0 {
         if exponent & 1 != 0 {
-            result = result.wrapping_mul(base) & mask;
+            result = if saturating {
+                saturating_integer_arithmetic(result, base, bits, signed, BinaryOperator::Multiply)
+            } else {
+                result.wrapping_mul(base) & mask
+            };
         }
-        base = base.wrapping_mul(base) & mask;
+        base = if saturating {
+            saturating_integer_arithmetic(base, base, bits, signed, BinaryOperator::Multiply)
+        } else {
+            base.wrapping_mul(base) & mask
+        };
         exponent >>= 1;
     }
     result

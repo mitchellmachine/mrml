@@ -2033,6 +2033,28 @@ fn rustc_wrapping_integer_powers_reach_native_objects() {
 }
 
 #[test]
+fn rustc_saturating_integer_powers_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, exponent: u32) -> u8 { input.saturating_pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, exponent: u32) -> i16 { input.saturating_pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, exponent: u32) -> u64 { input.saturating_pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, exponent: u32) -> i64 { input.saturating_pow(exponent) }",
+        "const VALUE: u8 = 3u8.saturating_pow(20); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-3i16).saturating_pow(17); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: i16 = (-3i16).saturating_pow(18); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u64 = 5u64.saturating_pow(0); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.reverse_bits() }",

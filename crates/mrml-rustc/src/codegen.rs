@@ -2308,7 +2308,7 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(distance)?;
         }
-        ExprKind::IntegerWrappingPower { base, exponent } => {
+        ExprKind::IntegerWrappingPower { base, exponent, .. } => {
             recurse(base)?;
             recurse(exponent)?;
         }
@@ -3206,7 +3206,7 @@ fn runtime_expression_type_with_locals<
             }
             Ok(base_type)
         }
-        ExprKind::IntegerWrappingPower { base, exponent } => {
+        ExprKind::IntegerWrappingPower { base, exponent, .. } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -5179,7 +5179,11 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
-            ExprKind::IntegerWrappingPower { base, exponent } => {
+            ExprKind::IntegerWrappingPower {
+                base,
+                exponent,
+                saturating,
+            } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
                     self.resolver,
@@ -5207,10 +5211,21 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 let done = self.emit_forward_branch(0x84)?;
                 self.emit(&[0x41, 0xf6, 0xc0, 1])?;
                 let even = self.emit_forward_branch(0x84)?;
-                self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
-                self.emit_normalize()?;
+                if saturating {
+                    self.emit_saturating_multiplication()?;
+                } else {
+                    self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
+                    self.emit_normalize()?;
+                }
                 self.patch_forward_branch(even)?;
-                self.emit(&[0x48, 0x0f, 0xaf, 0xc9, 0x49, 0xd1, 0xe8])?;
+                if saturating {
+                    self.emit(&[0x50, 0x48, 0x89, 0xc8])?;
+                    self.emit_saturating_multiplication()?;
+                    self.emit(&[0x48, 0x89, 0xc1, 0x58])?;
+                } else {
+                    self.emit(&[0x48, 0x0f, 0xaf, 0xc9])?;
+                }
+                self.emit(&[0x49, 0xd1, 0xe8])?;
                 self.emit_backward_branch(loop_start)?;
                 self.patch_forward_branch(done)?;
                 self.emit_normalize()?;
@@ -12609,6 +12624,48 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 1024, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn saturates_primitive_integer_powers() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, exponent: u32) -> u8 { input.saturating_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, exponent: u32) -> i16 { input.saturating_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, exponent: u32) -> u32 { input.saturating_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, exponent: u32) -> i64 { input.saturating_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, exponent: u32) -> usize { input.saturating_pow(exponent) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 3072, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, exponent: u16) -> u8 { input.saturating_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, exponent: u32) -> bool { input.saturating_pow(exponent) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 2048, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
