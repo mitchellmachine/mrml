@@ -58,14 +58,18 @@ AST borrows source text and uses
 caller-selected fixed item and parameter capacities; nesting is capped at 64
 delimiters. Capacity and malformed-input failures carry bounded source spans.
 Runtime emission additionally retains fixed tables of at most 256 monotonic
-local facts and 256 source-ordered assignment-place facts. Scope cleanup may
+local facts and 256 source-ordered runtime place-access facts. Scope cleanup may
 reuse stack storage but cannot reuse semantic local identity. Assignment facts
 retain the resolved local or parameter identity, parsed projection, type,
 source span, and whether the operation is a plain write or read-modify-write.
+Runtime identifier loads append `Read` facts for the same stable base identity,
+including specialized tuple, array, range, and address paths that do not use the
+ordinary scalar loader. Constants do not become local/parameter access facts.
 Final emission validates their identity, projection/type, and mutability
 invariants and fails explicitly on capacity exhaustion or inconsistent facts.
-These ephemeral write-side tables are groundwork for typed ownership and CFG
-analysis; expression-read, move, loan, and region analysis is not implemented.
+These ephemeral place-access tables are groundwork for typed ownership and CFG
+analysis. Read projections, moves, borrows, loans, and regions are not yet
+represented.
 
 Conditional action blocks retain up to four source-ordered local declarations,
 assignments, discarded scalar expressions, or value returns in each selected
@@ -2856,14 +2860,14 @@ facts and source-ordered assignment access facts in separate fixed 256-entry
 tables through final validation, even after active stack entries are removed.
 An adversarial unit test covers both access classes, same-name shadowing, scope
 cleanup, storage-index reuse, monotonic identity, corrupt fact rejection, and
-both exact capacity failures. Expression reads, parser/semantic local IDs,
+both exact capacity failures. Projected read facts, parser/semantic local IDs,
 arbitrary projection lists, complete typed body facts, CFGs, initialization,
-moves, loans, and regions remain outside this slice.
+moves, borrows, loans, and regions remain outside this slice.
 
-The bounded runtime-fact milestone passed all 563 compiler and driver tests on
-Windows gnullvm and all 563 in release mode on native Arch Linux WSL, plus
-warnings-denied Clippy on both hosts. The source remained `no_std`, allocation-
-free, and free of unsafe blocks under the repository hygiene scan.
+The bounded runtime-read-fact milestone passed all 563 compiler and driver
+tests on Windows gnullvm and all 563 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. The source remained `no_std`,
+allocation-free, and free of unsafe blocks under the repository hygiene scan.
 
 The runtime-place-identity milestone passed all 563 compiler and driver tests
 on Windows gnullvm and all 563 in release mode on native Arch Linux WSL, plus

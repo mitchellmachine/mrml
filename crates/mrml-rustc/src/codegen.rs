@@ -1934,6 +1934,7 @@ enum RuntimePlaceIdentity {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimePlaceAccess {
+    Read,
     Write,
     ReadModifyWrite,
 }
@@ -6522,6 +6523,17 @@ impl<
             RuntimePlaceBase::Local { id, .. } => RuntimePlaceIdentity::Local(id),
             RuntimePlaceBase::Parameter { index } => RuntimePlaceIdentity::Parameter(index),
         };
+        self.record_place_access_fact(base, place.projection, place.ty, place.access, span)
+    }
+
+    fn record_place_access_fact(
+        &mut self,
+        base: RuntimePlaceIdentity,
+        projection: Option<crate::parser::AssignmentProjection<'tree>>,
+        ty: RuntimeExpressionType,
+        access: RuntimePlaceAccess,
+        span: Span,
+    ) -> Result<(), CodegenError> {
         let capacity_error = self.error(CodegenErrorKind::TooManyRuntimePlaceAccessFacts);
         let slot = self
             .place_access_facts
@@ -6529,12 +6541,51 @@ impl<
             .ok_or(capacity_error)?;
         *slot = Some(RuntimePlaceAccessFact {
             base,
-            projection: place.projection,
-            ty: place.ty,
-            access: place.access,
+            projection,
+            ty,
+            access,
             span,
         });
         self.place_access_fact_count += 1;
+        Ok(())
+    }
+
+    fn record_identifier_read(&mut self, name: &str, span: Span) -> Result<(), CodegenError> {
+        let local_floor = self.runtime_call_local_floor.unwrap_or(0);
+        if let Some(local) = self.locals[local_floor..self.saved_locals]
+            .iter()
+            .rev()
+            .flatten()
+            .find(|local| local.name == name)
+            .copied()
+        {
+            return self.record_place_access_fact(
+                RuntimePlaceIdentity::Local(local.id),
+                None,
+                local.ty,
+                RuntimePlaceAccess::Read,
+                span,
+            );
+        }
+        if self.runtime_call_local_floor.is_none()
+            && let Some((index, parameter)) = self
+                .function
+                .parameters()
+                .iter()
+                .flatten()
+                .enumerate()
+                .find(|(_, parameter)| parameter.name == name)
+        {
+            let ty = runtime_type_from_text(parameter.ty.text)
+                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            return self.record_place_access_fact(
+                RuntimePlaceIdentity::Parameter(index),
+                None,
+                ty,
+                RuntimePlaceAccess::Read,
+                span,
+            );
+        }
         Ok(())
     }
 
@@ -6975,7 +7026,9 @@ impl<
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
             }
             match fact.access {
-                RuntimePlaceAccess::Write | RuntimePlaceAccess::ReadModifyWrite => {}
+                RuntimePlaceAccess::Read
+                | RuntimePlaceAccess::Write
+                | RuntimePlaceAccess::ReadModifyWrite => {}
             }
             match fact.base {
                 RuntimePlaceIdentity::Local(id) => {
@@ -6998,7 +7051,8 @@ impl<
                             RuntimeExpressionType::Reference { .. }
                         )
                     );
-                    if mutates_binding && !local.mutable {
+                    if fact.access != RuntimePlaceAccess::Read && mutates_binding && !local.mutable
+                    {
                         return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
                     }
                 }
@@ -10722,7 +10776,10 @@ impl<
             ExprKind::ClosureParameter { target: None, .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
-            ExprKind::Identifier(name) => self.emit_identifier(name)?,
+            ExprKind::Identifier(name) => {
+                self.record_identifier_read(name, expression.span)?;
+                self.emit_identifier(name)?;
+            }
             ExprKind::Call {
                 callee,
                 arguments,
@@ -10879,7 +10936,14 @@ impl<
                 operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
                 operand,
             } => match tree.expression(operand).map(|expression| expression.kind) {
-                Some(ExprKind::Identifier(name)) => self.emit_identifier_address(name)?,
+                Some(ExprKind::Identifier(name)) => {
+                    let span = tree
+                        .expression(operand)
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
+                        .span;
+                    self.record_identifier_read(name, span)?;
+                    self.emit_identifier_address(name)?;
+                }
                 Some(ExprKind::Unary {
                     operator: crate::UnaryOperator::Dereference,
                     operand: reference,
@@ -11174,6 +11238,7 @@ impl<
                 self.emit(&[0x25, 0xff, 0, 0, 0])
             }
             ExprKind::Identifier(name) => {
+                self.record_identifier_read(name, expression.span)?;
                 if let Some((local_index, local)) = self.locals[..self.saved_locals]
                     .iter()
                     .enumerate()
@@ -11350,6 +11415,11 @@ impl<
                         .map(|_| index)
                 })
         {
+            let span = tree
+                .expression(base)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
+                .span;
+            self.record_identifier_read(name, span)?;
             let slots = self
                 .local_stack_slots_from(index + 1)?
                 .checked_add(self.evaluation_depth)
@@ -11574,6 +11644,11 @@ impl<
             self.emit_slice_value_to_stack(tree, base, depth + 1)?;
             self.evaluation_depth += 2;
         } else if let Some(name) = local_name {
+            let span = tree
+                .expression(base)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
+                .span;
+            self.record_identifier_read(name, span)?;
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -11586,6 +11661,11 @@ impl<
             self.emit_stack_cleanup_bytes(16)?;
             self.evaluation_depth -= 2;
         } else if let Some(source) = slice_source {
+            let span = tree
+                .expression(base)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
+                .span;
+            self.record_identifier_read(source, span)?;
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
             self.emit_slice_length(source)?;
@@ -12096,6 +12176,11 @@ impl<
         self.emit(&[0x48, 0x29, 0xc8, 0x50])?;
         self.evaluation_depth += 1;
         if let Some(name) = local_name {
+            let span = tree
+                .expression(base)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
+                .span;
+            self.record_identifier_read(name, span)?;
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -15883,7 +15968,7 @@ mod tests {
 
     #[test]
     fn runtime_place_ids_survive_shadowing_and_scope_cleanup() {
-        let module = Parser::new("fn value() -> u64 { 0 }")
+        let module = Parser::new("fn value(parameter: u64) -> u64 { parameter }")
             .parse_module::<1, 4>()
             .unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -15941,6 +16026,9 @@ mod tests {
         emitter
             .record_place_access(first_place, assignment.name_span)
             .unwrap();
+        emitter
+            .record_identifier_read("value", Span { start: 10, end: 15 })
+            .unwrap();
         assert_eq!(first_place.access, RuntimePlaceAccess::Write);
         assert_eq!(
             first_place.base,
@@ -15968,6 +16056,12 @@ mod tests {
             .unwrap();
         assert_eq!(compound_place.access, RuntimePlaceAccess::ReadModifyWrite);
         let final_place = emitter.resolve_assignment_place(&assignment).unwrap();
+        emitter
+            .record_identifier_read("value", Span { start: 20, end: 25 })
+            .unwrap();
+        emitter
+            .record_identifier_read("parameter", Span { start: 28, end: 37 })
+            .unwrap();
         assert_eq!(
             final_place.base,
             RuntimePlaceBase::Local {
@@ -15979,19 +16073,35 @@ mod tests {
         assert_eq!(emitter.local_facts[0].unwrap().id, RuntimeLocalId(0));
         assert_eq!(emitter.local_facts[1].unwrap().id, RuntimeLocalId(1));
         assert_eq!(emitter.local_facts[2].unwrap().id, RuntimeLocalId(2));
-        assert_eq!(emitter.place_access_fact_count, 2);
+        assert_eq!(emitter.place_access_fact_count, 5);
         assert_eq!(
             emitter.place_access_facts[0].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(1))
         );
         assert_eq!(
             emitter.place_access_facts[1].unwrap().base,
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1))
+        );
+        assert_eq!(
+            emitter.place_access_facts[1].unwrap().access,
+            RuntimePlaceAccess::Read
+        );
+        assert_eq!(
+            emitter.place_access_facts[2].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(2))
+        );
+        assert_eq!(
+            emitter.place_access_facts[3].unwrap().base,
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2))
+        );
+        assert_eq!(
+            emitter.place_access_facts[4].unwrap().base,
+            RuntimePlaceIdentity::Parameter(0)
         );
         emitter.validate_runtime_place_facts().unwrap();
 
-        let valid_fact = emitter.place_access_facts[1].unwrap();
-        emitter.place_access_facts[1] = Some(RuntimePlaceAccessFact {
+        let valid_fact = emitter.place_access_facts[2].unwrap();
+        emitter.place_access_facts[2] = Some(RuntimePlaceAccessFact {
             base: RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
             ..valid_fact
         });
@@ -15999,7 +16109,7 @@ mod tests {
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
-        emitter.place_access_facts[1] = Some(valid_fact);
+        emitter.place_access_facts[2] = Some(valid_fact);
         for _ in emitter.place_access_fact_count..MAX_RUNTIME_PLACE_ACCESS_FACTS {
             emitter
                 .record_place_access(final_place, assignment.name_span)

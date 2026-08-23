@@ -449,3 +449,15 @@ protocol, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary bounded compiler fact tables and
 validation within the existing Rust-subset compiler category.
+
+## 2026-08-23 — stable runtime identifier-read facts
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Runtime identifier loads now append conventional read facts to the existing
+bounded local/place table, reusing stable local or parameter identity across
+ordinary scalar and specialized aggregate/address emission paths. This adds no
+novel algorithm, ABI, protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler use/definition bookkeeping
+within the existing Rust-subset compiler category.

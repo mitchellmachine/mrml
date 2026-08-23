@@ -150,22 +150,28 @@ operator. Resolution validates the ID again before a local store. Do not
 confuse the storage index with identity or reintroduce separate name/access
 inference in assignment families.
 
-The runtime emitter retains up to 256 local facts and 256 ordered assignment-
+The runtime emitter retains up to 256 local facts and 256 ordered runtime place-
 access facts. Local facts preserve ID, name, type, and mutability after scope
 cleanup releases the active stack entry; assignment facts preserve stable
 local/parameter identity, parsed projection, type, access intent, and source
-span. `finish` rejects holes, recycled/mismatched IDs, invalid projection/type
-combinations, immutable binding stores, and missing or mismatched parameters.
+span. Direct runtime identifier loads and the specialized tuple, array, range,
+and address paths append `Read` facts with the same stable base identities;
+constants do not enter this table. `finish` rejects holes, recycled/mismatched
+IDs, invalid projection/type combinations, immutable binding stores, and
+missing or mismatched parameters.
 The tables are bounded ephemeral compiler state and include expanded inlined
 helper bodies; they are not serialized IR or a claim of whole-program analysis.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
 
-Expression reads, parser-level IDs, general projection lists, initialization
-and move paths, CFG analysis, loans, and regions are still absent. The next
-compiler milestone is to turn this write-side foundation into the bounded typed
-body-wide local/place/access table, then add CFG and initialization/move facts.
+Read facts still resolve names during emission and retain only the base identity
+for aggregate/address operations; address-taking is not yet classified as a
+borrow. Parser-level IDs, general projection lists, initialization and move
+paths, CFG analysis, borrows, loans, and regions are still absent. The next
+compiler milestone is to turn this emission-side foundation into the bounded
+typed body-wide local/place/access table with complete projection chains, then
+add CFG and initialization/move facts.
 
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains

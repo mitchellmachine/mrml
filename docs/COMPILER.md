@@ -149,7 +149,9 @@ that are not recycled after scope cleanup. Their name, type, mutability, and ID
 remain in a fixed 256-entry fact table after the active stack slot is released.
 Assignment writes resolve once to a typed local-ID/parameter base plus the
 parsed projection before emission and append an ordered fact to a separate
-fixed 256-entry table.
+fixed 256-entry table. Runtime identifier loads append `Read` facts to that
+same table, including specialized tuple, array, range, and address paths that
+bypass the scalar loader; constants do not acquire local/parameter identities.
 The resolved place also classifies access intent as `Write` or
 `ReadModifyWrite`; every supported direct, tuple-field, fixed-array,
 reference-array, slice, and dereference assignment family uses that fact to
@@ -160,10 +162,12 @@ Capacity exhaustion and inconsistent internal facts fail explicitly.
 
 These tables cover the current runtime emission, including expanded inlined
 helper bodies; they are ephemeral compiler state rather than serialized IR.
-Expression reads and parser/semantic locals still resolve by name, and there is
-not yet a general projection list, complete typed body table, move path, loan,
-or CFG. This runtime write-place foundation is therefore an incremental
-prerequisite, not a claim of ownership checking.
+Expression identifiers still resolve by name before their stable fact is
+recorded, and aggregate reads currently record only the base identity rather
+than a complete projection chain. Parser/semantic locals also still resolve by
+name, and there is not yet a general projection list, complete typed body table,
+move path, borrow, loan, or CFG. This runtime place foundation is therefore an
+incremental prerequisite, not a claim of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 
