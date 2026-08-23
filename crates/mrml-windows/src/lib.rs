@@ -35,6 +35,53 @@ pub enum VbsEnclaveSupport {
     Supported,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VbsEnclaveApis(u8);
+
+impl VbsEnclaveApis {
+    pub const CREATE: Self = Self(1 << 0);
+    pub const LOAD_DATA: Self = Self(1 << 1);
+    pub const INITIALIZE: Self = Self(1 << 2);
+    pub const CALL: Self = Self(1 << 3);
+    pub const DELETE: Self = Self(1 << 4);
+    pub const REQUIRED: Self = Self(
+        Self::CREATE.0 | Self::LOAD_DATA.0 | Self::INITIALIZE.0 | Self::CALL.0 | Self::DELETE.0,
+    );
+
+    pub const fn contains(self, required: Self) -> bool {
+        self.0 & required.0 == required.0
+    }
+
+    pub const fn is_complete(self) -> bool {
+        self.contains(Self::REQUIRED)
+    }
+}
+
+#[cfg(windows)]
+pub fn vbs_enclave_apis() -> VbsEnclaveApis {
+    let Some(library) = DynamicLibrary::open(c"kernel32.dll") else {
+        return VbsEnclaveApis(0);
+    };
+    let mut bits = 0;
+    for (name, flag) in [
+        (c"CreateEnclave", VbsEnclaveApis::CREATE),
+        (c"LoadEnclaveData", VbsEnclaveApis::LOAD_DATA),
+        (c"InitializeEnclave", VbsEnclaveApis::INITIALIZE),
+        (c"CallEnclave", VbsEnclaveApis::CALL),
+        (c"DeleteEnclave", VbsEnclaveApis::DELETE),
+    ] {
+        if library.symbol(name).is_some() {
+            bits |= flag.0;
+        }
+    }
+    VbsEnclaveApis(bits)
+}
+
+#[cfg(not(windows))]
+pub const fn vbs_enclave_apis() -> VbsEnclaveApis {
+    VbsEnclaveApis(0)
+}
+
 #[cfg(windows)]
 pub fn vbs_enclave_support() -> VbsEnclaveSupport {
     type IsEnclaveTypeSupported = unsafe extern "system" fn(u32) -> i32;
@@ -1742,6 +1789,16 @@ mod tests {
             super::vbs_enclave_support(),
             super::VbsEnclaveSupport::ApiUnavailable
         );
+    }
+
+    #[test]
+    fn enclave_lifecycle_abi_is_resolved_as_one_requirement() {
+        let apis = super::vbs_enclave_apis();
+        assert_eq!(
+            apis.is_complete(),
+            apis.contains(super::VbsEnclaveApis::REQUIRED)
+        );
+        assert!(apis.contains(super::VbsEnclaveApis::CREATE));
     }
 
     #[test]

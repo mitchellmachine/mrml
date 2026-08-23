@@ -59,6 +59,14 @@ because the host advertises Hyper-V or because a guest boots successfully.
 Backend-specific evidence verification and a protected accelerator channel are
 separate requirements.
 
+The Windows GNU/LLVM path dynamically resolves the documented
+`IsEnclaveTypeSupported` query and the complete create/load/initialize/call/
+delete enclave lifecycle from `kernel32.dll`. This avoids an MSVC SDK or import
+crate dependency and distinguishes missing ABI from unsupported VBS. Discovery
+does not create an enclave and does not upgrade a WHP launch's protection
+claims; signed enclave image construction, loading, and evidence verification
+remain incomplete.
+
 The privileged kernel will contain only scheduling, address-space and interrupt
 mechanisms, capability enforcement, IPC, and the minimum early console/timer
 code needed to recover. Filesystems, networking, storage, GPU, CUDA mediation,
