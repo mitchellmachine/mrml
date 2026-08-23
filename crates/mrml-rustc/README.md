@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 389 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 391 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1913,6 +1913,11 @@ Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and
 multiple-width distances while retaining signed values as raw bit patterns.
+The unary `swap_bytes`, `reverse_bits`, `to_be`, and `to_le` methods now retain
+the receiver width and signed bit pattern in constants and native functions.
+The current little-endian targets use byte reversal for big-endian conversion
+and identity for little-endian conversion. Five linked System V artifacts
+matched pinned Rust across 8-, 16-, 32-, and 64-bit boundary values.
 The cast/conditional slice emitted 552-byte signed and 520-byte Boolean ELF
 objects. A separate nightly-built caller linked and executed both successfully.
 The compound-comparison replacement emitted a 552-byte ELF object and passed

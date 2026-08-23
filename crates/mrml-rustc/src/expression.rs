@@ -382,6 +382,10 @@ pub enum ExprKind<'source> {
         distance: ExprId,
         left: bool,
     },
+    IntegerBitTransform {
+        base: ExprId,
+        transform: IntegerBitTransform,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -446,6 +450,14 @@ pub enum AsciiPredicate {
     Graphic,
     Whitespace,
     Control,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerBitTransform {
+    SwapBytes,
+    ReverseBits,
+    ToBigEndian,
+    ToLittleEndian,
 }
 
 impl AsciiPredicate {
@@ -590,6 +602,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::WrappingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
+            | ExprKind::IntegerBitTransform { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -851,6 +864,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             }
             ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -2142,6 +2156,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::IntegerRotate { base, distance, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerBitTransform { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3725,6 +3742,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_mul"
                         | "rotate_left"
                         | "rotate_right"
+                        | "swap_bytes"
+                        | "reverse_bits"
+                        | "to_be"
+                        | "to_le"
                         | "offset"
                         | "wrapping_offset"
                         | "offset_from"
@@ -3891,6 +3912,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                     left: method.text == "rotate_left",
                 },
+                "swap_bytes" | "reverse_bits" | "to_be" | "to_le" => {
+                    ExprKind::IntegerBitTransform {
+                        base,
+                        transform: match method.text {
+                            "swap_bytes" => IntegerBitTransform::SwapBytes,
+                            "reverse_bits" => IntegerBitTransform::ReverseBits,
+                            "to_be" => IntegerBitTransform::ToBigEndian,
+                            "to_le" => IntegerBitTransform::ToLittleEndian,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
                 "is_ascii"
                 | "is_ascii_alphabetic"
                 | "is_ascii_uppercase"

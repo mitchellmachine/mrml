@@ -301,7 +301,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::UnsignedIntegerPredicate { .. }
             | ExprKind::AsciiPredicate { .. }
             | ExprKind::WrappingArithmetic { .. }
-            | ExprKind::IntegerRotate { .. } => {
+            | ExprKind::IntegerRotate { .. }
+            | ExprKind::IntegerBitTransform { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
                     span: expression.span,

@@ -208,7 +208,9 @@ pub fn analyze_constants<
             || tree.nodes().iter().flatten().any(|expression| {
                 matches!(
                     expression.kind,
-                    ExprKind::WrappingArithmetic { .. } | ExprKind::IntegerRotate { .. }
+                    ExprKind::WrappingArithmetic { .. }
+                        | ExprKind::IntegerRotate { .. }
+                        | ExprKind::IntegerBitTransform { .. }
                 )
             });
         let call_value = if requires_typed_evaluation {
@@ -1902,7 +1904,9 @@ fn evaluate_integer_const_expression<
     if tree.nodes().iter().flatten().any(|expression| {
         matches!(
             expression.kind,
-            ExprKind::WrappingArithmetic { .. } | ExprKind::IntegerRotate { .. }
+            ExprKind::WrappingArithmetic { .. }
+                | ExprKind::IntegerRotate { .. }
+                | ExprKind::IntegerBitTransform { .. }
         )
     }) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
@@ -2036,6 +2040,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerRotate { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
+        ExprKind::IntegerBitTransform { base, .. } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2138,6 +2143,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
+        ExprKind::IntegerBitTransform { base, .. } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -2353,6 +2359,15 @@ fn evaluate_call_aware_integer<
                 depth,
             )?;
             rotate_integer_bits(value, distance, bits, left)
+        }
+        ExprKind::IntegerBitTransform { base, transform } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            transform_integer_bits(recurse(base)?, bits, transform)
         }
         _ => return Err(arithmetic_error(ConstEvalError::InvalidCast)),
     };
@@ -3034,6 +3049,15 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .map_err(ExecutionError::Arithmetic)?;
             rotate_integer_bits(value, distance, bits, left)
         }
+        ExprKind::IntegerBitTransform { base, transform } => {
+            let base_type = expression_integer_type(tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            transform_integer_bits(recurse(base)?, bits, transform)
+        }
         ExprKind::WrappingArithmetic {
             base,
             argument,
@@ -3087,6 +3111,9 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
             .or_else(|| expression_integer_type(tree, right, constants)),
         ExprKind::WrappingArithmetic { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::IntegerRotate { base, .. } => expression_integer_type(tree, base, constants),
+        ExprKind::IntegerBitTransform { base, .. } => {
+            expression_integer_type(tree, base, constants)
+        }
         ExprKind::If {
             then_branch,
             else_branch,
@@ -3116,6 +3143,22 @@ fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u12
         ((value << distance) | (value >> (u32::from(bits) - distance))) & mask
     } else {
         ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
+    }
+}
+
+fn transform_integer_bits(
+    value: u128,
+    bits: u8,
+    transform: crate::expression::IntegerBitTransform,
+) -> u128 {
+    use crate::expression::IntegerBitTransform;
+    let value = value & signed_mask(bits);
+    match transform {
+        IntegerBitTransform::SwapBytes | IntegerBitTransform::ToBigEndian => {
+            value.swap_bytes() >> (128 - bits)
+        }
+        IntegerBitTransform::ReverseBits => value.reverse_bits() >> (128 - bits),
+        IntegerBitTransform::ToLittleEndian => value,
     }
 }
 

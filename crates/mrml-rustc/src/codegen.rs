@@ -2292,6 +2292,7 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(distance)?;
         }
+        ExprKind::IntegerBitTransform { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
@@ -3106,6 +3107,20 @@ fn runtime_expression_type_with_locals<
                         | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
                 )
             {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
+        }
+        ExprKind::IntegerBitTransform { base, .. } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_))) {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
@@ -4890,6 +4905,46 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     (64, true) => self.emit(&[0x48, 0xd3, 0xc0])?,
                     (64, false) => self.emit(&[0x48, 0xd3, 0xc8])?,
                     _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                }
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerBitTransform { base, transform } => {
+                use crate::expression::IntegerBitTransform;
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                match transform {
+                    IntegerBitTransform::ToLittleEndian => {}
+                    IntegerBitTransform::SwapBytes | IntegerBitTransform::ToBigEndian => {
+                        match operand_width.bits {
+                            8 => {}
+                            16 => self.emit(&[0x66, 0xc1, 0xc8, 8])?,
+                            32 => self.emit(&[0x0f, 0xc8])?,
+                            64 => self.emit(&[0x48, 0x0f, 0xc8])?,
+                            _ => {
+                                return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType));
+                            }
+                        }
+                    }
+                    IntegerBitTransform::ReverseBits => {
+                        self.emit(&[0x31, 0xc9])?;
+                        for _ in 0..operand_width.bits {
+                            self.emit(&[0x48, 0xd1, 0xe8, 0x48, 0xd1, 0xd1])?;
+                        }
+                        self.emit(&[0x48, 0x89, 0xc8])?;
+                    }
                 }
                 self.emit_normalize()?;
                 self.width = previous_width;
@@ -11447,6 +11502,48 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u16) -> u8 { input.rotate_left(distance) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, distance: u32) -> bool { input.rotate_right(distance) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn reorders_primitive_integer_bits_and_bytes() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.reverse_bits() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.swap_bytes() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { input.reverse_bits() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.to_be() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> usize { input.to_le() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.reverse_bits() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: char) -> char { input.swap_bytes() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

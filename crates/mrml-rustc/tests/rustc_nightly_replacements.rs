@@ -1854,6 +1854,29 @@ fn rustc_integer_rotations_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.reverse_bits() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> i16 { input.swap_bytes() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> u32 { input.reverse_bits() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.to_be() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: usize) -> usize { input.to_le() }",
+        "const VALUE: u8 = 0x81u8.reverse_bits(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-32767i16).swap_bytes(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u32 = 0x12345678u32.to_be(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: u64 = 0x123456789abcdef0u64.to_le(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",
