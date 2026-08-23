@@ -3366,6 +3366,7 @@ fn runtime_expression_type_with_locals<
                     base_type
                 }
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
+                | crate::expression::CheckedIntegerOptionOperation::Power
                     if argument.is_some_and(|argument| {
                         matches!(
                             runtime_expression_type_with_locals(
@@ -3483,8 +3484,9 @@ fn runtime_expression_type_with_locals<
                     argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed())
                 }
-                crate::expression::CheckedIntegerOptionOperation::Shift { .. } => argument
-                    .is_some_and(|argument| {
+                crate::expression::CheckedIntegerOptionOperation::Shift { .. }
+                | crate::expression::CheckedIntegerOptionOperation::Power => {
+                    argument.is_some_and(|argument| {
                         matches!(
                             runtime_expression_type_with_locals(
                                 function,
@@ -3499,7 +3501,8 @@ fn runtime_expression_type_with_locals<
                                     crate::IntegerType::U32
                                 )))
                         )
-                    }),
+                    })
+                }
                 crate::expression::CheckedIntegerOptionOperation::Cast(_) => argument.is_none(),
                 crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
                     argument.is_none()
@@ -10721,6 +10724,35 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.emit_normalize()
     }
 
+    fn emit_checked_multiply_branches(
+        &mut self,
+        width: RuntimeWidth,
+    ) -> Result<(Option<usize>, Option<usize>), CodegenError> {
+        if width.bits == 64 {
+            if width.signed {
+                self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
+                return Ok((Some(self.emit_forward_branch(0x80)?), None));
+            }
+            self.emit(&[0x48, 0xf7, 0xe1, 0x48, 0x85, 0xd2])?;
+            return Ok((Some(self.emit_forward_branch(0x85)?), None));
+        }
+        self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
+        let below_minimum = if width.signed {
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&(width.minimum as u64).to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            Some(self.emit_forward_branch(0x8c)?)
+        } else {
+            None
+        };
+        self.emit(&[0x48, 0xba])?;
+        self.emit(&width.maximum.to_le_bytes())?;
+        self.emit(&[0x48, 0x39, 0xd0])?;
+        let above_maximum = self.emit_forward_branch(if width.signed { 0x8f } else { 0x87 })?;
+        self.emit_normalize()?;
+        Ok((below_minimum, Some(above_maximum)))
+    }
+
     fn emit_checked_integer_option<const MAX_NODES: usize>(
         &mut self,
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
@@ -10775,6 +10807,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             crate::expression::CheckedIntegerOptionOperation::Arithmetic(_) => None,
             crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Shift { .. } => None,
+            crate::expression::CheckedIntegerOptionOperation::Power => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -10913,6 +10946,56 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             } else {
                 &[0x48, 0xd3, 0xe8]
             })?;
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
+        }
+        if operation == crate::expression::CheckedIntegerOptionOperation::Power {
+            let exponent =
+                argument.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+            self.width =
+                runtime_width("u32").ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            self.emit_expression(tree, exponent, depth + 1)?;
+            self.width = source_width;
+            self.emit(&[
+                0x49, 0x89, 0xc1, 0x59, 0xb8, 1, 0, 0, 0, 0x41, 0xb8, 1, 0, 0, 0,
+            ])?;
+            self.evaluation_depth -= 1;
+            let loop_start = self.length;
+            self.emit(&[0x4d, 0x85, 0xc9])?;
+            let done = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x41, 0xf6, 0xc1, 1])?;
+            let even = self.emit_forward_branch(0x84)?;
+            let mut overflow_patches = [None; 4];
+            let mut overflow_count = 0usize;
+            let multiply_patches = self.emit_checked_multiply_branches(source_width)?;
+            for patch in [multiply_patches.0, multiply_patches.1]
+                .into_iter()
+                .flatten()
+            {
+                overflow_patches[overflow_count] = Some(patch);
+                overflow_count += 1;
+            }
+            self.patch_forward_branch(even)?;
+            self.emit(&[0x49, 0xd1, 0xe9, 0x4d, 0x85, 0xc9])?;
+            let finished = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x49, 0x89, 0xc2, 0x48, 0x89, 0xc8])?;
+            let square_patches = self.emit_checked_multiply_branches(source_width)?;
+            for patch in [square_patches.0, square_patches.1].into_iter().flatten() {
+                overflow_patches[overflow_count] = Some(patch);
+                overflow_count += 1;
+            }
+            self.emit(&[0x48, 0x89, 0xc1, 0x4c, 0x89, 0xd0])?;
+            self.emit_backward_branch(loop_start)?;
+            for patch in overflow_patches[..overflow_count].iter().flatten().copied() {
+                self.patch_forward_branch(patch)?;
+            }
+            self.emit(&[0x45, 0x31, 0xc0])?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(done)?;
+            self.patch_forward_branch(finished)?;
+            self.patch_forward_branch(end)?;
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
         }
@@ -15793,6 +15876,46 @@ mod tests {
             };
             assert!(
                 compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_power_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u32, fallback: u8) -> u8 { a.checked_pow(n).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, n: u32) -> i64 { a.checked_pow(n).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16, n: u32) -> bool { a.checked_pow(n).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, n: u32) -> bool { a.checked_pow(n).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u16) -> u8 { a.checked_pow(n).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, n: i32) -> bool { a.checked_pow(n).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, n: u32) -> u64 { a.checked_pow(n) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 2048, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::SystemV,
