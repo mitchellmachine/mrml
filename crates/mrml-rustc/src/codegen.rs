@@ -2293,6 +2293,7 @@ fn validate_runtime_inline_const<
             recurse(distance)?;
         }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base)?,
+        ExprKind::IntegerBitCount { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
@@ -3124,6 +3125,24 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::IntegerBitCount { base, .. } => {
+            if !matches!(
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?,
+                RuntimeExpressionType::Integer(Some(_))
+            ) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Integer(Some(
+                crate::IntegerType::U32,
+            )))
         }
         ExprKind::RawPointerOffset {
             base,
@@ -4947,6 +4966,58 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     }
                 }
                 self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerBitCount { base, count } => {
+                use crate::expression::IntegerBitCount;
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                match count {
+                    IntegerBitCount::Ones | IntegerBitCount::Zeros => {
+                        self.emit(&[0x31, 0xc9])?;
+                        for _ in 0..operand_width.bits {
+                            self.emit(&[0x48, 0xd1, 0xe8, 0x48, 0x83, 0xd1, 0])?;
+                        }
+                        self.emit(&[0x48, 0x89, 0xc8])?;
+                        if count == IntegerBitCount::Zeros {
+                            self.emit(&[0xb9])?;
+                            self.emit(&u32::from(operand_width.bits).to_le_bytes())?;
+                            self.emit(&[0x29, 0xc1, 0x89, 0xc8])?;
+                        }
+                    }
+                    IntegerBitCount::LeadingZeros | IntegerBitCount::TrailingZeros => {
+                        if operand_width.bits < 64 {
+                            self.emit(&[0x48, 0x25])?;
+                            self.emit(&(operand_width.maximum as u32).to_le_bytes())?;
+                        }
+                        self.emit(&[0x48, 0x85, 0xc0])?;
+                        let zero = self.emit_forward_branch(0x84)?;
+                        if count == IntegerBitCount::LeadingZeros {
+                            self.emit(&[0x48, 0x0f, 0xbd, 0xc8, 0xb8])?;
+                            self.emit(&u32::from(operand_width.bits - 1).to_le_bytes())?;
+                            self.emit(&[0x29, 0xc8])?;
+                        } else {
+                            self.emit(&[0x48, 0x0f, 0xbc, 0xc0])?;
+                        }
+                        let end = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(zero)?;
+                        self.emit(&[0xb8])?;
+                        self.emit(&u32::from(operand_width.bits).to_le_bytes())?;
+                        self.patch_forward_branch(end)?;
+                    }
+                }
                 self.width = previous_width;
             }
             ExprKind::RawPointerOffset {
@@ -11544,6 +11615,48 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.reverse_bits() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: char) -> char { input.swap_bytes() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn counts_primitive_integer_bits() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u32 { input.count_ones() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> u32 { input.count_zeros() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { input.leading_zeros() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> u32 { input.trailing_zeros() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> u32 { input.count_ones() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> u32 { input.count_ones() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.leading_zeros() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

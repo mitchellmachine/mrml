@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 391 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 393 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1918,6 +1918,10 @@ the receiver width and signed bit pattern in constants and native functions.
 The current little-endian targets use byte reversal for big-endian conversion
 and identity for little-endian conversion. Five linked System V artifacts
 matched pinned Rust across 8-, 16-, 32-, and 64-bit boundary values.
+The `count_ones`, `count_zeros`, `leading_zeros`, and `trailing_zeros` methods
+evaluate each signed or unsigned receiver in its own width and return `u32`, as
+Rust requires. Four native objects matched pinned Rust for zero, all-ones,
+sign-bit, and sparse-bit cases, including the full-width zero results.
 The cast/conditional slice emitted 552-byte signed and 520-byte Boolean ELF
 objects. A separate nightly-built caller linked and executed both successfully.
 The compound-comparison replacement emitted a 552-byte ELF object and passed

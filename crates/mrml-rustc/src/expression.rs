@@ -386,6 +386,10 @@ pub enum ExprKind<'source> {
         base: ExprId,
         transform: IntegerBitTransform,
     },
+    IntegerBitCount {
+        base: ExprId,
+        count: IntegerBitCount,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -458,6 +462,14 @@ pub enum IntegerBitTransform {
     ReverseBits,
     ToBigEndian,
     ToLittleEndian,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerBitCount {
+    Ones,
+    Zeros,
+    LeadingZeros,
+    TrailingZeros,
 }
 
 impl AsciiPredicate {
@@ -603,6 +615,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::WrappingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
             | ExprKind::IntegerBitTransform { .. }
+            | ExprKind::IntegerBitCount { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -865,6 +878,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -2158,6 +2172,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerBitTransform { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerBitCount { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
@@ -3746,6 +3763,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "reverse_bits"
                         | "to_be"
                         | "to_le"
+                        | "count_ones"
+                        | "count_zeros"
+                        | "leading_zeros"
+                        | "trailing_zeros"
                         | "offset"
                         | "wrapping_offset"
                         | "offset_from"
@@ -3920,6 +3941,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                             "reverse_bits" => IntegerBitTransform::ReverseBits,
                             "to_be" => IntegerBitTransform::ToBigEndian,
                             "to_le" => IntegerBitTransform::ToLittleEndian,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
+                "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros" => {
+                    ExprKind::IntegerBitCount {
+                        base,
+                        count: match method.text {
+                            "count_ones" => IntegerBitCount::Ones,
+                            "count_zeros" => IntegerBitCount::Zeros,
+                            "leading_zeros" => IntegerBitCount::LeadingZeros,
+                            "trailing_zeros" => IntegerBitCount::TrailingZeros,
                             _ => unreachable!(),
                         },
                     }

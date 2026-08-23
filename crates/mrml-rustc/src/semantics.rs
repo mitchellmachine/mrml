@@ -211,6 +211,7 @@ pub fn analyze_constants<
                     ExprKind::WrappingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerBitTransform { .. }
+                        | ExprKind::IntegerBitCount { .. }
                 )
             });
         let call_value = if requires_typed_evaluation {
@@ -1907,6 +1908,7 @@ fn evaluate_integer_const_expression<
             ExprKind::WrappingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerBitTransform { .. }
+                | ExprKind::IntegerBitCount { .. }
         )
     }) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
@@ -2041,6 +2043,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base, inside_inline_const),
+        ExprKind::IntegerBitCount { base, .. } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2144,6 +2147,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
+        ExprKind::IntegerBitCount { base, .. } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -2368,6 +2372,26 @@ fn evaluate_call_aware_integer<
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
             transform_integer_bits(recurse(base)?, bits, transform)
+        }
+        ExprKind::IntegerBitCount { base, count } => {
+            if ty != crate::IntegerType::U32 {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants)
+                .unwrap_or(crate::IntegerType::I32);
+            let base_bits = base_type
+                .bits(context.target.pointer_bits())
+                .ok_or(SemanticErrorKind::UnsupportedConstCall)?;
+            let value = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                base,
+                base_type,
+                constants,
+                depth,
+            )?;
+            u128::from(count_integer_bits(value, base_bits, count))
         }
         _ => return Err(arithmetic_error(ConstEvalError::InvalidCast)),
     };
@@ -3114,6 +3138,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::IntegerBitTransform { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
+        ExprKind::IntegerBitCount { .. } => Some(crate::IntegerType::U32),
         ExprKind::If {
             then_branch,
             else_branch,
@@ -3159,6 +3184,17 @@ fn transform_integer_bits(
         }
         IntegerBitTransform::ReverseBits => value.reverse_bits() >> (128 - bits),
         IntegerBitTransform::ToLittleEndian => value,
+    }
+}
+
+fn count_integer_bits(value: u128, bits: u8, count: crate::expression::IntegerBitCount) -> u32 {
+    use crate::expression::IntegerBitCount;
+    let value = value & signed_mask(bits);
+    match count {
+        IntegerBitCount::Ones => value.count_ones(),
+        IntegerBitCount::Zeros => u32::from(bits) - value.count_ones(),
+        IntegerBitCount::LeadingZeros => (value << (128 - bits)).leading_zeros(),
+        IntegerBitCount::TrailingZeros => value.trailing_zeros().min(u32::from(bits)),
     }
 }
 
