@@ -5154,6 +5154,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 base,
                 distance,
                 left,
+                unbounded,
             } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
@@ -5174,15 +5175,38 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.width = runtime_width("u32")
                     .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
                 self.emit_expression(tree, distance, depth + 1)?;
-                self.emit(&[0x48, 0x89, 0xc1, 0x58, 0x83, 0xe1, operand_width.bits - 1])?;
+                self.emit(&[0x48, 0x89, 0xc1, 0x58])?;
                 self.evaluation_depth -= 1;
                 self.width = operand_width;
+                let in_range = if unbounded {
+                    self.emit(&[0x83, 0xf9, operand_width.bits])?;
+                    Some(self.emit_forward_branch(0x82)?)
+                } else {
+                    self.emit(&[0x83, 0xe1, operand_width.bits - 1])?;
+                    None
+                };
+                let end = if in_range.is_some() {
+                    if !left && operand_width.signed {
+                        self.emit(&[0xb1, operand_width.bits - 1, 0x48, 0xd3, 0xf8])?;
+                    } else {
+                        self.emit(&[0x31, 0xc0])?;
+                    }
+                    Some(self.emit_unconditional_forward_branch()?)
+                } else {
+                    None
+                };
+                if let Some(in_range) = in_range {
+                    self.patch_forward_branch(in_range)?;
+                }
                 if left {
                     self.emit(&[0x48, 0xd3, 0xe0])?;
                 } else if operand_width.signed {
                     self.emit(&[0x48, 0xd3, 0xf8])?;
                 } else {
                     self.emit(&[0x48, 0xd3, 0xe8])?;
+                }
+                if let Some(end) = end {
+                    self.patch_forward_branch(end)?;
                 }
                 self.emit_normalize()?;
                 self.width = previous_width;
@@ -12721,6 +12745,48 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn shifts_primitive_integers_without_bounds() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u32) -> u8 { input.unbounded_shl(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, distance: u32) -> i16 { input.unbounded_shr(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, distance: u32) -> u32 { input.unbounded_shr(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, distance: u32) -> i64 { input.unbounded_shl(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, distance: u32) -> usize { input.unbounded_shr(distance) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u16) -> u8 { input.unbounded_shl(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, distance: u32) -> bool { input.unbounded_shr(distance) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

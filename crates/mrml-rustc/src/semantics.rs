@@ -2453,6 +2453,7 @@ fn evaluate_call_aware_integer<
             base,
             distance,
             left,
+            unbounded,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -2472,7 +2473,7 @@ fn evaluate_call_aware_integer<
                 constants,
                 depth,
             )?;
-            wrapping_shift_integer_bits(value, distance, bits, left, ty.is_signed())
+            shift_integer_bits(value, distance, bits, left, ty.is_signed(), unbounded)
         }
         ExprKind::IntegerWrappingPower {
             base,
@@ -3300,6 +3301,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             base,
             distance,
             left,
+            unbounded,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3313,7 +3315,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             let distance = tree
                 .evaluate_at(distance, constants)
                 .map_err(ExecutionError::Arithmetic)?;
-            wrapping_shift_integer_bits(value, distance, bits, left, true)
+            shift_integer_bits(value, distance, bits, left, true, unbounded)
         }
         ExprKind::IntegerWrappingPower {
             base,
@@ -3654,15 +3656,23 @@ fn checked_integer_multiply(left: u128, right: u128, bits: u8, signed: bool) -> 
     }
 }
 
-fn wrapping_shift_integer_bits(
+fn shift_integer_bits(
     value: u128,
     distance: u128,
     bits: u8,
     left: bool,
     signed: bool,
+    unbounded: bool,
 ) -> u128 {
     let mask = signed_mask(bits);
     let value = value & mask;
+    if unbounded && distance >= u128::from(bits) {
+        return if !left && signed && value & (1_u128 << (bits - 1)) != 0 {
+            mask
+        } else {
+            0
+        };
+    }
     let distance = (distance % u128::from(bits)) as u32;
     if left {
         (value << distance) & mask

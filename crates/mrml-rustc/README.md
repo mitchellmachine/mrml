@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 415 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 417 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1990,6 +1990,13 @@ unsigned receivers; non-`u32` distances fail closed.
 Four emitted System V objects matched pinned Rust through zero, width-adjacent,
 hardware-mask-adjacent, and `u32::MAX` distances across narrow and full-width
 signed and unsigned receivers.
+The stable `unbounded_shl(u32)` and `unbounded_shr(u32)` methods retain ordinary
+shift results below the receiver width. At or above that width, left shifts and
+unsigned right shifts return zero, while signed right shifts return zero or
+negative one according to the receiver's sign.
+Four System V objects matched pinned Rust across narrow and full widths, both
+signed-right input signs, and distances immediately around the width through
+`u32::MAX`.
 Primitive signed and unsigned integers support `wrapping_pow(u32)` through a
 bounded-register exponentiation-by-squaring runtime loop and the equivalent
 width-normalized constant evaluator. Exponent zero returns one, and each

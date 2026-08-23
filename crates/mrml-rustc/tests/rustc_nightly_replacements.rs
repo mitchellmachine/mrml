@@ -2038,6 +2038,28 @@ fn rustc_wrapping_integer_shifts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_unbounded_integer_shifts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.unbounded_shl(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, distance: u32) -> i16 { input.unbounded_shr(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, distance: u32) -> u64 { input.unbounded_shr(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, distance: u32) -> i64 { input.unbounded_shl(distance) }",
+        "const VALUE: u8 = 3u8.unbounded_shl(8); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-3i16).unbounded_shr(16); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u32 = 9u32.unbounded_shr(32); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: i64 = (-1i64).unbounded_shl(64); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_wrapping_integer_powers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, exponent: u32) -> u8 { input.wrapping_pow(exponent) }",

@@ -409,6 +409,7 @@ pub enum ExprKind<'source> {
         base: ExprId,
         distance: ExprId,
         left: bool,
+        unbounded: bool,
     },
     IntegerWrappingPower {
         base: ExprId,
@@ -3854,6 +3855,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "rotate_right"
                         | "wrapping_shl"
                         | "wrapping_shr"
+                        | "unbounded_shl"
+                        | "unbounded_shr"
                         | "wrapping_pow"
                         | "saturating_pow"
                         | "pow"
@@ -3970,6 +3973,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "rotate_right"
                     | "wrapping_shl"
                     | "wrapping_shr"
+                    | "unbounded_shl"
+                    | "unbounded_shr"
                     | "wrapping_pow"
                     | "saturating_pow"
                     | "pow"
@@ -4106,13 +4111,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                     left: method.text == "rotate_left",
                 },
-                "wrapping_shl" | "wrapping_shr" => ExprKind::IntegerWrappingShift {
-                    base,
-                    distance: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    left: method.text == "wrapping_shl",
-                },
+                "wrapping_shl" | "wrapping_shr" | "unbounded_shl" | "unbounded_shr" => {
+                    ExprKind::IntegerWrappingShift {
+                        base,
+                        distance: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        left: matches!(method.text, "wrapping_shl" | "unbounded_shl"),
+                        unbounded: method.text.starts_with("unbounded_"),
+                    }
+                }
                 "pow" | "wrapping_pow" | "saturating_pow" => ExprKind::IntegerWrappingPower {
                     base,
                     exponent: argument.ok_or_else(|| {
