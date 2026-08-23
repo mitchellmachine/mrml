@@ -19,9 +19,15 @@ global_asm!(
             mov r11, 0x6fe000
             cmp qword ptr [r11], r12
             je 3f
-            mov eax, 2
-            xor edi, edi
-            xor esi, esi
+            lea rdi, [rip + mrml_service_buffer]
+            mov qword ptr [rdi], 0
+            mov qword ptr [rdi + 8], 0
+            mov qword ptr [rdi + 16], 0
+            mov qword ptr [rdi + 24], 0
+            mov qword ptr [rdi + 32], 0
+            mov qword ptr [rdi + 40], 0
+            mov eax, 5
+            mov esi, 48
             xor edx, edx
             xor r10d, r10d
             xor r8d, r8d
@@ -29,9 +35,28 @@ global_asm!(
             int 0x80
             cmp rax, 0
             jne 3f
-            cmp rdx, 4
+            cmp rdx, 48
             jne 3f
-            cmp r10d, 0x676e6970
+            cmp r10, 0
+            jne 3f
+            lea r11, [rip + mrml_service_buffer]
+            mov rax, 0x0807060504030201
+            cmp qword ptr [r11], rax
+            jne 3f
+            mov rax, 0x1817161514131211
+            cmp qword ptr [r11 + 8], rax
+            jne 3f
+            mov rax, 0x2827262524232221
+            cmp qword ptr [r11 + 16], rax
+            jne 3f
+            mov rax, 0x3837363534333231
+            cmp qword ptr [r11 + 24], rax
+            jne 3f
+            mov rax, 0x4847464544434241
+            cmp qword ptr [r11 + 32], rax
+            jne 3f
+            mov rax, 0x5857565554535251
+            cmp qword ptr [r11 + 40], rax
             jne 3f
             mov r11, 0x6fe000
             cmp qword ptr [r11], r12
@@ -41,17 +66,30 @@ global_asm!(
             ud2
 
             // Fix the secondary entry ABI exactly; assembly fails if the
-            // receiver ever grows beyond its reserved 128-byte window.
-            .org efi_main + 128, 0xcc
+            // receiver ever grows beyond its reserved 512-byte window.
+            .org efi_main + 512, 0xcc
             .global mrml_service_sender
         mrml_service_sender:
             mov r11, 0x6fe000
             mov qword ptr [r11], r12
-            mov eax, 1
+            lea r11, [rip + mrml_service_buffer]
+            mov rax, 0x0807060504030201
+            mov qword ptr [r11], rax
+            mov rax, 0x1817161514131211
+            mov qword ptr [r11 + 8], rax
+            mov rax, 0x2827262524232221
+            mov qword ptr [r11 + 16], rax
+            mov rax, 0x3837363534333231
+            mov qword ptr [r11 + 24], rax
+            mov rax, 0x4847464544434241
+            mov qword ptr [r11 + 32], rax
+            mov rax, 0x5857565554535251
+            mov qword ptr [r11 + 40], rax
+            mov eax, 4
             mov rdi, r13
             mov rsi, r14
-            mov edx, 4
-            mov r10d, 0x676e6970
+            mov rdx, r11
+            mov r10d, 48
             xor r8d, r8d
             xor r9d, r9d
             int 0x80
@@ -76,6 +114,12 @@ global_asm!(
             xor r9d, r9d
             int 0x80
             ud2
+
+            .section .data
+            .balign 8
+            .global mrml_service_buffer
+        mrml_service_buffer:
+            .zero 48
     "#
 );
 

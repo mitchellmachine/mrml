@@ -533,6 +533,21 @@ impl<const N: usize> PreparedKvmGuest<N> {
                 .map_err(|_| KvmError::InvalidMapping)?,
             )
             .map_err(|_| KvmError::PageTable)?;
+        let mut frame_index = 0;
+        while frame_index < tables.store().allocated_pages() {
+            let frame = tables
+                .store()
+                .allocated_frame(frame_index)
+                .ok_or(KvmError::PageTable)?;
+            tables
+                .map_page(
+                    VirtAddr::new(frame.get()).map_err(|_| KvmError::InvalidMapping)?,
+                    frame,
+                    PagePermissions::KERNEL_LOW_READ_WRITE,
+                )
+                .map_err(|_| KvmError::PageTable)?;
+            frame_index += 1;
+        }
         let root = tables.root();
         let _ = tables.into_store();
         self.service_entry[slot] = Some(loaded_service.entry());

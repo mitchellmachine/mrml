@@ -57,6 +57,8 @@ use mrml_kernel::arch::x86_64::TimerDivide;
     feature = "service-preemption-probe"
 ))]
 use mrml_kernel::arch::x86_64::TrapDisposition;
+#[cfg(feature = "service-probe")]
+use mrml_kernel::arch::x86_64::UserBufferAccess;
 #[cfg(any(
     feature = "user-probe",
     feature = "service-probe",
@@ -93,8 +95,10 @@ use mrml_kernel::{
 };
 #[cfg(feature = "service-probe")]
 use mrml_kernel::{
-    Capability, CapabilitySpace, ControlEvent, PeerDeathReason, RestartPolicy,
+    CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, Capability, CapabilitySpace, ControlEvent,
+    MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy,
     ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceSupervisor,
+    decode_capability_transfers,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -215,7 +219,7 @@ const SERVICE_B_ROOT: u64 = 0x00d0_0000;
 ))]
 const SERVICE_ENTRY: u64 = 0x0000_0001_4000_1000;
 #[cfg(feature = "service-probe")]
-const SERVICE_SENDER_ENTRY: u64 = SERVICE_ENTRY + 0x80;
+const SERVICE_SENDER_ENTRY: u64 = SERVICE_ENTRY + 0x200;
 #[cfg(any(
     feature = "service-probe",
     feature = "smp-service-migration-probe",
@@ -344,6 +348,25 @@ static mut SERVICE_CONTROLS: Option<[Capability; 2]> = None;
 static mut SERVICE_IDS: Option<[ServiceId; 2]> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESTARTED: bool = false;
+
+#[cfg(feature = "service-probe")]
+#[derive(Clone, Copy)]
+struct PendingBufferReceive {
+    task: mrml_kernel::TaskId,
+    payload_address: u64,
+    payload_capacity: usize,
+    capabilities_address: u64,
+    capability_capacity: usize,
+}
+
+#[cfg(feature = "service-probe")]
+static mut SERVICE_PENDING_BUFFER: Option<PendingBufferReceive> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_SYSCALL_PAYLOAD: [u8; MAX_INLINE_PAYLOAD] = [0; MAX_INLINE_PAYLOAD];
+#[cfg(feature = "service-probe")]
+static mut SERVICE_SYSCALL_CAPABILITIES: [u8; MAX_CAPABILITIES
+    * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES] =
+    [0; MAX_CAPABILITIES * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES];
 
 #[cfg(feature = "service-probe")]
 struct HostedServiceEraser;
@@ -702,7 +725,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         in("eax") 1u32,
                         options(nomem, nostack)
                     );
-                    if core::ptr::addr_of!(SERVICE_RESTARTED).read() && root.get() == SERVICE_B_ROOT
+                    if core::ptr::addr_of!(SERVICE_RESTARTED).read()
+                        && root.get() == SERVICE_B_ROOT
+                        && core::ptr::addr_of!(SERVICE_PENDING_BUFFER).read().is_none()
                     {
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
                         runtime
@@ -740,6 +765,94 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     in("eax") 2u32,
                     options(nomem, nostack)
                 );
+            }
+            SyscallRequest::SendBuffer {
+                endpoint,
+                receiver,
+                payload_address,
+                payload_length,
+                capabilities_address,
+                capability_count,
+            } => {
+                let payload_length = usize::from(payload_length);
+                let payload = core::slice::from_raw_parts_mut(
+                    core::ptr::addr_of_mut!(SERVICE_SYSCALL_PAYLOAD).cast::<u8>(),
+                    payload_length,
+                );
+                copy_from_active_user(root, payload_address, payload);
+                let capability_count = usize::from(capability_count);
+                let descriptor_length = capability_count
+                    .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
+                    .unwrap_or_else(|| halt());
+                let descriptor_bytes = core::slice::from_raw_parts_mut(
+                    core::ptr::addr_of_mut!(SERVICE_SYSCALL_CAPABILITIES).cast::<u8>(),
+                    descriptor_length,
+                );
+                if descriptor_length != 0 {
+                    copy_from_active_user(root, capabilities_address, descriptor_bytes);
+                }
+                let mut descriptors = [None; MAX_CAPABILITIES];
+                decode_capability_transfers(descriptor_bytes, capability_count, &mut descriptors)
+                    .unwrap_or_else(|_| halt());
+                let mut requested = [(Capability::from_token(0), Rights::NONE); MAX_CAPABILITIES];
+                for (slot, descriptor) in requested
+                    .iter_mut()
+                    .zip(descriptors[..capability_count].iter().flatten())
+                {
+                    *slot = (descriptor.capability, descriptor.rights);
+                }
+                let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
+                    .as_mut()
+                    .unwrap_or_else(|| halt());
+                let sequence = runtime
+                    .deliver_ipc(
+                        current,
+                        receiver,
+                        endpoint_object,
+                        endpoint,
+                        payload,
+                        &requested[..capability_count],
+                    )
+                    .unwrap_or_else(|_| halt());
+                frame.complete(sequence);
+                asm!(
+                    "out dx, eax",
+                    in("dx") SERVICE_CALL_PORT,
+                    in("eax") 2u32,
+                    options(nomem, nostack)
+                );
+            }
+            SyscallRequest::ReceiveBuffer {
+                payload_address,
+                payload_capacity,
+                capabilities_address,
+                capability_capacity,
+            } => {
+                let pending = PendingBufferReceive {
+                    task: current,
+                    payload_address,
+                    payload_capacity: usize::from(payload_capacity),
+                    capabilities_address,
+                    capability_capacity: usize::from(capability_capacity),
+                };
+                validate_active_receive(root, pending);
+                match runtime
+                    .receive_or_block_current()
+                    .unwrap_or_else(|_| halt())
+                {
+                    Ok(message) => complete_buffer_current(root, pending, &message, frame),
+                    Err(ScheduleOutcome::Switch { to, .. }) => {
+                        core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFER).write(Some(pending));
+                        asm!(
+                            "out dx, eax",
+                            in("dx") SERVICE_CALL_PORT,
+                            in("eax") 1u32,
+                            options(nomem, nostack)
+                        );
+                        enter_service_task(runtime, to)
+                    }
+                    _ => halt(),
+                }
             }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
@@ -785,19 +898,21 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             in("eax") 0x22u32,
                             options(nomem, nostack)
                         );
-                        let ControlEvent::Message(received) =
-                            runtime.receive_control(to).unwrap_or_else(|_| halt())
-                        else {
-                            halt()
-                        };
-                        if received.sender() != current || received.sequence() == 0 {
-                            halt();
+                        if core::ptr::addr_of!(SERVICE_PENDING_BUFFER).read().is_none() {
+                            let ControlEvent::Message(received) =
+                                runtime.receive_control(to).unwrap_or_else(|_| halt())
+                            else {
+                                halt()
+                            };
+                            if received.sender() != current || received.sequence() == 0 {
+                                halt();
+                            }
+                            let message = received.into_message();
+                            runtime
+                                .context_mut(to)
+                                .unwrap_or_else(|_| halt())
+                                .complete_message(message.payload());
                         }
-                        let message = received.into_message();
-                        runtime
-                            .context_mut(to)
-                            .unwrap_or_else(|_| halt())
-                            .complete_message(message.payload());
                         asm!(
                             "out dx, eax",
                             in("dx") SERVICE_CALL_PORT,
@@ -809,7 +924,6 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     _ => halt(),
                 }
             }
-            SyscallRequest::SendBuffer { .. } | SyscallRequest::ReceiveBuffer { .. } => halt(),
         }
     }
     #[cfg(feature = "smp-service-migration-probe")]
@@ -2716,7 +2830,144 @@ unsafe fn enter_service_preemption_context(context: &UserContext) -> ! {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn enter_service_task(runtime: &TaskRuntime<2, 2>, task: mrml_kernel::TaskId) -> ! {
+unsafe fn validate_service_user_range(
+    root: PhysAddr,
+    address: u64,
+    length: usize,
+    maximum_length: usize,
+    access: UserBufferAccess,
+) {
+    let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    active
+        .resolve_user_buffer(root, address, length, maximum_length, access)
+        .unwrap_or_else(|_| halt());
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn copy_from_active_user(root: PhysAddr, address: u64, output: &mut [u8]) {
+    unsafe {
+        validate_service_user_range(
+            root,
+            address,
+            output.len(),
+            MAX_INLINE_PAYLOAD,
+            UserBufferAccess::Read,
+        )
+    };
+    unsafe {
+        core::ptr::copy_nonoverlapping(address as *const u8, output.as_mut_ptr(), output.len())
+    };
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn validate_active_receive(root: PhysAddr, pending: PendingBufferReceive) {
+    unsafe {
+        validate_service_user_range(
+            root,
+            pending.payload_address,
+            pending.payload_capacity,
+            MAX_INLINE_PAYLOAD,
+            UserBufferAccess::Write,
+        )
+    };
+    if pending.capability_capacity != 0 {
+        let length = pending
+            .capability_capacity
+            .checked_mul(core::mem::size_of::<u64>())
+            .unwrap_or_else(|| halt());
+        unsafe {
+            validate_service_user_range(
+                root,
+                pending.capabilities_address,
+                length,
+                MAX_CAPABILITIES * core::mem::size_of::<u64>(),
+                UserBufferAccess::Write,
+            )
+        };
+    }
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn write_buffer_current(
+    root: PhysAddr,
+    pending: PendingBufferReceive,
+    message: &mrml_kernel::Message,
+) -> (usize, usize) {
+    if message.payload().len() > pending.payload_capacity
+        || message.capability_count() > pending.capability_capacity
+    {
+        halt();
+    }
+    unsafe { validate_active_receive(root, pending) };
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            message.payload().as_ptr(),
+            pending.payload_address as *mut u8,
+            message.payload().len(),
+        )
+    };
+    if message.capability_count() != 0 {
+        let mut encoded = [0u8; MAX_CAPABILITIES * core::mem::size_of::<u64>()];
+        for (index, capability) in message.capabilities().enumerate() {
+            let start = index * core::mem::size_of::<u64>();
+            encoded[start..start + 8].copy_from_slice(&capability.token().to_le_bytes());
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                encoded.as_ptr(),
+                pending.capabilities_address as *mut u8,
+                message.capability_count() * core::mem::size_of::<u64>(),
+            )
+        };
+    }
+    (message.payload().len(), message.capability_count())
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn complete_buffer_current(
+    root: PhysAddr,
+    pending: PendingBufferReceive,
+    message: &mrml_kernel::Message,
+    frame: &mut UserCallFrame,
+) {
+    let (payload_length, capability_count) =
+        unsafe { write_buffer_current(root, pending, message) };
+    frame.complete_buffer(payload_length, capability_count);
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<2, 2>, task: mrml_kernel::TaskId) {
+    let Some(pending) = (unsafe { core::ptr::addr_of!(SERVICE_PENDING_BUFFER).read() }) else {
+        return;
+    };
+    if pending.task != task {
+        return;
+    }
+    let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
+    let previous = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    let target = runtime
+        .context(task)
+        .unwrap_or_else(|_| halt())
+        .page_table();
+    unsafe { asm!("mov cr3, {}", in(reg) target.get(), options(nostack, preserves_flags)) };
+    let result = unsafe { write_buffer_current(target, pending, &message) };
+    unsafe {
+        asm!(
+            "mov cr3, {}",
+            in(reg) previous.root().get(),
+            options(nostack, preserves_flags)
+        )
+    };
+    runtime
+        .context_mut(task)
+        .unwrap_or_else(|_| halt())
+        .complete_buffer(result.0, result.1);
+    unsafe { core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFER).write(None) };
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn enter_service_task(runtime: &mut TaskRuntime<2, 2>, task: mrml_kernel::TaskId) -> ! {
+    unsafe { complete_pending_buffer(runtime, task) };
     let context = runtime
         .context(task)
         .map(|context| context as *const UserContext)

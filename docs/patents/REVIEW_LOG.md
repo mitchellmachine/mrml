@@ -420,3 +420,19 @@ use/definition and place-access representation; it introduces no novel
 algorithm, ABI, protocol, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary compiler access classification.
+
+## 2026-08-23 — signed buffered CPL3 service IPC
+
+MRML source: `crates/mrml-kernel-image/src/main.rs`,
+`crates/mrml-service-image/src/main.rs`,
+`crates/mrml-kernel/src/arch/x86_64/context.rs`, and hosted launchers.
+
+The signed service probe now performs bounded user-buffer validation, ordinary
+capability-message delivery, blocked-receiver wakeup, address-space switching,
+and directional copies. Hosted launchers provide supervisor-only page-table
+self-mappings for the existing active walker. These are conventional syscall
+marshalling, page-table access, scheduling, and IPC techniques; they introduce
+no novel algorithm, ABI optimization, device protocol, codec, or cryptographic
+construction.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded IPC and context switching.

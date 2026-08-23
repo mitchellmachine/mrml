@@ -170,11 +170,14 @@ authority; unrelated domains continue.
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-
    context gates. This path is unit-tested through actual `TaskRuntime` IPC
-   transfer, not yet signed CPL3 execution. Buffered syscall operations now
+   transfer, but the configuration dispatcher has not yet run in CPL3. Buffered
+   syscall operations now
    canonically bound payload and capability-descriptor addresses/counts, and
    mapping policy validates every complete user leaf and access direction before
-   invoking a copy backend. The next gate is wiring those validated copies into
-   send/receive dispatch and an authenticated signed CPL3 service image. Signed
+   invoking a copy backend. Signed WHP and KVM probes now send and receive a
+   48-byte payload through those validated copies, including deferred completion
+   of a blocked receiver under its exact address-space root. The next gate is
+   linking the real `mrml-config` dispatcher into that signed CPL3 path. Signed
    schema admission and storage-backed export/recovery follow before this item
    is complete.
 2. Define native filesystem object identities and attenuated directory/file

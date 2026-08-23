@@ -2617,10 +2617,9 @@ from trusted state rather than request bytes, and successful restart still
 passes exact CONTROL, completed cleanup, backoff, restart-limit, and fresh-task
 gates. Windows gnullvm tests cover eleven configuration/protocol/dispatch cases
 and the kernel suite covers authorized introspection. This is **PARTIALLY
-IMPLEMENTED** Phase 2 foundation: the current CPL3 register ABI carries only 24
-inline bytes, so these 48--368-byte requests have not yet crossed a bounded
-user-buffer syscall or run as a signed CPL3 service. Signed schema admission and
-native-storage persistence/export also remain incomplete.
+IMPLEMENTED** Phase 2 foundation: the configuration dispatcher is tested over
+kernel IPC but is not yet linked into the signed CPL3 service image. Signed
+schema admission and native-storage persistence/export also remain incomplete.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
@@ -2638,9 +2637,39 @@ borrow across validation and the memory-backend call, and tests prove invalid
 ranges never invoke that backend. `ActivePageTables::resolve_user_buffer`
 additionally binds the current CR3 to the exact task root and validates every
 touched live user leaf, including cross-page ranges. These mechanisms are
-**IMPLEMENTED** and Windows/Linux unit-tested; buffered syscall dispatch and a
-signed CPL3 service probe are still **PARTIALLY IMPLEMENTED**, so no live user
-pointer was dereferenced in this milestone.
+**IMPLEMENTED** and Windows/Linux unit-tested. The service-probe dispatcher now
+copies a live CPL3 send buffer only after exact active-root and user-leaf
+validation, decodes its canonical capability-transfer records, and delivers it
+through `TaskRuntime`. Receive validates writable output ranges before blocking.
+When delivery wakes that receiver, the kernel consumes its message, switches to
+the exact receiver CR3, revalidates and copies payload and derived capability
+tokens, restores the previous root, and completes the saved context. The hosted
+launchers self-map every allocated service page-table frame supervisor-only so
+this active walk remains available without exposing the frames to CPL3.
+
+Fresh one-time Lamport-signed service images sent and checked six exact qwords
+(48 bytes) with no transferred capability under both hosted backends. On
+2026-08-23 nested KVM reported `verify=21106us prepare=2584us execute=1027us
+total=56250us`; WHP reported `verify=18303us prepare=4072us execute=657us
+total=26967us`. These are hosted controlled probes, not physical-hardware,
+host-resistant isolation, or bare-metal evidence. The real configuration
+dispatcher and its 48--368-byte protocol records have not yet executed through
+this signed path.
+
+Focused verification after the live integration used:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel -p mrml-config -p mrml-whp --release --no-default-features
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-config -p mrml-whp --release --no-default-features --no-deps -- -D warnings
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel-image --release --target x86_64-unknown-uefi --features service-probe --no-deps -- -D warnings
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-service-image --release --target x86_64-unknown-uefi --no-deps -- -D warnings
+cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-default-features
+cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-default-features --no-deps -- -D warnings
+```
+
+Windows passed 11 configuration, 306 kernel, and 19 WHP tests with one ignored;
+Linux passed 11 configuration, 306 kernel, and 16 KVM tests with one ignored.
+All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,
 optimistic transactional revision checks, bounded audit rings, and capability

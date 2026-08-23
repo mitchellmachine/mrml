@@ -221,6 +221,14 @@ impl UserContext {
         self.r9 = words[2];
     }
 
+    pub fn complete_buffer(&mut self, payload_length: usize, capability_count: usize) {
+        self.rax = 0;
+        self.rdx = payload_length as u64;
+        self.r10 = capability_count as u64;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
+
     pub const fn instruction_pointer(&self) -> u64 {
         self.rip
     }
@@ -502,12 +510,18 @@ mod tests {
             rsp: 0x7000_0000,
             ss: u64::from(USER_DATA_SELECTOR),
         };
-        let context = UserContext::from_user_call(root, &frame).unwrap();
+        let mut context = UserContext::from_user_call(root, &frame).unwrap();
         assert_eq!(context.page_table(), root);
         assert_eq!(context.instruction_pointer(), frame.rip);
         assert_eq!(context.stack_pointer(), frame.rsp);
         assert_eq!(context.r15, 15);
         assert_eq!(context.rax, 2);
+        context.complete_buffer(368, 5);
+        assert_eq!(context.rax, 0);
+        assert_eq!(context.rdx, 368);
+        assert_eq!(context.r10, 5);
+        assert_eq!(context.r8, 0);
+        assert_eq!(context.r9, 0);
     }
 
     #[test]

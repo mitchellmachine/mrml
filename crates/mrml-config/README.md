@@ -21,8 +21,8 @@ Implemented boundaries:
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The dispatch adapters are
-simulation-tested through the kernel's real capability-transfer path, but the
-current 24-byte register syscall cannot carry these larger records. A bounded
-CPL3 request-buffer boundary and signed service-image execution therefore
-remain next, followed by signed schema admission, persistent export/import,
-and native-storage recovery.
+simulation-tested through the kernel's real capability-transfer path. The
+kernel's bounded CPL3 buffer ABI is now exercised by a signed 48-byte service
+probe under WHP and KVM, but this configuration dispatcher is not yet linked
+into that image. That integration remains next, followed by signed schema
+admission, persistent export/import, and native-storage recovery.

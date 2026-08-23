@@ -387,10 +387,15 @@ fails closed. The supervision adapter composes query and restart with existing
 exact-object, cleanup, backoff, restart-limit, and trusted-context gates. Names,
 numeric setting IDs, and service handles never authorize. A bounded CPL3
 request-buffer ABI now decodes fixed payload/capability-buffer descriptors and
-validates every active user leaf before a directional copy, but its service-
-probe dispatch is not yet connected. Signed service execution, signed schema
-admission, persistent export/import, and storage-backed recovery remain
-planned. It is not a clone of the Windows Registry, and secrets remain separate.
+validates every active user leaf before a directional copy. The signed service
+probe now sends and receives a 48-byte payload through that ABI under both WHP
+and KVM, including a blocked receive completed after switching to the exact
+receiver address-space root. Service page-table frames are supervisor-only
+self-mapped so active-root validation can walk them without granting CPL3
+access. The configuration dispatcher itself has not yet run in the signed CPL3
+image; signed schema admission, persistent export/import, and storage-backed
+recovery also remain planned. It is not a clone of the Windows Registry, and
+secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

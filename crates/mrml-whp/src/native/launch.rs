@@ -661,6 +661,21 @@ impl<'system> PreparedWhpGuest<'system> {
                 .map_err(|_| WhpError::InvalidMapping)?,
             )
             .map_err(|_| WhpError::InvalidRegisterState)?;
+        let mut frame_index = 0;
+        while frame_index < tables.store().allocated_pages() {
+            let frame = tables
+                .store()
+                .allocated_frame(frame_index)
+                .ok_or(WhpError::PageTable)?;
+            tables
+                .map_page(
+                    VirtAddr::new(frame.get()).map_err(|_| WhpError::InvalidMapping)?,
+                    frame,
+                    PagePermissions::KERNEL_LOW_READ_WRITE,
+                )
+                .map_err(|_| WhpError::PageTable)?;
+            frame_index += 1;
+        }
         let service_root = tables.root();
         let _ = tables.into_store();
         self.service_entry[slot] = Some(service_entry);
