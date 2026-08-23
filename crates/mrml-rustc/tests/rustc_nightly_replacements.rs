@@ -3312,6 +3312,23 @@ fn rustc_checked_option_inspection_preserves_composable_payloads() {
 }
 
 #[test]
+fn rustc_checked_option_and_then_composes_producers() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, limit: u8) -> u16 { a.checked_add(b).and_then(|sum| sum.checked_mul(limit)).map(|value| value as u16).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64) -> bool { a.checked_signed_diff(b).and_then(|difference| difference.checked_abs()).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, divisor: i16, fallback: i16) -> i16 { input.checked_truncate::<i16>().and_then(|value| value.checked_div(divisor)).unwrap_or(fallback) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",
