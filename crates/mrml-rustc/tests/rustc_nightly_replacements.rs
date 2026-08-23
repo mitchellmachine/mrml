@@ -3009,6 +3009,24 @@ fn rustc_checked_next_power_of_two_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_next_multiple_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, fallback: u8) -> u8 { a.checked_next_multiple_of(b).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, b: i64) -> i64 { a.checked_next_multiple_of(b).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i16, b: i16) -> bool { a.checked_next_multiple_of(b).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u32, b: u32) -> bool { a.checked_next_multiple_of(b).is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_logarithm_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, radix: u64, fallback: u32) -> u32 { a.checked_ilog(radix).unwrap_or(fallback) }",

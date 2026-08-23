@@ -172,6 +172,7 @@ pub enum CheckedIntegerOptionOperation {
     Power,
     NextPowerOfTwo,
     Logarithm { binary: bool },
+    NextMultiple,
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4454,6 +4455,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_ilog"
                         | "checked_ilog2"
                         | "checked_ilog10"
+                        | "checked_next_multiple_of"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4636,6 +4638,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_shr"
                     | "checked_pow"
                     | "checked_ilog"
+                    | "checked_next_multiple_of"
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
@@ -5003,6 +5006,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         },
                     }
                 }
+                "checked_next_multiple_of" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    operation: CheckedIntegerOptionOperation::NextMultiple,
+                },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {
                     base,
                     argument: Some(argument.ok_or_else(|| {

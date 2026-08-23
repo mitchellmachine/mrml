@@ -2357,7 +2357,7 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `checked_rem_euclid`, `checked_neg`, `checked_abs`,
 `checked_shl`, `checked_shr`, `checked_pow`, and unsigned
 `checked_next_power_of_two`, plus `checked_ilog`, `checked_ilog2`, and
-`checked_ilog10`, pinned-nightly
+`checked_ilog10`, and `checked_next_multiple_of`, pinned-nightly
 `checked_div_exact`, generic
 `checked_cast::<T>`, and same-width checked sign-cast results with
 `Option::unwrap_or` and
@@ -2379,6 +2379,8 @@ receivers and generic radices below two produce `None`; positive receivers use
 integer floor-logarithm semantics.
 Checked Euclidean division uses a nonnegative remainder for signed receivers,
 while retaining the checked zero-divisor and signed `MIN / -1` behavior.
+Checked next-multiple preserves Rust's signed rounding semantics and returns
+`None` for a zero divisor or an unrepresentable rounded result.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while
