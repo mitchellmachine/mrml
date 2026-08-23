@@ -50,7 +50,7 @@ pub use topology::{
 pub use trap::{HardwareTrapFrame, TrapDisposition, TrapError, TrapFrame};
 pub use vmx::{
     EptPointer, NativeVmx, VmxCapabilities, VmxControl, VmxControlMask, VmxController, VmxError,
-    VmxInstructionError, VmxInstructions, VmxState,
+    VmxInstructionError, VmxInstructions, VmxPrerequisites, VmxState,
 };
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;

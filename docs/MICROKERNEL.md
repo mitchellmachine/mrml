@@ -133,6 +133,13 @@ Both Windows and Linux LLVM assemblers accept the implementation. The
 instructions have not yet been executed by a bare-metal MRML boot, so this is
 not evidence of a successful hardware VM launch.
 
+VMX capability decisions are derived from raw `IA32_VMX_BASIC`, secondary
+processor-control, and EPT/VPID capability MSRs rather than host-supplied
+booleans. Entry prerequisites require a locked `IA32_FEATURE_CONTROL` that
+permits VMX outside SMX, `CR4.VMXE`, and exact compliance with both CR0 and CR4
+fixed-bit MSRs. Missing lock state, write-back VMX memory, EPT, unrestricted
+guest mode, or the required INVEPT form fails closed before `VMXON`.
+
 The privileged kernel will contain only scheduling, address-space and interrupt
 mechanisms, capability enforcement, IPC, and the minimum early console/timer
 code needed to recover. Filesystems, networking, storage, GPU, CUDA mediation,

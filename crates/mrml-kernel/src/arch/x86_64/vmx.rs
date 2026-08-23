@@ -76,6 +76,29 @@ pub struct VmxCapabilities {
 }
 
 impl VmxCapabilities {
+    pub const fn from_msrs(
+        vmx_basic: u64,
+        secondary_controls: u64,
+        ept_vpid_capabilities: u64,
+    ) -> Result<Self, VmxError> {
+        let revision_id = vmx_basic as u32;
+        let region_bytes = ((vmx_basic >> 32) & 0x1fff) as u16;
+        let memory_type = ((vmx_basic >> 50) & 0xf) as u8;
+        let allowed_one = (secondary_controls >> 32) as u32;
+        let ept = allowed_one & (1 << 1) != 0;
+        let unrestricted_guest = allowed_one & (1 << 7) != 0;
+        let invept = ept_vpid_capabilities & (1 << 20) != 0;
+        let invept_single_context = ept_vpid_capabilities & (1 << 25) != 0;
+        Self::new(
+            revision_id,
+            region_bytes,
+            memory_type,
+            ept,
+            unrestricted_guest,
+            invept && invept_single_context,
+        )
+    }
+
     pub const fn new(
         revision_id: u32,
         region_bytes: u16,
@@ -126,6 +149,58 @@ impl VmxCapabilities {
 
     pub const fn has_required_isolation(self) -> bool {
         self.ept && self.unrestricted_guest && self.invept_single_context
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxPrerequisites {
+    feature_control: u64,
+    cr0: u64,
+    cr4: u64,
+    cr0_fixed_zero: u64,
+    cr0_fixed_one: u64,
+    cr4_fixed_zero: u64,
+    cr4_fixed_one: u64,
+}
+
+impl VmxPrerequisites {
+    pub const fn new(
+        feature_control: u64,
+        cr0: u64,
+        cr4: u64,
+        cr0_fixed_zero: u64,
+        cr0_fixed_one: u64,
+        cr4_fixed_zero: u64,
+        cr4_fixed_one: u64,
+    ) -> Self {
+        Self {
+            feature_control,
+            cr0,
+            cr4,
+            cr0_fixed_zero,
+            cr0_fixed_one,
+            cr4_fixed_zero,
+            cr4_fixed_one,
+        }
+    }
+
+    pub const fn validate(self) -> Result<(), VmxError> {
+        const FEATURE_LOCK: u64 = 1;
+        const VMX_OUTSIDE_SMX: u64 = 1 << 2;
+        const CR4_VMXE: u64 = 1 << 13;
+        if self.feature_control & (FEATURE_LOCK | VMX_OUTSIDE_SMX) != FEATURE_LOCK | VMX_OUTSIDE_SMX
+        {
+            return Err(VmxError::Unsupported);
+        }
+        if self.cr4 & CR4_VMXE == 0
+            || (self.cr0 | self.cr0_fixed_zero) != self.cr0
+            || self.cr0 & !self.cr0_fixed_one != 0
+            || (self.cr4 | self.cr4_fixed_zero) != self.cr4
+            || self.cr4 & !self.cr4_fixed_one != 0
+        {
+            return Err(VmxError::InvalidControl);
+        }
+        Ok(())
     }
 }
 
@@ -520,6 +595,34 @@ mod tests {
         assert_eq!(
             VmxCapabilities::new(1, 4096, 6, true, true, false),
             Err(VmxError::MissingInvept)
+        );
+    }
+
+    #[test]
+    fn raw_msr_capabilities_are_parsed_without_caller_claims() {
+        let basic = 7u64 | (4096u64 << 32) | (6u64 << 50);
+        let secondary = ((1u64 << 1) | (1u64 << 7)) << 32;
+        let ept_vpid = (1u64 << 20) | (1u64 << 25);
+        let capabilities = VmxCapabilities::from_msrs(basic, secondary, ept_vpid).unwrap();
+        assert_eq!(capabilities.revision_id(), 7);
+        assert!(capabilities.has_required_isolation());
+        assert_eq!(
+            VmxCapabilities::from_msrs(basic, secondary, 1 << 20),
+            Err(VmxError::MissingInvept)
+        );
+    }
+
+    #[test]
+    fn prerequisites_require_locked_policy_vmxe_and_fixed_bits() {
+        let valid = VmxPrerequisites::new(5, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX);
+        assert_eq!(valid.validate(), Ok(()));
+        assert_eq!(
+            VmxPrerequisites::new(4, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX).validate(),
+            Err(VmxError::Unsupported)
+        );
+        assert_eq!(
+            VmxPrerequisites::new(5, 0x20, 1 << 13, 0x21, u64::MAX, 0, u64::MAX).validate(),
+            Err(VmxError::InvalidControl)
         );
     }
 
