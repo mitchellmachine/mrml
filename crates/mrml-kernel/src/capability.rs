@@ -40,7 +40,10 @@ impl Capability {
         ((self.generation as u64) << 32) | self.slot as u64
     }
 
-    pub(crate) const fn from_token(token: u64) -> Self {
+    /// Reconstructs an untrusted opaque handle received over a syscall or
+    /// service boundary. This grants no authority; every use must still pass
+    /// exact-generation lookup and rights checks in a [`CapabilitySpace`].
+    pub const fn from_token(token: u64) -> Self {
         Self {
             slot: token as u32,
             generation: (token >> 32) as u32,

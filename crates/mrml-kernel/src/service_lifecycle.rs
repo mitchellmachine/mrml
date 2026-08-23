@@ -16,6 +16,16 @@ impl ServiceId {
     pub const fn token(self) -> u64 {
         ((self.generation as u64) << 32) | self.slot as u64
     }
+
+    /// Reconstructs an untrusted opaque service handle. Callers gain no
+    /// authority until the supervisor validates its generation and the
+    /// operation's independently supplied capability.
+    pub const fn from_token(token: u64) -> Self {
+        Self {
+            slot: token as u32,
+            generation: (token >> 32) as u32,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,6 +233,27 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
 
     pub fn state(&self, service: ServiceId) -> Result<ServiceState, ServiceError> {
         Ok(self.slot(service)?.state)
+    }
+
+    /// Returns lifecycle state only when the caller holds exact READ authority
+    /// for this service object. Public supervision protocols must use this
+    /// path rather than treating a service token as introspection authority.
+    pub fn state_authorized<const MANAGEMENT_CAPS: usize>(
+        &self,
+        service: ServiceId,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        authority: Capability,
+    ) -> Result<ServiceState, ServiceError> {
+        let entry = self.slot(service)?;
+        let object = management
+            .authorize(authority, crate::Rights::READ)
+            .map_err(ServiceError::Unauthorized)?;
+        if object != entry.object {
+            return Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        Ok(entry.state)
     }
 
     pub fn task(&self, service: ServiceId) -> Result<Option<TaskId>, ServiceError> {
@@ -1020,5 +1051,41 @@ mod tests {
         );
         assert!(runtime.context(task).is_ok());
         assert_eq!(runtime.current(), Some(task));
+    }
+
+    #[test]
+    fn public_state_query_requires_exact_read_authority() {
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let object = ObjectId(0x7a);
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let mut management = CapabilitySpace::<3>::new();
+        let read = management.insert(object, Rights::READ).unwrap();
+        let wrong = management.insert(ObjectId(0x7b), Rights::READ).unwrap();
+        let control_only = management.insert(object, Rights::CONTROL).unwrap();
+        assert_eq!(
+            supervisor.state_authorized(service, &management, read),
+            Ok(ServiceState::Running)
+        );
+        assert_eq!(
+            supervisor.state_authorized(service, &management, wrong),
+            Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        assert_eq!(
+            supervisor.state_authorized(service, &management, control_only),
+            Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        management.revoke(read).unwrap();
+        assert_eq!(
+            supervisor.state_authorized(service, &management, read),
+            Err(ServiceError::Unauthorized(CapabilityError::Invalid))
+        );
     }
 }

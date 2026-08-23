@@ -2584,6 +2584,38 @@ Platform-backed service page
 erasure/reprovisioning and one bounded restart are complete for the hosted
 WHP/KVM proof.
 
+The first Phase 2 system-service foundation now lives outside the privileged
+kernel in `mrml-config`. It stores a fixed schema and fixed-capacity values,
+rejects zero/duplicate setting identities and duplicate authority objects, and
+supports Boolean, bounded unsigned, and bounded byte values. A commit requires
+exact CONTROL authority for the configuration root plus exact WRITE authority
+for every schema-bound setting object. It preflights the complete transaction,
+including duplicate settings, current revision, value constraints, capability
+generations, revision overflow, and audit-sequence overflow before the first
+write. Reads independently require exact READ authority. Bounded audit storage
+uses monotonic sequence numbers and reports the precise oldest retained event
+rather than silently hiding overwrite gaps. Secrets are not a configuration
+value class.
+
+The version-1 configuration protocol has strict fixed headers and at most four
+inline updates. It binds nonzero request identity, expected revision, opaque
+capability tokens, setting identity, canonical value kind/length/tail bytes,
+and exact encoded length; unknown versions, operations, nonzero reserved bytes,
+truncation, and hidden tail data fail closed. A separate fixed supervision
+protocol binds request identity, opaque generational `ServiceId`, capability
+token, operation, and restart time. Reconstructing either token grants no
+authority. `ServiceSupervisor::state_authorized` now requires exact READ
+authority for the service object, while restart continues to require exact
+CONTROL authority and all existing cleanup, backoff, and fresh-context gates.
+Windows gnullvm tests cover eight configuration/protocol cases and the kernel's
+authorized introspection case. This is **PARTIALLY IMPLEMENTED** Phase 2
+foundation: it has not yet run as a signed CPL3 service, admitted a signed
+schema, or persisted/exported state through native storage.
+
+Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,
+optimistic transactional revision checks, bounded audit rings, and capability
+authorization.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

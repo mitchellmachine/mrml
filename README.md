@@ -225,6 +225,8 @@ remain unfinished.
 
 - `mrml-kernel`, `mrml-kernel-image`, `mrml-uefi`, `mrml-service-image`:
   microkernel, boot, and isolated-service execution.
+- `mrml-config`: fixed-capacity typed configuration state and versioned
+  configuration/supervision service protocols.
 - `mrml-kvm`, `mrml-kvm-run`, `mrml-whp`, `mrml-whp-run`: Linux and Windows
   virtualization backends and signed probes.
 - `mrml-runtime`, `mrml-tensor`, `mrml-model`, `mrml-tokenizer`: inference and

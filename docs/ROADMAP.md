@@ -127,6 +127,16 @@ authority; unrelated domains continue.
 ## Phase 2 — Minimal userspace system
 
 1. Implement the policy/configuration service and service supervision protocol.
+   **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed
+   schema, exact-object capability checks for reads and every transaction
+   update, optimistic revision binding, atomic bounded commits, monotonic audit
+   sequencing with explicit overwrite gaps, and strict version-1
+   configuration/supervision request and response codecs. Kernel service-state
+   introspection now requires exact READ authority rather than a service token.
+   The next gate is an authenticated CPL3 service image that dispatches this
+   protocol over kernel IPC and composes authorized supervision requests with
+   the existing cleanup/restart mechanism. Signed schema admission and
+   storage-backed export/recovery follow before this item is complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
 3. Implement extent mapping, checksummed COW metadata, directory operations,

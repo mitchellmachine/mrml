@@ -298,6 +298,22 @@ protocol, cryptographic construction, or optimization.
 Patent review: `NOT_TRIGGERED` — conventional scheduler wakeup and typed
 lifecycle verification.
 
+## 2026-08-23 — typed configuration and supervision protocol foundation
+
+MRML source: `crates/mrml-config/src/lib.rs` and
+`crates/mrml-kernel/src/{capability,service_lifecycle}.rs`.
+
+The service foundation applies fixed schemas, ordinary optimistic transaction
+revision checks, exact capability authorization, a bounded overwrite-detecting
+audit ring, and canonical fixed-record request/response parsing. Supervision
+messages carry opaque generational handles whose authority is independently
+checked. These are conventional database, capability, and protocol-validation
+techniques; they introduce no novel algorithm, device protocol, codec,
+cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional transactional configuration and
+service-control message handling.
+
 ## 2026-08-23 — lazy tuple-valued compiler control flow
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.
@@ -320,3 +336,15 @@ expression sequencing and aggregate projection; it introduces no novel
 algorithm, ABI, protocol, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary expression sequencing.
+
+## 2026-08-23 — bounded mutable tuple places
+
+MRML source: `crates/mrml-rustc/src/parser.rs` and
+`crates/mrml-rustc/src/codegen.rs`.
+
+Numeric fields of mutable bounded scalar-tuple locals can now be assigned in
+their existing fixed stack slots. This reuses conventional place parsing,
+scalar compound assignment, and aggregate layout; it introduces no novel
+algorithm, ABI, protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary aggregate-place assignment.

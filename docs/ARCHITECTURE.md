@@ -342,9 +342,14 @@ or grant for a duration. Consent UI remains outside the kernel and must be
 difficult for untrusted applications to spoof. Temporary grants are revoked on
 exit, expiry, policy change, or explicit action.
 
-The configuration service is planned as typed, schema-validated,
-transactional, capability-controlled, versioned, auditable, exportable, and
-recoverable—not a clone of the Windows Registry. Secrets remain separate.
+**PARTIALLY IMPLEMENTED:** the configuration-service foundation is typed,
+schema-validated, transactional, capability-controlled, versioned, and
+bounded-auditable. Its fixed wire protocol also carries opaque generational
+service and capability handles for supervision requests; names and numeric
+setting IDs never authorize. CPL3 service execution, signed schema admission,
+persistent export/import, storage-backed recovery, and the complete
+supervision adapter remain planned. It is not a clone of the Windows Registry,
+and secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.
