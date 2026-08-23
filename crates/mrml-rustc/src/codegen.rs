@@ -5321,6 +5321,15 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.emit_binary(crate::BinaryOperator::Multiply)?;
                         self.emit(&[0x59])?;
                     }
+                    IntegerPowerMode::Strict => {
+                        self.emit(&[0x51])?;
+                        let previous_overflow_checks = self.overflow_checks;
+                        self.overflow_checks = true;
+                        let result = self.emit_binary(crate::BinaryOperator::Multiply);
+                        self.overflow_checks = previous_overflow_checks;
+                        result?;
+                        self.emit(&[0x59])?;
+                    }
                     IntegerPowerMode::Wrapping => {
                         self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
                         self.emit_normalize()?;
@@ -5336,6 +5345,12 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     self.emit(&[0x50, 0x48, 0x89, 0xc8])?;
                     if mode == IntegerPowerMode::Saturating {
                         self.emit_saturating_multiplication()?;
+                    } else if mode == IntegerPowerMode::Strict {
+                        let previous_overflow_checks = self.overflow_checks;
+                        self.overflow_checks = true;
+                        let result = self.emit_binary(crate::BinaryOperator::Multiply);
+                        self.overflow_checks = previous_overflow_checks;
+                        result?;
                     } else {
                         self.emit_binary(crate::BinaryOperator::Multiply)?;
                     }
@@ -12690,6 +12705,52 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn checks_strict_primitive_integer_powers() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, exponent: u32) -> u8 { input.strict_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, exponent: u32) -> i16 { input.strict_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, exponent: u32) -> u64 { input.strict_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, exponent: u32) -> i64 { input.strict_pow(exponent) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 2048, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, exponent: u16) -> u8 { input.strict_pow(exponent) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, exponent: u32) -> bool { input.strict_pow(exponent) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 2048, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

@@ -1927,6 +1927,27 @@ fn rustc_strict_shifts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_strict_powers_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, exponent: u32) -> u8 { input.strict_pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, exponent: u32) -> i16 { input.strict_pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, exponent: u32) -> u64 { input.strict_pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, exponent: u32) -> i64 { input.strict_pow(exponent) }",
+        "const VALUE: u8 = 42u8.strict_pow(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-2i16).strict_pow(5); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u64 = 7u64.strict_pow(0); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_euclidean_integer_division_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",

@@ -534,6 +534,7 @@ pub enum IntegerPairTransform {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IntegerPowerMode {
     Checked,
+    Strict,
     Wrapping,
     Saturating,
 }
@@ -3919,6 +3920,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "strict_rem_euclid"
                         | "strict_shl"
                         | "strict_shr"
+                        | "strict_pow"
                         | "saturating_add"
                         | "saturating_sub"
                         | "saturating_mul"
@@ -4015,6 +4017,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "strict_rem_euclid"
                     | "strict_shl"
                     | "strict_shr"
+                    | "strict_pow"
                     | "saturating_add"
                     | "saturating_sub"
                     | "saturating_mul"
@@ -4188,18 +4191,21 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     unbounded: method.text.starts_with("unbounded_"),
                     strict: method.text.starts_with("strict_"),
                 },
-                "pow" | "wrapping_pow" | "saturating_pow" => ExprKind::IntegerWrappingPower {
-                    base,
-                    exponent: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    mode: match method.text {
-                        "pow" => IntegerPowerMode::Checked,
-                        "wrapping_pow" => IntegerPowerMode::Wrapping,
-                        "saturating_pow" => IntegerPowerMode::Saturating,
-                        _ => unreachable!(),
-                    },
-                },
+                "pow" | "strict_pow" | "wrapping_pow" | "saturating_pow" => {
+                    ExprKind::IntegerWrappingPower {
+                        base,
+                        exponent: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        mode: match method.text {
+                            "pow" => IntegerPowerMode::Checked,
+                            "strict_pow" => IntegerPowerMode::Strict,
+                            "wrapping_pow" => IntegerPowerMode::Wrapping,
+                            "saturating_pow" => IntegerPowerMode::Saturating,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
                 "ilog" | "ilog2" | "ilog10" => ExprKind::IntegerLogarithm {
                     base,
                     radix: if method.text == "ilog" {

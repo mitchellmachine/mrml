@@ -3807,8 +3807,10 @@ fn integer_power_bits(
     while exponent != 0 {
         if exponent & 1 != 0 {
             result = match mode {
-                IntegerPowerMode::Checked => checked_integer_multiply(result, base, bits, signed)
-                    .ok_or(ConstEvalError::Overflow)?,
+                IntegerPowerMode::Checked | IntegerPowerMode::Strict => {
+                    checked_integer_multiply(result, base, bits, signed)
+                        .ok_or(ConstEvalError::Overflow)?
+                }
                 IntegerPowerMode::Wrapping => result.wrapping_mul(base) & mask,
                 IntegerPowerMode::Saturating => saturating_integer_arithmetic(
                     result,
@@ -3824,8 +3826,10 @@ fn integer_power_bits(
             break;
         }
         base = match mode {
-            IntegerPowerMode::Checked => checked_integer_multiply(base, base, bits, signed)
-                .ok_or(ConstEvalError::Overflow)?,
+            IntegerPowerMode::Checked | IntegerPowerMode::Strict => {
+                checked_integer_multiply(base, base, bits, signed)
+                    .ok_or(ConstEvalError::Overflow)?
+            }
             IntegerPowerMode::Wrapping => base.wrapping_mul(base) & mask,
             IntegerPowerMode::Saturating => {
                 saturating_integer_arithmetic(base, base, bits, signed, BinaryOperator::Multiply)
