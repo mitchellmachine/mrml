@@ -3098,6 +3098,7 @@ fn runtime_expression_type_with_locals<
             operator,
             euclidean,
             euclidean_wrapping: _,
+            strict,
         } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -3118,6 +3119,7 @@ fn runtime_expression_type_with_locals<
             match base_type {
                 RuntimeExpressionType::RawPointer { .. }
                     if !euclidean
+                        && !strict
                         && matches!(
                             operator,
                             crate::BinaryOperator::Add | crate::BinaryOperator::Subtract
@@ -5077,6 +5079,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 operator,
                 euclidean,
                 euclidean_wrapping,
+                strict,
             } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
@@ -5121,7 +5124,13 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     right?;
                     self.evaluation_depth -= 1;
                     self.emit(&[0x59])?;
-                    let result = if euclidean {
+                    let result = if strict {
+                        let previous_overflow_checks = self.overflow_checks;
+                        self.overflow_checks = true;
+                        let result = self.emit_binary(operator);
+                        self.overflow_checks = previous_overflow_checks;
+                        result
+                    } else if euclidean {
                         self.emit_euclidean_division(operator, euclidean_wrapping)
                     } else if matches!(
                         operator,
@@ -12493,6 +12502,55 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn checks_strict_primitive_integer_arithmetic() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.strict_add(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i16, right: i16) -> i16 { left.strict_sub(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u32, right: u32) -> u32 { left.strict_mul(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: i64) -> i64 { left.strict_add(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: u64) -> u64 { left.strict_sub(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.strict_mul(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 1024, 4, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.strict_add(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.strict_mul(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

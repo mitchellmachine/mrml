@@ -394,6 +394,7 @@ pub enum ExprKind<'source> {
         operator: BinaryOperator,
         euclidean: bool,
         euclidean_wrapping: bool,
+        strict: bool,
     },
     SaturatingArithmetic {
         base: ExprId,
@@ -3906,6 +3907,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "next_power_of_two"
                         | "wrapping_next_power_of_two"
                         | "isqrt"
+                        | "strict_add"
+                        | "strict_sub"
+                        | "strict_mul"
                         | "saturating_add"
                         | "saturating_sub"
                         | "saturating_mul"
@@ -3993,6 +3997,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_mul"
                     | "wrapping_div"
                     | "wrapping_rem"
+                    | "strict_add"
+                    | "strict_sub"
+                    | "strict_mul"
                     | "saturating_add"
                     | "saturating_sub"
                     | "saturating_mul"
@@ -4094,22 +4101,25 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     positive: method.text == "is_positive",
                 },
                 "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "wrapping_div"
-                | "wrapping_rem" => ExprKind::WrappingArithmetic {
-                    base,
-                    argument: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    operator: match method.text {
-                        "wrapping_add" => BinaryOperator::Add,
-                        "wrapping_sub" => BinaryOperator::Subtract,
-                        "wrapping_mul" => BinaryOperator::Multiply,
-                        "wrapping_div" => BinaryOperator::Divide,
-                        "wrapping_rem" => BinaryOperator::Remainder,
-                        _ => unreachable!(),
-                    },
-                    euclidean: false,
-                    euclidean_wrapping: false,
-                },
+                | "wrapping_rem" | "strict_add" | "strict_sub" | "strict_mul" => {
+                    ExprKind::WrappingArithmetic {
+                        base,
+                        argument: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        operator: match method.text {
+                            "wrapping_add" | "strict_add" => BinaryOperator::Add,
+                            "wrapping_sub" | "strict_sub" => BinaryOperator::Subtract,
+                            "wrapping_mul" | "strict_mul" => BinaryOperator::Multiply,
+                            "wrapping_div" => BinaryOperator::Divide,
+                            "wrapping_rem" => BinaryOperator::Remainder,
+                            _ => unreachable!(),
+                        },
+                        euclidean: false,
+                        euclidean_wrapping: false,
+                        strict: method.text.starts_with("strict_"),
+                    }
+                }
                 "div_euclid" | "rem_euclid" | "wrapping_div_euclid" | "wrapping_rem_euclid" => {
                     ExprKind::WrappingArithmetic {
                         base,
@@ -4123,6 +4133,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         },
                         euclidean: true,
                         euclidean_wrapping: method.text.starts_with("wrapping_"),
+                        strict: false,
                     }
                 }
                 "saturating_add" | "saturating_sub" | "saturating_mul" | "saturating_div" => {

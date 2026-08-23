@@ -1843,6 +1843,29 @@ fn rustc_wrapping_integer_methods_reach_native_objects() {
 }
 
 #[test]
+fn rustc_strict_arithmetic_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.strict_add(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i16, right: i16) -> i16 { left.strict_sub(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u32, right: u32) -> u32 { left.strict_mul(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: i64) -> i64 { left.strict_add(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u64, right: u64) -> u64 { left.strict_sub(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: i8) -> i8 { left.strict_mul(right) }",
+        "const VALUE: u8 = 40u8.strict_add(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = 40i16.strict_sub(-2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u32 = 6u32.strict_mul(7); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_euclidean_integer_division_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",
