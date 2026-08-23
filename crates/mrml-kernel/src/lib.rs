@@ -65,8 +65,9 @@ pub use policy::{
     VmName, VmPolicy,
 };
 pub use protected_channel::{
-    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectedChannelError, VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthorityOperation,
+    AUTHORITY_RECEIPT_BYTES, AuthenticatedProtectionAdmission, AuthorityReceipt,
+    LAUNCH_REQUEST_BYTES, LaunchRequest, ProtectedChannelError, VBS_AUTHORITY_CONTEXT_BYTES,
+    VbsAuthorityContext, VbsAuthorityOperation,
 };
 pub use protected_execution::{
     PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend, ProtectionClaims,

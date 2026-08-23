@@ -237,6 +237,8 @@ pub struct ProtectionAdmission {
     evidence_source: ProtectionEvidenceSource,
     backend: ProtectionBackend,
     claims: ProtectionClaims,
+    debug_allowed: bool,
+    security_version: u64,
     measurement: [u8; 64],
     nonce: [u8; 32],
     sequence: u64,
@@ -261,6 +263,14 @@ impl ProtectionAdmission {
         self.claims
     }
 
+    pub const fn debug_allowed(self) -> bool {
+        self.debug_allowed
+    }
+
+    pub const fn security_version(self) -> u64 {
+        self.security_version
+    }
+
     pub const fn measurement(self) -> [u8; 64] {
         self.measurement
     }
@@ -271,14 +281,6 @@ impl ProtectionAdmission {
 
     pub const fn sequence(self) -> u64 {
         self.sequence
-    }
-
-    pub const fn permits_secret_release(self) -> bool {
-        matches!(
-            self.evidence_source,
-            ProtectionEvidenceSource::AuthenticatedAuthorityReceipt
-        ) && self.claims.contains(ProtectionClaims::SEALED_KEYS)
-            && self.claims.contains(ProtectionClaims::MEASURED)
     }
 }
 
@@ -357,6 +359,8 @@ impl ProtectionSession {
             evidence_source,
             backend: report.backend,
             claims: report.claims,
+            debug_allowed: report.debug_allowed,
+            security_version: report.security_version,
             measurement: report.measurement,
             nonce: report.nonce,
             sequence: report.sequence,
@@ -440,7 +444,8 @@ mod tests {
             admitted.evidence_source(),
             ProtectionEvidenceSource::SelfAssertedReport
         );
-        assert!(!admitted.permits_secret_release());
+        assert!(!admitted.debug_allowed());
+        assert_eq!(admitted.security_version(), 7);
         assert_eq!(session.admit(vbs(4), policy), Err(ProtectionError::Replay));
 
         let debug = ProtectionReport::new(
@@ -479,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn unprotected_mode_never_releases_secrets() {
+    fn unprotected_admission_records_absence_of_security_properties() {
         let report = ProtectionReport::new(
             ProtectionBackend::Unprotected,
             ProtectionClaims::NONE,
@@ -503,7 +508,13 @@ mod tests {
                 ),
             )
             .unwrap();
-        assert!(!admission.permits_secret_release());
+        assert_eq!(
+            admission.evidence_source(),
+            ProtectionEvidenceSource::SelfAssertedReport
+        );
+        assert_eq!(admission.claims(), ProtectionClaims::NONE);
+        assert!(!admission.debug_allowed());
+        assert_eq!(admission.security_version(), 0);
     }
 
     #[test]

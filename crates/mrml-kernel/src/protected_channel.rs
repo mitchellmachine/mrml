@@ -247,6 +247,72 @@ pub struct AuthorityReceipt {
     report: ProtectionReport,
 }
 
+/// Admission derived from a receipt authenticated by the configured launch
+/// authority. This proves only which authority approved the exact request; it
+/// does not, by itself, prove hardware-backed isolation or host integrity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedProtectionAdmission {
+    admission: ProtectionAdmission,
+    request_digest: [u8; 64],
+    policy_measurement: [u8; 64],
+}
+
+impl AuthenticatedProtectionAdmission {
+    pub const fn evidence_source(self) -> crate::ProtectionEvidenceSource {
+        self.admission.evidence_source()
+    }
+
+    pub const fn backend(self) -> crate::ProtectionBackend {
+        self.admission.backend()
+    }
+
+    pub const fn claims(self) -> crate::ProtectionClaims {
+        self.admission.claims()
+    }
+
+    pub const fn debug_allowed(self) -> bool {
+        self.admission.debug_allowed()
+    }
+
+    pub const fn security_version(self) -> u64 {
+        self.admission.security_version()
+    }
+
+    pub const fn measurement(self) -> [u8; 64] {
+        self.admission.measurement()
+    }
+
+    pub const fn nonce(self) -> [u8; 32] {
+        self.admission.nonce()
+    }
+
+    pub const fn sequence(self) -> u64 {
+        self.admission.sequence()
+    }
+
+    pub const fn request_digest(self) -> [u8; 64] {
+        self.request_digest
+    }
+
+    pub const fn policy_measurement(self) -> [u8; 64] {
+        self.policy_measurement
+    }
+
+    /// Secret release remains fail-closed unless the authenticated decision is
+    /// non-debug and explicitly claims both measurement and sealed-key support.
+    pub const fn permits_secret_release(self) -> bool {
+        !self.admission.debug_allowed()
+            && self
+                .admission
+                .claims()
+                .contains(crate::ProtectionClaims::SEALED_KEYS)
+            && self
+                .admission
+                .claims()
+                .contains(crate::ProtectionClaims::MEASURED)
+    }
+}
+
 impl AuthorityReceipt {
     pub fn seal(
         key: &[u8; 32],
@@ -313,16 +379,21 @@ impl AuthorityReceipt {
         expected_policy_measurement: [u8; 64],
         session: &mut ProtectionSession,
         policy: ProtectionPolicy,
-    ) -> Result<ProtectionAdmission, ProtectedChannelError> {
+    ) -> Result<AuthenticatedProtectionAdmission, ProtectedChannelError> {
         let receipt = Self::verify(key, request, input)?;
         if expected_policy_measurement == [0; 64]
             || request.policy_measurement != expected_policy_measurement
         {
             return Err(ProtectedChannelError::PolicyMeasurementMismatch);
         }
-        session
+        let admission = session
             .admit_authority_receipt(receipt.report, policy)
-            .map_err(ProtectedChannelError::Report)
+            .map_err(ProtectedChannelError::Report)?;
+        Ok(AuthenticatedProtectionAdmission {
+            admission,
+            request_digest: receipt.request_digest,
+            policy_measurement: expected_policy_measurement,
+        })
     }
 
     pub const fn report(self) -> ProtectionReport {
@@ -483,6 +554,14 @@ mod tests {
             admitted.evidence_source(),
             crate::ProtectionEvidenceSource::AuthenticatedAuthorityReceipt
         );
+        assert_eq!(
+            admitted.request_digest(),
+            Sha3_512::digest(&request(4).encode())
+        );
+        assert_eq!(admitted.policy_measurement(), POLICY);
+        assert!(!admitted.debug_allowed());
+        assert_eq!(admitted.security_version(), 1);
+        assert!(!admitted.permits_secret_release());
     }
 
     #[test]
@@ -520,6 +599,40 @@ mod tests {
             .sequence(),
             4
         );
+    }
+
+    #[test]
+    fn authenticated_debug_admission_cannot_release_secrets() {
+        let debug_report = ProtectionReport::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionBackend::VbsEnclave.maximum_claims(),
+            true,
+            1,
+            4,
+            IMAGE,
+            NONCE,
+        )
+        .unwrap();
+        let encoded = AuthorityReceipt::seal(&KEY, request(4), debug_report).unwrap();
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            true,
+            1,
+            IMAGE,
+        );
+        let mut session = ProtectionSession::new(NONCE).unwrap();
+        let admitted = AuthorityReceipt::verify_and_admit(
+            &KEY,
+            request(4),
+            &encoded,
+            POLICY,
+            &mut session,
+            policy,
+        )
+        .unwrap();
+        assert!(admitted.debug_allowed());
+        assert!(!admitted.permits_secret_release());
     }
 
     #[test]
