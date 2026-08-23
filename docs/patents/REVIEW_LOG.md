@@ -564,6 +564,19 @@ layout optimization, cryptographic construction, or recovery technique.
 Patent review: `NOT_TRIGGERED` — conventional canonical serialization, hashing,
 and defensive recovery validation.
 
+## 2026-08-23 — scoped conditional compiler fact identities
+
+MRML source: `crates/mrml-rustc`.
+
+The bounded compiler prepass uses conventional lexical-scope copies and a
+monotonic local-identity counter while visiting mutually exclusive conditional
+branches in source emission order. This is ordinary compiler symbol-table and
+definition bookkeeping and introduces no novel analysis algorithm, parser,
+object format, ABI optimization, or persistent representation.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler scope and definition
+bookkeeping.
+
 ## 2026-08-23 — capability-native storage identity and metadata foundation
 
 MRML source: `crates/mrml-storage`.
