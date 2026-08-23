@@ -2572,12 +2572,12 @@ available to the mapping closure.
 
 Runtime expressions can call a safe, non-const Rust-ABI function declared
 before or after the selected export, with up to four built-in integer, Boolean,
-character, unit, thin scalar raw-pointer, thin scalar-reference, or thin
-fixed-array-reference parameters and a result from the same families. Pointer
-and reference signatures preserve their target, fixed-array element/count, and
-const/mutability distinctions; mutable values may coerce or reborrow as
-immutable values, while the reverse direction and mismatched targets fail type
-checking.
+character, unit, by-value fixed-array, thin scalar raw-pointer, thin
+scalar-reference, or thin fixed-array-reference parameters and a result from
+the same families. Pointer, reference, and array signatures preserve their
+target or element, fixed count, and const/mutability distinctions; mutable
+values may coerce or reborrow as immutable values, while the reverse direction
+and mismatched targets fail type checking.
 Arguments execute eagerly in source order, are normalized to their declared
 types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
@@ -2643,7 +2643,8 @@ function, so the object still contains one symbol and no call relocations. The
 bounded active-call-name stack rejects direct and mutual recursion before
 expanding a cycle; acyclic forward and backward chains remain declaration-order
 independent. Caller-local capture, unsafe or foreign-ABI callees, deeper loop
-nesting, by-value aggregate helper signatures, and recursion fail closed. An
+nesting, aggregate helper signatures other than fixed arrays, and recursion fail
+closed. An
 original nested statement-body probe produced a 516-byte COFF object and a
 904-byte ELF64 object. A separate multi-return probe produced 334-byte COFF and
 728-byte ELF64 objects. A conditional-action probe produced 402-byte COFF and
@@ -2735,6 +2736,17 @@ The slice path selected observably different full and one-element subslices;
 the same chain also exercised a valueless unit break and helper-local cleanup.
 Object-emission tests additionally cover character references and Boolean
 slices. A mixed Boolean/integer break source fails type checking.
+A by-value fixed-array helper chain used separate wide and packed probes. The
+three-word `[u64; 3]` path produced an 840-byte COFF object and a 1232-byte
+ELF64 object; the packed `[u16; 4]` path produced 1698-byte COFF and 2088-byte
+ELF64 objects. Pinned-nightly callers matched 84 independent cases on Windows
+and Arch Linux, covering nested helper calls, normal and explicit-early returns,
+observably reversed arrays, runtime indexing, zero and integer-width boundary
+values, packed local layout, and return-frame removal beneath arrays larger
+than two machine words. Object-emission tests additionally cover Boolean,
+character, and unit arrays. Separate adversarial sources reject element and
+count mismatches. This is fixed-array transport within inlined calls, not a
+general tuple, struct, enum, or public Rust aggregate ABI implementation.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

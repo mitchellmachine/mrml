@@ -188,6 +188,10 @@ pub enum ScalarType {
     Bool,
     Char,
     Unit,
+    Array {
+        element: CallArrayElement,
+        count: usize,
+    },
     RawPointer {
         pointee: PointerPointee,
         mutable: bool,
@@ -270,6 +274,21 @@ impl ScalarType {
             _ => {
                 if let Some(integer) = IntegerType::from_name(name) {
                     return Some(Self::Integer(integer));
+                }
+                if let Some(body) = name
+                    .trim()
+                    .strip_prefix('[')
+                    .and_then(|body| body.strip_suffix(']'))
+                {
+                    let (element, count) = body.split_once(';')?;
+                    let count = count.trim().parse::<usize>().ok()?;
+                    if count > MAX_ARRAY_ELEMENTS {
+                        return None;
+                    }
+                    return Some(Self::Array {
+                        element: CallArrayElement::from_name(element)?,
+                        count,
+                    });
                 }
                 if let Some(target) = name.trim().strip_prefix('&') {
                     let target = target.trim();
@@ -1178,6 +1197,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     ScalarType::Integer(_)
                     | ScalarType::Char
                     | ScalarType::Unit
+                    | ScalarType::Array { .. }
                     | ScalarType::RawPointer { .. }
                     | ScalarType::Reference { .. }
                     | ScalarType::ArrayReference { .. }
@@ -1527,6 +1547,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     }
                     ScalarType::Unit => Err(ConstEvalError::InvalidCast),
                     ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
+                    ScalarType::Array { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Reference { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::ArrayReference { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::SliceReference { .. } | ScalarType::StrReference { .. } => {

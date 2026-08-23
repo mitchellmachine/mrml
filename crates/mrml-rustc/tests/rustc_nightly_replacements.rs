@@ -3498,6 +3498,11 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: &mut char, first: bool) -> char { *choose(value, first) } fn choose(value: &mut char, first: bool) -> &mut char { loop { if first { break value; } break value; } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[bool], first: bool) -> usize { let returned: &[bool] = choose(values, first); returned.len() } fn choose(values: &[bool], first: bool) -> &[bool] { loop { if first { break values; } break values; } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { finish() } fn finish() { loop { break; } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: u16, second: u16, third: u16, early: bool) -> u16 { let returned: [u16; 3] = choose([first, second, third], early); returned[0] + returned[1] + returned[2] } fn choose(values: [u16; 3], early: bool) -> [u16; 3] { if early { return identity(values); } identity(values) } fn identity(values: [u16; 3]) -> [u16; 3] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: bool, second: bool) -> bool { identity([first, second])[1] } fn identity(values: [bool; 2]) -> [bool; 2] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: char, second: char) -> char { identity([first, second])[1] } fn identity(values: [char; 2]) -> [char; 2] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { identity([(); 4])[3] } fn identity(values: [(); 4]) -> [(); 4] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: u64, second: u64, third: u64) -> u64 { let returned: [u64; 3] = identity([first, second, third]); returned[0] + returned[1] + returned[2] } fn identity(values: [u64; 3]) -> [u64; 3] { values }",
     ];
     for source in sources {
         assert_eq!(

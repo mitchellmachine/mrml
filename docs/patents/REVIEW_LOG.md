@@ -94,6 +94,21 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler parsing, control-flow
 lowering, and inline-frame cleanup within the existing Rust-subset compiler
 category.
 
+## 2026-08-23 — by-value fixed-array helper signatures
+
+MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+
+The compiler now carries existing fixed-array element and count information
+through bounded descriptors for inlined safe Rust-ABI helper calls. Arguments
+reuse the established array materialization and local packing paths. Returns
+move existing element slots across inline-frame cleanup without defining a new
+public ABI. The change adds no distinctive optimization, memory layout, or
+algorithm.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler type propagation, fixed-array
+value transport, and inline-frame cleanup within the existing Rust-subset
+compiler category.
+
 ## 2026-08-23 — native guest-mapping revocation ordering
 
 MRML source: `crates/mrml-kernel/src/vm.rs`,

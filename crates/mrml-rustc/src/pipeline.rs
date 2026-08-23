@@ -274,6 +274,19 @@ mod tests {
         )
     }
 
+    fn compile_wide(
+        source: &str,
+        name: &str,
+        format: ObjectFormat,
+    ) -> Result<ObjectFile<4096>, CompileError> {
+        compile_source_function::<4096, 2048, 8, 4, 8, 64>(
+            source,
+            name,
+            format,
+            TargetLayout::X86_64,
+        )
+    }
+
     #[test]
     fn compiles_source_to_both_native_object_formats() {
         let source = "const BASE: u64 = 40; #[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { BASE + 2 }";
@@ -503,6 +516,34 @@ mod tests {
 
         let wrong_value_loop_type = "fn choose(value: u16, flag: bool) -> u16 { loop { if flag { break value; } break false; } } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16, flag: bool) -> u16 { choose(value, flag) }";
         let error = compile(wrong_value_loop_type, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let array_value_parameter = "fn sum(values: [u16; 3]) -> u16 { values[0] + values[1] + values[2] } #[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, third: u16) -> u16 { sum([first, second, third]) }";
+        let result = compile_wide(array_value_parameter, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
+        let array_value_return = "fn choose(values: [u16; 3], early: bool) -> [u16; 3] { let copy: [u16; 3] = values; if early { return copy; } copy } #[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, third: u16, early: bool) -> u16 { let returned: [u16; 3] = choose([first, second, third], early); returned[0] + returned[1] + returned[2] }";
+        let result = compile_wide(array_value_return, "answer", ObjectFormat::Elf64);
+        assert!(result.is_ok(), "{result:?}");
+
+        let direct_array_value_index = "fn identity(values: [char; 2]) -> [char; 2] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(first: char, second: char) -> char { identity([first, second])[1] }";
+        let result = compile_wide(direct_array_value_index, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
+        let wrong_array_value_count = "fn identity(values: [u16; 3]) -> [u16; 3] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: [u16; 2]) -> u16 { identity(values)[0] }";
+        let error =
+            compile_wide(wrong_array_value_count, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_array_value_element = "fn identity(values: [bool; 2]) -> [bool; 2] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: [u16; 2]) -> bool { identity(values)[0] }";
+        let error =
+            compile_wide(wrong_array_value_element, "answer", ObjectFormat::Coff).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)

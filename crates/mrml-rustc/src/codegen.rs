@@ -1970,6 +1970,10 @@ fn runtime_type_is_fat_reference(ty: RuntimeExpressionType) -> bool {
     )
 }
 
+fn runtime_type_is_array(ty: RuntimeExpressionType) -> bool {
+    matches!(ty, RuntimeExpressionType::Array { .. })
+}
+
 fn runtime_local_stack_slots(ty: RuntimeExpressionType) -> usize {
     let RuntimeExpressionType::Array { element, count } = ty else {
         return runtime_type_stack_slots(ty);
@@ -2005,6 +2009,15 @@ fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
         crate::ScalarType::Bool => RuntimeExpressionType::Bool,
         crate::ScalarType::Char => RuntimeExpressionType::Char,
         crate::ScalarType::Unit => RuntimeExpressionType::Unit,
+        crate::ScalarType::Array { element, count } => RuntimeExpressionType::Array {
+            element: match element {
+                crate::CallArrayElement::Unit => RuntimeArrayElementType::Unit,
+                crate::CallArrayElement::Integer(ty) => RuntimeArrayElementType::Integer(Some(ty)),
+                crate::CallArrayElement::Bool => RuntimeArrayElementType::Bool,
+                crate::CallArrayElement::Char => RuntimeArrayElementType::Char,
+            },
+            count,
+        },
         crate::ScalarType::RawPointer { pointee, mutable } => RuntimeExpressionType::RawPointer {
             pointee: match pointee {
                 crate::PointerPointee::Integer(ty) => RuntimeArrayElementType::Integer(Some(ty)),
@@ -5655,6 +5668,11 @@ fn runtime_expression_type_with_locals<
                 {
                     Ok(operand_type)
                 }
+                crate::ScalarType::Array { .. }
+                    if operand_type == runtime_type_from_scalar(target) =>
+                {
+                    Ok(operand_type)
+                }
                 crate::ScalarType::SliceReference { .. }
                 | crate::ScalarType::StrReference { .. }
                     if operand_type == runtime_type_from_scalar(target) =>
@@ -6647,13 +6665,19 @@ impl<
             if let Some(width) = runtime_expression_width(expected) {
                 self.width = width;
             }
-            let stack_slots = runtime_type_stack_slots(expected);
-            if stack_slots == 2 {
+            let stack_slots = if let RuntimeExpressionType::Array { element, count } = expected {
+                self.emit_array_to_stack(caller_tree, argument, count)?;
+                let stack_slots = self.pack_temporary_array_for_local(element, count)?;
+                self.evaluation_depth -= stack_slots;
+                stack_slots
+            } else if runtime_type_is_fat_reference(expected) {
                 self.emit_slice_value_to_stack(caller_tree, argument, depth)?;
+                2
             } else {
                 self.emit_expression(caller_tree, argument, depth)?;
                 self.emit(&[0x50])?;
-            }
+                1
+            };
             self.width = previous_width;
             self.evaluation_depth += stack_slots;
             argument_slots = argument_slots
@@ -6666,7 +6690,7 @@ impl<
                 name: parameter.name,
                 ty,
                 mutable: false,
-                stack_slots: runtime_type_stack_slots(ty),
+                stack_slots: runtime_local_stack_slots(ty),
             });
             self.saved_locals += 1;
         }
@@ -6817,6 +6841,8 @@ impl<
             }
             if runtime_type_is_fat_reference(return_type) {
                 self.emit_inline_fat_value(&tree, tree.root(), depth)
+            } else if runtime_type_is_array(return_type) {
+                self.emit_inline_array_value(&tree, tree.root(), return_type, checkpoint)
             } else {
                 self.emit_expression(&tree, tree.root(), depth)
             }
@@ -6829,12 +6855,22 @@ impl<
             self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
         }
         if !tail_unreachable {
-            self.emit_scoped_local_cleanup(checkpoint)?;
+            if runtime_type_is_array(return_type) {
+                self.truncate_scoped_locals(checkpoint)?;
+            } else {
+                self.emit_scoped_local_cleanup(checkpoint)?;
+            }
         } else {
             self.truncate_scoped_locals(checkpoint)?;
         }
         for patch in return_patches[..return_count].iter().flatten().copied() {
             self.patch_forward_branch(patch)?;
+        }
+        if tail_unreachable
+            && return_count != 0
+            && let RuntimeExpressionType::Array { count, .. } = return_type
+        {
+            self.evaluation_depth += count;
         }
         self.width = previous_width;
         Ok(())
@@ -6867,6 +6903,14 @@ impl<
         }
         if runtime_type_is_fat_reference(expected_type) {
             self.emit_inline_fat_value(&tree, tree.root(), 0)?;
+        } else if runtime_type_is_array(expected_type) {
+            let RuntimeExpressionType::Array { count, .. } = expected_type else {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            };
+            self.emit_inline_array_value(&tree, tree.root(), expected_type, checkpoint)?;
+            let branch = self.emit_unconditional_forward_branch()?;
+            self.evaluation_depth -= count;
+            return Ok(branch);
         } else {
             self.emit_expression(&tree, tree.root(), 0)?;
         }
@@ -6890,6 +6934,35 @@ impl<
         self.emit(&[0x48, 0x89, 0xc2])?;
         self.emit_stack_cleanup_bytes(16)?;
         self.emit(&[0x48, 0x89, 0xc8])
+    }
+
+    fn emit_inline_array_value<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        root: crate::ExprId,
+        expected_type: RuntimeExpressionType,
+        checkpoint: usize,
+    ) -> Result<(), CodegenError> {
+        let RuntimeExpressionType::Array { count, .. } = expected_type else {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        };
+        self.emit_array_to_stack(tree, root, count)?;
+        let frame_slots = self.local_stack_slots_from(checkpoint)?;
+        if frame_slots != 0 {
+            for index in (0..count).rev() {
+                self.emit_stack_slot(index)?;
+                let destination = frame_slots
+                    .checked_add(index)
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                self.emit_store_stack_slot(destination)?;
+            }
+            self.emit_stack_cleanup_bytes(
+                frame_slots
+                    .checked_mul(8)
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+            )?;
+        }
+        Ok(())
     }
 
     fn emit_inline_conditional_return<const MAX_NODES: usize>(
@@ -10203,6 +10276,7 @@ impl<
                     }
                     crate::ScalarType::Char
                     | crate::ScalarType::Unit
+                    | crate::ScalarType::Array { .. }
                     | crate::ScalarType::RawPointer { .. }
                     | crate::ScalarType::Reference { .. }
                     | crate::ScalarType::ArrayReference { .. }
@@ -10505,6 +10579,30 @@ impl<
             .expression(id)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
         match expression.kind {
+            ExprKind::Call { .. } => {
+                let RuntimeExpressionType::Array { element, count } =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        id,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                self.emit_array_to_stack(tree, id, count)?;
+                self.emit_stack_slot(index)?;
+                self.emit_normalize_array_element(element)?;
+                self.evaluation_depth -= count;
+                self.emit_stack_cleanup_bytes(
+                    count
+                        .checked_mul(8)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                )
+            }
             ExprKind::DefaultValue => self.emit(&[0x31, 0xc0]),
             ExprKind::Array {
                 elements,
@@ -12661,6 +12759,27 @@ impl<
         let expression = tree
             .expression(root)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if matches!(expression.kind, ExprKind::Call { .. }) {
+            let RuntimeExpressionType::Array {
+                count: return_count,
+                ..
+            } = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                root,
+                0,
+            )
+            .map_err(|kind| self.error(kind))?
+            else {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            };
+            if return_count != count {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            return self.emit_expression(tree, root, 0);
+        }
         if let ExprKind::ArrayRepeat {
             element,
             count: repeat,
