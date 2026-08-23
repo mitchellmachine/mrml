@@ -2448,12 +2448,14 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
 
 fn preanalyze_runtime_assignment_reads<
     'source,
+    R: ConstantResolver,
     const MAX_PARAMETERS: usize,
     const MAX_EXPRESSION_NODES: usize,
 >(
     facts: &mut RuntimeBodyFacts<'source>,
     locals: &[Option<RuntimeLocal<'source>>],
     function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
     assignment: &crate::Assignment<'source>,
 ) -> Result<(), CodegenError> {
     let tree = assignment
@@ -2463,10 +2465,59 @@ fn preanalyze_runtime_assignment_reads<
             span: translate_span(assignment.value_span.start, error.span),
         })?;
 
-    fn recurse<'source, const MAX_PARAMETERS: usize, const MAX_EXPRESSION_NODES: usize>(
+    fn push_read<'source, const MAX_PARAMETERS: usize>(
         facts: &mut RuntimeBodyFacts<'source>,
         locals: &[Option<RuntimeLocal<'source>>],
         function: &Function<'source, MAX_PARAMETERS>,
+        place: RuntimeReadPlace<'source>,
+        assignment_span: Span,
+    ) -> Result<(), CodegenError> {
+        let resolved = locals
+            .iter()
+            .rev()
+            .flatten()
+            .find(|local| local.name == place.name)
+            .map(|local| (RuntimePlaceIdentity::Local(local.id), local.ty))
+            .or_else(|| {
+                function
+                    .parameters()
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .find(|(_, parameter)| parameter.name == place.name)
+                    .and_then(|(index, parameter)| {
+                        runtime_type_from_text(parameter.ty.text)
+                            .map(|ty| (RuntimePlaceIdentity::Parameter(index), ty))
+                    })
+            });
+        if let Some((base, ty)) = resolved {
+            facts
+                .push_assignment_read(RuntimePlaceAccessFact {
+                    base,
+                    projections: place.projections,
+                    ty,
+                    access: RuntimePlaceAccess::Read,
+                    span: place.span,
+                })
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: assignment_span,
+                })?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recurse<
+        'source,
+        R: ConstantResolver,
+        const MAX_PARAMETERS: usize,
+        const MAX_EXPRESSION_NODES: usize,
+    >(
+        facts: &mut RuntimeBodyFacts<'source>,
+        locals: &[Option<RuntimeLocal<'source>>],
+        function: &Function<'source, MAX_PARAMETERS>,
+        resolver: &R,
         tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
         id: crate::ExprId,
         depth: usize,
@@ -2482,54 +2533,96 @@ fn preanalyze_runtime_assignment_reads<
             kind: CodegenErrorKind::RuntimeExpressionUnsupported,
             span: assignment_span,
         })?;
-        if depth != 0 && matches!(expression.kind, ExprKind::Index { .. }) {
-            // Nested indexes have lowering-family-specific read shapes: reference
-            // indexes read the reference and index, while local arrays may
-            // materialize every element. Preserve emission-time facts until the
-            // prepass carries the typed dispatch needed to mirror those shapes.
-            return Ok(());
+        if let ExprKind::Index { base, index } = expression.kind {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: assignment_span,
+            })?;
+            match base_type {
+                RuntimeExpressionType::Reference { .. } => {
+                    recurse(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        base,
+                        depth + 1,
+                        assignment_span,
+                    )?;
+                    recurse(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        index,
+                        depth + 1,
+                        assignment_span,
+                    )?;
+                    return Ok(());
+                }
+                RuntimeExpressionType::Array { count, .. } => {
+                    if let Some(ExprKind::Identifier(name)) =
+                        tree.expression(base).map(|expression| expression.kind)
+                    {
+                        let base_span = tree
+                            .expression(base)
+                            .ok_or(CodegenError {
+                                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                span: assignment_span,
+                            })?
+                            .span;
+                        let place = RuntimeReadPlace {
+                            name,
+                            span: base_span,
+                            projections: RuntimePlaceProjections::single(
+                                RuntimePlaceProjection::Index,
+                            ),
+                        };
+                        let reads = if tree.evaluate_at(index, resolver).is_ok() {
+                            1
+                        } else {
+                            count
+                        };
+                        for _ in 0..reads {
+                            push_read(facts, locals, function, place, assignment_span)?;
+                        }
+                    }
+                    recurse(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        index,
+                        depth + 1,
+                        assignment_span,
+                    )?;
+                    return Ok(());
+                }
+                _ => {}
+            }
         }
         if let Some(place) = discover_runtime_read_place(tree, id).map_err(|kind| CodegenError {
             kind,
             span: assignment_span,
         })? {
-            let resolved = locals
-                .iter()
-                .rev()
-                .flatten()
-                .find(|local| local.name == place.name)
-                .map(|local| (RuntimePlaceIdentity::Local(local.id), local.ty))
-                .or_else(|| {
-                    function
-                        .parameters()
-                        .iter()
-                        .flatten()
-                        .enumerate()
-                        .find(|(_, parameter)| parameter.name == place.name)
-                        .and_then(|(index, parameter)| {
-                            runtime_type_from_text(parameter.ty.text)
-                                .map(|ty| (RuntimePlaceIdentity::Parameter(index), ty))
-                        })
-                });
-            if let Some((base, ty)) = resolved {
-                facts
-                    .push_assignment_read(RuntimePlaceAccessFact {
-                        base,
-                        projections: place.projections,
-                        ty,
-                        access: RuntimePlaceAccess::Read,
-                        span: place.span,
-                    })
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: assignment_span,
-                    })?;
-            }
+            push_read(facts, locals, function, place, assignment_span)?;
             if let ExprKind::Index { index, .. } = expression.kind {
                 recurse(
                     facts,
                     locals,
                     function,
+                    resolver,
                     tree,
                     index,
                     depth + 1,
@@ -2544,6 +2637,7 @@ fn preanalyze_runtime_assignment_reads<
                 facts,
                 locals,
                 function,
+                resolver,
                 tree,
                 operand,
                 depth + 1,
@@ -2601,6 +2695,7 @@ fn preanalyze_runtime_assignment_reads<
         facts,
         locals,
         function,
+        resolver,
         &tree,
         tree.root(),
         0,
@@ -2610,16 +2705,18 @@ fn preanalyze_runtime_assignment_reads<
 
 fn preanalyze_runtime_assignment_access<
     'source,
+    R: ConstantResolver,
     const MAX_PARAMETERS: usize,
     const MAX_EXPRESSION_NODES: usize,
 >(
     facts: &mut RuntimeBodyFacts<'source>,
     locals: &[Option<RuntimeLocal<'source>>],
     function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
     assignment: &crate::Assignment<'source>,
 ) -> Result<(), CodegenError> {
-    preanalyze_runtime_assignment_reads::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-        facts, locals, function, assignment,
+    preanalyze_runtime_assignment_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+        facts, locals, function, resolver, assignment,
     )?;
     if assignment.binding_name() == "_" {
         return Ok(());
@@ -2688,10 +2785,11 @@ fn preanalyze_runtime_conditional_actions<
                 )?;
             }
             crate::ConditionalAssignmentAction::Assignment(assignment) => {
-                preanalyze_runtime_assignment_access::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                preanalyze_runtime_assignment_access::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     facts,
                     &locals[..local_count],
                     function,
+                    resolver,
                     &assignment,
                 )?;
             }
@@ -2735,10 +2833,11 @@ fn preanalyze_runtime_loop_actions<
                 )?;
             }
             crate::ConditionalLoopAction::Assignment(assignment) => {
-                preanalyze_runtime_assignment_access::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                preanalyze_runtime_assignment_access::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     facts,
                     &locals[..local_count],
                     function,
+                    resolver,
                     &assignment,
                 )?;
             }
@@ -2781,10 +2880,11 @@ fn preanalyze_runtime_loop_declarations<
                 )?;
             }
             crate::LoopOperation::Assignment(assignment) => {
-                preanalyze_runtime_assignment_access::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                preanalyze_runtime_assignment_access::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     facts,
                     &locals[..local_count],
                     function,
+                    resolver,
                     &assignment,
                 )?;
             }
@@ -2918,10 +3018,11 @@ fn preanalyze_runtime_top_level_statement<
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: function.name_span,
             })?;
-            preanalyze_runtime_assignment_access::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            preanalyze_runtime_assignment_access::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                 facts,
                 &locals[..*local_count],
                 function,
+                resolver,
                 &assignment,
             )?;
         }
@@ -17515,6 +17616,68 @@ mod tests {
                 facts.assignment_reads[index].unwrap().projections,
                 RuntimePlaceProjections::EMPTY
             );
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_mirror_typed_nested_index_lowering() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(seed: u16, values: &[u16; 2], index: usize, left: u16, right: u16) -> u16 { let mut result: u16 = seed; let local: [u16; 2] = [left, right]; result = values[index] + local[index]; result = local[1] + left; result }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_access_count, 2);
+        assert_eq!(facts.assignment_read_count, 7);
+        for (fact, (identity, projections)) in facts.assignment_reads[..7].iter().zip([
+            (
+                RuntimePlaceIdentity::Parameter(1),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Parameter(2),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+            ),
+            (
+                RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+            ),
+            (
+                RuntimePlaceIdentity::Parameter(2),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+            ),
+            (
+                RuntimePlaceIdentity::Parameter(3),
+                RuntimePlaceProjections::EMPTY,
+            ),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, projections);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {

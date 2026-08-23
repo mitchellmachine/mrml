@@ -1058,6 +1058,24 @@ fn rustc_nested_assignment_operands_reach_native_objects() {
 }
 
 #[test]
+fn rustc_nested_assignment_indexes_reach_native_objects() {
+    // Original bounded replacement for reference-index and by-value local-array
+    // materialization reads nested inside assignment RHS expressions.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(seed: u16, values: &[u16; 2], index: usize, left: u16, right: u16) -> u16 { let mut result: u16 = seed; let local: [u16; 2] = [left, right]; result = values[index] + local[index]; result = result ^ local[1]; result }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<3072, 2048, 8, 8, 8, 96>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.
