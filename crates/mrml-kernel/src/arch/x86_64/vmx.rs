@@ -1,0 +1,401 @@
+use crate::PhysAddr;
+
+const WRITE_BACK_MEMORY_TYPE: u8 = 6;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VmxError {
+    Unsupported,
+    InvalidRegionSize,
+    WrongMemoryType,
+    MissingEpt,
+    MissingUnrestrictedGuest,
+    MissingInvept,
+    InvalidControl,
+    InvalidEptPointer,
+    InvalidState,
+    InstructionFailed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VmxInstructionError {
+    Failed,
+}
+
+/// Intel VMX control MSRs encode bits that may be zero in the low half and
+/// bits that may be one in the high half. Adjustment therefore forces required
+/// ones and clears forbidden ones without trusting a caller-provided control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxControlMask {
+    allowed_zero: u32,
+    allowed_one: u32,
+}
+
+impl VmxControlMask {
+    pub const fn new(msr: u64) -> Result<Self, VmxError> {
+        let allowed_zero = msr as u32;
+        let allowed_one = (msr >> 32) as u32;
+        if (!allowed_zero) & (!allowed_one) != 0 {
+            return Err(VmxError::InvalidControl);
+        }
+        Ok(Self {
+            allowed_zero,
+            allowed_one,
+        })
+    }
+
+    pub const fn adjust(self, requested: u32) -> u32 {
+        (requested | !self.allowed_zero) & self.allowed_one
+    }
+
+    pub const fn accepts(self, value: u32) -> bool {
+        self.adjust(value) == value
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxControl(u32);
+
+impl VmxControl {
+    pub const fn constrained(requested: u32, mask: VmxControlMask) -> Self {
+        Self(mask.adjust(requested))
+    }
+
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmxCapabilities {
+    revision_id: u32,
+    region_bytes: u16,
+    memory_type: u8,
+    ept: bool,
+    unrestricted_guest: bool,
+    invept_single_context: bool,
+}
+
+impl VmxCapabilities {
+    pub const fn new(
+        revision_id: u32,
+        region_bytes: u16,
+        memory_type: u8,
+        ept: bool,
+        unrestricted_guest: bool,
+        invept_single_context: bool,
+    ) -> Result<Self, VmxError> {
+        if revision_id & (1 << 31) != 0 {
+            return Err(VmxError::Unsupported);
+        }
+        if region_bytes == 0 || region_bytes > 4096 {
+            return Err(VmxError::InvalidRegionSize);
+        }
+        if memory_type != WRITE_BACK_MEMORY_TYPE {
+            return Err(VmxError::WrongMemoryType);
+        }
+        if !ept {
+            return Err(VmxError::MissingEpt);
+        }
+        if !unrestricted_guest {
+            return Err(VmxError::MissingUnrestrictedGuest);
+        }
+        if !invept_single_context {
+            return Err(VmxError::MissingInvept);
+        }
+        Ok(Self {
+            revision_id,
+            region_bytes,
+            memory_type,
+            ept,
+            unrestricted_guest,
+            invept_single_context,
+        })
+    }
+
+    pub const fn revision_id(self) -> u32 {
+        self.revision_id
+    }
+
+    pub const fn region_bytes(self) -> u16 {
+        self.region_bytes
+    }
+
+    pub const fn memory_type(self) -> u8 {
+        self.memory_type
+    }
+
+    pub const fn has_required_isolation(self) -> bool {
+        self.ept && self.unrestricted_guest && self.invept_single_context
+    }
+}
+
+/// Canonical four-level EPT pointer using write-back page-table memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EptPointer(u64);
+
+impl EptPointer {
+    pub const fn new(root: PhysAddr, accessed_dirty: bool) -> Result<Self, VmxError> {
+        if root.get() == 0 {
+            return Err(VmxError::InvalidEptPointer);
+        }
+        Ok(Self(
+            root.get() | WRITE_BACK_MEMORY_TYPE as u64 | (3 << 3) | ((accessed_dirty as u64) << 6),
+        ))
+    }
+
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    pub const fn root(self) -> Result<PhysAddr, VmxError> {
+        match PhysAddr::new(self.0 & 0x000f_ffff_ffff_f000) {
+            Ok(root) if root.get() != 0 => Ok(root),
+            _ => Err(VmxError::InvalidEptPointer),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VmxState {
+    Disabled,
+    Root,
+    VmcsClear,
+    VmcsLoaded,
+    GuestRunning,
+}
+
+/// Narrow unsafe-instruction boundary. A bare-metal adapter implements these
+/// operations; tests and hosted probes use a deterministic emulator.
+pub trait VmxInstructions {
+    fn vmxon(&mut self, region: PhysAddr) -> Result<(), VmxInstructionError>;
+    fn vmxoff(&mut self) -> Result<(), VmxInstructionError>;
+    fn vmclear(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
+    fn vmptrld(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
+    fn vmlaunch(&mut self) -> Result<(), VmxInstructionError>;
+    fn vmresume(&mut self) -> Result<(), VmxInstructionError>;
+    fn invept_single_context(&mut self, ept: EptPointer) -> Result<(), VmxInstructionError>;
+}
+
+pub struct VmxController<I: VmxInstructions> {
+    instructions: I,
+    capabilities: VmxCapabilities,
+    state: VmxState,
+    active_vmcs: Option<PhysAddr>,
+    active_ept: Option<EptPointer>,
+}
+
+impl<I: VmxInstructions> VmxController<I> {
+    pub const fn new(instructions: I, capabilities: VmxCapabilities) -> Self {
+        Self {
+            instructions,
+            capabilities,
+            state: VmxState::Disabled,
+            active_vmcs: None,
+            active_ept: None,
+        }
+    }
+
+    pub const fn state(&self) -> VmxState {
+        self.state
+    }
+
+    pub const fn capabilities(&self) -> VmxCapabilities {
+        self.capabilities
+    }
+
+    pub fn enter_root(&mut self, region: PhysAddr) -> Result<(), VmxError> {
+        if self.state != VmxState::Disabled {
+            return Err(VmxError::InvalidState);
+        }
+        self.instructions
+            .vmxon(region)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.state = VmxState::Root;
+        Ok(())
+    }
+
+    pub fn clear_vmcs(&mut self, vmcs: PhysAddr) -> Result<(), VmxError> {
+        if !matches!(self.state, VmxState::Root | VmxState::VmcsLoaded) {
+            return Err(VmxError::InvalidState);
+        }
+        self.instructions
+            .vmclear(vmcs)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.active_vmcs = Some(vmcs);
+        self.active_ept = None;
+        self.state = VmxState::VmcsClear;
+        Ok(())
+    }
+
+    pub fn load_vmcs(&mut self, vmcs: PhysAddr, ept: EptPointer) -> Result<(), VmxError> {
+        if self.state != VmxState::VmcsClear || self.active_vmcs != Some(vmcs) {
+            return Err(VmxError::InvalidState);
+        }
+        ept.root()?;
+        self.instructions
+            .vmptrld(vmcs)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.instructions
+            .invept_single_context(ept)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.active_ept = Some(ept);
+        self.state = VmxState::VmcsLoaded;
+        Ok(())
+    }
+
+    pub fn launch(&mut self) -> Result<(), VmxError> {
+        if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
+            return Err(VmxError::InvalidState);
+        }
+        self.instructions
+            .vmlaunch()
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.state = VmxState::GuestRunning;
+        Ok(())
+    }
+
+    /// Records a VM exit before exit handling reads guest-controlled state.
+    pub fn record_vm_exit(&mut self) -> Result<(), VmxError> {
+        if self.state != VmxState::GuestRunning {
+            return Err(VmxError::InvalidState);
+        }
+        self.state = VmxState::VmcsLoaded;
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> Result<(), VmxError> {
+        if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
+            return Err(VmxError::InvalidState);
+        }
+        self.instructions
+            .vmresume()
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.state = VmxState::GuestRunning;
+        Ok(())
+    }
+
+    pub fn leave_root(&mut self) -> Result<(), VmxError> {
+        if self.state == VmxState::GuestRunning || self.state == VmxState::Disabled {
+            return Err(VmxError::InvalidState);
+        }
+        self.instructions
+            .vmxoff()
+            .map_err(|_| VmxError::InstructionFailed)?;
+        self.active_vmcs = None;
+        self.active_ept = None;
+        self.state = VmxState::Disabled;
+        Ok(())
+    }
+
+    pub fn into_instructions(self) -> I {
+        self.instructions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct EmulatedVmx {
+        trace: u64,
+        fail_at: u8,
+    }
+
+    impl EmulatedVmx {
+        fn step(&mut self, operation: u8) -> Result<(), VmxInstructionError> {
+            if self.fail_at == operation {
+                return Err(VmxInstructionError::Failed);
+            }
+            self.trace = (self.trace << 8) | operation as u64;
+            Ok(())
+        }
+    }
+
+    impl VmxInstructions for EmulatedVmx {
+        fn vmxon(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
+            self.step(1)
+        }
+        fn vmxoff(&mut self) -> Result<(), VmxInstructionError> {
+            self.step(2)
+        }
+        fn vmclear(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
+            self.step(3)
+        }
+        fn vmptrld(&mut self, _: PhysAddr) -> Result<(), VmxInstructionError> {
+            self.step(4)
+        }
+        fn vmlaunch(&mut self) -> Result<(), VmxInstructionError> {
+            self.step(6)
+        }
+        fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
+            self.step(7)
+        }
+        fn invept_single_context(&mut self, _: EptPointer) -> Result<(), VmxInstructionError> {
+            self.step(5)
+        }
+    }
+
+    fn capabilities() -> VmxCapabilities {
+        VmxCapabilities::new(7, 4096, 6, true, true, true).unwrap()
+    }
+
+    #[test]
+    fn controls_force_required_bits_and_clear_forbidden_bits() {
+        let mask = VmxControlMask::new(0xffff_fff5_ffff_fffe).unwrap();
+        let control = VmxControl::constrained(u32::MAX, mask);
+        assert_eq!(control.bits(), 0xffff_fff5);
+        assert!(mask.accepts(control.bits()));
+        assert!(!mask.accepts(u32::MAX));
+    }
+
+    #[test]
+    fn consumer_policy_rejects_missing_isolation_facilities() {
+        assert_eq!(
+            VmxCapabilities::new(1, 4096, 6, false, true, true),
+            Err(VmxError::MissingEpt)
+        );
+        assert_eq!(
+            VmxCapabilities::new(1, 4096, 6, true, false, true),
+            Err(VmxError::MissingUnrestrictedGuest)
+        );
+        assert_eq!(
+            VmxCapabilities::new(1, 4096, 6, true, true, false),
+            Err(VmxError::MissingInvept)
+        );
+    }
+
+    #[test]
+    fn launch_order_requires_ept_invalidation() {
+        let vmxon = PhysAddr::new(0x10_0000).unwrap();
+        let vmcs = PhysAddr::new(0x11_0000).unwrap();
+        let ept = EptPointer::new(PhysAddr::new(0x12_0000).unwrap(), true).unwrap();
+        let mut controller = VmxController::new(EmulatedVmx::default(), capabilities());
+        assert_eq!(controller.launch(), Err(VmxError::InvalidState));
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        controller.launch().unwrap();
+        controller.record_vm_exit().unwrap();
+        controller.resume().unwrap();
+        controller.record_vm_exit().unwrap();
+        controller.leave_root().unwrap();
+        assert_eq!(controller.into_instructions().trace, 0x0001_0304_0506_0702);
+    }
+
+    #[test]
+    fn failed_instruction_never_advances_state() {
+        let mut controller = VmxController::new(
+            EmulatedVmx {
+                trace: 0,
+                fail_at: 1,
+            },
+            capabilities(),
+        );
+        assert_eq!(
+            controller.enter_root(PhysAddr::new(0x10_0000).unwrap()),
+            Err(VmxError::InstructionFailed)
+        );
+        assert_eq!(controller.state(), VmxState::Disabled);
+    }
+}

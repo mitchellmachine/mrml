@@ -112,6 +112,18 @@ host forge receipts. A receipt authenticates the authority's decision, not the
 subsequent execution or GPU result, and policy admission still independently
 rejects replay, debug mode, rollback, and insufficient claims.
 
+The bare-metal x86_64 path now has an allocation-free VMX-root contract and an
+emulated instruction backend. Consumer hardware is rejected unless VMX regions
+fit one write-back 4 KiB page and EPT, unrestricted guests, and single-context
+INVEPT are all available. VMX capability masks force architecturally required
+control bits and clear forbidden bits. Four-level EPT pointers are constructed
+canonically from aligned physical roots. The controller enforces
+`Disabled -> Root -> VMCS-clear -> VMCS-loaded -> Guest-running`, performs
+INVEPT before first entry, distinguishes launch from resume, records exits
+before inspecting guest state, and never advances state after a failed
+instruction. This is a tested hardware-adapter contract, not yet an executing
+bare-metal VMX instruction implementation.
+
 The privileged kernel will contain only scheduling, address-space and interrupt
 mechanisms, capability enforcement, IPC, and the minimum early console/timer
 code needed to recover. Filesystems, networking, storage, GPU, CUDA mediation,

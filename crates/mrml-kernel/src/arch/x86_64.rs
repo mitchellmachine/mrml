@@ -13,6 +13,7 @@ mod privilege_stack;
 mod service_space;
 mod topology;
 mod trap;
+mod vmx;
 pub use acpi::{AcpiError, AcpiMemory, copy_madt};
 pub use address_space::{AddressSpace, AddressSpaceError, Mapping, MappingId};
 pub use ap_online::{ApOnlineError, ApOnlineTable};
@@ -47,6 +48,10 @@ pub use topology::{
     ApStartupTable, ApStartupToken, ApState, TopologyError, X86Cpu, X86CpuTopology,
 };
 pub use trap::{HardwareTrapFrame, TrapDisposition, TrapError, TrapFrame};
+pub use vmx::{
+    EptPointer, VmxCapabilities, VmxControl, VmxControlMask, VmxController, VmxError,
+    VmxInstructionError, VmxInstructions, VmxState,
+};
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
