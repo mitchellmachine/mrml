@@ -562,6 +562,10 @@ pub enum ExprKind<'source> {
         option: ExprId,
         map_closure: ExprId,
     },
+    IntegerOptionFilter {
+        option: ExprId,
+        closure: ExprId,
+    },
     IntegerClampMagnitude {
         base: ExprId,
         limit: ExprId,
@@ -632,7 +636,7 @@ pub enum ExprKind<'source> {
     },
     ClosureParameter {
         binding: ExprId,
-        target: Option<IntegerType>,
+        target: Option<ClosureParameterTarget>,
     },
     Identifier(&'source str),
     Call {
@@ -680,6 +684,12 @@ pub enum ExprKind<'source> {
         then_branch: ExprId,
         else_branch: ExprId,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClosureParameterTarget {
+    Integer(IntegerType),
+    IntegerReference(IntegerType),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -865,6 +875,25 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
         parameter: ExprId,
         target: IntegerType,
     ) -> Result<(), ExpressionErrorKind> {
+        self.bind_closure_parameter_target(parameter, ClosureParameterTarget::Integer(target))
+    }
+
+    pub(crate) fn bind_closure_reference_parameter(
+        &mut self,
+        parameter: ExprId,
+        target: IntegerType,
+    ) -> Result<(), ExpressionErrorKind> {
+        self.bind_closure_parameter_target(
+            parameter,
+            ClosureParameterTarget::IntegerReference(target),
+        )
+    }
+
+    fn bind_closure_parameter_target(
+        &mut self,
+        parameter: ExprId,
+        target: ClosureParameterTarget,
+    ) -> Result<(), ExpressionErrorKind> {
         if !matches!(
             self.nodes.get(parameter.0).and_then(Option::as_ref),
             Some(Expr {
@@ -960,6 +989,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerOptionMapOr { .. }
             | ExprKind::IntegerOptionMapOrElse { .. }
             | ExprKind::IntegerOptionMapOrDefault { .. }
+            | ExprKind::IntegerOptionFilter { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1252,6 +1282,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerOptionMapOrDefault { .. } => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
+            ExprKind::IntegerOptionFilter { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2868,6 +2899,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
                 self.substitute_identifier(map_closure, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionFilter { option, closure } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
+                self.substitute_identifier(closure, name, replacement, depth + 1)?;
             }
             ExprKind::Closure { body, .. } => {
                 self.substitute_identifier(body, name, replacement, depth + 1)?;
@@ -4667,6 +4702,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "map_or"
                         | "map_or_else"
                         | "map_or_default"
+                        | "filter"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4857,6 +4893,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "map_or"
                     | "map_or_else"
                     | "map_or_default"
+                    | "filter"
                     | "unwrap_or"
                     | "unwrap_or_else"
                     | "strict_add"
@@ -5360,6 +5397,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "map_or_default" => ExprKind::IntegerOptionMapOrDefault {
                     option: base,
                     map_closure: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "filter" => ExprKind::IntegerOptionFilter {
+                    option: base,
+                    closure: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },

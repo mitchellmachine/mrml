@@ -2433,6 +2433,15 @@ ordinary producer result types without extending its function-local lifetime.
 Captured parameters and locals remain available. Predicate bodies execute only
 for `Some`; `None` returns `false` for `is_some_and` and `true` for `is_none_or`.
 
+Checked integer options can be filtered by a bounded predicate before
+`is_some` or `is_none`. Matching Rust's API, the filter closure receives an
+immutable reference to the candidate rather than a copied value; the compiler
+backs that borrow with the candidate's temporary stack slot, limits it to the
+lazy predicate evaluation, and preserves exact producer integer types. An
+existing `None` skips the predicate, while a false result changes `Some` to
+`None`. Additional consumers of the filtered option remain tied to the broader
+internal Option-producer generalization.
+
 Checked-option `map_or` evaluates its default eagerly, then executes its
 bounded one-argument mapping closure only for `Some`. The closure may capture
 parameters and locals, and its mapped result has an independent compatible

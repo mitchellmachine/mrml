@@ -3243,6 +3243,24 @@ fn rustc_checked_integer_option_closure_predicates_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_integer_option_filters_reach_native_predicates() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, threshold: u8) -> bool { a.checked_add(b).filter(|value| *value > threshold).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, expected: i16) -> bool { input.checked_truncate::<i16>().filter(|value| *value == expected).is_none() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64) -> bool { a.checked_signed_diff(b).filter(|value| *value >= -10).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> bool { input.checked_ilog2().filter(|value| *value < 64).is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",
