@@ -72,6 +72,14 @@ or an equivalent transitive property. A safe top-level Rust crate is not enough:
 native FFI or unsafe dependencies can defeat memory safety and must not enter the
 ordinary application ecosystem silently.
 
+Admission distinguishes three profiles: the ordinary Application profile uses
+safe Rust, no unsafe native FFI, and no arbitrary native JIT; the System profile
+permits only justified and audited unsafe/FFI boundaries; the Compiler/Kernel
+profile supports the lowest-level work with the strongest review. “Written in
+Rust” is not evidence by itself. Build metadata and review inventory unsafe,
+FFI, assembly, naked functions, and mitigation exceptions, and admission never
+accepts self-asserted compiler metadata as proof.
+
 ### Execution classes
 
 1. A native safe application is a memory-safe, isolated CPL3 process controlled
@@ -272,6 +280,20 @@ interaction, media access, network use, filesystem access, and raw input remain
 separate capabilities. Remote LLM transport additionally requires explicit
 disclosure policy so secrets and private UI state are not exported implicitly.
 
+Remote AI receives a capability-scoped `SemanticView`, normally one authorized
+window or subtree, rather than the desktop. It does not automatically learn
+installed applications, other windows or titles, file names/layout, notification
+or clipboard history, contacts, browsing/network history, device inventory,
+credential metadata, or activity history. Incremental updates preserve the same
+scope and redaction. Core operation supports no AI, local AI, OpenAI-backed
+remote AI, and other future providers under equivalent capability rules; no
+provider is an ordinary-operation root of trust.
+
+Security assumes models can hallucinate, misunderstand, follow injected content,
+and propose unsafe actions. The enforced property is that a bad decision cannot
+exceed the session's delegated authority, not that the model always decides
+safely.
+
 Native applications obtain networking, audio, USB classes, and input through
 capability-bound userspace services, not VMM devices or raw hardware. Network
 connection objects are distinct from raw packet authority. Audio playback is
@@ -295,6 +317,18 @@ Where semantically safe, live revoke invokes the actual capability mechanism,
 not a cosmetic policy toggle. Human views express intent (“can authenticate to
 GitHub; cannot read the password”) while advanced authorized views expose the
 bounded delegation graph.
+
+The authority explanation answers “why can this application do this?” by tracing
+principal, capability, delegation source, rights, scope, and expiration without
+revealing unrelated state, and offers real revocation where semantics permit.
+Administrative work composes specific maintenance capabilities rather than
+recreating an omnipotent Unix-root or Windows-SYSTEM principal.
+
+Documented platform, accessibility, automation, monitoring, backup, password-
+manager, debugger, browser, shell, file-manager, and AI-client interfaces are
+available to equivalent third-party software under the same admission and
+capability rules. Trusted mediation may expose a narrower stable interface, but
+first-party status does not bypass authorization.
 
 AI sessions are visible principals with provider/model, local or remote status,
 session identity, current/temporary capabilities, network reach, accessible

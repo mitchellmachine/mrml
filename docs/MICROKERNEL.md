@@ -2001,6 +2001,15 @@ separate offline root and must not lower the monotonic version. Until TPM/NVRAM
 persistence and the canonical policy parser are implemented, this describes
 the required bootstrap flow rather than an end-to-end completed secure boot.
 
+The production design must replace the fixed project-centric bootstrap policy
+with an owner-selected trust policy. Recommended MRML keys may ship as defaults,
+but documented secure-attention/recovery flows must allow the owner to enroll or
+replace roots, authorize an owner-built or narrowly scoped development
+generation, and revoke compromised keys. Those actions change authenticated
+policy; they do not lower the committed monotonic release state. This is
+**PLANNED**, not evidence that current development signing implements owner-
+controlled Secure Boot, measured boot, TPM persistence, or physical recovery.
+
 Hyper-V and KVM are host backends, not code in the guest kernel. Both implement
 the same VMM contract for vCPU lifecycle, guest memory, interrupts, virtio-like
 queues, directory-handle grants, measured images, and optional IOMMU device

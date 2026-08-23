@@ -144,6 +144,15 @@ inspectable, and auditable. Redaction applies identically to visual, Braille,
 speech, automation, and AI. A password field may expose role and `populated`
 state while its value remains `REDACTED`.
 
+Third-party assistive software may use documented semantic, Braille, speech, and
+input interfaces under the same admission and capability model as MRML-shipped
+software. Trusted mediation may remain inside the TCB where necessary, but must
+expose the smallest safe stable interface above it. A publisher cannot disable
+screen-reader semantics, Braille, available required captions/transcripts, or
+owner-chosen accessibility tools by labeling content protected. Ordinary privacy
+redaction still applies uniformly; accessibility is neither a publisher veto nor
+a universal privilege bypass.
+
 Capability elevation, credential use/export, device assignment, microphone or
 camera permission, AI/debug authority, security exceptions, login, recovery,
 and update approval must eventually have equivalent meaningful visual, Braille,

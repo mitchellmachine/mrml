@@ -122,6 +122,25 @@ kernel running.
 
 ## Authority model
 
+Values must resolve into mechanisms and tests, not remain slogans:
+
+```text
+Power is revocable
+  -> derived authority must be removable
+  -> generational capability graph plus mapping/IPC/device cleanup
+  -> revoke a parent and prove descendant handles and mappings fail
+
+Intelligence does not imply authority
+  -> AI is an ordinary capability principal
+  -> scoped AI-session capabilities and SemanticView
+  -> injected content requests SecretObject.EXPORT and receives DENIED
+
+Owner controls the machine
+  -> owner-selected trust roots without rollback bypass
+  -> boot, update, recovery, and scoped-attestation key policy
+  -> an explicitly authorized owner-built generation boots and reports that policy
+```
+
 MRML avoids ambient authority. A path, PID, port, service name, object ID,
 device name, signature, publisher, hash, or user identity does not itself grant
 access. Authentication answers who an entity is; a capability answers what it
@@ -502,6 +521,13 @@ Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.
 Firewall policy remains a service and provides defense in depth; a firewall
 allow rule never creates network authority.
+
+Connection authority should expose the application, destination/scope, protocol,
+and lifetime as meaningful objects without treating DNS names as authority.
+Specific connection capability is preferred to raw networking, and network-
+service compromise must not imply kernel compromise. User-owned state should
+have documented export or migration paths where practical; secrets require an
+independent export capability and trusted consent.
 
 The planned security monitor consumes structured, non-secret events and holds
 only explicit observation/remediation capabilities. It is not an omnipotent

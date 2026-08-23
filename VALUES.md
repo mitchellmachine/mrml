@@ -18,6 +18,15 @@ come before institutional convenience, application reputation, or automated
 preference. Security should protect people without requiring them to surrender
 agency over their own computer.
 
+> **Security authenticates and enforces the owner's policy; it must not transfer
+> ownership of the machine to a vendor, publisher, service provider, or remote
+> verifier.**
+
+Secure defaults may require deliberate confirmation, physical presence, or
+recovery authentication, but the owner retains a documented path to understand,
+change, recover, and authorize their own system without silently weakening
+rollback protection.
+
 > **Intelligence does not imply authority.**
 
 AI is a capability-constrained principal. Intelligence, autonomy, model size,
@@ -58,11 +67,24 @@ the underlying semantic truth and redaction policy must not privilege AI.
 
 ## Durable project commitments
 
+> **Interoperability is compatible with least authority.**
+
+People are not telemetry subjects, advertising profiles, security liabilities,
+or sources of training data. Technology serves people and preserves dignity.
+
 - **Privacy by architecture:** minimize disclosure; separately authorize
   microphone, media, semantic inspection, and remote transport; redact secrets
   consistently across visual, speech, Braille, automation, and AI.
+- **Data minimization:** the safest unnecessary data is data never collected;
+  observation does not by itself authorize retention, correlation, secondary
+  use, training, redistribution, or disclosure.
 - **User control and local capability:** useful core operation, including
   accessibility, must not depend on a particular cloud or AI provider.
+- **Interoperability without lock-in:** documented interfaces and practical
+  export paths should let owners choose third-party software and services under
+  least authority; security is not an excuse for vendor lock-in.
+- **No owner-hostile DRM:** publisher identity, signatures, licenses, or metadata
+  describe policy requests but do not create kernel authority against the owner.
 - **Freedom to understand:** preserve whole-system traceability, readable source,
   structured state, and inspectable authority.
 - **Security without surrendering agency:** trusted prompts explain meaningful

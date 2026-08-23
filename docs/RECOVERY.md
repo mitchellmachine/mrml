@@ -10,6 +10,20 @@ override MRML's security architecture. Preserve MRML's independent technical
 identity, memory safety, capabilities, isolation, userspace services, VM
 compartments, and modern hardware protection.
 
+Owner sovereignty is a hard constraint: security authenticates owner-selected
+policy and does not establish permanent vendor, publisher, provider, or verifier
+authority. Preserve owner-controlled trust roots, rollback resistance, scoped
+remote attestation, accessible recovery, and owner-build authorization together.
+Publisher policy, signatures, licenses, manifests, and first-party status never
+authorize by themselves; DRM against the owner is not an MRML security goal.
+
+Minimize data, metadata, and retention. Remote AI receives only scoped semantic
+views and no provider is a root of trust for ordinary operation. Preserve third-
+party assistive tooling and documented interoperable/export interfaces under the
+same capabilities as equivalent first-party software. Every major security
+review must examine both technical compromise and digital-rights consequences,
+and every evidence claim remains limited to the environment actually exercised.
+
 Read `VALUES.md` and `docs/ACCESSIBILITY.md` before GUI, compositor, semantic
 graph, input/HID, USB, audio, browser, AI-control, trusted-prompt, boot, or
 recovery work. Accessibility is a platform property built on the shared semantic

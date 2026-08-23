@@ -24,6 +24,14 @@ proposals, not routine work. If a proposal conflicts, identify the conflict and
 propose an explicit amendment rather than bypassing the rule. `EULOGY.md` is
 historical inspiration only and never overrides MRML's security architecture.
 
+Owner sovereignty is a hard architectural constraint. Security authenticates
+and enforces owner-selected policy; it must not create superior permanent vendor,
+publisher, provider, or verifier authority. Preserve owner-controlled trust roots,
+rollback resistance, accessible recovery, owner-build authorization, and scoped
+privacy-limited attestation together. Publisher policy, signatures, manifests,
+licenses, EULAs, remote statements, and first-party status identify or describe;
+they do not authorize. Do not build general-purpose DRM against the owner.
+
 Accessibility is foundational. A core interface is incomplete when essential
 operations depend on one sensory/physical mode despite practical semantic
 alternatives. Reuse the Semantic Scene Graph for visual, keyboard, Braille,
@@ -120,6 +128,18 @@ Architectural invariants:
 - lifecycle/time-bounded authority must actually expire and revoke all derived
   state; disposable domains retain no storage, network, device, or secret
   authority unless explicitly granted.
+- first-party software has no hidden privilege; documented interfaces remain
+  available to equivalent third-party applications and assistive tools unless a
+  narrow TCB reason is explicitly recorded;
+- minimize data, metadata, retention, correlation, secondary use, and remote
+  disclosure; observation does not imply any of those authorities;
+- remote AI receives capability-scoped semantic views, not the whole desktop,
+  and no AI provider is a root of trust for ordinary operation;
+- compatibility adapts through isolated projected capabilities and never gains
+  ambient host authority merely because legacy software expects it;
+- major mechanisms pass both the Engineering Constitution's digital-rights and
+  hostile-security reviews, including independent adversarial review where
+  security-significant; agent review never replaces external human audit.
 
 Implement OS work in the dependency order in `docs/ROADMAP.md`. Determine the
 next milestone from current code, tests, documentation, TODOs, and Git history,

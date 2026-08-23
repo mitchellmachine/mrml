@@ -300,6 +300,14 @@ authority; unrelated domains continue.
    Successful final flush always recovers the new root, and no partial metadata
    generation is selectable. Physical-device cache, torn-write, and power-cut
    testing remain pending.
+   Bounded allocation/free successor planning is now implemented. It verifies
+   the active allocation image's exact self-ownership, advances exactly one
+   publication generation, automatically retires the prior allocation-image
+   claim, rotates to a disjoint new image, applies exact frees and additions,
+   sorts the complete successor index, and rebuilds every invariant. An added
+   range cannot overlap any active allocation even when that allocation is freed
+   in the same unpublished successor, preventing pre-commit reuse. Concrete
+   staging and transaction admission remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features
@@ -307,6 +315,8 @@ authority; unrelated domains continue.
 6. Implement a network service returning bounded connection capabilities.
 7. Add firewall/network-policy as defense in depth outside the kernel.
 8. Add tool and local-inference services over control and bulk IPC.
+9. Establish bounded structured audit foundations with explicit event purpose,
+   retention, access, erasure/redaction, and content-minimization rules.
 
 Security gate: services start with explicit least authority; paths, ports,
 names, identity, and signatures do not grant ambient access; raw packet/device
@@ -375,6 +385,8 @@ Before trusted consent UI, establish the application-facing foundation:
    incremental subscriptions and resynchronization.
 12. Add deterministic focus order and keyboard semantic actions, then a bounded
     accessibility semantic API with uniform secret redaction.
+    Keep that documented API available to third-party assistive tools under the
+    same capability and admission rules.
 13. Add basic trusted local speech output and a Braille representation/backend;
     simulated evidence does not establish physical-device compatibility.
 14. Add Braille input/routing and local deterministic speech input/control over
@@ -413,6 +425,10 @@ cannot bypass secret redaction or grant universal observation/input authority.
    independent fingerprinting suites.
 8. Add local/remote AI disclosure controls, incremental graph transport, and
    explicit visual-inspection requests.
+9. Restrict remote AI to capability-scoped semantic views and preserve useful
+   operation with no AI, local AI, or interchangeable remote providers.
+10. Add browser anti-tracking tests and an owner-controlled, selective-
+    attestation policy that avoids stable ordinary-service device identifiers.
 
 Security gate: web content cannot reach native admission, arbitrary JavaScript
 control, browser memory/debug authority, raw devices, or W+X execution; AI does
@@ -481,6 +497,10 @@ After the core capability/service substrate and trusted compositor exist:
 15. Add device ownership/delegation visualization and transition audit.
 16. Add deterministic system-generation metadata.
 17. Integrate crash/restart policy with persistent-state restoration.
+18. Add retention-aware disclosure policy separating observation, retention,
+    export, correlation, and training/secondary use.
+19. Add anti-dark-pattern consent behavior and realistic prompt-frequency tests.
+20. Add owner-visible AI-session disclosure and audit-privacy controls.
 
 In parallel, implement the capability-native authority broker with narrow scope,
 duration, and one-shot grants; the trusted userspace consent agent with anti-
@@ -509,6 +529,12 @@ can count as trusted consent.
    Secure Boot integration, recovery, and key rotation.
 5. Bind inspectable system-generation metadata to the exact kernel, compositor,
    services, configuration root, and compiler/runtime artifacts.
+6. Implement owner-selectable trust-root enrollment, replacement, owner-build and
+   development authorization, compromised-key revocation, and accessible recovery.
+7. Add scoped remote-attestation capabilities with verifier/claim/lifetime
+   binding and privacy-limited identities.
+8. Verify authenticated update and recovery cannot silently replace owner trust
+   policy while preserving rollback resistance.
 
 Security gate: older signed vulnerable releases cannot be admitted after a
 committed advance; loss/corruption fails safely and has a documented recovery
@@ -542,6 +568,18 @@ reproducible release review, and external audit. Investigate CET/IBT only as
 defense in depth for relevant trusted native boundaries; do not claim or depend
 on enforcement until implemented and exercised. Only then consider broad
 drivers, production claims, AArch64, and RISC-V64.
+
+Before architectural maturity, perform independent hostile-security and digital-
+rights reviews, accessibility user testing, and adversarial AI testing. Include
+acceptance scenarios for prompt-injected credential export, compromised-service
+non-amplification and anti-persistence, malicious publisher requests to disable
+accessibility/inspection, overbroad remote attestation, equivalent first-party
+and third-party authorization, and deliberately authorized owner-built boot.
+Expected results are denial outside delegated authority, complete cleanup,
+continued peer operation, ordinary redaction without publisher veto, scoped
+privacy-preserving claims only under owner policy, no first-party bypass, and no
+hidden vendor veto. Agent adversaries supplement rather than replace external
+human audit.
 
 Guest-device fuzzing prioritizes VirtIO descriptors and indirect/cyclic chains,
 virtual-network packets, audio control, USB descriptors, PCI configuration,

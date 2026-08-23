@@ -24,6 +24,45 @@ First-party origin, signatures, user launch, system membership, administrator-
 equivalent identity, AI status, or reputation does not imply unrestricted
 authority.
 
+> First-party status is identity, not authority.
+
+Equivalent first- and third-party software uses the same documented interfaces,
+capability checks, and admission rules unless a narrow TCB boundary is documented
+and justified. Publisher signatures, manifests, licenses, remote policy, and
+reputation may inform policy but never create authority.
+
+## Owner sovereignty
+
+> Security authenticates and enforces the owner's policy; it must not transfer
+> ownership of the machine to a vendor, publisher, service provider, or remote
+> verifier.
+
+Secure Boot, measured boot, TPM state, executable and driver admission, updates,
+recovery, attestation, and key rotation protect the owner-selected policy. The
+default installation may recommend project keys, but the owner retains a
+documented path to add or replace trust roots, authorize owner-built and
+development generations, recover the machine, and revoke compromised keys.
+Owner control and rollback resistance are independent requirements: neither may
+be weakened to simulate the other.
+
+> Secure by default must not mean impossible for the owner to change.
+
+Dangerous changes may require explicit confirmation, recovery authentication,
+secure attention, or physical presence. Prefer narrow development capabilities
+with visible, revocable exceptions over a permanent insecure developer edition
+or one global security-off switch.
+
+> MRML security protects the owner and authorities the owner deliberately
+> delegates. It is not a mechanism for creating permanent publisher authority
+> against the owner.
+
+MRML does not make cryptographic inaccessibility to the local machine owner a
+core security property. Publisher requests such as `NO_COPY`, `NO_SCREENSHOT`,
+`NO_DEBUG`, `NO_ACCESSIBILITY`, `NO_TRANSCRIPT`, or `NO_OWNER_INSPECTION` do not
+become kernel authority. Services may refuse content, and compatibility may
+include mechanisms such as HDCP, but those are not MRML guarantees against the
+owner and cannot veto required accessibility semantics.
+
 MRML uses one authority vocabulary across files, directories, windows,
 processes, VMs, connections, devices, secrets, debuggers, AI agents,
 configuration, graphics, audio, and services:
@@ -70,6 +109,12 @@ legacy software belongs behind explicit compatibility/isolation boundaries,
 normally VMs. WebAssembly remains browser content, not a general native
 application format.
 
+Compatibility adapts to the security model; the security model does not adapt by
+granting legacy software ambient authority. Compatibility VMs, adapter services,
+emulated devices, and third-party runtimes receive only projected capabilities,
+never implicit host filesystem, credential, debug, device, microphone, camera,
+HID, or network authority.
+
 Keep the trusted computing base small. Security-related work does not belong in
 the TCB merely because it is security-related. Every proposed TCB addition must
 explain why its compromise must have broader consequences; without a strong
@@ -87,6 +132,42 @@ networking, executable admission, boot verification, and AI tool execution.
 
 Simplicity is a security and maintainability property, but it must never be
 obtained by removing necessary isolation, validation, or correctness.
+
+Prefer prevention in this order: remove unnecessary functionality; use memory-
+safe implementation where practical; remove ambient authority; isolate; validate
+every untrusted boundary; apply hardware/compiler mitigations; detect compromise;
+then revoke and restart from independently validated state. Successful transient
+code execution must not create startup, configuration, executable-trust,
+credential, firmware, or other persistent authority without an independently
+authorized persistent object.
+
+Every significant component accounts for parsers, syscalls, IPC, shared memory,
+device and guest buffers, packets, firmware tables, compiler and executable
+metadata, filesystem metadata, semantic/accessibility input, browser content,
+and AI input as applicable. Prefer bounded, strictly versioned, canonical,
+fail-closed, independently fuzzable codecs.
+
+## Rights and hostile-security review
+
+Major platform mechanisms must pass both reviews before being called
+architecturally mature. This is design scrutiny, not organizational endorsement.
+
+`DIGITAL-RIGHTS REVIEW`: Does the mechanism collect unnecessary data; prevent
+owner inspection, control, revocation, export, or migration; create lock-in,
+publisher DRM, tracking identity, coercive consent, remote disclosure, an
+accessibility exclusion, or a hidden first-party bypass?
+
+`HOSTILE SECURITY REVIEW`: What inputs and parsers are untrusted; what authority
+does compromise yield; can authority amplify, persist, or survive cleanup; can
+stale identities, mappings, DMA, IPC, shared state, or secrets survive revocation;
+can a guest forge trusted UI or AI cross a capability boundary; what happens
+under exhaustion or partial cleanup; and which claims require real hardware?
+
+Important security features receive separable `IMPLEMENTER`, `REVIEWER`, and
+`ADVERSARY` passes. The adversary attempts to falsify non-amplification,
+revocation, secret non-exportability, AI/VM containment, parser bounds, semantic
+redaction, trusted identity, update rollback resistance, and DMA isolation.
+Agent review supplements rather than replaces independent human audit.
 
 ## Whole-system understandability
 
