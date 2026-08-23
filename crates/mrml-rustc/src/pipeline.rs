@@ -424,6 +424,30 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
+        let array_reference = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &mut [u16; 4], index: usize, delta: u16, mutate: bool) -> u16 { if mutate { update(values, index, delta)[index] } else { read(values, index) } } fn update(values: &mut [u16; 4], index: usize, delta: u16) -> &mut [u16; 4] { values[index] += delta; values } fn read(values: &[u16; 4], index: usize) -> u16 { identity(values)[index] } fn identity(values: &[u16; 4]) -> &[u16; 4] { values }";
+        assert!(compile(array_reference, "answer", ObjectFormat::Coff).is_ok());
+
+        let wrong_array_count = "fn identity(values: &[u16; 3]) -> &[u16; 3] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16; 4]) -> u16 { identity(values)[0] }";
+        let error = compile(wrong_array_count, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_array_element = "fn identity(values: &[bool; 4]) -> &[bool; 4] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16; 4]) -> bool { identity(values)[0] }";
+        let error = compile(wrong_array_element, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_array_mutability = "fn identity(values: &mut [u16; 4]) -> &mut [u16; 4] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: &[u16; 4]) -> u16 { identity(values)[0] }";
+        let error = compile(wrong_array_mutability, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
         let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

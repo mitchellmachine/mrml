@@ -196,6 +196,11 @@ pub enum ScalarType {
         target: PointerPointee,
         mutable: bool,
     },
+    ArrayReference {
+        element: CallArrayElement,
+        count: usize,
+        mutable: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,6 +221,14 @@ pub struct RuntimeCallTarget<'source, const MAX_PARAMETERS: usize> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PointerPointee {
+    Integer(IntegerType),
+    Bool,
+    Char,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallArrayElement {
+    Unit,
     Integer(IntegerType),
     Bool,
     Char,
@@ -245,6 +258,27 @@ impl ScalarType {
                     let (target, mutable) = target
                         .strip_prefix("mut ")
                         .map_or((target, false), |target| (target.trim(), true));
+                    if let Some(body) = target
+                        .strip_prefix('[')
+                        .and_then(|body| body.strip_suffix(']'))
+                    {
+                        let (element, count) = body.split_once(';')?;
+                        let count = count.trim().parse::<usize>().ok()?;
+                        if count > MAX_ARRAY_ELEMENTS {
+                            return None;
+                        }
+                        let element = match element.trim() {
+                            "()" => CallArrayElement::Unit,
+                            "bool" => CallArrayElement::Bool,
+                            "char" => CallArrayElement::Char,
+                            name => CallArrayElement::Integer(IntegerType::from_name(name)?),
+                        };
+                        return Some(Self::ArrayReference {
+                            element,
+                            count,
+                            mutable,
+                        });
+                    }
                     let target = match target {
                         "bool" => PointerPointee::Bool,
                         "char" => PointerPointee::Char,
@@ -1125,7 +1159,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     | ScalarType::Char
                     | ScalarType::Unit
                     | ScalarType::RawPointer { .. }
-                    | ScalarType::Reference { .. },
+                    | ScalarType::Reference { .. }
+                    | ScalarType::ArrayReference { .. },
                 ..
             } => false,
             ExprKind::Sequence { then, .. } => self.is_boolean_expression(then, depth + 1),
@@ -1471,6 +1506,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     ScalarType::Unit => Err(ConstEvalError::InvalidCast),
                     ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Reference { .. } => Err(ConstEvalError::InvalidCast),
+                    ScalarType::ArrayReference { .. } => Err(ConstEvalError::InvalidCast),
                 }
             }
             ExprKind::Unary { operator, operand } => {

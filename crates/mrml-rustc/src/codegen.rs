@@ -2011,6 +2011,25 @@ fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
             }),
             mutable,
         },
+        crate::ScalarType::ArrayReference {
+            element,
+            count,
+            mutable,
+        } => RuntimeExpressionType::Reference {
+            target: RuntimeReferenceTarget::Array {
+                element: match element {
+                    crate::CallArrayElement::Unit => RuntimeArrayElementType::Unit,
+                    crate::CallArrayElement::Integer(ty) => {
+                        RuntimeArrayElementType::Integer(Some(ty))
+                    }
+                    crate::CallArrayElement::Bool => RuntimeArrayElementType::Bool,
+                    crate::CallArrayElement::Char => RuntimeArrayElementType::Char,
+                },
+                count,
+                layout: RuntimeReferenceArrayLayout::Native,
+            },
+            mutable,
+        },
     }
 }
 
@@ -5600,6 +5619,11 @@ fn runtime_expression_type_with_locals<
                     Ok(operand_type)
                 }
                 crate::ScalarType::Reference { .. }
+                    if operand_type == runtime_type_from_scalar(target) =>
+                {
+                    Ok(operand_type)
+                }
+                crate::ScalarType::ArrayReference { .. }
                     if operand_type == runtime_type_from_scalar(target) =>
                 {
                     Ok(operand_type)
@@ -10096,7 +10120,8 @@ impl<
                     crate::ScalarType::Char
                     | crate::ScalarType::Unit
                     | crate::ScalarType::RawPointer { .. }
-                    | crate::ScalarType::Reference { .. } => {}
+                    | crate::ScalarType::Reference { .. }
+                    | crate::ScalarType::ArrayReference { .. } => {}
                 }
             }
             ExprKind::Unary {

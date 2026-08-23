@@ -49,3 +49,16 @@ GPU/CUDA mediation, quantization/speculative inference, and Zstandard before
 commercial or production release.
 
 Patent review: `TRIGGERED` — persistent worldwide policy and initial landscape.
+
+## 2026-08-23 — fixed-array reference helper signatures
+
+MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+
+The compiler now carries existing fixed-array element, count, and mutability
+information through its bounded descriptor for inlined safe Rust-ABI helper
+calls. The change reuses ordinary type compatibility, reference representation,
+index lowering, and inline-frame cleanup already present in MRML; it adds no
+distinctive optimization, memory layout, calling convention, or algorithm.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler type propagation and inline
+lowering within the review log's existing Rust-subset compiler category.

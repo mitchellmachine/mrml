@@ -3484,10 +3484,18 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: &mut u16) -> u16 { read(value) } fn read(value: &u16) -> u16 { *identity(value) } fn identity(value: &u16) -> &u16 { value }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: &mut bool) -> bool { *flip(value) } fn flip(value: &mut bool) -> &mut bool { *value = !*value; value }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: &char) -> char { *identity(value) } fn identity(value: &char) -> &char { value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &mut [u16; 4], index: usize, delta: u16, mutate: bool) -> u16 { if mutate { update(values, index, delta)[index] } else { read(values, index) } } fn update(values: &mut [u16; 4], index: usize, delta: u16) -> &mut [u16; 4] { values[index] += delta; values } fn read(values: &[u16; 4], index: usize) -> u16 { values[index] }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &mut [bool; 2]) -> bool { flip(values)[1] } fn flip(values: &mut [bool; 2]) -> &mut [bool; 2] { values[1] = !values[1]; values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[char; 2]) -> char { identity(values)[1] } fn identity(values: &[char; 2]) -> &[char; 2] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { let values: [(); 2] = [(); 2]; identity(&values)[1] } fn identity(values: &[(); 2]) -> &[(); 2] { values }",
     ];
     for source in sources {
-        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
-        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
     }
 }
 

@@ -22,10 +22,10 @@ pub use codegen::{
     compile_x86_64_function_with_options,
 };
 pub use expression::{
-    BinaryOperator, CastType, ConstEvalError, ConstantResolver, Expr, ExprId, ExprKind,
-    ExpressionError, ExpressionErrorKind, ExpressionParser, ExpressionTree, IntegerLiteral,
-    IntegerType, NoConstants, PointerPointee, RuntimeCallParameter, RuntimeCallTarget, ScalarType,
-    UnaryOperator,
+    BinaryOperator, CallArrayElement, CastType, ConstEvalError, ConstantResolver, Expr, ExprId,
+    ExprKind, ExpressionError, ExpressionErrorKind, ExpressionParser, ExpressionTree,
+    IntegerLiteral, IntegerType, NoConstants, PointerPointee, RuntimeCallParameter,
+    RuntimeCallTarget, ScalarType, UnaryOperator,
 };
 pub use ir::{
     ExecutionError, Instruction, IrError, IrErrorKind, IrProgram, lower_expression,

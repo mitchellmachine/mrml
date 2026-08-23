@@ -2572,11 +2572,12 @@ available to the mapping closure.
 
 Runtime expressions can call a safe, non-const Rust-ABI function declared
 before or after the selected export, with up to four built-in integer, Boolean,
-character, unit, thin scalar raw-pointer, or thin scalar-reference parameters
-and a result from the same families. Pointer and reference signatures preserve
-their scalar target and const/mutability distinctions; mutable values may
-coerce or reborrow as immutable values, while the reverse direction and
-mismatched scalar targets fail type checking.
+character, unit, thin scalar raw-pointer, thin scalar-reference, or thin
+fixed-array-reference parameters and a result from the same families. Pointer
+and reference signatures preserve their target, fixed-array element/count, and
+const/mutability distinctions; mutable values may coerce or reborrow as
+immutable values, while the reverse direction and mismatched targets fail type
+checking.
 Arguments execute eagerly in source order, are normalized to their declared
 types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
@@ -2701,8 +2702,17 @@ through `&mut u16`, exact mutable-reference returns across nested inline-frame
 cleanup, and caller-visible pointee updates. Object-emission tests additionally
 cover Boolean and character reference parameters and returns. Separate
 adversarial sources reject mismatched scalar targets and shared-to-mutable
-arguments. Slice, string, and fixed-array references remain outside helper
-signatures because their fat-pointer or aggregate frame behavior is separate.
+arguments.
+A fixed-array-reference helper chain produced a 312-byte COFF object and a
+704-byte ELF64 object. Pinned-nightly callers matched read-only and mutating
+paths at all four element indexes on Windows and Arch Linux, including
+mutable-to-shared reborrowing, exact mutable array-reference returns used as
+index bases, caller-visible single-element updates, and preservation of every
+untouched element. Object-emission tests additionally cover Boolean, character,
+and locally sourced unit-element arrays. Separate adversarial sources reject
+element, count, and shared-to-mutable mismatches. Slice and string references
+remain outside helper signatures because their two-word fat-pointer calling
+convention is separate.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
