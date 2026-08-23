@@ -13,6 +13,7 @@ use mrml_kernel::{VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthority
 const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
+const AUTHORITY_POLICY_MEASUREMENT: [u8; 64] = [0x72; 64];
 #[cfg(any(target_os = "windows", test))]
 const AUTHORITY_SECURITY_VERSION: u64 = 1;
 
@@ -252,7 +253,9 @@ fn process_authority_request(
     encoded_request: &[u8; LAUNCH_REQUEST_BYTES],
 ) -> Result<[u8; AUTHORITY_RECEIPT_BYTES], ()> {
     let request = LaunchRequest::decode(encoded_request).map_err(|_| ())?;
-    if request.image_measurement() != AUTHORITY_MEASUREMENT {
+    if request.image_measurement() != AUTHORITY_MEASUREMENT
+        || request.policy_measurement() != AUTHORITY_POLICY_MEASUREMENT
+    {
         return Err(());
     }
     let claims = ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED);
@@ -381,7 +384,13 @@ mod tests {
 
     #[test]
     fn authority_emits_bound_non_debug_vbs_receipt() {
-        let request = LaunchRequest::new(9, [0xa2; 32], AUTHORITY_MEASUREMENT, [0x72; 64]).unwrap();
+        let request = LaunchRequest::new(
+            9,
+            [0xa2; 32],
+            AUTHORITY_MEASUREMENT,
+            AUTHORITY_POLICY_MEASUREMENT,
+        )
+        .unwrap();
         let receipt = process_authority_request(&request.encode()).unwrap();
         let verified = AuthorityReceipt::verify(&AUTHORITY_KEY, request, &receipt).unwrap();
         assert_eq!(verified.report().backend(), ProtectionBackend::VbsEnclave);
@@ -393,8 +402,12 @@ mod tests {
 
     #[test]
     fn authority_rejects_unapproved_measurement_and_malformed_request() {
-        let wrong = LaunchRequest::new(9, [0xa2; 32], [0x52; 64], [0x72; 64]).unwrap();
+        let wrong =
+            LaunchRequest::new(9, [0xa2; 32], [0x52; 64], AUTHORITY_POLICY_MEASUREMENT).unwrap();
         assert_eq!(process_authority_request(&wrong.encode()), Err(()));
+        let wrong_policy =
+            LaunchRequest::new(9, [0xa2; 32], AUTHORITY_MEASUREMENT, [0x73; 64]).unwrap();
+        assert_eq!(process_authority_request(&wrong_policy.encode()), Err(()));
         let mut malformed = wrong.encode();
         malformed[0] ^= 1;
         assert_eq!(process_authority_request(&malformed), Err(()));

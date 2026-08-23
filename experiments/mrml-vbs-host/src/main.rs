@@ -17,6 +17,8 @@ const MAX_ENCLAVE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
 #[cfg(windows)]
 const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
+#[cfg(windows)]
+const AUTHORITY_POLICY_MEASUREMENT: [u8; 64] = [0x72; 64];
 
 #[cfg(windows)]
 const _: () = assert!(VBS_AUTHORITY_CONTEXT_BYTES == mrml_windows::VBS_AUTHORITY_CONTEXT_BYTES);
@@ -61,8 +63,13 @@ fn application_main() -> Result<()> {
     let mut nonce = [0; 32];
     mrml_runtime::fill_random(&mut nonce)
         .map_err(|_| anyhow!("cryptographic nonce generation failed"))?;
-    let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, [0x72; 64])
-        .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
+    let request = LaunchRequest::new(
+        1,
+        nonce,
+        AUTHORITY_MEASUREMENT,
+        AUTHORITY_POLICY_MEASUREMENT,
+    )
+    .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
     let mut receipt = [0; AUTHORITY_RECEIPT_BYTES];
     let context = VbsAuthorityContext::new(
@@ -92,9 +99,15 @@ fn application_main() -> Result<()> {
     );
     let mut session = ProtectionSession::new(nonce)
         .map_err(|error| anyhow!("protection session rejected: {:?}", error))?;
-    let admitted =
-        AuthorityReceipt::verify_and_admit(&AUTHORITY_KEY, request, &receipt, &mut session, policy)
-            .map_err(|error| anyhow!("authority receipt admission failed: {:?}", error))?;
+    let admitted = AuthorityReceipt::verify_and_admit(
+        &AUTHORITY_KEY,
+        request,
+        &receipt,
+        AUTHORITY_POLICY_MEASUREMENT,
+        &mut session,
+        policy,
+    )
+    .map_err(|error| anyhow!("authority receipt admission failed: {:?}", error))?;
     mrml_println!(
         "verified VTL1 authority receipt: backend={:?} claims={:?}",
         admitted.backend(),

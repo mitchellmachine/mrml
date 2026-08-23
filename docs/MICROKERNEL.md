@@ -55,6 +55,16 @@ measurement, nonce, replay, and debug policy. The VBS host probe uses this
 combined operation rather than treating MAC verification alone as launch
 admission.
 
+The launch request's separate policy measurement is not trusted merely because
+it is included in the authenticated request digest. The VBS authority compares
+it with an independently compiled approved-policy measurement before issuing a
+receipt. Final `verify_and_admit` takes the verifier's independently expected
+policy measurement and compares it again after authenticating the exact
+request. A mismatch has its own fail-closed error and does not advance replay
+state. Tests alter only the policy identity while retaining an otherwise valid
+request and receipt, then prove a correct same-sequence request is still
+admissible.
+
 The intended x86_64 layers are:
 
 - ordinary WHP or KVM remains explicitly unprotected against its host;
@@ -174,7 +184,7 @@ rejects replay, debug mode, rollback, and insufficient claims.
 The enclave now implements that authority entry rather than only a boundary
 probe. It copies the fixed-size call context and request into strict enclave
 memory with `EnclaveCopyIntoEnclave`, never directly dereferences a host
-pointer, requires the compiled workload measurement, constructs a non-debug
+pointer, requires the compiled workload and policy measurements, constructs a non-debug
 VBS report, seals the canonical receipt, and copies it out with
 `EnclaveCopyOutOfEnclave`. Pure tests cover a correctly bound receipt, malformed
 requests, and unapproved measurements. The current constant development MAC

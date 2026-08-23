@@ -138,6 +138,7 @@ pub enum ProtectedChannelError {
     Malformed,
     MissingNonce,
     MissingMeasurement,
+    PolicyMeasurementMismatch,
     InvalidTag,
     Report(ProtectionError),
 }
@@ -189,6 +190,10 @@ impl LaunchRequest {
 
     pub const fn image_measurement(self) -> [u8; 64] {
         self.image_measurement
+    }
+
+    pub const fn policy_measurement(self) -> [u8; 64] {
+        self.policy_measurement
     }
 
     pub fn encode(self) -> [u8; LAUNCH_REQUEST_BYTES] {
@@ -305,10 +310,16 @@ impl AuthorityReceipt {
         key: &[u8; 32],
         request: LaunchRequest,
         input: &[u8],
+        expected_policy_measurement: [u8; 64],
         session: &mut ProtectionSession,
         policy: ProtectionPolicy,
     ) -> Result<ProtectionAdmission, ProtectedChannelError> {
         let receipt = Self::verify(key, request, input)?;
+        if expected_policy_measurement == [0; 64]
+            || request.policy_measurement != expected_policy_measurement
+        {
+            return Err(ProtectedChannelError::PolicyMeasurementMismatch);
+        }
         session
             .admit(receipt.report, policy)
             .map_err(ProtectedChannelError::Report)
@@ -448,6 +459,7 @@ mod tests {
                 &KEY,
                 request(4),
                 &bare_receipt,
+                POLICY,
                 &mut session,
                 policy,
             ),
@@ -462,12 +474,50 @@ mod tests {
                 &KEY,
                 request(4),
                 &vbs_receipt,
+                POLICY,
                 &mut session,
                 policy,
             )
             .unwrap()
             .backend(),
             ProtectionBackend::VbsEnclave
+        );
+    }
+
+    #[test]
+    fn authenticated_receipt_requires_independently_expected_policy() {
+        let encoded = AuthorityReceipt::seal(&KEY, request(4), report(4)).unwrap();
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            false,
+            1,
+            IMAGE,
+        );
+        let mut session = ProtectionSession::new(NONCE).unwrap();
+        assert_eq!(
+            AuthorityReceipt::verify_and_admit(
+                &KEY,
+                request(4),
+                &encoded,
+                [0x73; 64],
+                &mut session,
+                policy,
+            ),
+            Err(ProtectedChannelError::PolicyMeasurementMismatch)
+        );
+        assert_eq!(
+            AuthorityReceipt::verify_and_admit(
+                &KEY,
+                request(4),
+                &encoded,
+                POLICY,
+                &mut session,
+                policy,
+            )
+            .unwrap()
+            .sequence(),
+            4
         );
     }
 

@@ -117,6 +117,9 @@ consumer-PC design does not depend on server confidential-computing extensions.
 Admission policy requires the exact backend as well as claims, measurement,
 security version, nonce, sequence, and debug state. A valid receipt from another
 mode cannot satisfy a weaker overlapping claim set or consume replay state.
+VBS request admission also compares the request's policy measurement with a
+verifier-owned expected value; merely MAC-binding a broker-selected policy is
+not approval.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.
