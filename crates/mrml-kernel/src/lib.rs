@@ -73,8 +73,8 @@ pub use protected_execution::{
     ProtectionError, ProtectionPolicy, ProtectionReport, ProtectionSession,
 };
 pub use protected_monitor::{
-    DomainId, DomainState, GranuleId, GranuleState, GranuleTransition, GranuleTransitionKind,
-    MonitorError, ProtectedMonitor,
+    DomainId, DomainState, GranuleHardware, GranuleId, GranuleState, GranuleTransition,
+    GranuleTransitionKind, MonitorError, ProtectedMonitor,
 };
 pub use scheduler::{
     BalanceOutcome, BalancePolicyError, BalanceTarget, DetachedTask, KernelScheduleError,

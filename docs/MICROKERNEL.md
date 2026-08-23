@@ -242,6 +242,14 @@ adapter performs the corresponding hardware change and then completes that
 ticket with success or failure. Policy state remains unchanged on hardware
 failure; failed tickets are consumed and retries receive a fresh sequence.
 Forged, replayed, mismatched, or already completed tickets cannot mutate state.
+Production callers cannot submit a bare success Boolean: completion is routed
+through an explicitly unsafe `GranuleHardware` implementation whose contract
+requires revoke-before-grant ordering, completed CPU/IOMMU translation
+invalidation, complete overwrite before scrub completion, and rollback or a
+more restrictive state on failure. Tickets include exact source and target
+domain ownership as well as the physical address. The monitor validates the
+entire opaque ticket before dispatch, so forged or stale work never reaches the
+adapter, and revalidates it before policy commit.
 Only one transition may be pending per granule, and a pending transition that
 mentions a domain blocks that domain's seal/start/stop/destroy and evidence
 operations. This prevents domain lifecycle progress or protection reports

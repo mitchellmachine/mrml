@@ -75,6 +75,8 @@ pub struct GranuleTransition {
     sequence: u32,
     kind: GranuleTransitionKind,
     physical: PhysAddr,
+    from_owner: Option<DomainId>,
+    to_owner: Option<DomainId>,
 }
 
 impl GranuleTransition {
@@ -89,6 +91,30 @@ impl GranuleTransition {
     pub const fn physical(self) -> PhysAddr {
         self.physical
     }
+
+    pub const fn from_owner(self) -> Option<DomainId> {
+        self.from_owner
+    }
+
+    pub const fn to_owner(self) -> Option<DomainId> {
+        self.to_owner
+    }
+}
+
+/// Privileged adapter that applies one validated transition to EPT and IOMMU
+/// state. Implementing this trait asserts hardware ordering and rollback
+/// invariants that safe Rust cannot inspect.
+///
+/// # Safety
+///
+/// On `true`, the exact transition must be fully applied and all required CPU
+/// and IOMMU translation invalidations must be complete. Old access must be
+/// revoked before new access is granted. `CompleteScrub` must additionally
+/// overwrite the complete granule before host access is restored. On `false`,
+/// no new access may remain visible; partial work must be rolled back or left
+/// more restrictive than the pre-transition state.
+pub unsafe trait GranuleHardware {
+    fn apply_transition(&mut self, transition: GranuleTransition) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -374,18 +400,22 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         )
     }
 
-    pub fn complete_transition(
+    pub fn execute_transition<H: GranuleHardware>(
+        &mut self,
+        transition: GranuleTransition,
+        hardware: &mut H,
+    ) -> Result<(), MonitorError> {
+        self.validate_transition(transition)?;
+        let hardware_succeeded = hardware.apply_transition(transition);
+        self.complete_transition(transition, hardware_succeeded)
+    }
+
+    fn complete_transition(
         &mut self,
         transition: GranuleTransition,
         hardware_succeeded: bool,
     ) -> Result<(), MonitorError> {
-        let pending = self
-            .granule(transition.granule)?
-            .pending
-            .ok_or(MonitorError::StaleTransition)?;
-        if pending.sequence != transition.sequence || pending.kind != transition.kind {
-            return Err(MonitorError::StaleTransition);
-        }
+        let pending = self.validate_transition(transition)?;
         if !hardware_succeeded {
             self.granule_mut(transition.granule)?.pending = None;
             return Err(if pending.kind == GranuleTransitionKind::CompleteScrub {
@@ -504,7 +534,29 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             sequence,
             kind,
             physical: granule.physical,
+            from_owner,
+            to_owner,
         })
+    }
+
+    fn validate_transition(
+        &self,
+        transition: GranuleTransition,
+    ) -> Result<PendingTransition, MonitorError> {
+        let granule = self.granule(transition.granule)?;
+        let pending = granule.pending.ok_or(MonitorError::StaleTransition)?;
+        let expected = GranuleTransition {
+            granule: transition.granule,
+            sequence: pending.sequence,
+            kind: pending.kind,
+            physical: granule.physical,
+            from_owner: pending.from_owner,
+            to_owner: pending.to_owner,
+        };
+        if transition != expected {
+            return Err(MonitorError::StaleTransition);
+        }
+        Ok(pending)
     }
 
     fn domain_has_pending_transition(&self, id: DomainId) -> bool {
@@ -557,6 +609,22 @@ impl<const DOMAINS: usize, const GRANULES: usize> Default for ProtectedMonitor<D
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RecordingHardware {
+        succeed: bool,
+        calls: usize,
+        last: Option<GranuleTransition>,
+    }
+
+    // SAFETY: this deterministic test adapter models an atomic hardware
+    // transaction and records no partial state when configured to fail.
+    unsafe impl GranuleHardware for RecordingHardware {
+        fn apply_transition(&mut self, transition: GranuleTransition) -> bool {
+            self.calls += 1;
+            self.last = Some(transition);
+            self.succeed
+        }
+    }
 
     #[test]
     fn lifecycle_requires_measurement_and_scrub_before_reuse() {
@@ -765,5 +833,65 @@ mod tests {
         );
         monitor.complete_transition(assignment, true).unwrap();
         monitor.seal_domain(domain, [0xb1; 64]).unwrap();
+    }
+
+    #[test]
+    fn public_execution_validates_before_dispatching_exact_ticket() {
+        let mut monitor = ProtectedMonitor::<1, 1>::new();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0x80_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        assert_eq!(transition.from_owner(), None);
+        assert_eq!(transition.to_owner(), None);
+        let mut hardware = RecordingHardware {
+            succeed: true,
+            calls: 0,
+            last: None,
+        };
+        let forged = GranuleTransition {
+            physical: PhysAddr::new(0x81_0000).unwrap(),
+            ..transition
+        };
+        assert_eq!(
+            monitor.execute_transition(forged, &mut hardware),
+            Err(MonitorError::StaleTransition)
+        );
+        assert_eq!(hardware.calls, 0);
+        monitor
+            .execute_transition(transition, &mut hardware)
+            .unwrap();
+        assert_eq!(hardware.calls, 1);
+        assert_eq!(hardware.last, Some(transition));
+        assert_eq!(
+            monitor.execute_transition(transition, &mut hardware),
+            Err(MonitorError::StaleTransition)
+        );
+        assert_eq!(hardware.calls, 1);
+    }
+
+    #[test]
+    fn adapter_failure_is_consumed_without_policy_commit() {
+        let mut monitor = ProtectedMonitor::<1, 1>::new();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0x90_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        let mut hardware = RecordingHardware {
+            succeed: false,
+            calls: 0,
+            last: None,
+        };
+        assert_eq!(
+            monitor.execute_transition(transition, &mut hardware),
+            Err(MonitorError::HardwareTransitionFailed)
+        );
+        assert_eq!(hardware.calls, 1);
+        assert_eq!(monitor.granule_state(granule), Ok(GranuleState::HostOwned));
+        assert_eq!(
+            monitor.execute_transition(transition, &mut hardware),
+            Err(MonitorError::StaleTransition)
+        );
+        assert_eq!(hardware.calls, 1);
     }
 }
