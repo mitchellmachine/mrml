@@ -2637,6 +2637,43 @@ without a separately authenticated expected digest it is not evidence of
 authenticity or rollback resistance. Native stable-object storage, atomic
 commit, and crash recovery remain the next dependency gate.
 
+The first native-storage dependency gate now lives in the separate `no_std`
+`mrml-storage` userspace-service crate, not in the privileged kernel. A stable
+object identity combines a nonzero 128-bit volume identity with a nonzero local
+identity; names and IDs are data and never authorize. A fixed-capacity global
+authority table binds opaque generational handles to one principal, object
+kind, and nonempty kind-valid rights set. Delegation requires explicit
+`DELEGATE`, can only reduce rights, records its source lineage, and may cross
+principals. Revoking any handle retires it and all derived descendants across
+principals; stale generations, wrong principals, kind confusion, table
+exhaustion, and overbroad derivation fail closed.
+
+Canonical version-1 fixed records now cover volume geometry and redundant
+superblock locations, exact predecessor-linked superblock generations, stable
+directory/file metadata, and bounded UTF-8 directory entries. Directory names
+reject empty, dot, dot-dot, NUL, slash, invalid UTF-8, and hidden tail bytes;
+rename changes parent metadata without changing object identity. Every parser
+checks exact length, version, reserved bytes, arithmetic, volume binding,
+nonzero identity/generation, metadata ranges, and a SHA3-256 self-check. That
+digest detects covered corruption only: it is not authority, authenticated
+storage, atomic publication, replay defense, or rollback protection. Ten
+focused unit tests and strict crate-local clippy pass on Windows gnullvm and
+Arch Linux under WSL2. Extent records, COW tree publication, directory
+operations, file I/O, transactions, crash recovery,
+snapshots, a block-device service, and configuration-checkpoint persistence
+remain unimplemented.
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-storage --release --no-default-features
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
+cargo +nightly test -q -p mrml-storage --release --no-default-features
+cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
+```
+
+Both unit-test runs passed 10 tests; both strict clippy invocations passed.
+These are unit tests and simulation of in-memory metadata/authority state, not
+block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
+
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
 IPC maximum and capability arrays by eight canonical 16-byte descriptors. Each

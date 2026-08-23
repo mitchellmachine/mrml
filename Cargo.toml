@@ -6,6 +6,7 @@ members = [
     "crates/mrml-kernel-image",
     "crates/mrml-service-image",
     "crates/mrml-config",
+    "crates/mrml-storage",
     "crates/mrml-uefi",
     "crates/mrml-kernel",
     "crates/mrml-kernel-bench",

@@ -563,3 +563,18 @@ layout optimization, cryptographic construction, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional canonical serialization, hashing,
 and defensive recovery validation.
+
+## 2026-08-23 — capability-native storage identity and metadata foundation
+
+MRML source: `crates/mrml-storage`.
+
+The userspace storage foundation uses conventional nonzero stable identifiers,
+fixed-capacity generational capability tables, attenuated delegation with
+parent-lineage revocation, and fixed versioned metadata records protected by a
+SHA3-256 corruption checksum. Directory entries use bounded UTF-8 names and
+object references; superblocks use ordinary monotonically chained generations.
+This adds no novel filesystem algorithm, storage optimization, cryptographic
+construction, on-disk tree, compression scheme, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional capability bookkeeping and
+defensive fixed-record filesystem metadata.

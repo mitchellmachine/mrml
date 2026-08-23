@@ -232,6 +232,8 @@ remain unfinished.
   microkernel, boot, and isolated-service execution.
 - `mrml-config`: fixed-capacity typed configuration state and versioned
   configuration/supervision service protocols.
+- `mrml-storage`: capability-native stable storage identities, attenuated
+  authority lineage, and canonical versioned metadata records.
 - `mrml-kvm`, `mrml-kvm-run`, `mrml-whp`, `mrml-whp-run`: Linux and Windows
   virtualization backends and signed probes.
 - `mrml-runtime`, `mrml-tensor`, `mrml-model`, `mrml-tokenizer`: inference and

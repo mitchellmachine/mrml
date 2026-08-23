@@ -222,6 +222,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mrml-storage"
+version = "0.4.0"
+dependencies = [
+ "mrml-crypto",
+]
+
+[[package]]
 name = "mrml-tensor"
 version = "0.4.0"
 dependencies = [

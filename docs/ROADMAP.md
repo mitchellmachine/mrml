@@ -192,6 +192,16 @@ authority; unrelated domains continue.
    authenticated atomic commit/recovery protocol before this item is complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
+   **IMPLEMENTED:** `mrml-storage` supplies stable nonzero volume/object IDs,
+   kind-specific rights without a universal administrator right,
+   principal-bound generational handles, attenuated cross-principal derivation,
+   and transitive descendant revocation. Version-1 fixed records cover volume
+   geometry, an exact predecessor-linked superblock generation, directory and
+   file metadata, and canonical bounded UTF-8 directory entries. SHA3-256
+   self-checks detect covered corruption only; they provide neither authority,
+   authenticity, atomic persistence, nor rollback resistance. Windows and
+   Linux unit tests exercise malformed records, wrong volumes, stable identity
+   across rename, rights confusion, stale handles, and descendant revocation.
 3. Implement extent mapping, checksummed COW metadata, directory operations,
    file reads/writes, explicit transactions, and crash recovery in that order.
 4. Add snapshot objects and capability enforcement, then system-generation and
