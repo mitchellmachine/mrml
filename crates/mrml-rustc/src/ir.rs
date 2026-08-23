@@ -464,7 +464,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
                     }
                     crate::ScalarType::Char
                     | crate::ScalarType::Unit
-                    | crate::ScalarType::RawPointer { .. } => {}
+                    | crate::ScalarType::RawPointer { .. }
+                    | crate::ScalarType::Reference { .. } => {}
                 }
             }
             ExprKind::Unary { operator, operand } => {

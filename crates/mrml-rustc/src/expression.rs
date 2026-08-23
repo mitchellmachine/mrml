@@ -192,6 +192,10 @@ pub enum ScalarType {
         pointee: PointerPointee,
         mutable: bool,
     },
+    Reference {
+        target: PointerPointee,
+        mutable: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,6 +239,18 @@ impl ScalarType {
             _ => {
                 if let Some(integer) = IntegerType::from_name(name) {
                     return Some(Self::Integer(integer));
+                }
+                if let Some(target) = name.trim().strip_prefix('&') {
+                    let target = target.trim();
+                    let (target, mutable) = target
+                        .strip_prefix("mut ")
+                        .map_or((target, false), |target| (target.trim(), true));
+                    let target = match target {
+                        "bool" => PointerPointee::Bool,
+                        "char" => PointerPointee::Char,
+                        name => PointerPointee::Integer(IntegerType::from_name(name)?),
+                    };
+                    return Some(Self::Reference { target, mutable });
                 }
                 let target = name.trim().strip_prefix('*')?.trim();
                 let (target, mutable) = if let Some(target) = target.strip_prefix("const ") {
@@ -1108,7 +1124,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     ScalarType::Integer(_)
                     | ScalarType::Char
                     | ScalarType::Unit
-                    | ScalarType::RawPointer { .. },
+                    | ScalarType::RawPointer { .. }
+                    | ScalarType::Reference { .. },
                 ..
             } => false,
             ExprKind::Sequence { then, .. } => self.is_boolean_expression(then, depth + 1),
@@ -1453,6 +1470,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     }
                     ScalarType::Unit => Err(ConstEvalError::InvalidCast),
                     ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
+                    ScalarType::Reference { .. } => Err(ConstEvalError::InvalidCast),
                 }
             }
             ExprKind::Unary { operator, operand } => {

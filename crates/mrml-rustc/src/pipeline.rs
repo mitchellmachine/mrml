@@ -401,6 +401,29 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
+        let reference = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: &mut u16, delta: u16, mutate: bool) -> u16 { if mutate { *update(value, delta) } else { read(value) } } fn update(value: &mut u16, delta: u16) -> &mut u16 { *value += delta; identity_mut(value) } fn identity_mut(value: &mut u16) -> &mut u16 { value } fn read(value: &u16) -> u16 { *identity(value) } fn identity(value: &u16) -> &u16 { value }";
+        assert!(compile(reference, "answer", ObjectFormat::Elf64).is_ok());
+
+        let boolean_reference = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: &mut bool) -> bool { *flip(value) } fn flip(value: &mut bool) -> &mut bool { *value = !*value; value }";
+        assert!(compile(boolean_reference, "answer", ObjectFormat::Coff).is_ok());
+
+        let character_reference = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: &char) -> char { *identity(value) } fn identity(value: &char) -> &char { value }";
+        assert!(compile(character_reference, "answer", ObjectFormat::Elf64).is_ok());
+
+        let wrong_reference_target = "fn identity(value: &u32) -> &u32 { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: &u16) -> u32 { *identity(value) }";
+        let error = compile(wrong_reference_target, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_reference_mutability = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: &u16) -> u16 { *identity(value) }";
+        let error = compile(wrong_reference_mutability, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
         let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

@@ -2572,11 +2572,11 @@ available to the mapping closure.
 
 Runtime expressions can call a safe, non-const Rust-ABI function declared
 before or after the selected export, with up to four built-in integer, Boolean,
-character, unit, or thin scalar raw-pointer parameters and a result from the
-same scalar, unit, or raw-pointer families. Raw-pointer signatures preserve
-their scalar pointee and const/mutability distinctions; mutable pointers may
-coerce to const pointers, while the reverse direction and mismatched pointees
-fail type checking.
+character, unit, thin scalar raw-pointer, or thin scalar-reference parameters
+and a result from the same families. Pointer and reference signatures preserve
+their scalar target and const/mutability distinctions; mutable values may
+coerce or reborrow as immutable values, while the reverse direction and
+mismatched scalar targets fail type checking.
 Arguments execute eagerly in source order, are normalized to their declared
 types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
@@ -2694,6 +2694,15 @@ and Arch Linux, covering mutable-to-const argument coercion, exact thin-pointer
 returns, a typed pointer local, and address extraction after the inlined calls.
 Separate adversarial sources reject mismatched pointees and const-to-mutable
 arguments.
+A scalar-reference helper chain produced a 232-byte COFF object and a 624-byte
+ELF64 object. Pinned-nightly callers matched six independent read-only and
+mutating cases on Windows and Arch Linux, proving shared reborrowing, mutation
+through `&mut u16`, exact mutable-reference returns across nested inline-frame
+cleanup, and caller-visible pointee updates. Object-emission tests additionally
+cover Boolean and character reference parameters and returns. Separate
+adversarial sources reject mismatched scalar targets and shared-to-mutable
+arguments. Slice, string, and fixed-array references remain outside helper
+signatures because their fat-pointer or aggregate frame behavior is separate.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
