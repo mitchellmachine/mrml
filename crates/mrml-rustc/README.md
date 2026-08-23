@@ -1198,7 +1198,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 539 Windows library, conformance, rustc-nightly-replacement, and driver
+The 541 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1208,6 +1208,10 @@ A checked-option `or_else` probe emitted a 224-byte COFF object and a 616-byte
 ELF64 object. Independent pinned-nightly callers proved that `Some` skips the
 fallback, `None` can recover to `Some`, and a second failure remains `None` on
 both hosts.
+An eager checked-option `or` probe emitted a 244-byte COFF object and a
+640-byte ELF64 object. Independent pinned-nightly callers observed first-`Some`
+preference, recovery from an outer `None`, and propagation when both producers
+returned `None` on Windows and Arch Linux WSL.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.
@@ -2473,6 +2477,13 @@ and locals, and must return another supported checked producer with the same
 integer payload type. A present outer value is preserved without evaluating
 the fallback, while a fallback failure retains `None` for later composition or
 terminal consumption.
+
+Checked integer options support eager `Option::or` for a second supported
+checked producer with the same integer payload type. The receiver and
+alternative are evaluated in source order regardless of receiver validity,
+then the receiver is selected when present and the alternative otherwise.
+This preserves Rust's eager argument semantics while retaining the internal
+value-plus-validity representation for further composition.
 
 Checked integer options also support composable `Option::inspect`. Its closure
 receives an immutable reference to a present candidate, must return unit, and

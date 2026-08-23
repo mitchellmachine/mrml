@@ -574,6 +574,10 @@ pub enum ExprKind<'source> {
         option: ExprId,
         closure: ExprId,
     },
+    IntegerOptionOr {
+        option: ExprId,
+        alternative: ExprId,
+    },
     IntegerOptionInspect {
         option: ExprId,
         closure: ExprId,
@@ -1008,6 +1012,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerOptionMap { .. }
             | ExprKind::IntegerOptionAndThen { .. }
             | ExprKind::IntegerOptionOrElse { .. }
+            | ExprKind::IntegerOptionOr { .. }
             | ExprKind::IntegerOptionInspect { .. }
             | ExprKind::IntegerOptionFilter { .. }
             | ExprKind::IntegerClampMagnitude { .. }
@@ -1305,6 +1310,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerOptionMap { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionAndThen { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionOrElse { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerOptionOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionInspect { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionFilter { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2935,6 +2941,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::IntegerOptionOrElse { option, closure } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
                 self.substitute_identifier(closure, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionOr {
+                option,
+                alternative,
+            } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
+                self.substitute_identifier(alternative, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerOptionInspect { option, closure } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
@@ -4745,6 +4758,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "map"
                         | "and_then"
                         | "or_else"
+                        | "or"
                         | "inspect"
                         | "filter"
                         | "clamp_magnitude"
@@ -4940,6 +4954,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "map"
                     | "and_then"
                     | "or_else"
+                    | "or"
                     | "inspect"
                     | "filter"
                     | "unwrap_or"
@@ -5463,6 +5478,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "or_else" => ExprKind::IntegerOptionOrElse {
                     option: base,
                     closure: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "or" => ExprKind::IntegerOptionOr {
+                    option: base,
+                    alternative: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },
