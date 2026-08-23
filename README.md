@@ -36,6 +36,12 @@ remaining milestones live in [docs/MICROKERNEL.md](docs/MICROKERNEL.md). Keeping
 that detail outside this README makes the project overview readable while
 retaining the evidence needed for engineering work.
 
+The durable OS direction is split by purpose: [architecture](docs/ARCHITECTURE.md),
+[security boundaries](docs/SECURITY.md), [dependency-ordered roadmap](docs/ROADMAP.md),
+and [context-loss recovery](docs/RECOVERY.md). `docs/MICROKERNEL.md` remains the
+detailed implementation and evidence ledger. Architecture goals in those files
+are not completion claims.
+
 ## Design principles
 
 - Own the critical implementation and keep the trusted dependency surface
@@ -291,8 +297,9 @@ not only self-round-trip tests.
 This section exists specifically to prevent a new AI session from overstating
 the repository or undoing its invariants.
 
-1. Read this README and [docs/MICROKERNEL.md](docs/MICROKERNEL.md) before
-   changing kernel, VMM, signing, GPU, or trust-boundary code.
+1. Read `AGENTS.md`, this README, the architecture, security, roadmap, recovery,
+   and [microkernel evidence](docs/MICROKERNEL.md) documents before changing
+   kernel, VMM, signing, GPU, or trust-boundary code.
 2. Treat the mandatory contribution rules above as hard acceptance gates.
 3. Inspect the current worktree before editing. Preserve unrelated staged,
    unstaged, and untracked user work; stage only the intended change.

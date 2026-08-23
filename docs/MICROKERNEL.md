@@ -1,5 +1,11 @@
 # MRML microkernel design
 
+This file is the detailed implementation and dated evidence ledger. Stable
+project direction is in [ARCHITECTURE.md](ARCHITECTURE.md), normative boundaries
+in [SECURITY.md](SECURITY.md), dependency order in [ROADMAP.md](ROADMAP.md), and
+context-loss procedure in [RECOVERY.md](RECOVERY.md). Planned architecture in
+those documents must not be reported as implemented evidence here.
+
 This document records design intent, not a claim of production readiness. The
 kernel is new, original Rust intended for CC0 dedication. Research informs
 requirements and trade-offs; no third-party implementation is copied or
@@ -2373,6 +2379,9 @@ erasure/reprovisioning and one bounded restart are complete for the hosted
 WHP/KVM proof.
 
 ## Milestones
+
+This historical list is retained for continuity. The current dependency-ordered
+plan and status vocabulary are authoritative in [ROADMAP.md](ROADMAP.md).
 
 1. Capability model, explicit directory grants, IPC wire format, and property
    tests. The fixed-size policy model and stable, versioned cross-VM control

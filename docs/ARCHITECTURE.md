@@ -1,0 +1,148 @@
+# MRML operating-system architecture
+
+This is the durable architectural overview. Detailed implementation history and
+probe evidence remain in [MICROKERNEL.md](MICROKERNEL.md); security boundaries
+are normative in [SECURITY.md](SECURITY.md); dependency order is in
+[ROADMAP.md](ROADMAP.md); context-loss recovery is in [RECOVERY.md](RECOVERY.md).
+
+## Status vocabulary
+
+- **IMPLEMENTED**: repository code and focused tests exist. This does not imply
+  production readiness, physical-hardware validation, or independent review.
+- **PARTIALLY IMPLEMENTED**: useful pieces exist but the named end-to-end
+  property or integration is incomplete.
+- **EXPERIMENTAL**: executable research or controlled probe whose environment
+  and evidence are narrower than a production claim.
+- **PLANNED**: intended architecture with no complete implementation.
+- **ASPIRATIONAL**: long-term direction whose feasibility or exact design is
+  not yet established.
+
+## Identity and direction
+
+MRML is the **Mitchell Renouf Machine Learning Library**. It began as local
+machine-learning and inference work and is evolving into a broader experimental
+computing stack, including an operating system built from first principles.
+The OS direction is experimental, security-oriented, capability-based,
+microkernel-oriented, Rust-first, local-first, dependency-minimized, designed
+for user sovereignty, and intended to make local AI a first-class system
+capability. MRML is not currently a production operating system.
+
+## Current architecture
+
+**IMPLEMENTED:** an experimental x86_64 PE32+ microkernel, original UEFI loader,
+bounded firmware handoff and allocator, W^X page tables, GDT/IDT/TSS, guarded
+privilege stacks, CPL3 domains, APIC timer preemption, SMP startup, IPIs,
+scheduling and migration, fixed-capacity generational capabilities and tasks,
+bounded IPC, fault retirement, service restart policy, guest-memory policy, and
+native KVM and Windows WHP launch backends. Signed controlled probes exercise
+subsets of these mechanisms. See the evidence ledger in MICROKERNEL.md.
+
+**PARTIALLY IMPLEMENTED:** blocking receive and scheduler wakeup, bounded
+backpressure, attenuated capability transfer, shared-memory bindings, mapping
+revocation, peer fault cleanup, multi-core balancing, protected-execution
+admission, VMX-root monitoring, VT-d table/control machinery, mediated GPU, boot
+admission, measured-boot plumbing, and monotonic release-state abstractions.
+These pieces do not yet form a complete production service substrate or
+hardware-validated security boundary.
+
+**EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
+authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM
+benchmarks. Backend-specific evidence is not evidence for another backend.
+
+**PLANNED:** practical storage, network, firewall, configuration, authority-
+broker, trusted-consent, security-monitor, audit-event, tool, inference, driver,
+and GPU services; production shared-memory queues; TPM-backed rollback state;
+complete physical VT-d/device-reset validation; recovery and release key
+rotation.
+
+**ASPIRATIONAL:** a production-secure sovereign local-AI OS, broad device
+support, machine-checked noninterference, independently audited security, and
+additional architectures.
+
+## The microkernel boundary
+
+The microkernel contains only mechanisms that fundamentally require privileged
+execution: address-space isolation, scheduling, IPC primitives, capability
+enforcement and transfer/revocation primitives, interrupt routing, fundamental
+memory ownership, minimal hardware isolation, and mechanisms needed to prevent
+userspace policy bypass. Ordinary policy must not migrate into the kernel merely
+because it is security-sensitive.
+
+Storage, networking, firewall/network policy, system configuration, authority
+brokering, trusted consent UI, security monitoring, service supervision policy,
+ordinary drivers where feasible, and AI policy belong in isolated userspace
+services. A service failure should revoke its authority and resources, notify
+affected peers, permit bounded restart, and leave unrelated services and the
+kernel running.
+
+## Authority model
+
+MRML avoids ambient authority. A path, PID, port, service name, object ID,
+device name, signature, publisher, hash, or user identity does not itself grant
+access. Authentication answers who an entity is; a capability answers what it
+may do. Human-facing names may guide policy, but enforcement should resolve
+them to capabilities for stable objects.
+
+Capabilities are narrow, explicitly transferred, and generational. Derivation
+may preserve or reduce rights but cannot increase them. Launch by a privileged
+user does not imply universal authority. Revocation is not complete until all
+relevant descendants and derived state—handles, mappings, shared memory, IPC,
+DMA, devices, network/firewall state, cached decisions, and temporary grants—
+are unusable or quarantined.
+
+## IPC and shared data
+
+The control path is kernel-mediated, bounded IPC for small messages,
+synchronization, request/reply, and capability transfer. Its target semantics
+include blocking send/receive, scheduler sleep/wakeup, backpressure, multiple
+clients, peer-death notification, cancellation/timeouts where justified, and
+predictable cleanup. Some receive/wakeup, bounded inbox, sequencing, and
+capability-transfer behavior is implemented; a complete multi-client service
+protocol is not.
+
+The bulk path uses revocable shared pages or rings for storage, network, GPU,
+and inference data. Large payloads should not be copied through the kernel.
+Avoid allocation, global locks, policy engines, scanning, and unnecessary copies
+on hot paths. Measure syscall, IPC, wakeup, lookup, transfer, revocation,
+mapping, interrupt-to-userspace, and later service throughput.
+
+## VMM backends
+
+```text
+backend-independent MRML VM policy and exit handling
+    +-- native WHP/WHPX backend (Windows)
+    +-- native KVM backend (Linux)
+```
+
+Both backends are implemented development and compatibility environments and
+must be preserved. Backend-specific lifecycle, memory mapping, registers, and
+exit decoding remain behind their adapters. Shared semantics belong in common
+kernel/VMM policy. Hosted WHP and KVM do not protect a guest from their host.
+
+## Planned system services
+
+The capability-native authority broker will evaluate narrow requests and may
+deny, allow, request trusted user consent, grant once, grant until process exit,
+or grant for a duration. Consent UI remains outside the kernel and must be
+difficult for untrusted applications to spoof. Temporary grants are revoked on
+exit, expiry, policy change, or explicit action.
+
+The configuration service is planned as typed, schema-validated,
+transactional, capability-controlled, versioned, auditable, exportable, and
+recoverable—not a clone of the Windows Registry. Secrets remain separate.
+
+Networking is planned around explicit authority and bounded connection objects,
+not ambient sockets. Raw packet and device access require separate capabilities.
+Firewall policy remains a service and provides defense in depth; a firewall
+allow rule never creates network authority.
+
+The planned security monitor consumes structured, non-secret events and holds
+only explicit observation/remediation capabilities. It is not an omnipotent
+antivirus process. Stable event classes should cover authority decisions,
+capability revocation, process/service lifecycle, artifact admission, networking,
+and policy changes with monotonic sequencing and trustworthy time only when
+available.
+
+Local AI is eventually exposed as a capability such as
+`ai.inference:<model/resource>`. AI agents receive the same least-authority
+discipline as all software: **AI-native does not mean AI-privileged**.
