@@ -38,6 +38,7 @@ pub enum KvmError {
     InvalidRegisterState,
     Pe(PeError),
     InvalidMapping,
+    MappingStateUncertain,
     PageTable,
     Handoff(HandoffError),
 }
@@ -52,6 +53,19 @@ pub struct KvmMemoryRegion {
 }
 
 impl KvmMemoryRegion {
+    pub fn removal(slot: u32) -> Result<Self, KvmError> {
+        if slot >= MAX_KVM_MEMORY_SLOTS {
+            return Err(KvmError::InvalidSlot);
+        }
+        Ok(Self {
+            slot,
+            flags: 0,
+            guest_address: 0,
+            size: 0,
+            userspace_address: 0,
+        })
+    }
+
     pub fn new(
         slot: u32,
         guest_address: u64,
@@ -268,6 +282,13 @@ mod tests {
         assert_eq!(
             KvmMemoryRegion::new(0, 1, 0x1000, 0x1000, false),
             Err(KvmError::UnalignedMemory)
+        );
+        let removal = KvmMemoryRegion::removal(3).unwrap().encode();
+        assert_eq!(u32::from_ne_bytes(removal[0..4].try_into().unwrap()), 3);
+        assert!(removal[4..].iter().all(|byte| *byte == 0));
+        assert_eq!(
+            KvmMemoryRegion::removal(MAX_KVM_MEMORY_SLOTS),
+            Err(KvmError::InvalidSlot)
         );
     }
 

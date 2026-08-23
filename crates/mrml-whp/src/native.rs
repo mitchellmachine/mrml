@@ -220,6 +220,7 @@ impl WhpSystem {
             api: self.api,
             mappings: [const { None }; MAX_MAPPINGS],
             vp_count: processor_count,
+            mapping_poisoned: false,
             _system: core::marker::PhantomData,
         };
         core::mem::forget(guard);
@@ -249,6 +250,7 @@ pub struct PreparedWhpPartition<'system> {
     api: Api,
     mappings: [Option<OwnedMapping>; MAX_MAPPINGS],
     vp_count: u32,
+    mapping_poisoned: bool,
     _system: core::marker::PhantomData<&'system WhpSystem>,
 }
 
@@ -328,6 +330,14 @@ impl WhpVcpuRunner {
 }
 
 impl PreparedWhpPartition<'_> {
+    pub(crate) fn ensure_mapping_coherent(&self) -> Result<(), WhpError> {
+        if self.mapping_poisoned {
+            Err(WhpError::MappingStateUncertain)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn protect_runtime_trampoline(
         &mut self,
         physical: u64,
@@ -712,6 +722,7 @@ impl PreparedWhpPartition<'_> {
     }
 
     pub(crate) fn run_vp(&mut self, index: u32) -> Result<VmExit, WhpError> {
+        self.ensure_mapping_coherent()?;
         if index >= self.vp_count {
             return Err(WhpError::InvalidVcpu);
         }
@@ -729,6 +740,41 @@ impl PreparedWhpPartition<'_> {
             self.advance_output_instruction(index, context[10] & 0x0f)?;
         }
         Ok(exit)
+    }
+
+    pub(crate) fn revoke_guest_mapping(
+        &mut self,
+        guest_address: u64,
+        bytes: u64,
+    ) -> Result<(), WhpError> {
+        let slot = self
+            .mappings
+            .iter()
+            .position(|entry| {
+                entry.as_ref().is_some_and(|mapping| {
+                    mapping.range.guest_address() == guest_address && mapping.range.size() == bytes
+                })
+            })
+            .ok_or(WhpError::UnmappedMemory)?;
+        let mapping = self.mappings[slot]
+            .as_ref()
+            .ok_or(WhpError::UnmappedMemory)?;
+        for range in mapping.subranges.iter().flatten() {
+            if check(unsafe {
+                (self.api.unmap_gpa_range)(
+                    self.partition.as_ptr(),
+                    range.guest_address(),
+                    range.size(),
+                )
+            })
+            .is_err()
+            {
+                self.mapping_poisoned = true;
+                return Err(WhpError::MappingStateUncertain);
+            }
+        }
+        self.mappings[slot] = None;
+        Ok(())
     }
 
     /// WHP leaves RIP at an intercepted OUT instruction. Advance it only after

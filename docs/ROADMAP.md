@@ -29,6 +29,10 @@ of one exact host extent across distinct VM mappings. Each added endpoint
 independently proves mapping authority and liveness, cannot amplify the source
 access, and must remain NX. Per-endpoint revocation reports when the final
 reference is gone without exposing the opaque host handle to a guest.
+Backend-neutral revocation now removes the exact KVM memory slot or every WHP
+GPA submapping before retiring the common mapping identity. Any uncertain
+native teardown poisons subsequent vCPU execution. Live Linux KVM and Windows
+WHP revocation probes remain required before this gate is physically verified.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
@@ -48,6 +52,8 @@ confidentiality.
 4. Complete transitive revocation accounting for IPC and descendants.
 5. Add shared-page/ring setup with explicit ownership and access attenuation.
 6. Pair mapping revocation with native KVM/WHP invalidation before vCPU resume.
+   **IMPLEMENTED** in code and focused simulation tests; live backend probes
+   remain outstanding.
 7. Integrate fault cleanup, peer notification, erasure, and bounded restart.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.

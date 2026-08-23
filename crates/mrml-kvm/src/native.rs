@@ -7,8 +7,8 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    BootHandoff, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr, VerifiedExecutable, VmBackend,
-    VmExit,
+    BootHandoff, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend,
+    VerifiedExecutable, VmBackend, VmExit,
 };
 
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, decode_run_page};
@@ -207,6 +207,7 @@ impl KvmSystem {
             memory: KvmGuestMemory::new(),
             vm,
             vcpu_id,
+            mapping_poisoned: false,
         })
     }
 
@@ -224,6 +225,7 @@ impl KvmSystem {
             memory: KvmGuestMemory::new(),
             vm,
             vcpu_id,
+            mapping_poisoned: false,
         })
     }
 
@@ -256,6 +258,7 @@ impl KvmSystem {
             memory: KvmGuestMemory::new(),
             vm,
             vcpu_id: 0,
+            mapping_poisoned: false,
         })
     }
 }
@@ -707,6 +710,7 @@ impl Drop for KvmVcpu {
 }
 
 struct HostRegion {
+    slot: u32,
     guest_address: u64,
     bytes: usize,
     host: NonNull<u8>,
@@ -714,9 +718,14 @@ struct HostRegion {
 }
 
 impl HostRegion {
-    fn allocate(guest_address: u64, bytes: usize, readonly: bool) -> Result<Self, KvmError> {
+    fn allocate(
+        slot: u32,
+        guest_address: u64,
+        bytes: usize,
+        readonly: bool,
+    ) -> Result<Self, KvmError> {
         let bytes_u64 = u64::try_from(bytes).map_err(|_| KvmError::MemoryOverflow)?;
-        KvmMemoryRegion::new(0, guest_address, bytes_u64, PAGE_SIZE, readonly)?;
+        KvmMemoryRegion::new(slot, guest_address, bytes_u64, PAGE_SIZE, readonly)?;
         let host = unsafe {
             mmap(
                 core::ptr::null_mut(),
@@ -731,6 +740,7 @@ impl HostRegion {
             return Err(KvmError::SystemCall);
         }
         Ok(Self {
+            slot,
             guest_address,
             bytes,
             host: NonNull::new(host.cast()).ok_or(KvmError::SystemCall)?,
@@ -773,26 +783,43 @@ impl<const N: usize> KvmGuestMemory<N> {
         if self.count == N || self.count >= crate::MAX_KVM_MEMORY_SLOTS as usize {
             return Err(KvmError::MemoryTableFull);
         }
-        let region = HostRegion::allocate(guest_address, bytes, readonly)?;
-        if self.regions[..self.count]
+        let slot = self
+            .regions
+            .iter()
+            .position(Option::is_none)
+            .ok_or(KvmError::MemoryTableFull)?;
+        let region = HostRegion::allocate(slot as u32, guest_address, bytes, readonly)?;
+        if self
+            .regions
             .iter()
             .flatten()
             .any(|existing| guest_address < existing.end() && existing.guest_address < region.end())
         {
             return Err(KvmError::MemoryOverlap);
         }
-        let slot = self.count as u32;
         let host = region.host.as_ptr() as u64;
-        self.regions[self.count] = Some(region);
+        self.regions[slot] = Some(region);
         self.count += 1;
-        Ok((slot, host))
+        Ok((slot as u32, host))
     }
 
-    fn rollback_last(&mut self) {
-        if self.count != 0 {
-            self.count -= 1;
-            self.regions[self.count] = None;
-        }
+    fn remove_slot(&mut self, slot: u32) -> Result<HostRegion, KvmError> {
+        let region = self
+            .regions
+            .get_mut(slot as usize)
+            .and_then(Option::take)
+            .ok_or(KvmError::UnmappedMemory)?;
+        self.count -= 1;
+        Ok(region)
+    }
+
+    fn exact_slot(&self, guest_address: u64, bytes: u64) -> Result<u32, KvmError> {
+        self.regions
+            .iter()
+            .flatten()
+            .find(|region| region.guest_address == guest_address && region.bytes as u64 == bytes)
+            .map(|region| region.slot)
+            .ok_or(KvmError::UnmappedMemory)
     }
 
     pub fn read(&self, guest_address: u64, output: &mut [u8]) -> Result<(), KvmError> {
@@ -920,7 +947,8 @@ impl<const N: usize> KvmGuestMemory<N> {
         let end = guest_address
             .checked_add(bytes as u64)
             .ok_or(KvmError::MemoryOverflow)?;
-        let region = self.regions[..self.count]
+        let region = self
+            .regions
             .iter()
             .flatten()
             .find(|region| guest_address >= region.guest_address && end <= region.end())
@@ -1172,10 +1200,14 @@ pub(crate) struct KvmBackend<const N: usize> {
     memory: KvmGuestMemory<N>,
     vm: KvmVm,
     vcpu_id: u32,
+    mapping_poisoned: bool,
 }
 
 impl<const N: usize> KvmBackend<N> {
     pub(crate) fn run_smp(&mut self) -> Result<(VmExit, VmExit), KvmError> {
+        if self.mapping_poisoned {
+            return Err(KvmError::MappingStateUncertain);
+        }
         let mut application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
         let cancellation = application.cancellation();
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
@@ -1266,7 +1298,7 @@ impl<const N: usize> KvmBackend<N> {
         let (slot, host) = self.memory.allocate(guest_address, bytes, readonly)?;
         let region = KvmMemoryRegion::new(slot, guest_address, bytes as u64, host, readonly)?;
         if let Err(error) = self.vm.register_memory(region) {
-            self.memory.rollback_last();
+            let _ = self.memory.remove_slot(slot);
             return Err(error);
         }
         Ok(())
@@ -1290,6 +1322,9 @@ impl<const N: usize> VmBackend for KvmBackend<N> {
     type Error = KvmError;
 
     fn run(&mut self, vcpu: u32) -> Result<VmExit, Self::Error> {
+        if self.mapping_poisoned {
+            return Err(KvmError::MappingStateUncertain);
+        }
         if vcpu != self.vcpu_id {
             return Err(KvmError::InvalidVcpu);
         }
@@ -1312,6 +1347,18 @@ impl<const N: usize> VmBackend for KvmBackend<N> {
         if unsafe { ioctl(self.vcpu.file.0, KVM_INTERRUPT, &interrupt) } < 0 {
             return Err(KvmError::SystemCall);
         }
+        Ok(())
+    }
+}
+
+impl<const N: usize> RevocableVmBackend for KvmBackend<N> {
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
+        let slot = self.memory.exact_slot(guest_address, bytes)?;
+        if let Err(error) = self.vm.register_memory(KvmMemoryRegion::removal(slot)?) {
+            self.mapping_poisoned = true;
+            return Err(error);
+        }
+        let _ = self.memory.remove_slot(slot)?;
         Ok(())
     }
 }

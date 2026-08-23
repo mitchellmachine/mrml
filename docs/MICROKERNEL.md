@@ -1885,8 +1885,13 @@ require distinct capability objects. Guest mappings are fixed-capacity,
 page-aligned, non-overlapping in both guest and host address spaces, and never
 writable and executable. A request buffer must fit wholly within one readable
 mapping. Backend-owned pointers never enter the policy core. The common
-`VmBackend` contract currently covers vCPU exits, bounded guest copies, and
-interrupt injection. KVM has a prepared launch path and WHP has a native
+`VmBackend` contract covers vCPU exits, bounded guest copies, and interrupt
+injection. Its `RevocableVmBackend` extension removes an exact native mapping
+before `revoke_mapping_before_resume` retires the common identity. KVM uses a
+stable memory-slot identity and a zero-sized `KVM_SET_USER_MEMORY_REGION`
+update; WHP unmaps every installed GPA subrange. A failed native teardown
+poisons all later vCPU execution because the second-level mapping state can no
+longer be proven. KVM has a prepared launch path and WHP has a native
 long-mode lifecycle, memory, and register path. Both run signed one- and
 two-vCPU kernel images, isolated CPL3 services, timer/preemption probes, and
 authenticated mediated-GPU queues. General-purpose device models and bulk
@@ -1896,9 +1901,10 @@ executable rather than a lifecycle-only prototype.
 Guest mappings receive opaque monotonic identifiers and can be revoked or have
 their permissions changed without exposing array slots. Revocation compacts the
 bounded table but never reissues an old identifier. Permission changes retain
-the W^X invariant, and translations fail immediately after revocation. This is
-the common policy operation that concrete adapters must pair with their native
-second-level page-table invalidation before allowing a vCPU to resume.
+the W^X invariant, and translations fail immediately after revocation. Focused
+simulation tests prove native-first ordering and preservation of the policy
+identity on backend failure. The adapters compile on Windows gnullvm; live KVM
+and WHP revocation execution has not yet been exercised for this path.
 
 VM instances are tracked in a fixed-capacity lifecycle table with generational
 identities. Only created images may become loaded, only loaded or cleanly
@@ -2436,8 +2442,9 @@ plan and status vocabulary are authoritative in [ROADMAP.md](ROADMAP.md).
    generations cannot resolve a replacement and the host token never enters
    guest memory. Windows gnullvm unit tests cover read/write attenuation,
    mismatched extents, executable or insufficient native permissions, stale
-   bindings, and final-reference accounting. Native KVM/WHP handle adapters and
-   invalidate-before-resume integration remain pending.
+   bindings, and final-reference accounting. Native KVM/WHP mapping revocation
+   is integrated with fail-closed execution poisoning; live backend evidence
+   and opaque shared-handle adapter integration remain pending.
 2. Original x86_64 UEFI loader, physical allocator, page tables, exceptions,
    timer, scheduler, and serial diagnostics under emulation.
 3. User address spaces and synchronous IPC; isolated storage, network, tool,

@@ -6,7 +6,7 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE,
-    PeImage, PhysAddr, VerifiedExecutable, VmBackend, VmExit,
+    PeImage, PhysAddr, RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -178,6 +178,7 @@ impl PreparedWhpGuest<'_> {
         self.partition.run()
     }
     pub fn run_smp(&mut self) -> Result<(VmExit, VmExit), WhpError> {
+        self.partition.ensure_mapping_coherent()?;
         let trampoline = self.ap_trampoline.ok_or(WhpError::InvalidMapping)?;
         let mut secondary = None;
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
@@ -612,6 +613,12 @@ impl VmBackend for PreparedWhpGuest<'_> {
             return Err(WhpError::InvalidVcpu);
         }
         self.partition.inject_interrupt(vector)
+    }
+}
+
+impl RevocableVmBackend for PreparedWhpGuest<'_> {
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
+        self.partition.revoke_guest_mapping(guest_address, bytes)
     }
 }
 

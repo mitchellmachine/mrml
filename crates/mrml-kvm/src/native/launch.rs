@@ -5,7 +5,7 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE, PhysAddr,
-    VerifiedExecutable, VmBackend, VmExit,
+    RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
 };
 
 use super::{KvmBackend, KvmError, KvmSystem, KvmVcpuSnapshot, map_loaded_handoff, map_loaded_pe};
@@ -468,6 +468,12 @@ impl<const N: usize> VmBackend for PreparedKvmGuest<N> {
     }
     fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> Result<(), Self::Error> {
         self.backend.inject_interrupt(vcpu, vector)
+    }
+}
+
+impl<const N: usize> RevocableVmBackend for PreparedKvmGuest<N> {
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
+        self.backend.revoke_guest_mapping(guest_address, bytes)
     }
 }
 

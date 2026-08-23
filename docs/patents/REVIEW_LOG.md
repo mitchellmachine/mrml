@@ -62,3 +62,18 @@ distinctive optimization, memory layout, calling convention, or algorithm.
 
 Patent review: `NOT_TRIGGERED` — ordinary compiler type propagation and inline
 lowering within the review log's existing Rust-subset compiler category.
+
+## 2026-08-23 — native guest-mapping revocation ordering
+
+MRML source: `crates/mrml-kernel/src/vm.rs`,
+`crates/mrml-kvm/src/{abi,native.rs,native/launch.rs}`, and
+`crates/mrml-whp/src/{abi,native.rs,native/launch.rs}`.
+
+The VMM adapters now remove exact second-level guest mappings before the common
+mapping identity is retired and prevent vCPU execution after uncertain native
+teardown. The implementation uses ordinary lifecycle ordering and the existing
+documented KVM memory-slot and WHP GPA unmapping interfaces. It adds no novel
+algorithm, device protocol, codec, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional capability/mapping lifecycle
+enforcement over existing hypervisor APIs.

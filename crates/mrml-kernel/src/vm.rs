@@ -263,6 +263,10 @@ impl GuestRegion {
         self.host_start
     }
 
+    pub const fn guest_start(self) -> u64 {
+        self.guest_start
+    }
+
     pub const fn pages(self) -> u64 {
         self.pages
     }
@@ -612,6 +616,39 @@ pub trait VmBackend {
     fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> Result<(), Self::Error>;
 }
 
+/// Backend contract for retiring a complete native second-level mapping.
+/// Implementations must prevent every vCPU from running if native teardown
+/// fails or leaves the mapping state uncertain.
+pub trait RevocableVmBackend: VmBackend {
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MappingRevocationError<E> {
+    Backend(E),
+    Policy(VmError),
+}
+
+/// Retires native translation before invalidating the policy identity. A
+/// backend failure deliberately leaves the policy mapping live so callers can
+/// observe that revocation did not complete; the backend is responsible for
+/// poisoning further execution when native state may be uncertain.
+pub fn revoke_mapping_before_resume<B: RevocableVmBackend, const N: usize>(
+    backend: &mut B,
+    memory: &mut GuestMemory<N>,
+    id: GuestMappingId,
+) -> Result<GuestRegion, MappingRevocationError<B::Error>> {
+    let region = memory.region(id).map_err(MappingRevocationError::Policy)?;
+    let bytes = region
+        .pages()
+        .checked_mul(PAGE_SIZE)
+        .ok_or(MappingRevocationError::Policy(VmError::Overflow))?;
+    backend
+        .revoke_guest_mapping(region.guest_start(), bytes)
+        .map_err(MappingRevocationError::Backend)?;
+    memory.unmap(id).map_err(MappingRevocationError::Policy)
+}
+
 pub fn decode_hypercall_exit<B: VmBackend>(
     backend: &B,
     exit: VmExit,
@@ -774,6 +811,34 @@ mod tests {
         }
     }
 
+    struct RevocationBackend {
+        fail: bool,
+        request: Option<(u64, u64)>,
+    }
+
+    impl VmBackend for RevocationBackend {
+        type Error = ();
+        fn run(&mut self, _vcpu: u32) -> Result<VmExit, Self::Error> {
+            Err(())
+        }
+        fn read_guest(&self, _address: u64, _output: &mut [u8]) -> Result<(), Self::Error> {
+            Err(())
+        }
+        fn write_guest(&mut self, _address: u64, _input: &[u8]) -> Result<(), Self::Error> {
+            Err(())
+        }
+        fn inject_interrupt(&mut self, _vcpu: u32, _vector: u8) -> Result<(), Self::Error> {
+            Err(())
+        }
+    }
+
+    impl RevocableVmBackend for RevocationBackend {
+        fn revoke_guest_mapping(&mut self, address: u64, bytes: u64) -> Result<(), Self::Error> {
+            self.request = Some((address, bytes));
+            if self.fail { Err(()) } else { Ok(()) }
+        }
+    }
+
     #[test]
     fn guest_memory_rejects_aliases_crossings_and_wx() {
         assert_eq!(
@@ -823,6 +888,40 @@ mod tests {
             Err(VmError::Unmapped)
         );
         assert_eq!(memory.unmap(id), Err(VmError::StaleMapping));
+    }
+
+    #[test]
+    fn native_revocation_precedes_policy_identity_retirement() {
+        let mut memory = GuestMemory::<1>::new();
+        let id = memory
+            .map(GuestRegion::new(0x4000, PhysAddr::new(0x9000).unwrap(), 2, true, false).unwrap())
+            .unwrap();
+        let mut backend = RevocationBackend {
+            fail: false,
+            request: None,
+        };
+        let region = revoke_mapping_before_resume(&mut backend, &mut memory, id).unwrap();
+        assert_eq!(backend.request, Some((0x4000, 2 * PAGE_SIZE)));
+        assert_eq!(region.guest_start(), 0x4000);
+        assert_eq!(memory.region(id), Err(VmError::StaleMapping));
+    }
+
+    #[test]
+    fn failed_native_revocation_preserves_policy_identity() {
+        let mut memory = GuestMemory::<1>::new();
+        let id = memory
+            .map(GuestRegion::new(0x7000, PhysAddr::new(0xb000).unwrap(), 1, false, true).unwrap())
+            .unwrap();
+        let mut backend = RevocationBackend {
+            fail: true,
+            request: None,
+        };
+        assert_eq!(
+            revoke_mapping_before_resume(&mut backend, &mut memory, id),
+            Err(MappingRevocationError::Backend(()))
+        );
+        assert_eq!(backend.request, Some((0x7000, PAGE_SIZE)));
+        assert_eq!(memory.region(id).unwrap().guest_start(), 0x7000);
     }
 
     #[test]

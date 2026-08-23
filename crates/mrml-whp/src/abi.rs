@@ -26,6 +26,7 @@ pub enum WhpError {
     InvalidVcpu,
     InvalidInterrupt,
     InvalidMapping,
+    MappingStateUncertain,
     UnmappedMemory,
     ReadOnlyMemory,
     PageTable,
