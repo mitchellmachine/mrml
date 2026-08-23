@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 435 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 437 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1924,6 +1924,11 @@ returns ordinary signed negations and unsigned zero, while signed minima and
 every nonzero unsigned value overflow. Two unchecked-mode System V objects
 matched pinned Rust for representable values, and independent signed and
 unsigned overflow probes trapped.
+Stable `strict_shl(u32)` and `strict_shr(u32)` preserve ordinary signed and
+unsigned shift behavior below the receiver width and trap at or above it even
+when overflow checks are disabled. Two unchecked-mode System V objects matched
+pinned Rust from zero through width-minus-one, including signed arithmetic
+right shift; exact-width and `u32::MAX` distance probes trapped.
 Signed integers additionally support `wrapping_neg` and `wrapping_abs` in
 constants and runtime functions. Both preserve the receiver width, including
 the two's-complement minimum value whose mathematical negation is not

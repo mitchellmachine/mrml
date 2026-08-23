@@ -2472,6 +2472,7 @@ fn evaluate_call_aware_integer<
             distance,
             left,
             unbounded,
+            strict,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -2491,6 +2492,9 @@ fn evaluate_call_aware_integer<
                 constants,
                 depth,
             )?;
+            if strict && distance >= u128::from(bits) {
+                return Err(arithmetic_error(ConstEvalError::InvalidShift));
+            }
             shift_integer_bits(value, distance, bits, left, ty.is_signed(), unbounded)
         }
         ExprKind::IntegerWrappingPower {
@@ -3421,6 +3425,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             distance,
             left,
             unbounded,
+            strict,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3434,6 +3439,9 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             let distance = tree
                 .evaluate_at(distance, constants)
                 .map_err(ExecutionError::Arithmetic)?;
+            if strict && distance >= u128::from(bits) {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidShift));
+            }
             shift_integer_bits(value, distance, bits, left, true, unbounded)
         }
         ExprKind::IntegerWrappingPower {

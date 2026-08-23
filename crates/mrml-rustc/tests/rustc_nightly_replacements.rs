@@ -1907,6 +1907,26 @@ fn rustc_strict_negation_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_strict_shifts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.strict_shl(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, distance: u32) -> i16 { input.strict_shr(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, distance: u32) -> u64 { input.strict_shl(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, distance: u32) -> i64 { input.strict_shr(distance) }",
+        "const VALUE: u8 = 21u8.strict_shl(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-84i16).strict_shr(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_euclidean_integer_division_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",
