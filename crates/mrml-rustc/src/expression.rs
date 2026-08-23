@@ -501,9 +501,11 @@ pub enum ExprKind<'source> {
     UncheckedIntegerOperation {
         base: ExprId,
         argument: Option<ExprId>,
+        second_argument: Option<ExprId>,
         operator: BinaryOperator,
         unary: bool,
         disjoint: bool,
+        funnel: bool,
     },
     IntegerClampMagnitude {
         base: ExprId,
@@ -2624,10 +2626,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(argument, name, replacement, depth + 1)?;
             }
-            ExprKind::UncheckedIntegerOperation { base, argument, .. } => {
+            ExprKind::UncheckedIntegerOperation {
+                base,
+                argument,
+                second_argument,
+                ..
+            } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 if let Some(argument) = argument {
                     self.substitute_identifier(argument, name, replacement, depth + 1)?;
+                }
+                if let Some(second_argument) = second_argument {
+                    self.substitute_identifier(second_argument, name, replacement, depth + 1)?;
                 }
             }
             ExprKind::SaturatingArithmetic { base, argument, .. } => {
@@ -4361,6 +4371,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unchecked_neg"
                         | "unchecked_shl"
                         | "unchecked_shr"
+                        | "unchecked_shl_exact"
+                        | "unchecked_shr_exact"
+                        | "unchecked_funnel_shl"
+                        | "unchecked_funnel_shr"
                         | "unchecked_disjoint_bitor"
                         | "clamp_magnitude"
                         | "wrapping_shl"
@@ -4522,6 +4536,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "unchecked_mul"
                     | "unchecked_shl"
                     | "unchecked_shr"
+                    | "unchecked_shl_exact"
+                    | "unchecked_shr_exact"
+                    | "unchecked_funnel_shl"
+                    | "unchecked_funnel_shr"
                     | "unchecked_disjoint_bitor"
                     | "strict_add"
                     | "strict_sub"
@@ -4612,6 +4630,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "write_bytes"
                     | "funnel_shl"
                     | "funnel_shr"
+                    | "unchecked_funnel_shl"
+                    | "unchecked_funnel_shr"
                     | "copy_to"
                     | "copy_to_nonoverlapping"
                     | "copy_from"
@@ -4787,18 +4807,28 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 | "unchecked_neg"
                 | "unchecked_shl"
                 | "unchecked_shr"
+                | "unchecked_shl_exact"
+                | "unchecked_shr_exact"
+                | "unchecked_funnel_shl"
+                | "unchecked_funnel_shr"
                 | "unchecked_disjoint_bitor" => ExprKind::UncheckedIntegerOperation {
                     base,
                     argument,
+                    second_argument,
                     unary: method.text == "unchecked_neg",
                     disjoint: method.text == "unchecked_disjoint_bitor",
+                    funnel: matches!(method.text, "unchecked_funnel_shl" | "unchecked_funnel_shr"),
                     operator: match method.text {
                         "unchecked_add" => BinaryOperator::Add,
                         "unchecked_sub" => BinaryOperator::Subtract,
                         "unchecked_mul" => BinaryOperator::Multiply,
                         "unchecked_neg" => BinaryOperator::Subtract,
-                        "unchecked_shl" => BinaryOperator::ShiftLeft,
-                        "unchecked_shr" => BinaryOperator::ShiftRight,
+                        "unchecked_shl" | "unchecked_shl_exact" | "unchecked_funnel_shl" => {
+                            BinaryOperator::ShiftLeft
+                        }
+                        "unchecked_shr" | "unchecked_shr_exact" | "unchecked_funnel_shr" => {
+                            BinaryOperator::ShiftRight
+                        }
                         "unchecked_disjoint_bitor" => BinaryOperator::BitOr,
                         _ => unreachable!(),
                     },

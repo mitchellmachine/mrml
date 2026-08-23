@@ -2821,6 +2821,10 @@ fn rustc_unchecked_integer_operations_reach_native_objects() {
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64) -> i64 { a.unchecked_neg() }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, n: u32) -> u8 { a.unchecked_shl(n) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64, n: u32) -> i64 { a.unchecked_shr(n) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u16, n: u32) -> u16 { a.unchecked_shl_exact(n) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i32, n: u32) -> i32 { a.unchecked_shr_exact(n) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, b: u8, n: u32) -> u8 { a.unchecked_funnel_shl(b, n) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u64, b: u64, n: u32) -> u64 { a.unchecked_funnel_shr(b, n) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u64, b: u64) -> u64 { a.unchecked_disjoint_bitor(b) }",
     ];
     for source in sources {

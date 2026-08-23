@@ -2307,10 +2307,18 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(argument)?;
         }
-        ExprKind::UncheckedIntegerOperation { base, argument, .. } => {
+        ExprKind::UncheckedIntegerOperation {
+            base,
+            argument,
+            second_argument,
+            ..
+        } => {
             recurse(base)?;
             if let Some(argument) = argument {
                 recurse(argument)?;
+            }
+            if let Some(second_argument) = second_argument {
+                recurse(second_argument)?;
             }
         }
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
@@ -3203,9 +3211,11 @@ fn runtime_expression_type_with_locals<
         ExprKind::UncheckedIntegerOperation {
             base,
             argument,
+            second_argument,
             operator,
             unary,
             disjoint,
+            funnel,
         } => {
             if !function.unsafe_function {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -3221,6 +3231,38 @@ fn runtime_expression_type_with_locals<
             let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             };
+            if funnel {
+                let argument = argument.ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+                let distance = second_argument.ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+                if integer_type.is_signed()
+                    || runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        argument,
+                        depth + 1,
+                    )? != base_type
+                    || !matches!(
+                        runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            distance,
+                            depth + 1,
+                        )?,
+                        RuntimeExpressionType::Integer(None)
+                            | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                    )
+                {
+                    return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                }
+                return Ok(base_type);
+            }
+            if second_argument.is_some() {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             if unary {
                 if argument.is_some() {
                     return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -5524,8 +5566,10 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             ExprKind::UncheckedIntegerOperation {
                 base,
                 argument,
+                second_argument,
                 operator,
                 unary,
+                funnel,
                 ..
             } => {
                 let base_type = runtime_expression_type_with_locals(
@@ -5542,7 +5586,76 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 let previous_width = self.width;
                 self.width = operand_width;
                 self.emit_expression(tree, base, depth + 1)?;
-                if unary {
+                if funnel {
+                    let other =
+                        argument.ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                    let distance =
+                        second_argument.ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                    self.emit_expression(tree, other, depth + 1)?;
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                    self.width = runtime_width("u32")
+                        .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                    self.emit_expression(tree, distance, depth + 1)?;
+                    self.emit(&[0x49, 0x89, 0xc2, 0x59, 0x58])?;
+                    self.evaluation_depth -= 2;
+                    self.width = operand_width;
+                    self.emit(&[0x4d, 0x85, 0xd2])?;
+                    let nonzero = self.emit_forward_branch(0x85)?;
+                    self.emit(if operator == crate::BinaryOperator::ShiftLeft {
+                        &[0x90][..]
+                    } else {
+                        &[0x48, 0x89, 0xc8][..]
+                    })?;
+                    let done = self.emit_unconditional_forward_branch()?;
+                    self.patch_forward_branch(nonzero)?;
+                    self.emit(&[0x49, 0x89, 0xc0, 0x49, 0x89, 0xc9])?;
+                    if operator == crate::BinaryOperator::ShiftLeft {
+                        self.emit(&[
+                            0x44,
+                            0x89,
+                            0xd1,
+                            0x49,
+                            0xd3,
+                            0xe0,
+                            0xb9,
+                            operand_width.bits,
+                            0,
+                            0,
+                            0,
+                            0x44,
+                            0x29,
+                            0xd1,
+                            0x49,
+                            0xd3,
+                            0xe9,
+                        ])?;
+                    } else {
+                        self.emit(&[
+                            0xb9,
+                            operand_width.bits,
+                            0,
+                            0,
+                            0,
+                            0x44,
+                            0x29,
+                            0xd1,
+                            0x49,
+                            0xd3,
+                            0xe0,
+                            0x44,
+                            0x89,
+                            0xd1,
+                            0x49,
+                            0xd3,
+                            0xe9,
+                        ])?;
+                    }
+                    self.emit(&[0x4d, 0x09, 0xc8, 0x4c, 0x89, 0xc0])?;
+                    self.patch_forward_branch(done)?;
+                } else if unary {
                     self.emit(&[0x48, 0xf7, 0xd8])?;
                 } else {
                     let argument =
@@ -14935,6 +15048,10 @@ mod tests {
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64) -> i64 { a.unchecked_neg() }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, n: u32) -> u8 { a.unchecked_shl(n) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64, n: u32) -> i64 { a.unchecked_shr(n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u16, n: u32) -> u16 { a.unchecked_shl_exact(n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i32, n: u32) -> i32 { a.unchecked_shr_exact(n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8, n: u32) -> u8 { a.unchecked_funnel_shl(b, n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u64, b: u64, n: u32) -> u64 { a.unchecked_funnel_shr(b, n) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u64, b: u64) -> u64 { a.unchecked_disjoint_bitor(b) }",
         ];
         for source in sources {
@@ -14956,6 +15073,10 @@ mod tests {
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unchecked_neg() }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i8, b: i8) -> i8 { a.unchecked_disjoint_bitor(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, n: u16) -> u8 { a.unchecked_shl(n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i8, b: i8, n: u32) -> i8 { a.unchecked_funnel_shl(b, n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u16, n: u32) -> u8 { a.unchecked_funnel_shr(b, n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8, n: u16) -> u8 { a.unchecked_funnel_shr(b, n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, n: u32) -> u8 { a.unchecked_funnel_shr(n) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
