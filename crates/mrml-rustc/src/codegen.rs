@@ -3216,6 +3216,7 @@ fn runtime_expression_type_with_locals<
                 transform,
                 crate::expression::IntegerBitTransform::WrappingNegate
                     | crate::expression::IntegerBitTransform::WrappingAbsolute
+                    | crate::expression::IntegerBitTransform::Absolute
                     | crate::expression::IntegerBitTransform::Signum
             ) && !integer_type.is_signed()
             {
@@ -5144,10 +5145,13 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.emit(&[0x48, 0x89, 0xc8])?;
                     }
                     IntegerBitTransform::WrappingNegate => self.emit(&[0x48, 0xf7, 0xd8])?,
-                    IntegerBitTransform::WrappingAbsolute => {
+                    IntegerBitTransform::WrappingAbsolute | IntegerBitTransform::Absolute => {
                         self.emit(&[0x48, 0x85, 0xc0])?;
                         let nonnegative = self.emit_forward_branch(0x89)?;
                         self.emit(&[0x48, 0xf7, 0xd8])?;
+                        if transform == IntegerBitTransform::Absolute && self.overflow_checks {
+                            self.emit_trap_branch(0x80)?;
+                        }
                         self.patch_forward_branch(nonnegative)?;
                     }
                     IntegerBitTransform::Signum => {
@@ -11895,6 +11899,81 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn checks_signed_absolute_overflow_mode() {
+        let source =
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.abs() }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let checked = compile_x86_64_function_with_options::<_, 1024, 2, 64>(
+            &function,
+            &NoConstants,
+            X86_64Abi::Windows,
+            CodegenOptions::CHECKED,
+        )
+        .unwrap();
+        assert!(
+            checked
+                .bytes()
+                .windows(2)
+                .any(|bytes| bytes == [0x0f, 0x80])
+        );
+        let wrapping = compile_x86_64_function_with_options::<_, 1024, 2, 64>(
+            &function,
+            &NoConstants,
+            X86_64Abi::Windows,
+            CodegenOptions::WRAPPING,
+        )
+        .unwrap();
+        assert!(
+            !wrapping
+                .bytes()
+                .windows(2)
+                .any(|bytes| bytes == [0x0f, 0x80])
+        );
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> i32 { input.abs() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 2, 64>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_ok()
+            );
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.abs() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 64>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

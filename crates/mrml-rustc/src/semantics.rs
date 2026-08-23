@@ -2454,12 +2454,19 @@ fn evaluate_call_aware_integer<
                     transform,
                     crate::expression::IntegerBitTransform::WrappingNegate
                         | crate::expression::IntegerBitTransform::WrappingAbsolute
+                        | crate::expression::IntegerBitTransform::Absolute
                         | crate::expression::IntegerBitTransform::Signum
                 ) && !ty.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
-            transform_integer_bits(recurse(base)?, bits, transform)
+            let value = recurse(base)?;
+            if transform == crate::expression::IntegerBitTransform::Absolute
+                && value == 1_u128 << (bits - 1)
+            {
+                return Err(arithmetic_error(ConstEvalError::Overflow));
+            }
+            transform_integer_bits(value, bits, transform)
         }
         ExprKind::IntegerBitCount { base, count } => {
             if ty != crate::IntegerType::U32 {
@@ -3215,7 +3222,13 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
-            transform_integer_bits(recurse(base)?, bits, transform)
+            let value = recurse(base)?;
+            if transform == crate::expression::IntegerBitTransform::Absolute
+                && value == 1_u128 << (bits - 1)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::Overflow));
+            }
+            transform_integer_bits(value, bits, transform)
         }
         ExprKind::WrappingArithmetic {
             base,
@@ -3376,7 +3389,7 @@ fn transform_integer_bits(
         IntegerBitTransform::ReverseBits => value.reverse_bits() >> (128 - bits),
         IntegerBitTransform::ToLittleEndian => value,
         IntegerBitTransform::WrappingNegate => 0_u128.wrapping_sub(value) & mask,
-        IntegerBitTransform::WrappingAbsolute => {
+        IntegerBitTransform::WrappingAbsolute | IntegerBitTransform::Absolute => {
             if value & (1_u128 << (bits - 1)) == 0 {
                 value
             } else {

@@ -1853,6 +1853,8 @@ fn rustc_signed_integer_classification_reaches_native_objects() {
         "const VALUE: bool = (-1i16).is_negative(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
         "const VALUE: bool = 1i32.is_positive(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
         "const VALUE: bool = 0i64.is_positive(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.abs() }",
+        "const VALUE: i16 = (-12345i16).abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
     ];
     for source in sources {
         assert_eq!(
@@ -1862,6 +1864,15 @@ fn rustc_signed_integer_classification_reaches_native_objects() {
         );
         assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
     }
+    let minimum_abs = "const VALUE: i8 = (-128i8).abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }";
+    assert!(matches!(
+        compile_wide(minimum_abs, ObjectFormat::Elf64),
+        Err(CompileErrorKind::Semantic(_))
+    ));
+    assert!(matches!(
+        compile_wide(minimum_abs, ObjectFormat::Coff),
+        Err(CompileErrorKind::Semantic(_))
+    ));
 }
 
 #[test]

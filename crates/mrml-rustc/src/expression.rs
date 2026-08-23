@@ -477,6 +477,7 @@ pub enum IntegerBitTransform {
     ToLittleEndian,
     WrappingNegate,
     WrappingAbsolute,
+    Absolute,
     Signum,
 }
 
@@ -3808,6 +3809,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "to_le"
                         | "wrapping_neg"
                         | "wrapping_abs"
+                        | "abs"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -4006,7 +4008,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                 },
                 "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
-                | "wrapping_abs" | "signum" => ExprKind::IntegerBitTransform {
+                | "wrapping_abs" | "abs" | "signum" => ExprKind::IntegerBitTransform {
                     base,
                     transform: match method.text {
                         "swap_bytes" => IntegerBitTransform::SwapBytes,
@@ -4015,6 +4017,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "to_le" => IntegerBitTransform::ToLittleEndian,
                         "wrapping_neg" => IntegerBitTransform::WrappingNegate,
                         "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
+                        "abs" => IntegerBitTransform::Absolute,
                         "signum" => IntegerBitTransform::Signum,
                         _ => unreachable!(),
                     },
