@@ -3321,6 +3321,11 @@ fn runtime_expression_type_with_locals<
             ) {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
+            if transform == crate::expression::IntegerPairTransform::DivideCeiling
+                && integer_type.is_signed()
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let result_type =
                 if transform == crate::expression::IntegerPairTransform::AbsoluteDifference {
                     integer_type.unsigned_counterpart().unwrap_or(integer_type)
@@ -5555,6 +5560,14 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                             self.emit(&[0x49, 0x83, 0xe0, 1, 0x4c, 0x01, 0xc0])?;
                             self.patch_forward_branch(nonnegative)?;
                         }
+                    }
+                    crate::expression::IntegerPairTransform::DivideCeiling => {
+                        self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x85, 0xc9])?;
+                        self.emit_trap_branch(0x84)?;
+                        self.emit(&[
+                            0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1, 0x48, 0xf7, 0xda, 0x48, 0x83, 0xd0,
+                            0,
+                        ])?;
                     }
                 }
                 self.emit_normalize_width(result_width)?;
@@ -12875,6 +12888,48 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.midpoint(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.midpoint(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn divides_unsigned_integers_toward_positive_infinity() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: u16) -> u16 { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: u64) -> u64 { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: usize, right: usize) -> usize { left.div_ceil(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.div_ceil(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.div_ceil(right) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

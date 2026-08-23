@@ -524,6 +524,7 @@ pub enum IntegerBitTransform {
 pub enum IntegerPairTransform {
     AbsoluteDifference,
     Midpoint,
+    DivideCeiling,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3910,6 +3911,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_div"
                         | "abs_diff"
                         | "midpoint"
+                        | "div_ceil"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -4009,6 +4011,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "pow"
                     | "abs_diff"
                     | "midpoint"
+                    | "div_ceil"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -4175,15 +4178,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
-                "abs_diff" | "midpoint" => ExprKind::IntegerPairTransform {
+                "abs_diff" | "midpoint" | "div_ceil" => ExprKind::IntegerPairTransform {
                     base,
                     other: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
-                    transform: if method.text == "midpoint" {
-                        IntegerPairTransform::Midpoint
-                    } else {
-                        IntegerPairTransform::AbsoluteDifference
+                    transform: match method.text {
+                        "abs_diff" => IntegerPairTransform::AbsoluteDifference,
+                        "midpoint" => IntegerPairTransform::Midpoint,
+                        "div_ceil" => IntegerPairTransform::DivideCeiling,
+                        _ => unreachable!(),
                     },
                 },
                 "swap_bytes"

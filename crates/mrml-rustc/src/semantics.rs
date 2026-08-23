@@ -2584,6 +2584,8 @@ fn evaluate_call_aware_integer<
                 .unwrap_or(crate::IntegerType::I32);
             if integer_expression_type(context, symbol_count, tree, other, constants)
                 .is_some_and(|other_type| other_type != base_type)
+                || (transform == crate::expression::IntegerPairTransform::DivideCeiling
+                    && base_type.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
@@ -2623,6 +2625,9 @@ fn evaluate_call_aware_integer<
                 }
                 crate::expression::IntegerPairTransform::Midpoint => {
                     midpoint_integer_bits(left, right, base_bits, base_type.is_signed())
+                }
+                crate::expression::IntegerPairTransform::DivideCeiling => {
+                    unsigned_divide_ceiling(left, right).map_err(arithmetic_error)?
                 }
             }
         }
@@ -3724,6 +3729,13 @@ fn midpoint_integer_bits(left: u128, right: u128, bits: u8, signed: bool) -> u12
         midpoint = midpoint.wrapping_add(differing & 1) & mask;
     }
     midpoint
+}
+
+fn unsigned_divide_ceiling(left: u128, right: u128) -> Result<u128, ConstEvalError> {
+    if right == 0 {
+        return Err(ConstEvalError::DivisionByZero);
+    }
+    Ok(left / right + u128::from(!left.is_multiple_of(right)))
 }
 
 fn integer_power_bits(
