@@ -1812,6 +1812,58 @@ fn rustc_unsigned_integer_predicates_reach_native_objects() {
 }
 
 #[test]
+fn rustc_ascii_byte_predicates_reach_native_objects() {
+    let methods = [
+        "is_ascii",
+        "is_ascii_alphabetic",
+        "is_ascii_uppercase",
+        "is_ascii_lowercase",
+        "is_ascii_alphanumeric",
+        "is_ascii_digit",
+        "is_ascii_hexdigit",
+        "is_ascii_punctuation",
+        "is_ascii_graphic",
+        "is_ascii_whitespace",
+        "is_ascii_control",
+    ];
+    for method in methods {
+        let mut source = [0u8; 192];
+        let prefix = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> bool { input.";
+        let suffix = "() }";
+        let length = prefix.len() + method.len() + suffix.len();
+        source[..prefix.len()].copy_from_slice(prefix.as_bytes());
+        source[prefix.len()..prefix.len() + method.len()].copy_from_slice(method.as_bytes());
+        source[prefix.len() + method.len()..length].copy_from_slice(suffix.as_bytes());
+        let runtime_source = core::str::from_utf8(&source[..length]).unwrap();
+        assert_eq!(
+            compile_wide(runtime_source, ObjectFormat::Elf64),
+            Ok(()),
+            "{runtime_source}"
+        );
+        assert_eq!(
+            compile_wide(runtime_source, ObjectFormat::Coff),
+            Ok(()),
+            "{runtime_source}"
+        );
+
+        let const_prefix = "const VALUE: bool = 65u8.";
+        let const_suffix = "(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }";
+        let length = const_prefix.len() + method.len() + const_suffix.len();
+        source[..const_prefix.len()].copy_from_slice(const_prefix.as_bytes());
+        source[const_prefix.len()..const_prefix.len() + method.len()]
+            .copy_from_slice(method.as_bytes());
+        source[const_prefix.len() + method.len()..length].copy_from_slice(const_suffix.as_bytes());
+        let source = core::str::from_utf8(&source[..length]).unwrap();
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_independent_aggregate_parameter_widths_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, values: [u16; 3]) -> u8 { if values[1] == 257 { input + 1 } else { input } }",

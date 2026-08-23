@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 383 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 385 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1898,6 +1898,11 @@ Unsigned integer `is_power_of_two` and `is_multiple_of` now work in constant
 initializers and emitted runtime functions for every supported unsigned width.
 The zero-divisor rule matches Rust, including `0.is_multiple_of(0) == true`,
 while signed receivers and explicitly mismatched divisor types fail closed.
+The complete inherent `u8` ASCII classification family now works in constants
+and runtime functions: ASCII, alphabetic, uppercase, lowercase, alphanumeric,
+digit, hexadecimal digit, punctuation, graphic, whitespace, and control-byte
+predicates. Eleven independently emitted System V objects were linked into a
+pinned-nightly caller and matched Rust for every byte from zero through 255.
 The cast/conditional slice emitted 552-byte signed and 520-byte Boolean ELF
 objects. A separate nightly-built caller linked and executed both successfully.
 The compound-comparison replacement emitted a 552-byte ELF object and passed

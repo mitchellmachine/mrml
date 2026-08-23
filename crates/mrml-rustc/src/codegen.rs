@@ -2283,6 +2283,7 @@ fn validate_runtime_inline_const<
                 recurse(argument)?;
             }
         }
+        ExprKind::AsciiPredicate { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
@@ -2595,6 +2596,20 @@ fn runtime_expression_type_with_locals<
                         )?,
                         base_type,
                     ))
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Bool)
+        }
+        ExprKind::AsciiPredicate { base, .. } => {
+            if runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )? != RuntimeExpressionType::Integer(Some(crate::IntegerType::U8))
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
@@ -4936,6 +4951,15 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     ])?;
                     self.patch_forward_branch(end)?;
                 }
+            }
+            ExprKind::AsciiPredicate { base, predicate } => {
+                let previous_width = self.width;
+                self.width = runtime_width("u8")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let emission = self.emit_expression(tree, base, depth + 1);
+                self.width = previous_width;
+                emission?;
+                self.emit_ascii_predicate(predicate)?;
             }
             ExprKind::Integer(literal) => {
                 if literal.value > u128::from(self.width.maximum) {
@@ -7858,6 +7882,49 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.emit_trap_branch(0x8c)?;
         }
         Ok(())
+    }
+
+    fn emit_ascii_predicate(
+        &mut self,
+        predicate: crate::expression::AsciiPredicate,
+    ) -> Result<(), CodegenError> {
+        use crate::expression::AsciiPredicate;
+        let ranges: &[(u8, u8)] = match predicate {
+            AsciiPredicate::Ascii => &[(0x00, 0x7f)],
+            AsciiPredicate::Alphabetic => &[(b'A', b'Z'), (b'a', b'z')],
+            AsciiPredicate::Uppercase => &[(b'A', b'Z')],
+            AsciiPredicate::Lowercase => &[(b'a', b'z')],
+            AsciiPredicate::Alphanumeric => &[(b'0', b'9'), (b'A', b'Z'), (b'a', b'z')],
+            AsciiPredicate::Digit => &[(b'0', b'9')],
+            AsciiPredicate::HexDigit => &[(b'0', b'9'), (b'A', b'F'), (b'a', b'f')],
+            AsciiPredicate::Punctuation => {
+                &[(0x21, 0x2f), (0x3a, 0x40), (0x5b, 0x60), (0x7b, 0x7e)]
+            }
+            AsciiPredicate::Graphic => &[(0x21, 0x7e)],
+            AsciiPredicate::Whitespace => &[
+                (b'\t', b'\t'),
+                (b'\n', b'\n'),
+                (0x0c, 0x0c),
+                (b'\r', b'\r'),
+                (b' ', b' '),
+            ],
+            AsciiPredicate::Control => &[(0x00, 0x1f), (0x7f, 0x7f)],
+        };
+        let mut matches = [None; 5];
+        for (index, &(low, high)) in ranges.iter().enumerate() {
+            self.emit(&[0x48, 0x83, 0xf8, low])?;
+            let below = self.emit_forward_branch(0x82)?;
+            self.emit(&[0x48, 0x83, 0xf8, high])?;
+            matches[index] = Some(self.emit_forward_branch(0x86)?);
+            self.patch_forward_branch(below)?;
+        }
+        self.emit(&[0x31, 0xc0])?;
+        let end = self.emit_unconditional_forward_branch()?;
+        for matched in matches[..ranges.len()].iter().flatten().copied() {
+            self.patch_forward_branch(matched)?;
+        }
+        self.emit(&[0xb8, 1, 0, 0, 0])?;
+        self.patch_forward_branch(end)
     }
 
     fn emit_binary(&mut self, operator: crate::BinaryOperator) -> Result<(), CodegenError> {
@@ -11129,6 +11196,64 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_ascii_bytes() {
+        let methods = [
+            "is_ascii",
+            "is_ascii_alphabetic",
+            "is_ascii_uppercase",
+            "is_ascii_lowercase",
+            "is_ascii_alphanumeric",
+            "is_ascii_digit",
+            "is_ascii_hexdigit",
+            "is_ascii_punctuation",
+            "is_ascii_graphic",
+            "is_ascii_whitespace",
+            "is_ascii_control",
+        ];
+        for method in methods {
+            let mut source = [0u8; 160];
+            let prefix =
+                "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { input.";
+            let suffix = "() }";
+            let length = prefix.len() + method.len() + suffix.len();
+            source[..prefix.len()].copy_from_slice(prefix.as_bytes());
+            source[prefix.len()..prefix.len() + method.len()].copy_from_slice(method.as_bytes());
+            source[prefix.len() + method.len()..length].copy_from_slice(suffix.as_bytes());
+            let source = core::str::from_utf8(&source[..length]).unwrap();
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> bool { input.is_ascii() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> bool { input.is_ascii_digit() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.is_ascii_control() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,

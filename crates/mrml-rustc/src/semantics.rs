@@ -2014,6 +2014,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const)
                 || argument.is_some_and(|argument| recurse(argument, inside_inline_const))
         }
+        ExprKind::AsciiPredicate { base, .. } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2113,6 +2114,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::UnsignedIntegerPredicate { base, argument, .. } => {
             recurse(base) || argument.is_some_and(recurse)
         }
+        ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -2571,6 +2573,14 @@ fn evaluate_boolean_constant<R: ConstantResolver, const MAX_NODES: usize>(
                 expression_integer_type(tree, argument, constants)
                     .is_some_and(|argument_type| argument_type != base_type)
             }) {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            tree.evaluate_at(id, constants)
+                .map(|value| value != 0)
+                .map_err(ExecutionError::Arithmetic)
+        }
+        ExprKind::AsciiPredicate { base, .. } => {
+            if expression_integer_type(tree, base, constants) != Some(crate::IntegerType::U8) {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
             tree.evaluate_at(id, constants)

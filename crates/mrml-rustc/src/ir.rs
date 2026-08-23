@@ -298,7 +298,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::RawPointerMask { .. }
             | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. }
-            | ExprKind::UnsignedIntegerPredicate { .. } => {
+            | ExprKind::UnsignedIntegerPredicate { .. }
+            | ExprKind::AsciiPredicate { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
                     span: expression.span,

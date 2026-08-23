@@ -368,6 +368,10 @@ pub enum ExprKind<'source> {
         argument: Option<ExprId>,
         power_of_two: bool,
     },
+    AsciiPredicate {
+        base: ExprId,
+        predicate: AsciiPredicate,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -417,6 +421,39 @@ pub enum ExprKind<'source> {
         then_branch: ExprId,
         else_branch: ExprId,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AsciiPredicate {
+    Ascii,
+    Alphabetic,
+    Uppercase,
+    Lowercase,
+    Alphanumeric,
+    Digit,
+    HexDigit,
+    Punctuation,
+    Graphic,
+    Whitespace,
+    Control,
+}
+
+impl AsciiPredicate {
+    pub(crate) const fn matches(self, value: u8) -> bool {
+        match self {
+            Self::Ascii => value.is_ascii(),
+            Self::Alphabetic => value.is_ascii_alphabetic(),
+            Self::Uppercase => value.is_ascii_uppercase(),
+            Self::Lowercase => value.is_ascii_lowercase(),
+            Self::Alphanumeric => value.is_ascii_alphanumeric(),
+            Self::Digit => value.is_ascii_digit(),
+            Self::HexDigit => value.is_ascii_hexdigit(),
+            Self::Punctuation => value.is_ascii_punctuation(),
+            Self::Graphic => value.is_ascii_graphic(),
+            Self::Whitespace => value.is_ascii_whitespace(),
+            Self::Control => value.is_ascii_control(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -546,7 +583,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::Identifier(_)
             | ExprKind::Call { .. }
             | ExprKind::Cast { .. } => false,
-            ExprKind::SliceIsEmpty { .. } | ExprKind::UnsignedIntegerPredicate { .. } => true,
+            ExprKind::SliceIsEmpty { .. }
+            | ExprKind::UnsignedIntegerPredicate { .. }
+            | ExprKind::AsciiPredicate { .. } => true,
             ExprKind::Ascribe {
                 operand,
                 target: ScalarType::Bool,
@@ -792,6 +831,11 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     }
                 };
                 Ok(u128::from(result))
+            }
+            ExprKind::AsciiPredicate { base, predicate } => {
+                let value = self.evaluate_node(base, resolver, depth + 1)?;
+                let value = u8::try_from(value).map_err(|_| ConstEvalError::Overflow)?;
+                Ok(u128::from(predicate.matches(value)))
             }
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
@@ -2073,6 +2117,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 if let Some(argument) = argument {
                     self.substitute_identifier(argument, name, replacement, depth + 1)?;
                 }
+            }
+            ExprKind::AsciiPredicate { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3694,6 +3741,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "with_metadata_of"
                         | "is_power_of_two"
                         | "is_multiple_of"
+                        | "is_ascii"
+                        | "is_ascii_alphabetic"
+                        | "is_ascii_uppercase"
+                        | "is_ascii_lowercase"
+                        | "is_ascii_alphanumeric"
+                        | "is_ascii_digit"
+                        | "is_ascii_hexdigit"
+                        | "is_ascii_punctuation"
+                        | "is_ascii_graphic"
+                        | "is_ascii_whitespace"
+                        | "is_ascii_control"
                 )
             }) else {
                 return Err(self.error(ExpressionErrorKind::ExpectedExpression, method));
@@ -3785,6 +3843,33 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     base,
                     argument,
                     power_of_two: false,
+                },
+                "is_ascii"
+                | "is_ascii_alphabetic"
+                | "is_ascii_uppercase"
+                | "is_ascii_lowercase"
+                | "is_ascii_alphanumeric"
+                | "is_ascii_digit"
+                | "is_ascii_hexdigit"
+                | "is_ascii_punctuation"
+                | "is_ascii_graphic"
+                | "is_ascii_whitespace"
+                | "is_ascii_control" => ExprKind::AsciiPredicate {
+                    base,
+                    predicate: match method.text {
+                        "is_ascii" => AsciiPredicate::Ascii,
+                        "is_ascii_alphabetic" => AsciiPredicate::Alphabetic,
+                        "is_ascii_uppercase" => AsciiPredicate::Uppercase,
+                        "is_ascii_lowercase" => AsciiPredicate::Lowercase,
+                        "is_ascii_alphanumeric" => AsciiPredicate::Alphanumeric,
+                        "is_ascii_digit" => AsciiPredicate::Digit,
+                        "is_ascii_hexdigit" => AsciiPredicate::HexDigit,
+                        "is_ascii_punctuation" => AsciiPredicate::Punctuation,
+                        "is_ascii_graphic" => AsciiPredicate::Graphic,
+                        "is_ascii_whitespace" => AsciiPredicate::Whitespace,
+                        "is_ascii_control" => AsciiPredicate::Control,
+                        _ => unreachable!(),
+                    },
                 },
                 "is_aligned" => ExprKind::RawPointerIsAligned { base },
                 "addr" | "expose_provenance" => ExprKind::RawPointerAddress { base },
