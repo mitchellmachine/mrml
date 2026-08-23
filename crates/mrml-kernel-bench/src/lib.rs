@@ -469,9 +469,7 @@ mod tests {
                 .unwrap();
             let derived = message.capabilities().next().unwrap();
             black_box(&mut runtime)
-                .capabilities_mut(receiver)
-                .unwrap()
-                .revoke(derived)
+                .revoke_capability(receiver, derived)
                 .unwrap();
         }
         report(

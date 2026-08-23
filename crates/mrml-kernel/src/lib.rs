@@ -106,8 +106,9 @@ pub use syscall::{
 };
 pub use task_runtime::{
     ControlEvent, DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, FaultRetirement,
-    PeerDeath, PeerDeathReason, PeriodicDomainBalancer, ReceivedMessage, TASK_CONTROL_PEERS,
-    TASK_INBOX_MESSAGES, TaskRuntime, TaskRuntimeError, TaskTermination, TimerDomainBalanceOutcome,
+    MAX_TASK_DELEGATIONS, PeerDeath, PeerDeathReason, PeriodicDomainBalancer, ReceivedMessage,
+    TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES, TaskRuntime, TaskRuntimeError, TaskTermination,
+    TimerDomainBalanceOutcome,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

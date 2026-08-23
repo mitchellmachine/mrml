@@ -18,8 +18,9 @@ remain independently attributable.
 
 **PARTIALLY IMPLEMENTED:** the kernel has bounded IPC, blocking receive/wakeup,
 two-message inbox backpressure, attenuated capability transfer with rollback,
-generational revocation, shared-memory bindings, mapping revocation, fault
-retirement, service cleanup/restart policy, and signed two-service probes.
+generational revocation, bounded exact-generation IPC delegation tracking,
+transitive descendant revocation, shared-memory bindings, mapping revocation,
+fault retirement, service cleanup/restart policy, and signed two-service probes.
 Kernel-owned receive envelopes now retain exact sender and endpoint sequence,
 and bounded explicitly linked peers receive typed fault/exit results with
 scheduler wakeup. Cross-CPU peer migration remains fail-closed until ownership
@@ -59,6 +60,11 @@ confidentiality.
    peer-death behavior.
 3. Complete atomic capability transfer/derivation with non-amplification tests.
 4. Complete transitive revocation accounting for IPC and descendants.
+   **IMPLEMENTED:** successful transfers commit bounded exact-generation
+   delegation edges; explicit source or intermediate revocation and task death
+   revoke the complete descendant set before another task can run. Capacity is
+   preflighted, denied transfers roll back both handles and edges, and domains
+   with live delegation relations cannot migrate.
 5. Add shared-page/ring setup with explicit ownership and access attenuation.
 6. Pair mapping revocation with native KVM/WHP invalidation before vCPU resume.
    **IMPLEMENTED** in code and focused simulation tests; live backend probes

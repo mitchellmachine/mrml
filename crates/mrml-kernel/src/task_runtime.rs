@@ -9,6 +9,7 @@ use crate::{
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
 pub const TASK_CONTROL_PEERS: usize = 8;
+pub const MAX_TASK_DELEGATIONS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskRuntimeError {
@@ -25,6 +26,8 @@ pub enum TaskRuntimeError {
     InboxEmpty,
     PeerTableFull,
     ActiveControlPeers,
+    ActiveDelegations,
+    DelegationTableFull,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,6 +110,16 @@ struct TaskDomain<const CAPS: usize> {
     peers: [Option<TaskId>; TASK_CONTROL_PEERS],
     peer_deaths: [Option<PeerDeath>; TASK_CONTROL_PEERS],
 }
+
+#[derive(Clone, Copy)]
+struct Delegation {
+    source_task: TaskId,
+    source: Capability,
+    destination_task: TaskId,
+    destination: Capability,
+}
+
+type DelegationSet = [Option<(TaskId, Capability)>; MAX_TASK_DELEGATIONS + 1];
 
 pub struct DetachedTaskDomain<const CAPS: usize> {
     scheduling: DetachedTask,
@@ -239,6 +252,7 @@ impl<const CPUS: usize, const CAPS: usize> PeriodicDomainBalancer<CPUS, CAPS> {
 pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     scheduler: KernelScheduler<TASKS>,
     domains: [Option<TaskDomain<CAPS>>; TASKS],
+    delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
 }
 
 impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
@@ -248,6 +262,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(Self {
             scheduler,
             domains: array::from_fn(|_| None),
+            delegations: [None; MAX_TASK_DELEGATIONS],
         })
     }
 
@@ -364,6 +379,14 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }) {
             return Err(TaskRuntimeError::ActiveControlPeers);
         }
+        if self
+            .delegations
+            .iter()
+            .flatten()
+            .any(|delegation| delegation.source_task == task || delegation.destination_task == task)
+        {
+            return Err(TaskRuntimeError::ActiveDelegations);
+        }
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
@@ -436,6 +459,110 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::MissingTask)
     }
 
+    /// Revokes one exact capability and every capability transitively derived
+    /// from it through this runtime's IPC transfer path. Descendants are
+    /// removed before the source handle, so no surviving task can observe a
+    /// live child after explicit revocation completes.
+    pub fn revoke_capability(
+        &mut self,
+        task: TaskId,
+        capability: Capability,
+    ) -> Result<(), TaskRuntimeError> {
+        self.capabilities_mut(task)?
+            .authorize(capability, Rights::NONE)
+            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+        let descendants = self.delegation_descendants(task, capability)?;
+        self.revoke_tracked(&descendants.0, 1)?;
+        self.capabilities_mut(task)?
+            .revoke(capability)
+            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+        self.remove_tracked(&descendants.0);
+        Ok(())
+    }
+
+    fn delegation_descendants(
+        &self,
+        task: TaskId,
+        capability: Capability,
+    ) -> Result<(DelegationSet, usize), TaskRuntimeError> {
+        let mut tracked = [None; MAX_TASK_DELEGATIONS + 1];
+        tracked[0] = Some((task, capability));
+        let mut count = 1usize;
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for edge in self.delegations.iter().flatten().copied() {
+                if tracked[..count].contains(&Some((edge.source_task, edge.source)))
+                    && !tracked[..count].contains(&Some((edge.destination_task, edge.destination)))
+                {
+                    let slot = tracked
+                        .get_mut(count)
+                        .ok_or(TaskRuntimeError::IntegrityFailure)?;
+                    *slot = Some((edge.destination_task, edge.destination));
+                    count += 1;
+                    changed = true;
+                }
+            }
+        }
+        Ok((tracked, count))
+    }
+
+    fn revoke_tracked(
+        &mut self,
+        tracked: &DelegationSet,
+        start: usize,
+    ) -> Result<(), TaskRuntimeError> {
+        // Validate the complete exact-generation set before changing any
+        // destination space. A stale graph edge is an integrity failure, but
+        // cannot otherwise leave a partially revoked descendant tree.
+        for (task, capability) in tracked[start..].iter().flatten().copied() {
+            self.capabilities_mut(task)?
+                .authorize(capability, Rights::NONE)
+                .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        }
+        for (task, capability) in tracked[start..].iter().flatten().copied() {
+            self.capabilities_mut(task)?
+                .revoke(capability)
+                .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        }
+        Ok(())
+    }
+
+    fn remove_tracked(&mut self, tracked: &DelegationSet) {
+        for edge in &mut self.delegations {
+            if edge.is_some_and(|edge| {
+                tracked.contains(&Some((edge.source_task, edge.source)))
+                    || tracked.contains(&Some((edge.destination_task, edge.destination)))
+            }) {
+                *edge = None;
+            }
+        }
+    }
+
+    fn revoke_task_delegations(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
+        let mut roots = [None; MAX_TASK_DELEGATIONS];
+        let mut root_count = 0usize;
+        for edge in self.delegations.iter().flatten().copied() {
+            if edge.source_task == task
+                && !roots[..root_count].contains(&Some((edge.source_task, edge.source)))
+            {
+                roots[root_count] = Some((edge.source_task, edge.source));
+                root_count += 1;
+            }
+        }
+        for (source_task, source) in roots[..root_count].iter().flatten().copied() {
+            let descendants = self.delegation_descendants(source_task, source)?;
+            self.revoke_tracked(&descendants.0, 1)?;
+            self.remove_tracked(&descendants.0);
+        }
+        for edge in &mut self.delegations {
+            if edge.is_some_and(|edge| edge.source_task == task || edge.destination_task == task) {
+                *edge = None;
+            }
+        }
+        Ok(())
+    }
+
     pub fn terminate_current_fault(
         &mut self,
         disposition: TrapDisposition,
@@ -455,6 +582,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .iter()
             .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
+
+        self.revoke_task_delegations(current)?;
 
         // Taking the complete domain first revokes the saved context and every
         // task-local capability before scheduler selection can expose `next`.
@@ -495,6 +624,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .iter()
             .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        self.revoke_task_delegations(current)?;
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
@@ -527,6 +657,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if sender == receiver {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
+        if self
+            .delegations
+            .iter()
+            .filter(|edge| edge.is_none())
+            .count()
+            < requested.len()
+        {
+            return Err(TaskRuntimeError::DelegationTableFull);
+        }
         let sender_slot = self
             .domains
             .iter()
@@ -550,12 +689,32 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             &mut destination.capabilities,
         )
         .map_err(TaskRuntimeError::Ipc)?;
+        for ((source, _), destination) in requested.iter().zip(message.capabilities()) {
+            let slot = self
+                .delegations
+                .iter_mut()
+                .find(|edge| edge.is_none())
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            *slot = Some(Delegation {
+                source_task: sender,
+                source: *source,
+                destination_task: receiver,
+                destination,
+            });
+        }
         match endpoint.authorize_send(&source.capabilities, endpoint_capability, &message) {
             Ok(sequence) => Ok((sequence, message)),
             Err(error) => {
                 for capability in message.capabilities() {
                     if destination.capabilities.revoke(capability).is_err() {
                         return Err(TaskRuntimeError::IntegrityFailure);
+                    }
+                    for edge in &mut self.delegations {
+                        if edge.is_some_and(|edge| {
+                            edge.destination_task == receiver && edge.destination == capability
+                        }) {
+                            *edge = None;
+                        }
                     }
                 }
                 Err(TaskRuntimeError::Ipc(error))
@@ -1012,6 +1171,357 @@ mod tests {
         let receiver_space = runtime.capabilities_mut(receiver).unwrap();
         assert!(receiver_space.insert(ObjectId(8), Rights::READ).is_ok());
         assert!(receiver_space.insert(ObjectId(9), Rights::READ).is_ok());
+    }
+
+    #[test]
+    fn denied_transfer_leaves_no_delegation_that_blocks_migration() {
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let wrong_endpoint = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x80), Rights::SIGNAL)
+            .unwrap();
+        let delegated = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x81), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(ObjectId(0x82));
+
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    wrong_endpoint,
+                    &[],
+                    &[(delegated, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert!(runtime.detach_domain(receiver).is_ok());
+    }
+
+    #[test]
+    fn delegation_capacity_is_preflighted_and_reusable_after_revocation() {
+        const RECEIVERS: usize = MAX_TASK_DELEGATIONS / 8;
+        let mut runtime = TaskRuntime::<{ RECEIVERS + 2 }, 8>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x85);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x86), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut receivers = [None; RECEIVERS + 1];
+        for (index, slot) in receivers.iter_mut().enumerate() {
+            *slot = Some(
+                runtime
+                    .create(
+                        Priority::NORMAL,
+                        context(0x30_0000 + index as u64 * 0x1000, 0x50_0000),
+                    )
+                    .unwrap(),
+            );
+        }
+        let requested = [(root, Rights::READ); 8];
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let mut first_derived = None;
+        for receiver in receivers[..RECEIVERS].iter().flatten().copied() {
+            let (_, message) = runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    &[],
+                    &requested,
+                )
+                .unwrap();
+            if first_derived.is_none() {
+                first_derived = message.capabilities().next();
+            }
+        }
+        let spare = receivers[RECEIVERS].unwrap();
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    spare,
+                    &mut endpoint,
+                    endpoint_capability,
+                    &[],
+                    &[(root, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::DelegationTableFull)
+        );
+
+        let first_receiver = receivers[0].unwrap();
+        runtime
+            .revoke_capability(first_receiver, first_derived.unwrap())
+            .unwrap();
+        assert!(
+            runtime
+                .send_ipc(
+                    sender,
+                    spare,
+                    &mut endpoint,
+                    endpoint_capability,
+                    &[],
+                    &[(root, Rights::READ)],
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn explicit_revocation_removes_transitive_ipc_descendants() {
+        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
+        let source_task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let middle_task = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let leaf_task = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x90);
+        let source_endpoint = runtime
+            .capabilities_mut(source_task)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let middle_endpoint = runtime
+            .capabilities_mut(middle_task)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(source_task)
+            .unwrap()
+            .insert(
+                ObjectId(0x91),
+                Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let (_, middle_message) = runtime
+            .send_ipc(
+                source_task,
+                middle_task,
+                &mut endpoint,
+                source_endpoint,
+                &[],
+                &[(root, Rights::READ.union(Rights::DELEGATE))],
+            )
+            .unwrap();
+        let middle = middle_message.capabilities().next().unwrap();
+        let (_, leaf_message) = runtime
+            .send_ipc(
+                middle_task,
+                leaf_task,
+                &mut endpoint,
+                middle_endpoint,
+                &[],
+                &[(middle, Rights::READ)],
+            )
+            .unwrap();
+        let leaf = leaf_message.capabilities().next().unwrap();
+
+        runtime.revoke_capability(source_task, root).unwrap();
+
+        assert!(
+            runtime
+                .capabilities_mut(middle_task)
+                .unwrap()
+                .authorize(middle, Rights::READ)
+                .is_err()
+        );
+        assert!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(leaf, Rights::READ)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn intermediate_revocation_preserves_root_and_blocks_migration_until_cleanup() {
+        let mut runtime = TaskRuntime::<3, 3>::new(1_000, 1).unwrap();
+        let source_task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let middle_task = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let leaf_task = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0xa0);
+        let source_endpoint = runtime
+            .capabilities_mut(source_task)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let middle_endpoint = runtime
+            .capabilities_mut(middle_task)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(source_task)
+            .unwrap()
+            .insert(ObjectId(0xa1), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let (_, message) = runtime
+            .send_ipc(
+                source_task,
+                middle_task,
+                &mut endpoint,
+                source_endpoint,
+                &[],
+                &[(root, Rights::READ.union(Rights::DELEGATE))],
+            )
+            .unwrap();
+        let middle = message.capabilities().next().unwrap();
+        let (_, message) = runtime
+            .send_ipc(
+                middle_task,
+                leaf_task,
+                &mut endpoint,
+                middle_endpoint,
+                &[],
+                &[(middle, Rights::READ)],
+            )
+            .unwrap();
+        let leaf = message.capabilities().next().unwrap();
+        assert_eq!(
+            runtime.detach_domain(middle_task).err(),
+            Some(TaskRuntimeError::ActiveDelegations)
+        );
+
+        runtime.revoke_capability(middle_task, middle).unwrap();
+
+        assert_eq!(
+            runtime
+                .capabilities_mut(source_task)
+                .unwrap()
+                .authorize(root, Rights::READ),
+            Ok(ObjectId(0xa1))
+        );
+        assert!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(leaf, Rights::READ)
+                .is_err()
+        );
+        assert!(runtime.detach_domain(middle_task).is_ok());
+    }
+
+    #[test]
+    fn task_death_revokes_transitive_descendants_before_replacement_runs() {
+        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
+        let source_task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let middle_task = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let leaf_task = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0xb0);
+        let source_endpoint = runtime
+            .capabilities_mut(source_task)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let middle_endpoint = runtime
+            .capabilities_mut(middle_task)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(source_task)
+            .unwrap()
+            .insert(ObjectId(0xb1), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let unrelated = runtime
+            .capabilities_mut(leaf_task)
+            .unwrap()
+            .insert(ObjectId(0xb2), Rights::READ)
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let (_, message) = runtime
+            .send_ipc(
+                source_task,
+                middle_task,
+                &mut endpoint,
+                source_endpoint,
+                &[],
+                &[(root, Rights::READ.union(Rights::DELEGATE))],
+            )
+            .unwrap();
+        let middle = message.capabilities().next().unwrap();
+        let (_, message) = runtime
+            .send_ipc(
+                middle_task,
+                leaf_task,
+                &mut endpoint,
+                middle_endpoint,
+                &[],
+                &[(middle, Rights::READ)],
+            )
+            .unwrap();
+        let leaf = message.capabilities().next().unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == source_task));
+
+        let termination = runtime.terminate_current().unwrap();
+
+        assert!(
+            matches!(termination.next, ScheduleOutcome::Switch { to, .. } if to == middle_task)
+        );
+        assert!(
+            runtime
+                .capabilities_mut(middle_task)
+                .unwrap()
+                .authorize(middle, Rights::READ)
+                .is_err()
+        );
+        assert!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(leaf, Rights::READ)
+                .is_err()
+        );
+        assert_eq!(
+            runtime
+                .capabilities_mut(leaf_task)
+                .unwrap()
+                .authorize(unrelated, Rights::READ),
+            Ok(ObjectId(0xb2))
+        );
     }
 
     #[test]

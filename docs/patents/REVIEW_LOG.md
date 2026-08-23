@@ -165,3 +165,17 @@ optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary measurement of existing kernel and
 hypervisor operations.
+
+## 2026-08-23 — transitive IPC capability revocation
+
+MRML source: `crates/mrml-kernel/src/task_runtime.rs`.
+
+IPC transfers now record bounded parent/child relations between exact
+generational capability handles. Explicit revocation and task retirement walk
+those relations to invalidate descendants, while transactional capacity checks
+and rollback prevent partial graph publication. This is ordinary capability
+lifecycle accounting and graph traversal; it adds no novel algorithm, device
+protocol, codec, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded delegation tracking and
+lifecycle revocation.

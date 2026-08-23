@@ -1434,6 +1434,21 @@ bypass a domain boundary. Windows and Linux pass 116 kernel tests, including
 attenuation and failed-authorization rollback. Live syscall entry and blocking
 endpoint queues are now exercised by the two-root service proof below.
 
+IPC derivation now also commits one bounded exact-generation delegation edge
+for each destination handle. The 256-edge table is capacity-checked before any
+capability mutation, and a denied endpoint authorization removes both every
+tentative handle and its edge. `TaskRuntime::revoke_capability` discovers the
+complete descendant set, validates every exact handle before mutation, revokes
+children before their source, and removes the consumed graph relations.
+Revoking an intermediate handle leaves its parent live while invalidating all
+of its children. Fault and voluntary-exit retirement perform the same
+transitive cleanup before scheduler replacement selection; domains involved in
+a live delegation cannot migrate and orphan the relation. Windows gnullvm
+passes 294 kernel tests, including three-domain derivation chains, intermediate
+and task-death revocation, unrelated-authority survival, rollback cleanup, and
+full-table saturation/reuse. This is allocation-free kernel-policy evidence,
+not a live signed-backend or physical-hardware revocation result.
+
 The initial x86 user-call ABI is deliberately pointer-free. Exactly IDT vector
 `0x80` receives a DPL3 interrupt gate; external interrupt gates remain DPL0 and
 all other fallback vectors remain inaccessible to `INT`. Operation zero is
