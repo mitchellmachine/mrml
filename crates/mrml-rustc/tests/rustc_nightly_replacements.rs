@@ -2762,6 +2762,27 @@ fn rustc_same_width_integer_sign_casts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_width_casts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> u8 { input.truncate::<u8>() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i16 { input.saturating_truncate::<i16>() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u64 { input.widen::<u64>() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> i64 { input.widen::<i64>() }",
+        "const VALUE: u8 = 300u16.truncate::<u8>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i8 = 300i16.saturating_truncate::<i8>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i64 = (-42i8).widen::<i64>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_signed_clamp_magnitude_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i8, limit: u8) -> i8 { value.clamp_magnitude(limit) }",

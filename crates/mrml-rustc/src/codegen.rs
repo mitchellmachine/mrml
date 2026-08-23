@@ -2325,7 +2325,9 @@ fn validate_runtime_inline_const<
             recurse(other)?;
             recurse(distance)?;
         }
-        ExprKind::IntegerSignCast { base, .. } => recurse(base)?,
+        ExprKind::IntegerSignCast { base, .. } | ExprKind::IntegerWidthCast { base, .. } => {
+            recurse(base)?
+        }
         ExprKind::IntegerClampMagnitude { base, limit } => {
             recurse(base)?;
             recurse(limit)?;
@@ -3326,6 +3328,24 @@ fn runtime_expression_type_with_locals<
             }
             .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
             Ok(RuntimeExpressionType::Integer(Some(target_type)))
+        }
+        ExprKind::IntegerWidthCast { base, target, mode } => {
+            let RuntimeExpressionType::Integer(Some(source_type)) =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if !source_type.supports_width_cast(target, mode) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Integer(Some(target)))
         }
         ExprKind::IntegerClampMagnitude { base, limit } => {
             let base_type = runtime_expression_type_with_locals(
@@ -5648,6 +5668,60 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.emit(&saturated.to_le_bytes())?;
                         self.patch_forward_branch(in_range)?;
                     }
+                }
+                self.width = target_width;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerWidthCast { base, target, mode } => {
+                let RuntimeExpressionType::Integer(Some(source_type)) =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                if !source_type.supports_width_cast(target, mode) {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                }
+                let source_width = runtime_width(source_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let target_width = runtime_width(target.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = source_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                if mode == crate::expression::IntegerWidthCastMode::SaturatingTruncate {
+                    self.emit(&[0x48, 0xba])?;
+                    self.emit(&target_width.maximum.to_le_bytes())?;
+                    self.emit(&[0x48, 0x39, 0xd0])?;
+                    let within_maximum =
+                        self.emit_forward_branch(if source_width.signed { 0x8e } else { 0x86 })?;
+                    self.emit(&[0x48, 0xb8])?;
+                    self.emit(&target_width.maximum.to_le_bytes())?;
+                    let saturated_maximum = self.emit_unconditional_forward_branch()?;
+                    self.patch_forward_branch(within_maximum)?;
+                    let saturated_minimum = if source_width.signed {
+                        self.emit(&[0x48, 0xba])?;
+                        self.emit(&(target_width.minimum as u64).to_le_bytes())?;
+                        self.emit(&[0x48, 0x39, 0xd0])?;
+                        let within_minimum = self.emit_forward_branch(0x8d)?;
+                        self.emit(&[0x48, 0xb8])?;
+                        self.emit(&(target_width.minimum as u64).to_le_bytes())?;
+                        Some(within_minimum)
+                    } else {
+                        None
+                    };
+                    if let Some(within_minimum) = saturated_minimum {
+                        self.patch_forward_branch(within_minimum)?;
+                    }
+                    self.patch_forward_branch(saturated_maximum)?;
                 }
                 self.width = target_width;
                 self.emit_normalize()?;
@@ -14567,6 +14641,52 @@ mod tests {
                     X86_64Abi::Windows
                 )
                 .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn widens_and_truncates_primitive_integers() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u8 { input.truncate::<u8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i16 { input.saturating_truncate::<i16>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u64 { input.widen::<u64>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i64 { input.widen::<i64>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> usize { input.widen::<usize>() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi).is_ok(),
+                    "{source}"
+                );
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u16 { input.truncate::<u16>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i8 { input.widen::<i8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> i16 { input.widen::<i16>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> usize { input.widen::<usize>() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+                "{source}"
             );
         }
     }

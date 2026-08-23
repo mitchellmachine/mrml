@@ -152,6 +152,13 @@ pub enum IntegerType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerWidthCastMode {
+    Truncate,
+    SaturatingTruncate,
+    Widen,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
     Integer(IntegerType),
     Bool,
@@ -190,6 +197,46 @@ pub struct IntegerLiteral<'source> {
 }
 
 impl IntegerType {
+    pub const fn supports_width_cast(self, target: Self, mode: IntegerWidthCastMode) -> bool {
+        if self.is_signed() != target.is_signed() {
+            return false;
+        }
+        match mode {
+            IntegerWidthCastMode::Truncate | IntegerWidthCastMode::SaturatingTruncate => match self
+            {
+                Self::U8 | Self::I8 => matches!(target, Self::U8 | Self::I8),
+                Self::U16 | Self::I16 => {
+                    matches!(target, Self::U8 | Self::I8 | Self::U16 | Self::I16)
+                }
+                Self::U32 | Self::I32 => matches!(
+                    target,
+                    Self::U8 | Self::I8 | Self::U16 | Self::I16 | Self::U32 | Self::I32
+                ),
+                Self::U64 | Self::I64 => {
+                    !matches!(target, Self::U128 | Self::I128 | Self::Usize | Self::Isize)
+                }
+                Self::U128 | Self::I128 => !matches!(target, Self::Usize | Self::Isize),
+                Self::Usize | Self::Isize => matches!(
+                    target,
+                    Self::U8 | Self::I8 | Self::U16 | Self::I16 | Self::Usize | Self::Isize
+                ),
+            },
+            IntegerWidthCastMode::Widen => match self {
+                Self::U8 | Self::I8 => true,
+                Self::U16 | Self::I16 => !matches!(target, Self::U8 | Self::I8),
+                Self::U32 | Self::I32 => matches!(
+                    target,
+                    Self::U32 | Self::I32 | Self::U64 | Self::I64 | Self::U128 | Self::I128
+                ),
+                Self::U64 | Self::I64 => {
+                    matches!(target, Self::U64 | Self::I64 | Self::U128 | Self::I128)
+                }
+                Self::U128 | Self::I128 => matches!(target, Self::U128 | Self::I128),
+                Self::Usize | Self::Isize => matches!(target, Self::Usize | Self::Isize),
+            },
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "u8" => Self::U8,
@@ -431,6 +478,11 @@ pub enum ExprKind<'source> {
         signed: bool,
         saturating: bool,
         strict: bool,
+    },
+    IntegerWidthCast {
+        base: ExprId,
+        target: IntegerType,
+        mode: IntegerWidthCastMode,
     },
     IntegerClampMagnitude {
         base: ExprId,
@@ -771,6 +823,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerRotate { .. }
             | ExprKind::IntegerFunnelShift { .. }
             | ExprKind::IntegerSignCast { .. }
+            | ExprKind::IntegerWidthCast { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1049,7 +1102,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::SaturatingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFunnelShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
-            ExprKind::IntegerSignCast { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerSignCast { .. } | ExprKind::IntegerWidthCast { .. } => {
+                Err(ConstEvalError::InvalidExpressionTree)
+            }
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2563,7 +2618,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(other, name, replacement, depth + 1)?;
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;
             }
-            ExprKind::IntegerSignCast { base, .. } => {
+            ExprKind::IntegerSignCast { base, .. } | ExprKind::IntegerWidthCast { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerClampMagnitude { base, limit } => {
@@ -4139,6 +4194,57 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             self.take()?;
             let method = self.take()?;
+            if method.is_some_and(|method| {
+                matches!(method.text, "truncate" | "saturating_truncate" | "widen")
+            }) {
+                let method = method.expect("method was checked");
+                let separator = self.take()?;
+                if !separator.is_some_and(|token| token.kind == TokenKind::PathSeparator) {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, separator));
+                }
+                let open_generic = self.take()?;
+                if !open_generic.is_some_and(|token| token.text == "<") {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, open_generic));
+                }
+                let target = self.take()?;
+                let Some(target) = target.filter(|token| token.kind == TokenKind::Identifier)
+                else {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, target));
+                };
+                let target_type = IntegerType::from_name(target.text).ok_or_else(|| {
+                    self.error(ExpressionErrorKind::UnsupportedCastType, Some(target))
+                })?;
+                let close_generic = self.take()?;
+                if !close_generic.is_some_and(|token| token.text == ">") {
+                    return Err(self.error(ExpressionErrorKind::ExpectedCastType, close_generic));
+                }
+                let open = self.take()?;
+                if !open.is_some_and(|token| token.kind == TokenKind::OpenParen) {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, open));
+                }
+                let close = self.take()?;
+                let Some(close) = close.filter(|token| token.kind == TokenKind::CloseParen) else {
+                    return Err(self.error(ExpressionErrorKind::ExpectedExpression, close));
+                };
+                let mode = match method.text {
+                    "truncate" => IntegerWidthCastMode::Truncate,
+                    "saturating_truncate" => IntegerWidthCastMode::SaturatingTruncate,
+                    "widen" => IntegerWidthCastMode::Widen,
+                    _ => unreachable!(),
+                };
+                base = self.push(Expr {
+                    kind: ExprKind::IntegerWidthCast {
+                        base,
+                        target: target_type,
+                        mode,
+                    },
+                    span: Span {
+                        start: self.node_span(base)?.start,
+                        end: close.span.end,
+                    },
+                })?;
+                continue;
+            }
             if method.is_some_and(|method| method.text == "cast") {
                 let separator = self.take()?;
                 if !separator.is_some_and(|token| token.kind == TokenKind::PathSeparator) {

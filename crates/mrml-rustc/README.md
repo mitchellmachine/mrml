@@ -2322,6 +2322,13 @@ zero, duplicate definitions, and source-bounded diagnostics. The driver caps
 source input at 1 MiB and refuses an already existing output path. No claim is
 made that a compromised host protects compiler input or output.
 
+Pinned-nightly generic integer `truncate::<T>`, `saturating_truncate::<T>`, and
+`widen::<T>` calls are accepted for the exact same-signedness source/target
+pairs implemented by that toolchain's `TruncateTarget` and `WidenTarget`
+traits. Constant evaluation and x86-64 code generation preserve truncation,
+saturation, signed extension, and unsigned extension semantics; unsupported
+width, signedness, and pointer-sized pairs are rejected as type mismatches.
+
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
 Windows development host and 0.005 seconds under Arch Linux WSL2. These are

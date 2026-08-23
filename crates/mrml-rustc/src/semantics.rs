@@ -213,6 +213,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerFunnelShift { .. }
                         | ExprKind::IntegerSignCast { .. }
+                        | ExprKind::IntegerWidthCast { .. }
                         | ExprKind::IntegerClampMagnitude { .. }
                         | ExprKind::IntegerEndianFrom { .. }
                         | ExprKind::IntegerFromBytes { .. }
@@ -1923,6 +1924,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerFunnelShift { .. }
                 | ExprKind::IntegerSignCast { .. }
+                | ExprKind::IntegerWidthCast { .. }
                 | ExprKind::IntegerClampMagnitude { .. }
                 | ExprKind::IntegerEndianFrom { .. }
                 | ExprKind::IntegerFromBytes { .. }
@@ -2082,7 +2084,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
                 || recurse(other, inside_inline_const)
                 || recurse(distance, inside_inline_const)
         }
-        ExprKind::IntegerSignCast { base, .. } => recurse(base, inside_inline_const),
+        ExprKind::IntegerSignCast { base, .. } | ExprKind::IntegerWidthCast { base, .. } => {
+            recurse(base, inside_inline_const)
+        }
         ExprKind::IntegerClampMagnitude { base, limit } => {
             recurse(base, inside_inline_const) || recurse(limit, inside_inline_const)
         }
@@ -2225,7 +2229,9 @@ fn expression_contains_call<const MAX_NODES: usize>(
             distance,
             ..
         } => recurse(base) || recurse(other) || recurse(distance),
-        ExprKind::IntegerSignCast { base, .. } => recurse(base),
+        ExprKind::IntegerSignCast { base, .. } | ExprKind::IntegerWidthCast { base, .. } => {
+            recurse(base)
+        }
         ExprKind::IntegerClampMagnitude { base, limit } => recurse(base) || recurse(limit),
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value),
         ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes),
@@ -2637,6 +2643,30 @@ fn evaluate_call_aware_integer<
                 depth,
             )? & signed_mask(bits);
             sign_cast_bits(value, bits, signed, saturating, strict).map_err(arithmetic_error)?
+        }
+        ExprKind::IntegerWidthCast { base, target, mode } => {
+            if ty != target {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let source_type = integer_expression_type(context, symbol_count, tree, base, constants)
+                .ok_or_else(|| arithmetic_error(ConstEvalError::InvalidCast))?;
+            if !source_type.supports_width_cast(target, mode) {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let source_bits = source_type
+                .bits(context.target.pointer_bits())
+                .ok_or_else(|| arithmetic_error(ConstEvalError::InvalidCast))?;
+            let value = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                base,
+                source_type,
+                constants,
+                depth,
+            )?;
+            width_cast_bits(value, source_bits, bits, source_type.is_signed(), mode)
+                .map_err(arithmetic_error)?
         }
         ExprKind::IntegerWrappingShift {
             base,
@@ -3781,6 +3811,27 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             sign_cast_bits(value, bits, signed, saturating, strict)
                 .map_err(ExecutionError::Arithmetic)?
         }
+        ExprKind::IntegerWidthCast {
+            base,
+            target: cast_target,
+            mode,
+        } => {
+            if ty != cast_target {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let source_type = expression_integer_type(tree, base, constants)
+                .ok_or(ExecutionError::Arithmetic(ConstEvalError::InvalidCast))?;
+            if !source_type.supports_width_cast(cast_target, mode) {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let source_bits = source_type
+                .bits(target.pointer_bits())
+                .ok_or(ExecutionError::Arithmetic(ConstEvalError::InvalidCast))?;
+            let value =
+                evaluate_signed_integer(tree, base, source_type, target, constants, depth + 1)?;
+            width_cast_bits(value, source_bits, bits, source_type.is_signed(), mode)
+                .map_err(ExecutionError::Arithmetic)?
+        }
         ExprKind::IntegerClampMagnitude { .. } => {
             return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
         }
@@ -4041,6 +4092,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
                 source.unsigned_counterpart()
             }
         }
+        ExprKind::IntegerWidthCast { target, .. } => Some(target),
         ExprKind::IntegerClampMagnitude { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
@@ -4149,6 +4201,40 @@ fn sign_cast_bits(
         return Ok(if signed { sign_bit - 1 } else { 0 });
     }
     Ok(value & signed_mask(bits))
+}
+
+fn width_cast_bits(
+    value: u128,
+    source_bits: u8,
+    target_bits: u8,
+    signed: bool,
+    mode: crate::expression::IntegerWidthCastMode,
+) -> Result<u128, ConstEvalError> {
+    let target_mask = signed_mask(target_bits);
+    if !signed {
+        let value = value & signed_mask(source_bits);
+        return Ok(
+            if mode == crate::expression::IntegerWidthCastMode::SaturatingTruncate {
+                value.min(target_mask)
+            } else {
+                value & target_mask
+            },
+        );
+    }
+    let value = decode_signed(value & signed_mask(source_bits), source_bits);
+    let value = if mode == crate::expression::IntegerWidthCastMode::SaturatingTruncate {
+        value.clamp(
+            if target_bits == 128 {
+                i128::MIN
+            } else {
+                -(1_i128 << (target_bits - 1))
+            },
+            signed_maximum(target_bits),
+        )
+    } else {
+        value
+    };
+    Ok((value as u128) & target_mask)
 }
 
 fn saturating_integer_arithmetic(
@@ -5767,5 +5853,19 @@ mod tests {
         let error = analyze_constants::<2, 8, 2, 2>(&pointer, target).unwrap_err();
         assert_eq!(error.kind, SemanticErrorKind::ConstantOutOfRange);
         assert_eq!(TargetLayout::new(24), None);
+    }
+
+    #[test]
+    fn evaluates_integer_width_cast_constants() {
+        let module = Parser::new(
+            "const TRUNCATED: u8 = 300u16.truncate::<u8>(); const SATURATED_HIGH: i8 = 300i16.saturating_truncate::<i8>(); const SATURATED_LOW: i8 = (-300i16).saturating_truncate::<i8>(); const WIDENED: i64 = (-42i8).widen::<i64>();",
+        )
+        .parse_module::<4, 2>()
+        .unwrap();
+        let values = analyze_constants::<4, 48, 4, 2>(&module, TargetLayout::X86_64).unwrap();
+        assert_eq!(values.resolve("TRUNCATED"), Some(44));
+        assert_eq!(values.resolve("SATURATED_HIGH"), Some(127));
+        assert_eq!(values.resolve("SATURATED_LOW"), Some(128));
+        assert_eq!(values.resolve("WIDENED"), Some(u128::from(u64::MAX - 41)));
     }
 }
