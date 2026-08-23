@@ -221,6 +221,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerBitTransform { .. }
                         | ExprKind::IntegerUnsignedAbsolute { .. }
                         | ExprKind::IntegerPairTransform { .. }
+                        | ExprKind::IntegerClamp { .. }
                         | ExprKind::IntegerBitCount { .. }
                         | ExprKind::IntegerLogarithm { .. }
                 )
@@ -1929,6 +1930,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerBitTransform { .. }
                 | ExprKind::IntegerUnsignedAbsolute { .. }
                 | ExprKind::IntegerPairTransform { .. }
+                | ExprKind::IntegerClamp { .. }
                 | ExprKind::IntegerBitCount { .. }
                 | ExprKind::IntegerLogarithm { .. }
         )
@@ -2095,6 +2097,15 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerPairTransform { base, other, .. } => {
             recurse(base, inside_inline_const) || recurse(other, inside_inline_const)
         }
+        ExprKind::IntegerClamp {
+            base,
+            minimum,
+            maximum,
+        } => {
+            recurse(base, inside_inline_const)
+                || recurse(minimum, inside_inline_const)
+                || recurse(maximum, inside_inline_const)
+        }
         ExprKind::IntegerBitCount { base, .. } => recurse(base, inside_inline_const),
         ExprKind::IntegerLogarithm { base, radix, .. } => {
             recurse(base, inside_inline_const)
@@ -2219,6 +2230,11 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
         ExprKind::IntegerUnsignedAbsolute { base } => recurse(base),
         ExprKind::IntegerPairTransform { base, other, .. } => recurse(base) || recurse(other),
+        ExprKind::IntegerClamp {
+            base,
+            minimum,
+            maximum,
+        } => recurse(base) || recurse(minimum) || recurse(maximum),
         ExprKind::IntegerBitCount { base, .. } => recurse(base),
         ExprKind::IntegerLogarithm { base, radix, .. } => {
             recurse(base) || radix.is_some_and(recurse)
@@ -2837,6 +2853,20 @@ fn evaluate_call_aware_integer<
                 depth,
             )?;
             match transform {
+                crate::expression::IntegerPairTransform::Minimum => {
+                    if integer_bits_less_than(right, left, base_bits, base_type.is_signed()) {
+                        right
+                    } else {
+                        left
+                    }
+                }
+                crate::expression::IntegerPairTransform::Maximum => {
+                    if integer_bits_less_than(left, right, base_bits, base_type.is_signed()) {
+                        right
+                    } else {
+                        left
+                    }
+                }
                 crate::expression::IntegerPairTransform::AbsoluteDifference => {
                     absolute_difference_integer_bits(left, right, base_bits, base_type.is_signed())
                 }
@@ -2864,6 +2894,59 @@ fn evaluate_call_aware_integer<
                     next_multiple_integer_bits(left, right, base_bits, base_type.is_signed())
                         .map_err(arithmetic_error)?
                 }
+            }
+        }
+        ExprKind::IntegerClamp {
+            base,
+            minimum,
+            maximum,
+        } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants)
+                .unwrap_or(crate::IntegerType::I32);
+            if base_type != ty
+                || [minimum, maximum].into_iter().any(|bound| {
+                    integer_expression_type(context, symbol_count, tree, bound, constants)
+                        .is_some_and(|bound_type| bound_type != base_type)
+                })
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                base,
+                base_type,
+                constants,
+                depth,
+            )?;
+            let minimum = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                minimum,
+                base_type,
+                constants,
+                depth,
+            )?;
+            let maximum = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                maximum,
+                base_type,
+                constants,
+                depth,
+            )?;
+            if integer_bits_less_than(maximum, minimum, bits, base_type.is_signed()) {
+                return Err(arithmetic_error(ConstEvalError::InvalidRangeBounds));
+            }
+            if integer_bits_less_than(value, minimum, bits, base_type.is_signed()) {
+                minimum
+            } else if integer_bits_less_than(maximum, value, bits, base_type.is_signed()) {
+                maximum
+            } else {
+                value
             }
         }
         ExprKind::IntegerBitCount { base, count } => {
@@ -3967,6 +4050,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
                 },
             )
         }
+        ExprKind::IntegerClamp { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::IntegerBitCount { .. } | ExprKind::IntegerLogarithm { .. } => {
             Some(crate::IntegerType::U32)
         }
@@ -4148,6 +4232,14 @@ fn absolute_difference_integer_bits(left: u128, right: u128, bits: u8, signed: b
         left.wrapping_sub(right) & mask
     } else {
         right.wrapping_sub(left) & mask
+    }
+}
+
+fn integer_bits_less_than(left: u128, right: u128, bits: u8, signed: bool) -> bool {
+    if signed {
+        decode_signed(left, bits) < decode_signed(right, bits)
+    } else {
+        left < right
     }
 }
 

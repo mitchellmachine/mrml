@@ -2037,6 +2037,10 @@ toward zero for signed values, including odd negative sums, without widening
 or allocating. Four linked System V objects matched pinned Rust across operand
 orders, exact and fractional averages, mixed signs, and narrow/full-width
 extrema.
+Primitive `min`, `max`, and `clamp` likewise require exact matching
+integer types in constants and runtime functions. Their comparisons honor
+signed ordering, and `clamp` traps when its minimum exceeds its maximum before
+selecting either bound.
 Primitive `div_floor` supports ordinary unsigned division and the pinned
 nightly's `int_roundings` signed form. Signed results round toward negative
 infinity when a nonzero remainder has the opposite sign from the divisor;

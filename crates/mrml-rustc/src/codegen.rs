@@ -2346,6 +2346,15 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(other)?;
         }
+        ExprKind::IntegerClamp {
+            base,
+            minimum,
+            maximum,
+        } => {
+            recurse(base)?;
+            recurse(minimum)?;
+            recurse(maximum)?;
+        }
         ExprKind::IntegerBitCount { base, .. } => recurse(base)?,
         ExprKind::IntegerLogarithm { base, radix, .. } => {
             recurse(base)?;
@@ -3525,6 +3534,37 @@ fn runtime_expression_type_with_locals<
                     integer_type
                 };
             Ok(RuntimeExpressionType::Integer(Some(result_type)))
+        }
+        ExprKind::IntegerClamp {
+            base,
+            minimum,
+            maximum,
+        } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_))) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            for bound in [minimum, maximum] {
+                let bound_type = runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    bound,
+                    depth + 1,
+                )?;
+                if !runtime_types_compatible(bound_type, base_type) {
+                    return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                }
+            }
+            Ok(base_type)
         }
         ExprKind::IntegerBitCount { base, count } => {
             let base_type = runtime_expression_type_with_locals(
@@ -5998,6 +6038,52 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_normalize_width(result_width)?;
                 self.width = previous_width;
             }
+            ExprKind::IntegerClamp {
+                base,
+                minimum,
+                maximum,
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, minimum, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, maximum, depth + 1)?;
+                self.emit(&[0x59, 0x5a])?;
+                self.evaluation_depth -= 2;
+                self.emit(&[0x48, 0x39, 0xc1])?;
+                self.emit_trap_branch(if operand_width.signed { 0x8f } else { 0x87 })?;
+                self.emit(&[0x48, 0x39, 0xca])?;
+                let check_maximum =
+                    self.emit_forward_branch(if operand_width.signed { 0x8d } else { 0x83 })?;
+                self.emit(&[0x48, 0x89, 0xc8])?;
+                let end_below = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(check_maximum)?;
+                self.emit(&[0x48, 0x39, 0xc2])?;
+                let use_value =
+                    self.emit_forward_branch(if operand_width.signed { 0x8e } else { 0x86 })?;
+                let end_above = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(use_value)?;
+                self.emit(&[0x48, 0x89, 0xd0])?;
+                self.patch_forward_branch(end_below)?;
+                self.patch_forward_branch(end_above)?;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
             ExprKind::IntegerPairTransform {
                 base,
                 other,
@@ -6037,6 +6123,23 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit(&[0x59])?;
                 self.evaluation_depth -= 1;
                 match transform {
+                    crate::expression::IntegerPairTransform::Minimum
+                    | crate::expression::IntegerPairTransform::Maximum => {
+                        self.emit(&[0x48, 0x39, 0xc1])?;
+                        let choose_left = self.emit_forward_branch(match transform {
+                            crate::expression::IntegerPairTransform::Minimum => {
+                                if operand_width.signed { 0x8e } else { 0x86 }
+                            }
+                            crate::expression::IntegerPairTransform::Maximum => {
+                                if operand_width.signed { 0x8d } else { 0x83 }
+                            }
+                            _ => unreachable!(),
+                        })?;
+                        let end = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(choose_left)?;
+                        self.emit(&[0x48, 0x89, 0xc8])?;
+                        self.patch_forward_branch(end)?;
+                    }
                     crate::expression::IntegerPairTransform::AbsoluteDifference => {
                         self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x39, 0xd1])?;
                         let left_at_least_right = self
@@ -14056,6 +14159,38 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn orders_and_clamps_primitive_integers() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.min(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i16, right: i16) -> i16 { left.max(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, low: u32, high: u32) -> u32 { input.clamp(low, high) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, low: i64, high: i64) -> i64 { input.clamp(low, high) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, low: u16, high: u32) -> u32 { input.clamp(low, high) }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1536, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]

@@ -343,6 +343,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
             | ExprKind::IntegerPairTransform { .. }
+            | ExprKind::IntegerClamp { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::IntegerLogarithm { .. } => {
                 return Err(IrError {

@@ -2220,6 +2220,27 @@ fn rustc_integer_midpoints_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_ordering_methods_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.min(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i16, right: i16) -> i16 { left.max(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u32, low: u32, high: u32) -> u32 { value.clamp(low, high) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i64, low: i64, high: i64) -> i64 { value.clamp(low, high) }",
+        "const VALUE: i8 = (-100i8).max(-42); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: u16 = 900u16.min(42); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+        "const VALUE: i32 = (-100i32).clamp(-42, 42); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_div_ceil_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.div_ceil(right) }",

@@ -469,6 +469,11 @@ pub enum ExprKind<'source> {
         other: ExprId,
         transform: IntegerPairTransform,
     },
+    IntegerClamp {
+        base: ExprId,
+        minimum: ExprId,
+        maximum: ExprId,
+    },
     IntegerBitCount {
         base: ExprId,
         count: IntegerBitCount,
@@ -574,6 +579,8 @@ pub enum IntegerBitTransform {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IntegerPairTransform {
+    Minimum,
+    Maximum,
     AbsoluteDifference,
     Midpoint,
     CarrylessMultiply,
@@ -756,6 +763,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
             | ExprKind::IntegerPairTransform { .. }
+            | ExprKind::IntegerClamp { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::IntegerLogarithm { .. }
             | ExprKind::Integer(_)
@@ -1034,6 +1042,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerUnsignedAbsolute { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerPairTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerClamp { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerLogarithm { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
@@ -2454,6 +2463,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::IntegerPairTransform { base, other, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(other, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerClamp {
+                base,
+                minimum,
+                maximum,
+            } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(minimum, name, replacement, depth + 1)?;
+                self.substitute_identifier(maximum, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerBitCount { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -4120,6 +4138,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_div"
                         | "abs_diff"
                         | "midpoint"
+                        | "min"
+                        | "max"
+                        | "clamp"
                         | "div_floor"
                         | "div_ceil"
                         | "next_multiple_of"
@@ -4281,6 +4302,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "with_addr"
                     | "with_metadata_of"
                     | "is_multiple_of"
+                    | "min"
+                    | "max"
+                    | "clamp"
             ) {
                 Some(self.expression(0, depth + 1)?)
             } else {
@@ -4295,6 +4319,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "copy_to_nonoverlapping"
                     | "copy_from"
                     | "copy_from_nonoverlapping"
+                    | "clamp"
             ) {
                 let comma = self.take()?;
                 if !comma.is_some_and(|token| token.kind == TokenKind::Comma) {
@@ -4502,23 +4527,36 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
-                "abs_diff" | "midpoint" | "carryless_mul" | "extract_bits" | "deposit_bits"
-                | "div_floor" | "div_ceil" | "next_multiple_of" => ExprKind::IntegerPairTransform {
+                "min" | "max" | "abs_diff" | "midpoint" | "carryless_mul" | "extract_bits"
+                | "deposit_bits" | "div_floor" | "div_ceil" | "next_multiple_of" => {
+                    ExprKind::IntegerPairTransform {
+                        base,
+                        other: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        transform: match method.text {
+                            "min" => IntegerPairTransform::Minimum,
+                            "max" => IntegerPairTransform::Maximum,
+                            "abs_diff" => IntegerPairTransform::AbsoluteDifference,
+                            "midpoint" => IntegerPairTransform::Midpoint,
+                            "carryless_mul" => IntegerPairTransform::CarrylessMultiply,
+                            "extract_bits" => IntegerPairTransform::ExtractBits,
+                            "deposit_bits" => IntegerPairTransform::DepositBits,
+                            "div_floor" => IntegerPairTransform::DivideFloor,
+                            "div_ceil" => IntegerPairTransform::DivideCeiling,
+                            "next_multiple_of" => IntegerPairTransform::NextMultiple,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
+                "clamp" => ExprKind::IntegerClamp {
                     base,
-                    other: argument.ok_or_else(|| {
+                    minimum: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
-                    transform: match method.text {
-                        "abs_diff" => IntegerPairTransform::AbsoluteDifference,
-                        "midpoint" => IntegerPairTransform::Midpoint,
-                        "carryless_mul" => IntegerPairTransform::CarrylessMultiply,
-                        "extract_bits" => IntegerPairTransform::ExtractBits,
-                        "deposit_bits" => IntegerPairTransform::DepositBits,
-                        "div_floor" => IntegerPairTransform::DivideFloor,
-                        "div_ceil" => IntegerPairTransform::DivideCeiling,
-                        "next_multiple_of" => IntegerPairTransform::NextMultiple,
-                        _ => unreachable!(),
-                    },
+                    maximum: second_argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
                 },
                 "isolate_highest_one"
                 | "isolate_lowest_one"
