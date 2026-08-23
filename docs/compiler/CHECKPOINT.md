@@ -9,12 +9,13 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `acd1d64df8c74181c938ecf644c653499cd162db`
-  (`Preanalyze bounded runtime body facts`)
+- Compiler checkpoint commit: `8b4a529b0ff5d4ac9360e0a94a922dcf710c00aa`
+  (`Preanalyze conditional branch local identities`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
-- Preceding compiler commits: `486fc87` (`Discover bounded runtime read
-  places`), `aac7798` (`Bound runtime place projection facts`), `308c781`
+- Preceding compiler commits: `acd1d64` (`Preanalyze bounded runtime body
+  facts`), `486fc87` (`Discover bounded runtime read places`), `aac7798`
+  (`Bound runtime place projection facts`), `308c781`
   (`Record stable runtime identifier reads`), and `099b11c` (`Retain bounded
   runtime place facts`).
 - Oracle: `docs/compiler/oracles/ORACLE-0001.md`, rustc
@@ -54,16 +55,18 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
 - a standalone fixed-capacity body-fact object outside the x86 machine-code
   state; and
 - pre-emission typing and stable identity assignment for the supported leading
-  straight-line named-local declaration prefix, including translated source
-  spans and exact consumption validation.
+  straight-line named-local declaration prefix and branch-local declarations in
+  its first supported conditional assignment, including translated source spans,
+  distinct monotonically assigned branch identities, and exact consumption
+  validation.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Conditional/loop declarations and general accesses are not yet
-preanalyzed. Names are still resolved during emission, and read-place discovery
+borrow checker. Later conditionals, loop declarations, arbitrary nested scopes,
+and general accesses are not yet preanalyzed. Names are still resolved during emission, and read-place discovery
 is not yet run body-wide or consumed by every nested emission family. Parser
 locals do not yet carry these IDs. Initialization/move paths, body basic blocks
 and edges, borrows, loans, regions, Polonius-style analysis, and a general trait
@@ -105,9 +108,9 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 566 tests on each host: 313 library tests, 10
-conformance tests, 241 replacement tests, and 2 driver tests. Warnings-denied
-Clippy also passed on both hosts. The commands were:
+The checkpoint source passed 568 tests on each host: 314
+library tests, 10 conformance tests, 242 replacement tests, and 2 driver tests.
+Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
 $env:RUSTFLAGS='-C link-arg=/stack:16777216'
