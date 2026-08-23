@@ -239,6 +239,18 @@ impl IntegerType {
         })
     }
 
+    pub const fn signed_counterpart(self) -> Option<Self> {
+        Some(match self {
+            Self::U8 => Self::I8,
+            Self::U16 => Self::I16,
+            Self::U32 => Self::I32,
+            Self::U64 => Self::I64,
+            Self::U128 => Self::I128,
+            Self::Usize => Self::Isize,
+            _ => return None,
+        })
+    }
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::U8 => "u8",
@@ -395,6 +407,7 @@ pub enum ExprKind<'source> {
         euclidean: bool,
         euclidean_wrapping: bool,
         strict: bool,
+        mixed_signedness: bool,
     },
     SaturatingArithmetic {
         base: ExprId,
@@ -3915,6 +3928,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "isqrt"
                         | "strict_add"
                         | "strict_sub"
+                        | "strict_add_signed"
+                        | "strict_sub_signed"
+                        | "strict_add_unsigned"
+                        | "strict_sub_unsigned"
                         | "strict_mul"
                         | "strict_div"
                         | "strict_rem"
@@ -4012,6 +4029,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_rem"
                     | "strict_add"
                     | "strict_sub"
+                    | "strict_add_signed"
+                    | "strict_sub_signed"
+                    | "strict_add_unsigned"
+                    | "strict_sub_unsigned"
                     | "strict_mul"
                     | "strict_div"
                     | "strict_rem"
@@ -4120,16 +4141,33 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     base,
                     positive: method.text == "is_positive",
                 },
-                "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "wrapping_div"
-                | "wrapping_rem" | "strict_add" | "strict_sub" | "strict_mul" | "strict_div"
+                "wrapping_add"
+                | "wrapping_sub"
+                | "wrapping_mul"
+                | "wrapping_div"
+                | "wrapping_rem"
+                | "strict_add"
+                | "strict_sub"
+                | "strict_add_signed"
+                | "strict_sub_signed"
+                | "strict_add_unsigned"
+                | "strict_sub_unsigned"
+                | "strict_mul"
+                | "strict_div"
                 | "strict_rem" => ExprKind::WrappingArithmetic {
                     base,
                     argument: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                     operator: match method.text {
-                        "wrapping_add" | "strict_add" => BinaryOperator::Add,
-                        "wrapping_sub" | "strict_sub" => BinaryOperator::Subtract,
+                        "wrapping_add"
+                        | "strict_add"
+                        | "strict_add_signed"
+                        | "strict_add_unsigned" => BinaryOperator::Add,
+                        "wrapping_sub"
+                        | "strict_sub"
+                        | "strict_sub_signed"
+                        | "strict_sub_unsigned" => BinaryOperator::Subtract,
                         "wrapping_mul" | "strict_mul" => BinaryOperator::Multiply,
                         "wrapping_div" | "strict_div" => BinaryOperator::Divide,
                         "wrapping_rem" | "strict_rem" => BinaryOperator::Remainder,
@@ -4138,6 +4176,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     euclidean: false,
                     euclidean_wrapping: false,
                     strict: method.text.starts_with("strict_"),
+                    mixed_signedness: method.text.ends_with("_signed")
+                        || method.text.ends_with("_unsigned"),
                 },
                 "div_euclid"
                 | "rem_euclid"
@@ -4160,6 +4200,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     euclidean: true,
                     euclidean_wrapping: method.text.starts_with("wrapping_"),
                     strict: method.text.starts_with("strict_"),
+                    mixed_signedness: false,
                 },
                 "saturating_add" | "saturating_sub" | "saturating_mul" | "saturating_div" => {
                     ExprKind::SaturatingArithmetic {

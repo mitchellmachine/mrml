@@ -3099,6 +3099,7 @@ fn runtime_expression_type_with_locals<
             euclidean,
             euclidean_wrapping: _,
             strict,
+            mixed_signedness,
         } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -3132,10 +3133,22 @@ fn runtime_expression_type_with_locals<
                 {
                     Ok(base_type)
                 }
-                RuntimeExpressionType::Integer(Some(_))
-                    if runtime_types_compatible(argument_type, base_type) =>
-                {
-                    Ok(base_type)
+                RuntimeExpressionType::Integer(Some(integer_type)) => {
+                    let expected_argument = if mixed_signedness {
+                        if integer_type.is_signed() {
+                            integer_type.unsigned_counterpart()
+                        } else {
+                            integer_type.signed_counterpart()
+                        }
+                        .map(|ty| RuntimeExpressionType::Integer(Some(ty)))
+                    } else {
+                        Some(base_type)
+                    };
+                    if expected_argument == Some(argument_type) {
+                        Ok(base_type)
+                    } else {
+                        Err(CodegenErrorKind::RuntimeTypeMismatch)
+                    }
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
@@ -5081,6 +5094,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 euclidean,
                 euclidean_wrapping,
                 strict,
+                mixed_signedness,
             } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
@@ -5121,12 +5135,18 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     left?;
                     self.emit(&[0x50])?;
                     self.evaluation_depth += 1;
+                    if mixed_signedness {
+                        self.width.signed = !operand_width.signed;
+                    }
                     let right = self.emit_expression(tree, argument, depth + 1);
                     right?;
+                    self.width = operand_width;
                     self.evaluation_depth -= 1;
                     self.emit(&[0x59])?;
                     let result = if euclidean {
                         self.emit_euclidean_division(operator, euclidean_wrapping)
+                    } else if strict && mixed_signedness {
+                        self.emit_strict_mixed_arithmetic(operator)
                     } else if strict {
                         let previous_overflow_checks = self.overflow_checks;
                         self.overflow_checks = true;
@@ -9321,6 +9341,58 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             LogicalAnd | LogicalOr => Err(self.error(CodegenErrorKind::UnsupportedRuntimeOperator)),
         }
     }
+
+    fn emit_strict_mixed_arithmetic(
+        &mut self,
+        operator: crate::BinaryOperator,
+    ) -> Result<(), CodegenError> {
+        use crate::BinaryOperator::{Add, Subtract};
+        if self.width.signed {
+            match operator {
+                Add => {
+                    self.emit(&[0x48, 0xba])?;
+                    self.emit(&self.width.maximum.to_le_bytes())?;
+                    self.emit(&[0x48, 0x29, 0xca])?;
+                }
+                Subtract => {
+                    self.emit(&[0x48, 0x89, 0xca, 0x49, 0xb8])?;
+                    self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+                    self.emit(&[0x4c, 0x29, 0xc2])?;
+                }
+                _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeOperator)),
+            }
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            self.emit_trap_branch(0x87)?;
+            match operator {
+                Add => self.emit(&[0x48, 0x01, 0xc8])?,
+                Subtract => self.emit(&[0x48, 0x29, 0xc1, 0x48, 0x89, 0xc8])?,
+                _ => unreachable!(),
+            }
+            self.emit_normalize()
+        } else if self.width.bits < 64 {
+            let previous_overflow_checks = self.overflow_checks;
+            self.overflow_checks = true;
+            let result = self.emit_binary(operator);
+            self.overflow_checks = previous_overflow_checks;
+            result
+        } else {
+            self.emit(&[0x48, 0x85, 0xc0, 0x79, 0x11, 0x48, 0xf7, 0xd8])?;
+            match operator {
+                Add => self.emit(&[0x48, 0x29, 0xc1])?,
+                Subtract => self.emit(&[0x48, 0x01, 0xc1])?,
+                _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeOperator)),
+            }
+            self.emit_trap_branch(0x82)?;
+            self.emit(&[0x48, 0x89, 0xc8, 0xeb, 0x0c])?;
+            match operator {
+                Add => self.emit(&[0x48, 0x01, 0xc1])?,
+                Subtract => self.emit(&[0x48, 0x29, 0xc1])?,
+                _ => unreachable!(),
+            }
+            self.emit_trap_branch(0x82)?;
+            self.emit(&[0x48, 0x89, 0xc8])
+        }
+    }
 }
 
 fn parameter_push_encoding(abi: X86_64Abi, index: usize) -> Option<&'static [u8]> {
@@ -12577,6 +12649,53 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u16) -> u8 { left.strict_add(right) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: bool, right: bool) -> bool { left.strict_mul(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn checks_strict_mixed_signedness_integer_arithmetic() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: u8) -> i8 { left.strict_add_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: u64) -> i64 { left.strict_sub_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: i16) -> u16 { left.strict_add_signed(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: i64) -> u64 { left.strict_sub_signed(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 1536, 4, 128>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.strict_add_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u32, right: u32) -> u32 { left.strict_sub_signed(right) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

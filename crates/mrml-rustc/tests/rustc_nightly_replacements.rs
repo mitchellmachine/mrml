@@ -1866,6 +1866,41 @@ fn rustc_strict_arithmetic_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_strict_mixed_signedness_arithmetic_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: u8) -> i8 { left.strict_add_unsigned(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: u64) -> i64 { left.strict_sub_unsigned(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u16, right: i16) -> u16 { left.strict_add_signed(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u64, right: i64) -> u64 { left.strict_sub_signed(right) }",
+        "const VALUE: i8 = (-40i8).strict_add_unsigned(82); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i128 = (-170141183460469231731687303715884105728i128).strict_add_unsigned(340282366920938463463374607431768211455u128); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i64 { VALUE as i64 }",
+        "const VALUE: u8 = 40u8.strict_add_signed(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u128 = 340282366920938463463374607431768211455u128.strict_sub_signed(170141183460469231731687303715884105727i128); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE as u64 }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: i8) -> i8 { left.strict_add_unsigned(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u64, right: u64) -> u64 { left.strict_sub_signed(right) }",
+    ] {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeTypeMismatch
+            )),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn rustc_strict_division_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.strict_div(right) }",

@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 441 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 443 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1914,6 +1914,14 @@ signed or unsigned receiver types and trap on overflow independently of the
 runtime overflow-check setting. Three System V objects emitted explicitly with
 `-C overflow-checks=no` matched ordinary pinned-Rust results; independent
 narrow signed/unsigned and full-width overflow probes all trapped.
+Stable `strict_add_signed`, `strict_sub_signed`, `strict_add_unsigned`, and
+`strict_sub_unsigned` require the corresponding same-width opposite-signed
+argument and preserve the receiver type. Constants through 128 bits use exact
+mathematical bounds, while native 8- through 64-bit operations trap on overflow
+independently of the runtime overflow-check setting. Four 536- to 544-byte
+System V objects matched pinned Rust across eight narrow and full-width
+cross-sign boundary cases. Separate signed-add, signed-subtract, unsigned-add,
+and unsigned-subtract overflow callers all terminated at MRML trap instructions.
 Stable `strict_div`, `strict_rem`, `strict_div_euclid`, and
 `strict_rem_euclid` likewise retain exact receiver types and ignore disabled
 overflow checks. Five unchecked-mode System V objects matched truncating and

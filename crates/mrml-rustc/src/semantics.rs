@@ -2363,17 +2363,35 @@ fn evaluate_call_aware_integer<
             euclidean,
             euclidean_wrapping,
             strict,
+            mixed_signedness,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            let argument_type = if mixed_signedness {
+                if ty.is_signed() {
+                    ty.unsigned_counterpart()
+                } else {
+                    ty.signed_counterpart()
+                }
+            } else {
+                Some(ty)
+            };
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
                 || integer_expression_type(context, symbol_count, tree, argument, constants)
-                    .is_some_and(|argument_type| argument_type != ty)
+                    .is_some_and(|actual| Some(actual) != argument_type)
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
             let left = recurse(base)?;
-            let right = recurse(argument)?;
+            let right = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                argument,
+                argument_type.ok_or_else(|| arithmetic_error(ConstEvalError::InvalidCast))?,
+                constants,
+                depth,
+            )?;
             if euclidean {
                 return euclidean_integer_arithmetic(
                     left,
@@ -2386,6 +2404,16 @@ fn evaluate_call_aware_integer<
                 .map_err(arithmetic_error);
             }
             if strict {
+                if mixed_signedness {
+                    return strict_mixed_integer_arithmetic(
+                        left,
+                        right,
+                        bits,
+                        ty.is_signed(),
+                        operator,
+                    )
+                    .map_err(arithmetic_error);
+                }
                 return if ty.is_signed() {
                     evaluate_call_aware_signed_binary(operator, left, right, bits)
                 } else {
@@ -3508,12 +3536,18 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             euclidean,
             euclidean_wrapping,
             strict,
+            mixed_signedness,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
+            let argument_type = if mixed_signedness {
+                ty.unsigned_counterpart()
+            } else {
+                Some(ty)
+            };
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
                 || expression_integer_type(tree, argument, constants)
-                    .is_some_and(|argument_type| argument_type != ty)
+                    .is_some_and(|actual| Some(actual) != argument_type)
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
@@ -3531,6 +3565,10 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .map_err(ExecutionError::Arithmetic);
             }
             if strict {
+                if mixed_signedness {
+                    return strict_mixed_integer_arithmetic(left, right, bits, true, operator)
+                        .map_err(ExecutionError::Arithmetic);
+                }
                 return evaluate_call_aware_signed_binary(operator, left, right, bits)
                     .map_err(ExecutionError::Arithmetic);
             }
@@ -4035,6 +4073,52 @@ fn decode_signed(value: u128, bits: u8) -> i128 {
     } else {
         ((value << (128 - bits)) as i128) >> (128 - bits)
     }
+}
+
+fn strict_mixed_integer_arithmetic(
+    left: u128,
+    right: u128,
+    bits: u8,
+    receiver_signed: bool,
+    operator: BinaryOperator,
+) -> Result<u128, ConstEvalError> {
+    let mask = signed_mask(bits);
+    let left = left & mask;
+    let right = right & mask;
+    if receiver_signed {
+        let signed_left = decode_signed(left, bits);
+        let magnitude = signed_left.unsigned_abs();
+        let half = 1_u128 << (bits - 1);
+        let maximum = half - 1;
+        let bound = match operator {
+            BinaryOperator::Add if signed_left >= 0 => maximum - signed_left as u128,
+            BinaryOperator::Add => maximum + magnitude,
+            BinaryOperator::Subtract if signed_left >= 0 => half + signed_left as u128,
+            BinaryOperator::Subtract => half - magnitude,
+            _ => return Err(ConstEvalError::InvalidExpressionTree),
+        };
+        if right > bound {
+            return Err(ConstEvalError::Overflow);
+        }
+    } else {
+        let signed_right = decode_signed(right, bits);
+        let magnitude = signed_right.unsigned_abs();
+        let overflows = match (operator, signed_right >= 0) {
+            (BinaryOperator::Add, true) | (BinaryOperator::Subtract, false) => {
+                left > mask - magnitude
+            }
+            (BinaryOperator::Add, false) | (BinaryOperator::Subtract, true) => left < magnitude,
+            _ => return Err(ConstEvalError::InvalidExpressionTree),
+        };
+        if overflows {
+            return Err(ConstEvalError::Overflow);
+        }
+    }
+    Ok(match operator {
+        BinaryOperator::Add => left.wrapping_add(right) & mask,
+        BinaryOperator::Subtract => left.wrapping_sub(right) & mask,
+        _ => return Err(ConstEvalError::InvalidExpressionTree),
+    })
 }
 
 fn encode_signed(value: i128, bits: u8) -> Result<u128, ExecutionError> {
