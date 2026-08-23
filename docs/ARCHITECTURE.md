@@ -226,7 +226,14 @@ protected active generation, verifies staged-image digests, flushes them before
 atomically replacing only the inactive superblock, and treats any failure at or
 after replacement as fail-stop. There is not yet a concrete block backend,
 allocator, cross-file allocation index, complete COW tree, transaction engine,
-native file I/O, snapshot implementation, or crash-recovery path. The EFI
+or native file I/O. Bounded in-memory directory state now requires exact
+per-operation directory authority for lookup, enumeration, creation, rename,
+cross-directory file moves, and removal. Creation returns a capability bound to
+a service-allocated stable object identity; namespace removal does not revoke
+existing object capabilities, and rename preserves identity. Cross-directory
+directory moves fail closed until bounded ancestry proof prevents cycles, and
+the identity allocator is not crash-safe until transactionally persisted.
+Snapshots and crash recovery also remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import
 services, but FAT32, legacy formats, POSIX permissions, and a universal global

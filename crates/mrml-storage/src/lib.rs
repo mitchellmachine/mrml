@@ -8,6 +8,7 @@
 
 mod authority;
 mod cow;
+mod directory;
 mod extent;
 mod format;
 mod identity;
@@ -19,6 +20,7 @@ pub use authority::{
 pub use cow::{
     CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan, CowPublishError,
 };
+pub use directory::{DirectoryError, DirectoryState, StorageObjectAllocator};
 pub use extent::{
     EXTENT_RECORD_BYTES, ExtentError, ExtentKind, ExtentLocation, ExtentMap, ExtentRecord,
     MAX_EXTENT_BLOCKS,

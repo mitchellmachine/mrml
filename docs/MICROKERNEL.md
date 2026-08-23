@@ -2689,9 +2689,32 @@ the old root remains selected. A replacement or final-flush failure is
 claimed. This is an ordering and failure-state mechanism with an emulated
 backend; it is not a physical-disk atomic-write result or crash-recovery proof.
 
-Nineteen focused unit tests and strict crate-local clippy pass on Windows gnullvm
-and Arch Linux under WSL2. Concrete COW backend integration, directory
-operations, file I/O, transactions, crash recovery,
+The first directory-operation layer is also bounded and userspace-owned. A
+directory state binds one stable directory object, nonzero generation, and at
+most its compile-time entry capacity. Construction rejects wrong-volume,
+duplicate-name, and duplicate-object entries. Lookup and enumeration require
+exact `LOOKUP` and `ENUMERATE` authority for that directory. File or directory
+creation separately requires `CREATE_FILE` or `CREATE_DIRECTORY`, obtains the
+next identity from a service-owned nonzero monotonic allocator, preflights name,
+capacity, generation, child-right validity, and authority-table capacity, then
+returns both the canonical entry and an object-bound child handle. No caller-
+chosen name or ID grants access.
+
+Same-directory rename requires `RENAME_CHILD` and preserves child identity,
+kind, metadata generation, and every existing open capability. A cross-
+directory file move requires exact `RENAME_CHILD` on both directories and
+preflights both generations, source identity, destination name/object collision,
+and destination capacity before changing either directory. Removal requires
+`REMOVE_CHILD`; it unlinks the namespace entry without silently revoking open
+object capabilities, leaving lifetime reclamation to a later object-lifecycle
+layer. Cross-directory movement of directory objects is rejected until a
+bounded authoritative ancestry proof can prevent cycles. The object-ID
+allocator is volatile simulation state and must be persisted in the same future
+transaction before create becomes crash-safe.
+
+Twenty-seven focused unit tests and strict crate-local clippy pass on Windows
+gnullvm and Arch Linux under WSL2. Concrete COW backend integration, complete
+directory hierarchy/lifetime handling, file I/O, transactions, crash recovery,
 snapshots, a block-device service, and configuration-checkpoint persistence
 remain unimplemented.
 
@@ -2702,7 +2725,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 19 tests, and both strict crate-local clippy
+Both current unit-test runs pass 27 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

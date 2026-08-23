@@ -148,6 +148,11 @@ impl<const N: usize> StorageAuthorityTable<N> {
     ) -> Result<StorageHandle, StorageAuthorityError> {
         self.insert_derived(object, kind, rights, owner, None)
     }
+    pub fn has_capacity(&self) -> bool {
+        self.entries.iter().enumerate().any(|(slot, entry)| {
+            entry.object.is_none() && !entry.retired && u32::try_from(slot).is_ok()
+        })
+    }
     pub fn authorize(
         &self,
         handle: StorageHandle,
@@ -249,13 +254,14 @@ impl<const N: usize> StorageAuthorityTable<N> {
             .enumerate()
             .find(|(_, entry)| entry.object.is_none() && !entry.retired)
             .ok_or(StorageAuthorityError::Full)?;
+        let slot = u32::try_from(slot).map_err(|_| StorageAuthorityError::Full)?;
         entry.object = Some(object);
         entry.kind = kind;
         entry.rights = rights;
         entry.owner = Some(owner);
         entry.parent = parent;
         Ok(StorageHandle {
-            slot: slot as u32,
+            slot,
             generation: entry.generation,
         })
     }

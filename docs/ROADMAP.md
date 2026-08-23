@@ -218,6 +218,14 @@ authority; unrelated domains continue.
    failure is clean rejection; replacement or later failure is fail-stop.
    Concrete block-backend integration, allocation ownership across files, a
    complete COW tree, and every later operation in this item remain pending.
+   Directory lookup/enumeration/create/rename/remove and atomic cross-directory
+   file moves are now implemented over fixed-capacity state. Every operation
+   requires the exact directory object and operation-specific right; create
+   allocates a service-owned stable ID and returns object-bound authority, while
+   rename/move preserve identity and open capabilities. All failure-prone checks
+   precede mutation. Cross-directory directory moves remain rejected pending a
+   bounded ancestry proof, and allocator persistence awaits transactions, so
+   directory operations are not yet complete or crash-safe.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

@@ -78,6 +78,18 @@ impl DirectoryEntry {
         self.object
     }
 
+    pub const fn name(self) -> StorageName {
+        self.name
+    }
+
+    pub const fn kind(self) -> StorageObjectKind {
+        self.kind
+    }
+
+    pub const fn metadata_generation(self) -> u64 {
+        self.metadata_generation
+    }
+
     pub fn encode(self, output: &mut [u8; DIRECTORY_ENTRY_BYTES]) {
         *output = [0; DIRECTORY_ENTRY_BYTES];
         output[..8].copy_from_slice(&ENTRY_MAGIC);
