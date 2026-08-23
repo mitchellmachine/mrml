@@ -2580,6 +2580,29 @@ fn rustc_unsigned_bit_introspection_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_unsigned_bit_gather_scatter_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.carryless_mul(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u64, right: u64) -> u64 { left.carryless_mul(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u8, mask: u8) -> u8 { value.extract_bits(mask) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u64, mask: u64) -> u64 { value.extract_bits(mask) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u8, mask: u8) -> u8 { value.deposit_bits(mask) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u64, mask: u64) -> u64 { value.deposit_bits(mask) }",
+        "const VALUE: u8 = 0b1011u8.carryless_mul(0b110); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u8 = 0b10111100u8.extract_bits(0b00100100); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u8 = 0b10101101u8.deposit_bits(0b01010101); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",

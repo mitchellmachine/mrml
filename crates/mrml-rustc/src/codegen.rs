@@ -3355,6 +3355,15 @@ fn runtime_expression_type_with_locals<
             ) {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
+            if matches!(
+                transform,
+                crate::expression::IntegerPairTransform::CarrylessMultiply
+                    | crate::expression::IntegerPairTransform::ExtractBits
+                    | crate::expression::IntegerPairTransform::DepositBits
+            ) && integer_type.is_signed()
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let result_type =
                 if transform == crate::expression::IntegerPairTransform::AbsoluteDifference {
                     integer_type.unsigned_counterpart().unwrap_or(integer_type)
@@ -5659,6 +5668,45 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                             self.emit(&[0x49, 0x83, 0xe0, 1, 0x4c, 0x01, 0xc0])?;
                             self.patch_forward_branch(nonnegative)?;
                         }
+                    }
+                    crate::expression::IntegerPairTransform::CarrylessMultiply => {
+                        self.emit(&[0x49, 0x89, 0xc0, 0x48, 0x89, 0xc8, 0x31, 0xd2])?;
+                        let loop_start = self.length;
+                        self.emit(&[0x4d, 0x85, 0xc0])?;
+                        let done = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x41, 0xf6, 0xc0, 1])?;
+                        let clear = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x48, 0x31, 0xc2])?;
+                        self.patch_forward_branch(clear)?;
+                        self.emit(&[0x48, 0xd1, 0xe0, 0x49, 0xd1, 0xe8])?;
+                        self.emit_backward_branch(loop_start)?;
+                        self.patch_forward_branch(done)?;
+                        self.emit(&[0x48, 0x89, 0xd0])?;
+                    }
+                    crate::expression::IntegerPairTransform::ExtractBits
+                    | crate::expression::IntegerPairTransform::DepositBits => {
+                        self.emit(&[0x49, 0x89, 0xc0, 0x31, 0xd2, 0x41, 0xb9, 1, 0, 0, 0])?;
+                        let loop_start = self.length;
+                        self.emit(&[0x4d, 0x85, 0xc0])?;
+                        let done = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x4d, 0x89, 0xc2, 0x49, 0xf7, 0xda, 0x4d, 0x21, 0xc2])?;
+                        if transform == crate::expression::IntegerPairTransform::ExtractBits {
+                            self.emit(&[0x4c, 0x85, 0xd1])?;
+                        } else {
+                            self.emit(&[0x4c, 0x85, 0xc9])?;
+                        }
+                        let clear = self.emit_forward_branch(0x84)?;
+                        if transform == crate::expression::IntegerPairTransform::ExtractBits {
+                            self.emit(&[0x4c, 0x09, 0xca])?;
+                        } else {
+                            self.emit(&[0x4c, 0x09, 0xd2])?;
+                        }
+                        self.patch_forward_branch(clear)?;
+                        self.emit(&[0x4d, 0x31, 0xd0])?;
+                        self.emit(&[0x49, 0xd1, 0xe1])?;
+                        self.emit_backward_branch(loop_start)?;
+                        self.patch_forward_branch(done)?;
+                        self.emit(&[0x48, 0x89, 0xd0])?;
                     }
                     crate::expression::IntegerPairTransform::DivideFloor => {
                         self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x85, 0xc9])?;
@@ -14114,6 +14162,48 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u32 { input.bit_width() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_highest_one() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.isolate_lowest_one() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn multiplies_and_gathers_unsigned_integer_bits() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u8, right: u8) -> u8 { left.carryless_mul(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: u64, mask: u64) -> u64 { value.carryless_mul(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: u8, mask: u8) -> u8 { value.extract_bits(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: u64, mask: u64) -> u64 { value.deposit_bits(mask) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.carryless_mul(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: i8, mask: i8) -> i8 { value.extract_bits(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: i8, mask: i8) -> i8 { value.deposit_bits(mask) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(value: u8, mask: u16) -> u8 { value.extract_bits(mask) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

@@ -544,6 +544,9 @@ pub enum IntegerBitTransform {
 pub enum IntegerPairTransform {
     AbsoluteDifference,
     Midpoint,
+    CarrylessMultiply,
+    ExtractBits,
+    DepositBits,
     DivideFloor,
     DivideCeiling,
     NextMultiple,
@@ -3965,6 +3968,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "div_floor"
                         | "div_ceil"
                         | "next_multiple_of"
+                        | "carryless_mul"
+                        | "extract_bits"
+                        | "deposit_bits"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -4089,6 +4095,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "div_floor"
                     | "div_ceil"
                     | "next_multiple_of"
+                    | "carryless_mul"
+                    | "extract_bits"
+                    | "deposit_bits"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -4306,22 +4315,24 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
-                "abs_diff" | "midpoint" | "div_floor" | "div_ceil" | "next_multiple_of" => {
-                    ExprKind::IntegerPairTransform {
-                        base,
-                        other: argument.ok_or_else(|| {
-                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                        })?,
-                        transform: match method.text {
-                            "abs_diff" => IntegerPairTransform::AbsoluteDifference,
-                            "midpoint" => IntegerPairTransform::Midpoint,
-                            "div_floor" => IntegerPairTransform::DivideFloor,
-                            "div_ceil" => IntegerPairTransform::DivideCeiling,
-                            "next_multiple_of" => IntegerPairTransform::NextMultiple,
-                            _ => unreachable!(),
-                        },
-                    }
-                }
+                "abs_diff" | "midpoint" | "carryless_mul" | "extract_bits" | "deposit_bits"
+                | "div_floor" | "div_ceil" | "next_multiple_of" => ExprKind::IntegerPairTransform {
+                    base,
+                    other: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    transform: match method.text {
+                        "abs_diff" => IntegerPairTransform::AbsoluteDifference,
+                        "midpoint" => IntegerPairTransform::Midpoint,
+                        "carryless_mul" => IntegerPairTransform::CarrylessMultiply,
+                        "extract_bits" => IntegerPairTransform::ExtractBits,
+                        "deposit_bits" => IntegerPairTransform::DepositBits,
+                        "div_floor" => IntegerPairTransform::DivideFloor,
+                        "div_ceil" => IntegerPairTransform::DivideCeiling,
+                        "next_multiple_of" => IntegerPairTransform::NextMultiple,
+                        _ => unreachable!(),
+                    },
+                },
                 "isolate_highest_one"
                 | "isolate_lowest_one"
                 | "swap_bytes"

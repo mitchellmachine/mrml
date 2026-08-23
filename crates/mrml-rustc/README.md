@@ -2115,6 +2115,13 @@ zero for both isolation methods and has width zero; other values retain exactly
 their highest or lowest set bit or report the highest set-bit index plus one.
 Six 504- to 568-byte System V objects matched pinned Rust across zero, adjacent
 low bits, sparse patterns, both width boundaries, and unsigned maxima.
+Pinned-nightly unsigned `carryless_mul`, `extract_bits`, and `deposit_bits`
+support exact-type operands in constants and runtime functions. Carryless
+multiplication uses truncated polynomial arithmetic over bits; extraction packs
+mask-selected source bits toward the least-significant end, while deposition
+scatters the receiver's low bits into mask-selected positions. Six 552- to
+576-byte System V objects matched pinned Rust at 8 and 64 bits across zero and
+full masks, sparse high/low masks, mixed values, and unsigned maxima.
 Unsigned primitives support stable `next_power_of_two` and pinned-nightly
 `wrapping_next_power_of_two`. Zero maps to one; checked runtime objects trap
 when the rounded power exceeds the receiver width, while unchecked and explicit

@@ -2662,6 +2662,12 @@ fn evaluate_call_aware_integer<
                 .unwrap_or(crate::IntegerType::I32);
             if integer_expression_type(context, symbol_count, tree, other, constants)
                 .is_some_and(|other_type| other_type != base_type)
+                || (matches!(
+                    transform,
+                    crate::expression::IntegerPairTransform::CarrylessMultiply
+                        | crate::expression::IntegerPairTransform::ExtractBits
+                        | crate::expression::IntegerPairTransform::DepositBits
+                ) && base_type.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
@@ -2701,6 +2707,15 @@ fn evaluate_call_aware_integer<
                 }
                 crate::expression::IntegerPairTransform::Midpoint => {
                     midpoint_integer_bits(left, right, base_bits, base_type.is_signed())
+                }
+                crate::expression::IntegerPairTransform::CarrylessMultiply => {
+                    carryless_multiply_integer_bits(left, right, base_bits)
+                }
+                crate::expression::IntegerPairTransform::ExtractBits => {
+                    extract_integer_bits(left, right, base_bits)
+                }
+                crate::expression::IntegerPairTransform::DepositBits => {
+                    deposit_integer_bits(left, right, base_bits)
                 }
                 crate::expression::IntegerPairTransform::DivideFloor => {
                     divide_floor_integer_bits(left, right, base_bits, base_type.is_signed())
@@ -3882,6 +3897,49 @@ fn midpoint_integer_bits(left: u128, right: u128, bits: u8, signed: bool) -> u12
         midpoint = midpoint.wrapping_add(differing & 1) & mask;
     }
     midpoint
+}
+
+fn carryless_multiply_integer_bits(mut left: u128, mut right: u128, bits: u8) -> u128 {
+    let mask = signed_mask(bits);
+    let mut result = 0_u128;
+    while right != 0 {
+        if right & 1 != 0 {
+            result ^= left;
+        }
+        left = left.wrapping_shl(1) & mask;
+        right >>= 1;
+    }
+    result & mask
+}
+
+fn extract_integer_bits(value: u128, mut mask: u128, bits: u8) -> u128 {
+    mask &= signed_mask(bits);
+    let mut result = 0_u128;
+    let mut output = 1_u128;
+    while mask != 0 {
+        let selected = mask & 0_u128.wrapping_sub(mask);
+        if value & selected != 0 {
+            result |= output;
+        }
+        mask &= mask - 1;
+        output = output.wrapping_shl(1);
+    }
+    result
+}
+
+fn deposit_integer_bits(value: u128, mut mask: u128, bits: u8) -> u128 {
+    mask &= signed_mask(bits);
+    let mut result = 0_u128;
+    let mut input = 1_u128;
+    while mask != 0 {
+        let selected = mask & 0_u128.wrapping_sub(mask);
+        if value & input != 0 {
+            result |= selected;
+        }
+        mask &= mask - 1;
+        input = input.wrapping_shl(1);
+    }
+    result
 }
 
 fn divide_ceiling_integer_bits(
