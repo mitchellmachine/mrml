@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 393 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 394 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1909,6 +1909,12 @@ runtime functions. The same syntax remains type-directed for raw pointers, so
 their existing `wrapping_add` and `wrapping_sub` element offsets are preserved.
 Four emitted System V integer objects matched pinned Rust across ordinary and
 overflowing narrow, 32-bit, and 64-bit boundary cases.
+Signed integers additionally support `wrapping_neg` and `wrapping_abs` in
+constants and runtime functions. Both preserve the receiver width, including
+the two's-complement minimum value whose mathematical negation is not
+representable; unsigned and Boolean receivers fail closed.
+Four emitted System V objects matched pinned Rust for positive, negative, zero,
+and minimum/maximum values at 8, 16, 32, and 64 bits.
 Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and

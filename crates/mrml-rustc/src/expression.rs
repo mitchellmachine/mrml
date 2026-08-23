@@ -462,6 +462,8 @@ pub enum IntegerBitTransform {
     ReverseBits,
     ToBigEndian,
     ToLittleEndian,
+    WrappingNegate,
+    WrappingAbsolute,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3765,6 +3767,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "reverse_bits"
                         | "to_be"
                         | "to_le"
+                        | "wrapping_neg"
+                        | "wrapping_abs"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -3937,18 +3941,19 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                     left: method.text == "rotate_left",
                 },
-                "swap_bytes" | "reverse_bits" | "to_be" | "to_le" => {
-                    ExprKind::IntegerBitTransform {
-                        base,
-                        transform: match method.text {
-                            "swap_bytes" => IntegerBitTransform::SwapBytes,
-                            "reverse_bits" => IntegerBitTransform::ReverseBits,
-                            "to_be" => IntegerBitTransform::ToBigEndian,
-                            "to_le" => IntegerBitTransform::ToLittleEndian,
-                            _ => unreachable!(),
-                        },
-                    }
-                }
+                "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
+                | "wrapping_abs" => ExprKind::IntegerBitTransform {
+                    base,
+                    transform: match method.text {
+                        "swap_bytes" => IntegerBitTransform::SwapBytes,
+                        "reverse_bits" => IntegerBitTransform::ReverseBits,
+                        "to_be" => IntegerBitTransform::ToBigEndian,
+                        "to_le" => IntegerBitTransform::ToLittleEndian,
+                        "wrapping_neg" => IntegerBitTransform::WrappingNegate,
+                        "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
+                        _ => unreachable!(),
+                    },
+                },
                 "count_ones" | "count_zeros" | "leading_zeros" | "trailing_zeros"
                 | "leading_ones" | "trailing_ones" => ExprKind::IntegerBitCount {
                     base,

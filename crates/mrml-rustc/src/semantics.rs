@@ -2368,6 +2368,11 @@ fn evaluate_call_aware_integer<
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || (matches!(
+                    transform,
+                    crate::expression::IntegerBitTransform::WrappingNegate
+                        | crate::expression::IntegerBitTransform::WrappingAbsolute
+                ) && !ty.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
@@ -3177,13 +3182,22 @@ fn transform_integer_bits(
     transform: crate::expression::IntegerBitTransform,
 ) -> u128 {
     use crate::expression::IntegerBitTransform;
-    let value = value & signed_mask(bits);
+    let mask = signed_mask(bits);
+    let value = value & mask;
     match transform {
         IntegerBitTransform::SwapBytes | IntegerBitTransform::ToBigEndian => {
             value.swap_bytes() >> (128 - bits)
         }
         IntegerBitTransform::ReverseBits => value.reverse_bits() >> (128 - bits),
         IntegerBitTransform::ToLittleEndian => value,
+        IntegerBitTransform::WrappingNegate => 0_u128.wrapping_sub(value) & mask,
+        IntegerBitTransform::WrappingAbsolute => {
+            if value & (1_u128 << (bits - 1)) == 0 {
+                value
+            } else {
+                0_u128.wrapping_sub(value) & mask
+            }
+        }
     }
 }
 

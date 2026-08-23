@@ -407,7 +407,14 @@ pub fn compile_x86_64_constant_function<
             kind: CodegenErrorKind::Execution(error),
             span: function.body_expression_span,
         })?;
-    if crate::expression::cast_integer(value, return_integer_type, 64) != Ok(value) {
+    let trusted_typed_identifier = matches!(
+        tree.expression(tree.root()).map(|expression| expression.kind),
+        Some(ExprKind::Identifier(name))
+            if resolver.resolve_type(name) == Some(return_integer_type)
+    );
+    if crate::expression::cast_integer(value, return_integer_type, 64) != Ok(value)
+        && !trusted_typed_identifier
+    {
         return Err(CodegenError {
             kind: CodegenErrorKind::ValueOutOfRange,
             span: function.body_expression_span,
@@ -3112,7 +3119,7 @@ fn runtime_expression_type_with_locals<
             }
             Ok(base_type)
         }
-        ExprKind::IntegerBitTransform { base, .. } => {
+        ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -3121,7 +3128,15 @@ fn runtime_expression_type_with_locals<
                 base,
                 depth + 1,
             )?;
-            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_))) {
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if matches!(
+                transform,
+                crate::expression::IntegerBitTransform::WrappingNegate
+                    | crate::expression::IntegerBitTransform::WrappingAbsolute
+            ) && !integer_type.is_signed()
+            {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
@@ -4963,6 +4978,13 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                             self.emit(&[0x48, 0xd1, 0xe8, 0x48, 0xd1, 0xd1])?;
                         }
                         self.emit(&[0x48, 0x89, 0xc8])?;
+                    }
+                    IntegerBitTransform::WrappingNegate => self.emit(&[0x48, 0xf7, 0xd8])?,
+                    IntegerBitTransform::WrappingAbsolute => {
+                        self.emit(&[0x48, 0x85, 0xc0])?;
+                        let nonnegative = self.emit_forward_branch(0x89)?;
+                        self.emit(&[0x48, 0xf7, 0xd8])?;
+                        self.patch_forward_branch(nonnegative)?;
                     }
                 }
                 self.emit_normalize()?;
@@ -11552,6 +11574,49 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.wrapping_add(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.wrapping_mul(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: *const u8, rhs: usize) -> *const u8 { input.wrapping_mul(rhs) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn wraps_signed_integer_negation_and_absolute_value() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.wrapping_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.wrapping_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> i32 { input.wrapping_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.wrapping_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize) -> isize { input.wrapping_neg() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.wrapping_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { input.wrapping_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.wrapping_neg() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
