@@ -2618,8 +2618,10 @@ Statement-position unconditional `loop` bodies use the same bounded outer and
 nested representations. Explicit and conditional break, continue, and return
 edges retain their existing cleanup targets; a body without an exit emits a
 real backedge, so an unreachable later tail is not exposed to the caller.
-The parser does not yet accept a `loop` used directly as the function's tail
-expression.
+A diverging statement loop may be the callee's effective tail and therefore
+inhabits its declared scalar return type without emitting cleanup or caller
+fallthrough. Value-producing `loop { break value; }` expressions are not yet
+part of this loop IR.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2627,9 +2629,9 @@ skipping the remaining body, while a fallthrough tail performs the same cleanup
 once on its normal edge.
 Calls may nest to eight levels and are inlined into the selected exported
 function, so the object still contains one symbol and no call relocations.
-Forward calls, caller-local capture, unsafe or foreign-ABI callees, tail-position
-loop expressions, deeper loop nesting, aggregates, references, and recursion
-fail closed. An original nested
+Forward calls, caller-local capture, unsafe or foreign-ABI callees,
+value-producing loop expressions, deeper loop nesting, aggregates, references,
+and recursion fail closed. An original nested
 statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
 object. A separate multi-return probe produced a 334-byte COFF object and a
 728-byte ELF64 object. A conditional-action probe produced 402-byte COFF and
@@ -2656,6 +2658,10 @@ reference across 26 combinations of bounds and nested-return selection,
 exercising unconditional outer and inner backedges, inner continue and break,
 labeled outer break, normal tail composition, and a nested early return on both
 hosts. A separate emission test retains an actually diverging empty backedge.
+A divergent-tail branch probe produced a 238-byte COFF object and a 624-byte
+ELF64 object. Pinned-nightly callers exercised four bypass inputs and the
+callee's reachable early-return edge on both hosts; the unexecuted nonzero call
+path is the emitted infinite backedge and has no synthetic caller join.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

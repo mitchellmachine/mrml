@@ -6692,7 +6692,7 @@ impl<
                 }
             }
             if body.tail_diverges && !tail_unreachable {
-                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                tail_unreachable = true;
             }
             if tail_unreachable {
                 return Ok(());
