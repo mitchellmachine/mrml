@@ -1,6 +1,6 @@
 use core::sync::atomic::{Ordering, compiler_fence};
 
-use crate::{DeviceAddress, GranuleHardwareOutcome, PhysAddr};
+use crate::{DeviceAddress, GranuleHardwareOutcome, PAGE_SIZE, PhysAddr};
 
 use super::DmaIsolation;
 
@@ -51,6 +51,54 @@ pub struct VtdFaultSnapshot {
     pub read: bool,
     pub address: u64,
     record_high: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VtdRegisterLayout {
+    iotlb_offset: usize,
+    fault_offset: usize,
+    fault_records: u16,
+    pages: u64,
+}
+
+impl VtdRegisterLayout {
+    pub fn from_capabilities(capability: u64, extended: u64) -> Result<Self, VtdError> {
+        let invalidation_base = ((extended >> 8) & 0x3ff) as usize * 16;
+        let iotlb_offset = invalidation_base
+            .checked_add(IOTLB_OFFSET_DELTA)
+            .ok_or(VtdError::InvalidRegisterLayout)?;
+        if invalidation_base == 0 || !iotlb_offset.is_multiple_of(8) {
+            return Err(VtdError::InvalidRegisterLayout);
+        }
+        let fault_offset = (((capability >> 24) & 0x3ff) as usize)
+            .checked_mul(16)
+            .ok_or(VtdError::InvalidFaultLayout)?;
+        let fault_records = (((capability >> 40) & 0xff) as u16) + 1;
+        let fault_end = fault_offset
+            .checked_add(usize::from(fault_records) * 16)
+            .ok_or(VtdError::InvalidFaultLayout)?;
+        if fault_offset == 0 || fault_end <= fault_offset {
+            return Err(VtdError::InvalidFaultLayout);
+        }
+        let required = core::cmp::max(core::cmp::max(iotlb_offset + 8, fault_end), 0x38);
+        let pages = u64::try_from(required)
+            .map_err(|_| VtdError::InvalidRegisterLayout)?
+            .div_ceil(PAGE_SIZE);
+        Ok(Self {
+            iotlb_offset,
+            fault_offset,
+            fault_records,
+            pages,
+        })
+    }
+
+    pub const fn pages(self) -> u64 {
+        self.pages
+    }
+
+    pub const fn bytes(self) -> u64 {
+        self.pages * PAGE_SIZE
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -733,28 +781,15 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
     pub fn new(mut registers: R, poll_limit: u32) -> Result<Self, VtdError> {
         let capability = registers.read64(CAP_OFFSET);
         let ecap = registers.read64(ECAP_OFFSET);
-        let invalidation_base = ((ecap >> 8) & 0x3ff) as usize * 16;
-        let iotlb_offset = invalidation_base
-            .checked_add(IOTLB_OFFSET_DELTA)
-            .ok_or(VtdError::InvalidRegisterLayout)?;
-        if poll_limit == 0 || invalidation_base == 0 || !iotlb_offset.is_multiple_of(8) {
+        let layout = VtdRegisterLayout::from_capabilities(capability, ecap)?;
+        if poll_limit == 0 {
             return Err(VtdError::InvalidRegisterLayout);
-        }
-        let fault_offset = (((capability >> 24) & 0x3ff) as usize)
-            .checked_mul(16)
-            .ok_or(VtdError::InvalidFaultLayout)?;
-        let fault_records = (((capability >> 40) & 0xff) as u16) + 1;
-        let fault_end = fault_offset
-            .checked_add(usize::from(fault_records) * 16)
-            .ok_or(VtdError::InvalidFaultLayout)?;
-        if fault_offset == 0 || fault_end <= fault_offset {
-            return Err(VtdError::InvalidFaultLayout);
         }
         Ok(Self {
             registers,
-            iotlb_offset,
-            fault_offset,
-            fault_records,
+            iotlb_offset: layout.iotlb_offset,
+            fault_offset: layout.fault_offset,
+            fault_records: layout.fault_records,
             poll_limit,
         })
     }
@@ -1188,6 +1223,22 @@ mod tests {
         assert_eq!(allocation.end_bus, 0x2f);
         assert_eq!(allocation.bytes(), 16 << 20);
         assert_eq!(allocation.physical_start(), 0xe200_0000);
+    }
+
+    #[test]
+    fn capability_layout_bounds_all_register_arrays() {
+        assert_eq!(
+            VtdRegisterLayout::from_capabilities(0x40 << 24, 0),
+            Err(VtdError::InvalidRegisterLayout)
+        );
+        assert_eq!(
+            VtdRegisterLayout::from_capabilities(0, 0x20 << 8),
+            Err(VtdError::InvalidFaultLayout)
+        );
+        let maximum =
+            VtdRegisterLayout::from_capabilities((0x3ff << 24) | (0xff << 40), 0x3ff << 8).unwrap();
+        assert_eq!(maximum.pages(), 5);
+        assert_eq!(maximum.bytes(), 5 * PAGE_SIZE);
     }
 
     #[test]

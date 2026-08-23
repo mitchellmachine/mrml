@@ -349,9 +349,17 @@ identity must be exact and every leaf must be supervisor-only, writable, and
 non-executable under the dedicated MMIO permission class. A returned mapping
 token therefore proves the current page-table state, not merely an intended
 address-space policy record. The initial DRHD page is deliberately described as
-bootstrap-only; capability-derived extension for fault-record arrays outside
-that page must be separately manifested and verified before the corresponding
-registers are accessed.
+bootstrap-only. CAP and ECAP are decoded into one shared `VtdRegisterLayout`
+used by both mapping and invalidation code, covering the fixed status registers,
+the reported IOTLB register, and the complete reported primary fault array.
+Zero/invalid offsets and arithmetic failures are rejected; the architectural
+field maxima produce a bounded five-page extent. Extending a bootstrap
+requirement preserves its exact DRHD base and identity, requires the complete
+derived span to remain inside firmware MMIO, and returns an unverified mapping
+requirement rather than reusing the bootstrap token. The extended mapping must
+pass the same page-by-page active-PTE verification before any out-of-page
+register is accessed. Tests cover hostile maximum fields and a fault array that
+crosses the bootstrap-page boundary.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 

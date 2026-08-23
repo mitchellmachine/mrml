@@ -1,6 +1,9 @@
 use crate::{MemoryKind, MemoryRegion, PAGE_SIZE, PhysAddr};
 
-use super::{ActivePageTables, DmarTopology, Mapping, McfgTopology, PagePermissions, VirtAddr};
+use super::{
+    ActivePageTables, DmarTopology, Mapping, McfgTopology, PagePermissions, VirtAddr,
+    VtdRegisterLayout,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlatformMmioError {
@@ -208,6 +211,34 @@ pub fn verify_active_platform_mmio(
     })
 }
 
+/// Replaces a DRHD bootstrap requirement with its complete capability-derived
+/// register extent. The result must be mapped and independently PTE-verified.
+pub fn extend_vtd_mmio_requirement(
+    bootstrap: PlatformMmioRequirement,
+    layout: VtdRegisterLayout,
+    memory: &[MemoryRegion],
+) -> Result<PlatformMmioRequirement, PlatformMmioError> {
+    if bootstrap.pages != 1
+        || !matches!(bootstrap.purpose, PlatformMmioPurpose::VtdBootstrap { .. })
+        || layout.pages() == 0
+    {
+        return Err(PlatformMmioError::MappingMismatch);
+    }
+    let extended = PlatformMmioRequirement {
+        physical: bootstrap.physical,
+        pages: layout.pages(),
+        purpose: bootstrap.purpose,
+    };
+    if !memory.iter().any(|region| {
+        region.kind() == MemoryKind::Mmio
+            && region.start().get() <= extended.physical.get()
+            && region.end() >= extended.end()
+    }) {
+        return Err(PlatformMmioError::OutsideFirmwareMmio);
+    }
+    Ok(extended)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,6 +310,36 @@ mod tests {
         assert_eq!(
             PlatformMmioManifest::<2>::from_topology(&dmar, &mcfg, &memory),
             Err(PlatformMmioError::Overlap)
+        );
+    }
+
+    #[test]
+    fn capability_extension_requires_complete_mmio_coverage() {
+        let dmar = DmarTopology::<1, 0>::parse(&dmar(0xfed9_0000)).unwrap();
+        let mcfg = McfgTopology::<1>::parse(&mcfg(0xe000_0000)).unwrap();
+        let full_memory = [
+            MemoryRegion::new(PhysAddr::new(0xe000_0000).unwrap(), 256, MemoryKind::Mmio).unwrap(),
+            MemoryRegion::new(PhysAddr::new(0xfed9_0000).unwrap(), 2, MemoryKind::Mmio).unwrap(),
+        ];
+        let manifest =
+            PlatformMmioManifest::<2>::from_topology(&dmar, &mcfg, &full_memory).unwrap();
+        let bootstrap = manifest.iter().next().unwrap();
+        let layout = VtdRegisterLayout::from_capabilities(0x100 << 24, 0x20 << 8).unwrap();
+        assert_eq!(layout.pages(), 2);
+        assert_eq!(
+            extend_vtd_mmio_requirement(bootstrap, layout, &full_memory)
+                .unwrap()
+                .pages(),
+            2
+        );
+        let bootstrap_only =
+            [
+                MemoryRegion::new(PhysAddr::new(0xfed9_0000).unwrap(), 1, MemoryKind::Mmio)
+                    .unwrap(),
+            ];
+        assert_eq!(
+            extend_vtd_mmio_requirement(bootstrap, layout, &bootstrap_only),
+            Err(PlatformMmioError::OutsideFirmwareMmio)
         );
     }
 }

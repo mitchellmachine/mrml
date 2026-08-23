@@ -48,7 +48,7 @@ pub use page_table::{
 pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
     PlatformMmioError, PlatformMmioManifest, PlatformMmioPurpose, PlatformMmioRequirement,
-    VerifiedPlatformMmio, verify_active_platform_mmio,
+    VerifiedPlatformMmio, extend_vtd_mmio_requirement, verify_active_platform_mmio,
 };
 pub use privilege_stack::{
     CpuPrivilegeStacks, EARLY_STACK_PAGES, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
@@ -67,6 +67,7 @@ pub use vtd::{
     DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamSegments, McfgAllocation, McfgError,
     McfgTopology, NativeEcamSegment, NativeVtdMmio, PciConfigSpace, PciPathElement,
     VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot, VtdInvalidator, VtdRegisterIo,
+    VtdRegisterLayout,
 };
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;
