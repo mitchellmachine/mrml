@@ -2307,6 +2307,12 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(argument)?;
         }
+        ExprKind::UncheckedIntegerOperation { base, argument, .. } => {
+            recurse(base)?;
+            if let Some(argument) = argument {
+                recurse(argument)?;
+            }
+        }
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base)?;
             recurse(argument)?;
@@ -3193,6 +3199,65 @@ fn runtime_expression_type_with_locals<
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
+        }
+        ExprKind::UncheckedIntegerOperation {
+            base,
+            argument,
+            operator,
+            unary,
+            disjoint,
+        } => {
+            if !function.unsafe_function {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if unary {
+                if argument.is_some() {
+                    return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                }
+                return if integer_type.is_signed() {
+                    Ok(base_type)
+                } else {
+                    Err(CodegenErrorKind::RuntimeTypeMismatch)
+                };
+            }
+            let argument = argument.ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+            let argument_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                argument,
+                depth + 1,
+            )?;
+            if matches!(
+                operator,
+                crate::BinaryOperator::ShiftLeft | crate::BinaryOperator::ShiftRight
+            ) {
+                if !matches!(
+                    argument_type,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                ) {
+                    return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                }
+            } else if argument_type != base_type {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            if disjoint && integer_type.is_signed() {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
         }
         ExprKind::SaturatingArithmetic {
             base,
@@ -5455,6 +5520,70 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     self.width = previous_width;
                     result?;
                 }
+            }
+            ExprKind::UncheckedIntegerOperation {
+                base,
+                argument,
+                operator,
+                unary,
+                ..
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                if unary {
+                    self.emit(&[0x48, 0xf7, 0xd8])?;
+                } else {
+                    let argument =
+                        argument.ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                    if matches!(
+                        operator,
+                        crate::BinaryOperator::ShiftLeft | crate::BinaryOperator::ShiftRight
+                    ) {
+                        self.width = runtime_width("u32")
+                            .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                    }
+                    self.emit_expression(tree, argument, depth + 1)?;
+                    self.evaluation_depth -= 1;
+                    if matches!(
+                        operator,
+                        crate::BinaryOperator::ShiftLeft | crate::BinaryOperator::ShiftRight
+                    ) {
+                        self.emit(&[0x48, 0x89, 0xc1, 0x58])?;
+                        self.width = operand_width;
+                        if operator == crate::BinaryOperator::ShiftLeft {
+                            self.emit(&[0x48, 0xd3, 0xe0])?;
+                        } else if operand_width.signed {
+                            self.emit(&[0x48, 0xd3, 0xf8])?;
+                        } else {
+                            self.emit(&[0x48, 0xd3, 0xe8])?;
+                        }
+                    } else {
+                        self.width = operand_width;
+                        self.emit(&[0x59])?;
+                        let previous_overflow_checks = self.overflow_checks;
+                        self.overflow_checks = false;
+                        let result = self.emit_binary(operator);
+                        self.overflow_checks = previous_overflow_checks;
+                        result?;
+                    }
+                }
+                self.width = operand_width;
+                self.emit_normalize()?;
+                self.width = previous_width;
             }
             ExprKind::SaturatingArithmetic {
                 base,
@@ -14780,6 +14909,53 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> u8 { input.wrapping_cast::<u8>() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { input.saturating_cast::<u8>() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn emits_unchecked_integer_operations_only_in_unsafe_functions() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i16, b: i16) -> i16 { a.unchecked_sub(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u32, b: u32) -> u32 { a.unchecked_mul(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64) -> i64 { a.unchecked_neg() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, n: u32) -> u8 { a.unchecked_shl(n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i64, n: u32) -> i64 { a.unchecked_shr(n) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u64, b: u64) -> u64 { a.unchecked_disjoint_bitor(b) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unchecked_add() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i8) -> i8 { a.unchecked_neg(1) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unchecked_neg() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i8, b: i8) -> i8 { a.unchecked_disjoint_bitor(b) }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, n: u16) -> u8 { a.unchecked_shl(n) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

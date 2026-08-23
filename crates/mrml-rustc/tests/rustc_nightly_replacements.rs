@@ -2813,6 +2813,33 @@ fn rustc_generic_integer_casts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_unchecked_integer_operations_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i16, b: i16) -> i16 { a.unchecked_sub(b) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u32, b: u32) -> u32 { a.unchecked_mul(b) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64) -> i64 { a.unchecked_neg() }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, n: u32) -> u8 { a.unchecked_shl(n) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i64, n: u32) -> i64 { a.unchecked_shr(n) }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u64, b: u64) -> u64 { a.unchecked_disjoint_bitor(b) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+
+    assert!(compile_wide(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+}
+
+#[test]
 fn rustc_signed_clamp_magnitude_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: i8, limit: u8) -> i8 { value.clamp_magnitude(limit) }",

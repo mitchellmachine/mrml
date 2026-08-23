@@ -498,6 +498,13 @@ pub enum ExprKind<'source> {
         target: IntegerType,
         mode: IntegerWidthCastMode,
     },
+    UncheckedIntegerOperation {
+        base: ExprId,
+        argument: Option<ExprId>,
+        operator: BinaryOperator,
+        unary: bool,
+        disjoint: bool,
+    },
     IntegerClampMagnitude {
         base: ExprId,
         limit: ExprId,
@@ -838,6 +845,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerFunnelShift { .. }
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerWidthCast { .. }
+            | ExprKind::UncheckedIntegerOperation { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1116,7 +1124,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::SaturatingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFunnelShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
-            ExprKind::IntegerSignCast { .. } | ExprKind::IntegerWidthCast { .. } => {
+            ExprKind::IntegerSignCast { .. }
+            | ExprKind::IntegerWidthCast { .. }
+            | ExprKind::UncheckedIntegerOperation { .. } => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2613,6 +2623,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::WrappingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(argument, name, replacement, depth + 1)?;
+            }
+            ExprKind::UncheckedIntegerOperation { base, argument, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                if let Some(argument) = argument {
+                    self.substitute_identifier(argument, name, replacement, depth + 1)?;
+                }
             }
             ExprKind::SaturatingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -4339,6 +4355,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_cast_unsigned"
                         | "strict_cast_signed"
                         | "strict_cast_unsigned"
+                        | "unchecked_add"
+                        | "unchecked_sub"
+                        | "unchecked_mul"
+                        | "unchecked_neg"
+                        | "unchecked_shl"
+                        | "unchecked_shr"
+                        | "unchecked_disjoint_bitor"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4494,6 +4517,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_mul"
                     | "wrapping_div"
                     | "wrapping_rem"
+                    | "unchecked_add"
+                    | "unchecked_sub"
+                    | "unchecked_mul"
+                    | "unchecked_shl"
+                    | "unchecked_shr"
+                    | "unchecked_disjoint_bitor"
                     | "strict_add"
                     | "strict_sub"
                     | "strict_add_signed"
@@ -4751,6 +4780,28 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     signed: method.text.ends_with("_signed"),
                     saturating: method.text.starts_with("saturating_"),
                     strict: method.text.starts_with("strict_"),
+                },
+                "unchecked_add"
+                | "unchecked_sub"
+                | "unchecked_mul"
+                | "unchecked_neg"
+                | "unchecked_shl"
+                | "unchecked_shr"
+                | "unchecked_disjoint_bitor" => ExprKind::UncheckedIntegerOperation {
+                    base,
+                    argument,
+                    unary: method.text == "unchecked_neg",
+                    disjoint: method.text == "unchecked_disjoint_bitor",
+                    operator: match method.text {
+                        "unchecked_add" => BinaryOperator::Add,
+                        "unchecked_sub" => BinaryOperator::Subtract,
+                        "unchecked_mul" => BinaryOperator::Multiply,
+                        "unchecked_neg" => BinaryOperator::Subtract,
+                        "unchecked_shl" => BinaryOperator::ShiftLeft,
+                        "unchecked_shr" => BinaryOperator::ShiftRight,
+                        "unchecked_disjoint_bitor" => BinaryOperator::BitOr,
+                        _ => unreachable!(),
+                    },
                 },
                 "clamp_magnitude" => ExprKind::IntegerClampMagnitude {
                     base,

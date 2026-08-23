@@ -337,6 +337,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerFunnelShift { .. }
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerWidthCast { .. }
+            | ExprKind::UncheckedIntegerOperation { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }

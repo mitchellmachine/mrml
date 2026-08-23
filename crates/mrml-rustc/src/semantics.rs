@@ -2068,6 +2068,10 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::WrappingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
+        ExprKind::UncheckedIntegerOperation { base, argument, .. } => {
+            recurse(base, inside_inline_const)
+                || argument.is_some_and(|argument| recurse(argument, inside_inline_const))
+        }
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
@@ -2221,6 +2225,9 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::SignedIntegerPredicate { base, .. } => recurse(base),
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
+        ExprKind::UncheckedIntegerOperation { base, argument, .. } => {
+            recurse(base) || argument.is_some_and(recurse)
+        }
         ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerFunnelShift {

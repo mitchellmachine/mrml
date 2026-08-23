@@ -2337,6 +2337,15 @@ traps across signedness and width changes. The `Option`-returning `checked_cast`
 and unsafe `unchecked_cast` remain outside this scalar milestone until their
 result and unsafe-expression forms can be represented without partial behavior.
 
+Unsafe functions can use the stable `unchecked_add`, `unchecked_sub`,
+`unchecked_mul`, `unchecked_neg`, `unchecked_shl`, and `unchecked_shr` integer
+methods and pinned-nightly `unchecked_disjoint_bitor`. They emit the direct
+unchecked scalar operation for callers that uphold Rust's documented
+preconditions. Calls from safe functions, constant initializers, invalid
+receiver/argument types, invalid arity, unsigned negation, and signed disjoint
+bit-or are rejected; unsafe blocks are not accepted as a substitute because
+this bounded parser does not yet represent their safety context.
+
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
 Windows development host and 0.005 seconds under Arch Linux WSL2. These are
