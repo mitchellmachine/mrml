@@ -234,6 +234,22 @@ does not claim `PRIVATE_MEMORY`, `HOST_VMM_ISOLATION`, `TRUSTED_IO`, or
 hardware page-transition/IOMMU enforcement and an authenticated evidence path,
 not a configuration flag.
 
+Granule ownership no longer changes through a one-step policy call. Every
+delegate, private assignment, share, make-private, reclaim, and scrub-complete
+operation first creates a generational single-use transition ticket containing
+the exact granule, physical address, operation, and sequence. The EPT/IOMMU
+adapter performs the corresponding hardware change and then completes that
+ticket with success or failure. Policy state remains unchanged on hardware
+failure; failed tickets are consumed and retries receive a fresh sequence.
+Forged, replayed, mismatched, or already completed tickets cannot mutate state.
+Only one transition may be pending per granule, and a pending transition that
+mentions a domain blocks that domain's seal/start/stop/destroy and evidence
+operations. This prevents domain lifecycle progress or protection reports
+while hardware and policy ownership may disagree. The ticket protocol does not
+prove that an adapter truthfully reported success; the eventual native EPT and
+IOMMU adapter remains inside the trusted bare-metal monitor boundary and must
+be validated on hardware before stronger claims are enabled.
+
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context
 `INVEPT`. It can only be constructed through an unsafe CPL0 boundary whose
