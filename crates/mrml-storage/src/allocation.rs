@@ -382,6 +382,12 @@ pub struct AllocationImage<const N: usize> {
     index: AllocationIndex<N>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AllocationChange {
+    Allocate(AllocationRecord),
+    Free(AllocationRecord),
+}
+
 impl<const N: usize> AllocationImage<N> {
     pub fn build(
         header: VolumeHeader,
@@ -489,6 +495,130 @@ impl<const N: usize> AllocationImage<N> {
             .owns_allocation_image(root, self.generation, self.pointer)
     }
 
+    pub fn successor(
+        &self,
+        header: VolumeHeader,
+        root: StorageObjectId,
+        next_pointer: MetadataPointer,
+        changes: &[AllocationChange],
+    ) -> Result<Self, AllocationError> {
+        if header.volume() != self.volume || root.volume() != self.volume || changes.len() > N {
+            return Err(AllocationError::InvalidImage);
+        }
+        let next_generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(AllocationError::GenerationExhausted)?;
+        let active_self = self
+            .index
+            .exact_record_index(
+                root,
+                self.generation,
+                self.pointer,
+                AllocationKind::AllocationMetadata,
+            )
+            .ok_or(AllocationError::InvalidImage)?;
+        let mut removed = [false; N];
+        let mut additions = [None; N];
+        let mut addition_count = 0;
+        for change in changes.iter().copied() {
+            match change {
+                AllocationChange::Free(record) => {
+                    let index = self.index.records[..self.index.count]
+                        .iter()
+                        .position(|candidate| *candidate == Some(record))
+                        .ok_or(AllocationError::NotFound)?;
+                    if index == active_self || removed[index] {
+                        return Err(AllocationError::DuplicateChange);
+                    }
+                    removed[index] = true;
+                }
+                AllocationChange::Allocate(record) => {
+                    if record.owner.volume() != self.volume
+                        || self.index.records[..self.index.count]
+                            .iter()
+                            .flatten()
+                            .copied()
+                            .any(|active| overlaps(active, record))
+                        || additions[..addition_count]
+                            .iter()
+                            .flatten()
+                            .copied()
+                            .any(|prior| overlaps(prior, record))
+                    {
+                        return Err(AllocationError::ReusesLiveRange);
+                    }
+                    additions[addition_count] = Some(record);
+                    addition_count += 1;
+                }
+            }
+        }
+        let next_self = AllocationRecord::new(
+            root,
+            next_generation,
+            next_pointer.block(),
+            next_pointer.blocks(),
+            AllocationKind::AllocationMetadata,
+        )?;
+        if self.index.records[..self.index.count]
+            .iter()
+            .flatten()
+            .copied()
+            .any(|active| overlaps(active, next_self))
+            || additions[..addition_count]
+                .iter()
+                .flatten()
+                .copied()
+                .any(|addition| overlaps(addition, next_self))
+        {
+            return Err(AllocationError::ReusesLiveRange);
+        }
+
+        let removed_count = removed[..self.index.count]
+            .iter()
+            .filter(|removed| **removed)
+            .count();
+        let retained = self.index.count - removed_count - 1;
+        let next_count = retained
+            .checked_add(addition_count)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(AllocationError::Capacity)?;
+        if next_count > N {
+            return Err(AllocationError::Capacity);
+        }
+        let mut records = [None; N];
+        let mut count = 0;
+        for (index, (record, removed)) in self.index.records[..self.index.count]
+            .iter()
+            .zip(removed[..self.index.count].iter())
+            .enumerate()
+        {
+            let record = record.ok_or(AllocationError::InvalidImage)?;
+            if index != active_self && !*removed {
+                insert_sorted(&mut records, &mut count, record)?;
+            }
+        }
+        for record in additions[..addition_count].iter().flatten().copied() {
+            insert_sorted(&mut records, &mut count, record)?;
+        }
+        insert_sorted(&mut records, &mut count, next_self)?;
+        let encoded_len = image_bytes(header, next_pointer)?;
+        let used = count
+            .checked_mul(ALLOCATION_RECORD_BYTES)
+            .and_then(|bytes| bytes.checked_add(ALLOCATION_IMAGE_HEADER_BYTES))
+            .ok_or(AllocationError::Arithmetic)?;
+        if used > encoded_len {
+            return Err(AllocationError::Capacity);
+        }
+        Ok(Self {
+            volume: self.volume,
+            generation: next_generation,
+            pointer: next_pointer,
+            encoded_len,
+            index: AllocationIndex::from_stored(header, records, count)?,
+        })
+    }
+
     pub fn encode(&self, output: &mut [u8]) -> Result<(), AllocationError> {
         if output.len() != self.encoded_len {
             return Err(AllocationError::Truncated);
@@ -534,6 +664,10 @@ pub enum AllocationError {
     Overlap,
     Arithmetic,
     InvalidImage,
+    GenerationExhausted,
+    NotFound,
+    DuplicateChange,
+    ReusesLiveRange,
 }
 
 fn contains(record: AllocationRecord, block: u64) -> bool {
@@ -543,6 +677,27 @@ fn contains(record: AllocationRecord, block: u64) -> bool {
 fn overlaps(left: AllocationRecord, right: AllocationRecord) -> bool {
     left.block < right.block + u64::from(right.block_count)
         && right.block < left.block + u64::from(left.block_count)
+}
+
+fn insert_sorted<const N: usize>(
+    records: &mut [Option<AllocationRecord>; N],
+    count: &mut usize,
+    record: AllocationRecord,
+) -> Result<(), AllocationError> {
+    if *count == N {
+        return Err(AllocationError::Capacity);
+    }
+    let index = records[..*count]
+        .iter()
+        .flatten()
+        .position(|current| current.block > record.block)
+        .unwrap_or(*count);
+    for slot in (index..*count).rev() {
+        records[slot + 1] = records[slot];
+    }
+    records[index] = Some(record);
+    *count += 1;
+    Ok(())
 }
 
 fn record_digest(input: &[u8]) -> [u8; 32] {
@@ -730,5 +885,77 @@ mod tests {
             AllocationImage::<2>::decode(header(), 5, pointer, &encoded),
             Err(AllocationError::NonCanonical)
         ));
+    }
+
+    #[test]
+    fn successor_frees_without_reusing_live_ranges_and_rotates_its_image() {
+        let root_metadata =
+            AllocationRecord::new(object(1), 2, 10, 1, AllocationKind::ObjectMetadata).unwrap();
+        let active_self =
+            AllocationRecord::new(object(1), 5, 20, 1, AllocationKind::AllocationMetadata).unwrap();
+        let old_data =
+            AllocationRecord::new(object(7), 3, 30, 1, AllocationKind::FileData).unwrap();
+        let active = AllocationImage::<4>::build(
+            header(),
+            5,
+            MetadataPointer::new(20, 1).unwrap(),
+            &[root_metadata, active_self, old_data],
+        )
+        .unwrap();
+        let new_data =
+            AllocationRecord::new(object(7), 4, 40, 1, AllocationKind::FileData).unwrap();
+        let successor = active
+            .successor(
+                header(),
+                object(1),
+                MetadataPointer::new(50, 1).unwrap(),
+                &[
+                    AllocationChange::Free(old_data),
+                    AllocationChange::Allocate(new_data),
+                ],
+            )
+            .unwrap();
+        assert_eq!(successor.generation(), 6);
+        assert!(successor.is_self_owned_by(object(1)));
+        assert!(
+            successor
+                .index()
+                .owns_extent(ExtentRecord::data(object(7), 4, 0, 1, 40, [1; 32]).unwrap())
+        );
+        assert!(
+            !successor
+                .index()
+                .owns_extent(ExtentRecord::data(object(7), 3, 0, 1, 30, [1; 32]).unwrap())
+        );
+        assert!(
+            active
+                .index()
+                .owns_extent(ExtentRecord::data(object(7), 3, 0, 1, 30, [1; 32]).unwrap())
+        );
+
+        let reused = AllocationRecord::new(object(8), 1, 30, 1, AllocationKind::FileData).unwrap();
+        assert!(matches!(
+            active.successor(
+                header(),
+                object(1),
+                MetadataPointer::new(50, 1).unwrap(),
+                &[
+                    AllocationChange::Free(old_data),
+                    AllocationChange::Allocate(reused),
+                ],
+            ),
+            Err(AllocationError::ReusesLiveRange)
+        ));
+
+        let mut encoded = [0; 4096];
+        successor.encode(&mut encoded).unwrap();
+        let decoded = AllocationImage::<4>::decode(
+            header(),
+            6,
+            MetadataPointer::new(50, 1).unwrap(),
+            &encoded,
+        )
+        .unwrap();
+        assert_eq!(decoded.index().len(), 3);
     }
 }

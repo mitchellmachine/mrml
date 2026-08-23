@@ -804,6 +804,18 @@ optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional recovery fault simulation.
 
+## 2026-08-23 — bounded allocation successor planning
+
+MRML source: `crates/mrml-storage/src/allocation.rs`.
+
+The service uses conventional copy-on-write allocation-table reconstruction,
+exact free/allocate changes, sorted records, active-range exclusion, generation
+advancement, and allocation-image rotation. This adds no novel allocator,
+free-space structure, transaction protocol, recovery algorithm, cryptographic
+construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional COW allocation bookkeeping.
+
 ## 2026-08-23 — bounded assignment-expression read traversal
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

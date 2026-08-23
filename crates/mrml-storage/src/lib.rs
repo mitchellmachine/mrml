@@ -18,8 +18,8 @@ mod recovery;
 mod transaction;
 
 pub use allocation::{
-    ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationError, AllocationImage,
-    AllocationIndex, AllocationKind, AllocationRecord, MAX_ALLOCATION_BLOCKS,
+    ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationChange, AllocationError,
+    AllocationImage, AllocationIndex, AllocationKind, AllocationRecord, MAX_ALLOCATION_BLOCKS,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
