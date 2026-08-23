@@ -176,6 +176,164 @@ pub trait VmxInstructions {
     fn invept_single_context(&mut self, ept: EptPointer) -> Result<(), VmxInstructionError>;
 }
 
+/// Direct Intel VMX instruction adapter for the bare-metal kernel.
+/// Construction is unsafe so hosted code cannot accidentally execute
+/// privileged instructions through an otherwise safe trait method.
+pub struct NativeVmx {
+    _private: (),
+}
+
+impl NativeVmx {
+    /// # Safety
+    ///
+    /// The caller must be executing at CPL0 on an x86_64 CPU with VMX enabled
+    /// in IA32_FEATURE_CONTROL and CR4.VMXE. VMX regions and VMCS host-state
+    /// fields must remain valid according to the Intel architecture contract.
+    pub const unsafe fn assume_cpl0_vmx_enabled() -> Self {
+        Self { _private: () }
+    }
+
+    fn physical_operand(
+        instruction: unsafe fn(*const u64) -> u8,
+        address: PhysAddr,
+    ) -> Result<(), VmxInstructionError> {
+        let operand = address.get();
+        // SAFETY: NativeVmx can only be constructed through the documented
+        // unsafe CPL0 boundary; `operand` is live for the instruction.
+        if unsafe { instruction(core::ptr::from_ref(&operand)) } == 0 {
+            Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn native_vmxon(operand: *const u64) -> u8 {
+    let failed: u8;
+    unsafe {
+        core::arch::asm!(
+            "vmxon [{operand}]",
+            "setna {failed}",
+            operand = in(reg) operand,
+            failed = lateout(reg_byte) failed,
+            options(nostack),
+        );
+    }
+    failed
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn native_vmclear(operand: *const u64) -> u8 {
+    let failed: u8;
+    unsafe {
+        core::arch::asm!(
+            "vmclear [{operand}]",
+            "setna {failed}",
+            operand = in(reg) operand,
+            failed = lateout(reg_byte) failed,
+            options(nostack),
+        );
+    }
+    failed
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn native_vmptrld(operand: *const u64) -> u8 {
+    let failed: u8;
+    unsafe {
+        core::arch::asm!(
+            "vmptrld [{operand}]",
+            "setna {failed}",
+            operand = in(reg) operand,
+            failed = lateout(reg_byte) failed,
+            options(nostack),
+        );
+    }
+    failed
+}
+
+impl VmxInstructions for NativeVmx {
+    fn vmxon(&mut self, region: PhysAddr) -> Result<(), VmxInstructionError> {
+        Self::physical_operand(native_vmxon, region)
+    }
+
+    fn vmxoff(&mut self) -> Result<(), VmxInstructionError> {
+        unsafe { core::arch::asm!("vmxoff", options(nostack)) };
+        Ok(())
+    }
+
+    fn vmclear(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError> {
+        Self::physical_operand(native_vmclear, vmcs)
+    }
+
+    fn vmptrld(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError> {
+        Self::physical_operand(native_vmptrld, vmcs)
+    }
+
+    fn vmlaunch(&mut self) -> Result<(), VmxInstructionError> {
+        let failed: u8;
+        unsafe {
+            core::arch::asm!(
+                "vmlaunch",
+                "setna {failed}",
+                failed = lateout(reg_byte) failed,
+                options(nostack),
+            )
+        };
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
+    }
+
+    fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
+        let failed: u8;
+        unsafe {
+            core::arch::asm!(
+                "vmresume",
+                "setna {failed}",
+                failed = lateout(reg_byte) failed,
+                options(nostack),
+            )
+        };
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
+    }
+
+    fn invept_single_context(&mut self, ept: EptPointer) -> Result<(), VmxInstructionError> {
+        #[repr(C, align(16))]
+        struct InveptDescriptor {
+            ept_pointer: u64,
+            reserved: u64,
+        }
+        let descriptor = InveptDescriptor {
+            ept_pointer: ept.bits(),
+            reserved: 0,
+        };
+        let failed: u8;
+        unsafe {
+            core::arch::asm!(
+                "invept {kind}, [{descriptor}]",
+                "setna {failed}",
+                kind = in(reg) 1u64,
+                descriptor = in(reg) core::ptr::from_ref(&descriptor),
+                failed = lateout(reg_byte) failed,
+                options(nostack, readonly),
+            )
+        };
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
+    }
+}
+
 pub struct VmxController<I: VmxInstructions> {
     instructions: I,
     capabilities: VmxCapabilities,

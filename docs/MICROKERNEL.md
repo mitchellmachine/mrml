@@ -121,8 +121,17 @@ canonically from aligned physical roots. The controller enforces
 `Disabled -> Root -> VMCS-clear -> VMCS-loaded -> Guest-running`, performs
 INVEPT before first entry, distinguishes launch from resume, records exits
 before inspecting guest state, and never advances state after a failed
-instruction. This is a tested hardware-adapter contract, not yet an executing
-bare-metal VMX instruction implementation.
+instruction. This ordering layer is tested with an emulated backend.
+
+The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
+`VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context
+`INVEPT`. It can only be constructed through an unsafe CPL0 boundary whose
+contract requires locked feature-control policy, `CR4.VMXE`, valid revision
+headers, and complete VMCS host state. VMfail flags become explicit errors and
+physical-address operands remain live memory operands for the instructions.
+Both Windows and Linux LLVM assemblers accept the implementation. The
+instructions have not yet been executed by a bare-metal MRML boot, so this is
+not evidence of a successful hardware VM launch.
 
 The privileged kernel will contain only scheduling, address-space and interrupt
 mechanisms, capability enforcement, IPC, and the minimum early console/timer

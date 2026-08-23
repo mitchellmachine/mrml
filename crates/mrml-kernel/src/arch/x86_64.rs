@@ -49,7 +49,7 @@ pub use topology::{
 };
 pub use trap::{HardwareTrapFrame, TrapDisposition, TrapError, TrapFrame};
 pub use vmx::{
-    EptPointer, VmxCapabilities, VmxControl, VmxControlMask, VmxController, VmxError,
+    EptPointer, NativeVmx, VmxCapabilities, VmxControl, VmxControlMask, VmxController, VmxError,
     VmxInstructionError, VmxInstructions, VmxState,
 };
 
