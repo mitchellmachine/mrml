@@ -1915,6 +1915,13 @@ the two's-complement minimum value whose mathematical negation is not
 representable; unsigned and Boolean receivers fail closed.
 Four emitted System V objects matched pinned Rust for positive, negative, zero,
 and minimum/maximum values at 8, 16, 32, and 64 bits.
+Primitive signed and unsigned integers also support `wrapping_div` and
+`wrapping_rem`. Division by zero retains Rust's trap behavior, while signed
+minimum divided by negative one wraps to the minimum and its remainder is zero
+instead of taking x86-64's division-overflow fault.
+Four emitted System V objects matched pinned Rust across signed and unsigned
+ordinary cases and the signed minimum/negative-one exception at narrow and
+full widths.
 Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and

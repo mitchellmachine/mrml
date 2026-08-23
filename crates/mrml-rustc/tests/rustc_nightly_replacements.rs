@@ -1826,6 +1826,11 @@ fn rustc_wrapping_integer_methods_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.wrapping_abs() }",
         "const VALUE: i8 = (-128i8).wrapping_neg(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
         "const VALUE: i16 = (-32768i16).wrapping_abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8, rhs: i8) -> i8 { input.wrapping_div(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, rhs: u16) -> u16 { input.wrapping_rem(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.wrapping_rem(rhs) }",
+        "const VALUE: i8 = (-128i8).wrapping_div(-1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: i16 = (-32768i16).wrapping_rem(-1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
     ];
     for source in sources {
         assert_eq!(

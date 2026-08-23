@@ -2342,6 +2342,28 @@ fn evaluate_call_aware_integer<
                 BinaryOperator::Add => left.overflowing_add(right).0 & mask,
                 BinaryOperator::Subtract => left.overflowing_sub(right).0 & mask,
                 BinaryOperator::Multiply => left.overflowing_mul(right).0 & mask,
+                BinaryOperator::Divide | BinaryOperator::Remainder => {
+                    if right == 0 {
+                        return Err(arithmetic_error(ConstEvalError::DivisionByZero));
+                    }
+                    if ty.is_signed() {
+                        let minimum = 1_u128 << (bits - 1);
+                        if left == minimum && right == mask {
+                            if operator == BinaryOperator::Divide {
+                                minimum
+                            } else {
+                                0
+                            }
+                        } else {
+                            evaluate_call_aware_signed_binary(operator, left, right, bits)
+                                .map_err(arithmetic_error)?
+                        }
+                    } else if operator == BinaryOperator::Divide {
+                        left / right
+                    } else {
+                        left % right
+                    }
+                }
                 _ => return Err(arithmetic_error(ConstEvalError::InvalidExpressionTree)),
             }
         }
@@ -3156,6 +3178,22 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 BinaryOperator::Add => left.overflowing_add(right).0,
                 BinaryOperator::Subtract => left.overflowing_sub(right).0,
                 BinaryOperator::Multiply => left.overflowing_mul(right).0,
+                BinaryOperator::Divide | BinaryOperator::Remainder => {
+                    if right == 0 {
+                        return Err(ExecutionError::Arithmetic(ConstEvalError::DivisionByZero));
+                    }
+                    let minimum = 1_u128 << (bits - 1);
+                    if left == minimum && right == signed_mask(bits) {
+                        if operator == BinaryOperator::Divide {
+                            minimum
+                        } else {
+                            0
+                        }
+                    } else {
+                        evaluate_call_aware_signed_binary(operator, left, right, bits)
+                            .map_err(ExecutionError::Arithmetic)?
+                    }
+                }
                 _ => {
                     return Err(ExecutionError::Arithmetic(
                         ConstEvalError::InvalidExpressionTree,

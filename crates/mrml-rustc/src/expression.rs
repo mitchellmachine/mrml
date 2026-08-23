@@ -3772,6 +3772,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_add"
                         | "wrapping_sub"
                         | "wrapping_mul"
+                        | "wrapping_div"
+                        | "wrapping_rem"
                         | "rotate_left"
                         | "rotate_right"
                         | "wrapping_shl"
@@ -3859,6 +3861,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_add"
                     | "wrapping_sub"
                     | "wrapping_mul"
+                    | "wrapping_div"
+                    | "wrapping_rem"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -3937,7 +3941,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     argument,
                     power_of_two: false,
                 },
-                "wrapping_add" | "wrapping_sub" | "wrapping_mul" => ExprKind::WrappingArithmetic {
+                "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "wrapping_div"
+                | "wrapping_rem" => ExprKind::WrappingArithmetic {
                     base,
                     argument: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
@@ -3946,6 +3951,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "wrapping_add" => BinaryOperator::Add,
                         "wrapping_sub" => BinaryOperator::Subtract,
                         "wrapping_mul" => BinaryOperator::Multiply,
+                        "wrapping_div" => BinaryOperator::Divide,
+                        "wrapping_rem" => BinaryOperator::Remainder,
                         _ => unreachable!(),
                     },
                 },
