@@ -3467,6 +3467,7 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
     let sources = [
         "fn add(value: u16, offset: u16) -> u16 { let mut total: u16 = value; total += offset; total } fn twice(value: u16) -> u64 { let doubled: u16 = add(value, value); doubled as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u8, choose: bool) -> u64 { if choose { twice(add(value as u16, 5)) } else { twice(add(value as u16, 6)) } }",
         "fn classify(value: u16) -> u64 { let adjusted: u16 = value + 1; if adjusted > 100 { return adjusted as u64 + 1; } else if adjusted > 50 { return 70; } else { return adjusted as u64; } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u16) -> u64 { classify(value) }",
+        "fn adjust(value: u16, choose: bool) -> u64 { let mut total: u16 = value; if choose { let delta: u16 = 3; total += delta; } else if value > 10 { total *= 2; } else { total += 1; } total as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u16, choose: bool) -> u64 { adjust(value, choose) + 5 }",
     ];
     for source in sources {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

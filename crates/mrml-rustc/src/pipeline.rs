@@ -374,6 +374,16 @@ mod tests {
         let boolean_return = "fn large(value: u16) -> bool { if value > 10 { return true; } false } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> bool { large(value) }";
         assert!(compile(boolean_return, "answer", ObjectFormat::Coff).is_ok());
 
+        let conditional_actions = "fn adjust(value: u16, choose: bool) -> u64 { let mut total: u16 = value; if choose { total += 3; } else { total += 1; } total as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16, choose: bool) -> u64 { adjust(value, choose) }";
+        assert!(compile(conditional_actions, "answer", ObjectFormat::Elf64).is_ok());
+
+        let branch_return = "fn adjust(value: u64, choose: bool) -> u64 { let mut total: u64 = value; if choose { total += 1; return total; } else { total += 2; } total } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, choose: bool) -> u64 { adjust(value, choose) }";
+        let error = compile(branch_return, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+        );
+
         let loop_body = "fn count(value: u64) -> u64 { let mut current: u64 = value; while current < 10 { current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
         let error = compile(loop_body, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

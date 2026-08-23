@@ -2577,6 +2577,10 @@ types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
 assignments, and discarded expression statements before its tail value; its
 temporary frame is removed without disturbing the returned register value.
+Bounded `if`/`else if`/`else` action blocks may introduce scoped scalar locals,
+perform assignments, and evaluate discarded expressions. Conditions and arms
+remain lazy, branch locals are removed at their join, and mutations of an
+enclosing callee local persist into its tail value.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2585,13 +2589,15 @@ once on its normal edge.
 Calls may nest to eight levels and are inlined into the selected exported
 function, so the object still contains one symbol and no call relocations.
 Forward calls, caller-local capture, unsafe or foreign-ABI callees, early
-returns from loops, loops themselves, conditional assignment actions,
-aggregates, references, and recursion fail closed. An original nested
+returns mixed into conditional action blocks, returns from loops, loops
+themselves, aggregates, references, and recursion fail closed. An original nested
 statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
 object. A separate multi-return probe produced a 334-byte COFF object and a
-728-byte ELF64 object. Independent pinned-nightly callers exercised normal-tail
-and both early-return edges, caller-side result composition, Boolean branches,
-and inputs at narrow-width boundaries on Windows and Arch Linux WSL.
+728-byte ELF64 object. A conditional-action probe produced 402-byte COFF and
+792-byte ELF64 objects. Independent pinned-nightly callers exercised all three
+action arms, scoped-local cleanup, persistent outer mutation, normal-tail and
+both early-return edges, caller-side result composition, Boolean branches, and
+inputs at narrow-width boundaries on Windows and Arch Linux WSL.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

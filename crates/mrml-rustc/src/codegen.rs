@@ -6661,8 +6661,30 @@ impl<
                         return_count += 1;
                         tail_unreachable = true;
                     }
-                    crate::BodyStatement::Loop(_)
-                    | crate::BodyStatement::ConditionalAssignment(_) => {
+                    crate::BodyStatement::ConditionalAssignment(index) => {
+                        let conditional = body.conditional_assignments()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        let has_return = conditional
+                            .branches()
+                            .iter()
+                            .flatten()
+                            .flat_map(crate::ConditionalAssignmentBranch::actions)
+                            .flatten()
+                            .chain(conditional.else_actions().iter().flatten())
+                            .any(|action| {
+                                matches!(action, crate::ConditionalAssignmentAction::Return(_))
+                            });
+                        if has_return {
+                            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                        }
+                        self.emit_conditional_assignment::<MAX_NODES>(
+                            &conditional,
+                            return_type,
+                            return_type_name,
+                            body_start,
+                        )?;
+                    }
+                    crate::BodyStatement::Loop(_) => {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                     }
                 }
@@ -11821,7 +11843,7 @@ impl<
 
     fn emit_conditional_assignment<const MAX_EXPRESSION_NODES: usize>(
         &mut self,
-        conditional: &crate::ConditionalAssignment<'source>,
+        conditional: &crate::ConditionalAssignment<'tree>,
         expected_type: RuntimeExpressionType,
         operand_type: &str,
         body_start: usize,
