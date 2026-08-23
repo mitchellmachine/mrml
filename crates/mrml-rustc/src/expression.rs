@@ -411,7 +411,7 @@ pub enum ExprKind<'source> {
     IntegerWrappingPower {
         base: ExprId,
         exponent: ExprId,
-        saturating: bool,
+        mode: IntegerPowerMode,
     },
     IntegerBitTransform {
         base: ExprId,
@@ -506,6 +506,13 @@ pub enum IntegerBitTransform {
     SaturatingNegate,
     SaturatingAbsolute,
     Signum,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegerPowerMode {
+    Checked,
+    Wrapping,
+    Saturating,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3847,6 +3854,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_shr"
                         | "wrapping_pow"
                         | "saturating_pow"
+                        | "pow"
                         | "signum"
                         | "is_positive"
                         | "is_negative"
@@ -3954,6 +3962,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_shr"
                     | "wrapping_pow"
                     | "saturating_pow"
+                    | "pow"
                     | "abs_diff"
                     | "offset"
                     | "wrapping_offset"
@@ -4077,12 +4086,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                     left: method.text == "wrapping_shl",
                 },
-                "wrapping_pow" | "saturating_pow" => ExprKind::IntegerWrappingPower {
+                "pow" | "wrapping_pow" | "saturating_pow" => ExprKind::IntegerWrappingPower {
                     base,
                     exponent: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
-                    saturating: method.text == "saturating_pow",
+                    mode: match method.text {
+                        "pow" => IntegerPowerMode::Checked,
+                        "wrapping_pow" => IntegerPowerMode::Wrapping,
+                        "saturating_pow" => IntegerPowerMode::Saturating,
+                        _ => unreachable!(),
+                    },
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
                 "abs_diff" => ExprKind::IntegerAbsoluteDifference {

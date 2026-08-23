@@ -2464,7 +2464,7 @@ fn evaluate_call_aware_integer<
         ExprKind::IntegerWrappingPower {
             base,
             exponent,
-            saturating,
+            mode,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -2484,7 +2484,8 @@ fn evaluate_call_aware_integer<
                 constants,
                 depth,
             )?;
-            integer_power_bits(value, exponent, bits, ty.is_signed(), saturating)
+            integer_power_bits(value, exponent, bits, ty.is_signed(), mode)
+                .map_err(arithmetic_error)?
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
@@ -3304,7 +3305,7 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::IntegerWrappingPower {
             base,
             exponent,
-            saturating,
+            mode,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3318,7 +3319,8 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             let exponent = tree
                 .evaluate_at(exponent, constants)
                 .map_err(ExecutionError::Arithmetic)?;
-            integer_power_bits(value, exponent, bits, true, saturating)
+            integer_power_bits(value, exponent, bits, true, mode)
+                .map_err(ExecutionError::Arithmetic)?
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = expression_integer_type(tree, base, constants);
@@ -3535,27 +3537,57 @@ fn integer_power_bits(
     mut exponent: u128,
     bits: u8,
     signed: bool,
-    saturating: bool,
-) -> u128 {
+    mode: crate::expression::IntegerPowerMode,
+) -> Result<u128, ConstEvalError> {
+    use crate::expression::IntegerPowerMode;
     let mask = signed_mask(bits);
     let mut base = value & mask;
     let mut result = 1_u128;
     while exponent != 0 {
         if exponent & 1 != 0 {
-            result = if saturating {
-                saturating_integer_arithmetic(result, base, bits, signed, BinaryOperator::Multiply)
-            } else {
-                result.wrapping_mul(base) & mask
+            result = match mode {
+                IntegerPowerMode::Checked => checked_integer_multiply(result, base, bits, signed)
+                    .ok_or(ConstEvalError::Overflow)?,
+                IntegerPowerMode::Wrapping => result.wrapping_mul(base) & mask,
+                IntegerPowerMode::Saturating => saturating_integer_arithmetic(
+                    result,
+                    base,
+                    bits,
+                    signed,
+                    BinaryOperator::Multiply,
+                ),
             };
         }
-        base = if saturating {
-            saturating_integer_arithmetic(base, base, bits, signed, BinaryOperator::Multiply)
-        } else {
-            base.wrapping_mul(base) & mask
-        };
         exponent >>= 1;
+        if exponent == 0 {
+            break;
+        }
+        base = match mode {
+            IntegerPowerMode::Checked => checked_integer_multiply(base, base, bits, signed)
+                .ok_or(ConstEvalError::Overflow)?,
+            IntegerPowerMode::Wrapping => base.wrapping_mul(base) & mask,
+            IntegerPowerMode::Saturating => {
+                saturating_integer_arithmetic(base, base, bits, signed, BinaryOperator::Multiply)
+            }
+        };
     }
-    result
+    Ok(result)
+}
+
+fn checked_integer_multiply(left: u128, right: u128, bits: u8, signed: bool) -> Option<u128> {
+    let mask = signed_mask(bits);
+    if signed {
+        let value =
+            decode_signed(left & mask, bits).checked_mul(decode_signed(right & mask, bits))?;
+        let minimum = -(1_i128 << (bits - 1));
+        (minimum..=signed_maximum(bits))
+            .contains(&value)
+            .then_some(value as u128 & mask)
+    } else {
+        (left & mask)
+            .checked_mul(right & mask)
+            .filter(|value| *value <= mask)
+    }
 }
 
 fn wrapping_shift_integer_bits(

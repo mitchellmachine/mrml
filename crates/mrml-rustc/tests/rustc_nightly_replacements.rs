@@ -2055,6 +2055,60 @@ fn rustc_saturating_integer_powers_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_integer_powers_reach_native_objects() {
+    let runtime_sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, exponent: u32) -> u8 { input.pow(exponent) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, exponent: u32) -> i64 { input.pow(exponent) }",
+    ];
+    for source in runtime_sources {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            let checked = compile_source_function_with_options::<4096, 3072, 4, 8, 8, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+                CodegenOptions::CHECKED,
+            )
+            .unwrap();
+            let wrapping = compile_source_function_with_options::<4096, 3072, 4, 8, 8, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+                CodegenOptions::WRAPPING,
+            )
+            .unwrap();
+            assert_ne!(checked.bytes(), wrapping.bytes());
+        }
+    }
+    for source in [
+        "const VALUE: u8 = 255u8.pow(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-3i16).pow(3); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u64 = 5u64.pow(0); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+    ] {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+    let overflow = "const VALUE: u8 = 16u8.pow(2); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        let result = compile_wide(overflow, format);
+        assert!(
+            matches!(
+                result,
+                Err(CompileErrorKind::Semantic(
+                    mrml_rustc::SemanticErrorKind::ConstantOutOfRange
+                ))
+            ),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
 fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.reverse_bits() }",
