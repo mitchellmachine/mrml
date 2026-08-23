@@ -2432,7 +2432,55 @@ fn preanalyze_runtime_local_binding<
         },
         _ => None,
     };
-    if let Some((condition, then_elements, else_elements, count)) = direct_conditional_array {
+    let direct_sequence_aggregate = match (
+        ty,
+        tree.expression(tree.root())
+            .map(|expression| expression.kind),
+    ) {
+        (RuntimeExpressionType::Array { count, .. }, Some(ExprKind::Sequence { first, then })) => {
+            match tree.expression(then).map(|expression| expression.kind) {
+                Some(ExprKind::Array {
+                    elements,
+                    element_count,
+                }) if element_count == count => Some((first, Some(elements), count)),
+                _ => None,
+            }
+        }
+        (
+            RuntimeExpressionType::Tuple { element_count, .. },
+            Some(ExprKind::Sequence { first, then }),
+        ) if matches!(
+            tree.expression(then).map(|expression| expression.kind),
+            Some(ExprKind::Tuple {
+                element_count: count,
+                ..
+            }) if count == element_count
+        ) =>
+        {
+            Some((first, None, element_count))
+        }
+        _ => None,
+    };
+    if let Some((first, Some(elements), count)) = direct_sequence_aggregate {
+        for element in &elements[..count] {
+            let element = element.ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: local.initializer_span,
+            })?;
+            for expression in [first, element] {
+                preanalyze_runtime_expression_at_reads(
+                    facts,
+                    &locals[..*local_count],
+                    function,
+                    resolver,
+                    &tree,
+                    expression,
+                    local.initializer_span,
+                )?;
+            }
+        }
+    } else if let Some((condition, then_elements, else_elements, count)) = direct_conditional_array
+    {
         for index in 0..count {
             let then_element = then_elements[index].ok_or(CodegenError {
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
@@ -2459,6 +2507,7 @@ fn preanalyze_runtime_local_binding<
         && !runtime_type_is_fat_reference(ty))
         || literal_aggregate
         || literal_conditional_tuple
+        || matches!(direct_sequence_aggregate, Some((_, None, _)))
     {
         preanalyze_runtime_expression_reads(
             facts,
@@ -18991,6 +19040,50 @@ mod tests {
             RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_sequence_wrapped_aggregates_exactly() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: u16, second: u16, left: u16, right: u16, prefix: u16) -> u16 { let pair: (u16, u16) = { prefix + first; (left, right) }; let values: [u16; 2] = { prefix + second; [first, left] }; pair.0 + values[1] }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_read_count, 12);
+        for (fact, identity) in facts.assignment_reads[..12].iter().zip([
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
         ]) {
             assert_eq!(fact.unwrap().base, identity);
         }

@@ -3700,6 +3700,13 @@ fn rustc_conditional_array_literal_reads_reach_native_objects() {
 }
 
 #[test]
+fn rustc_sequence_wrapped_aggregate_reads_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: u16, second: u16, left: u16, right: u16, prefix: u16) -> u16 { let pair: (u16, u16) = { prefix + first; (left, right) }; let values: [u16; 2] = { prefix + second; [first, left] }; pair.0 + values[1] }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
