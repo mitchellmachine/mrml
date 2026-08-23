@@ -125,8 +125,8 @@ impl<const N: usize> DirectorySuccessorClosure<N> {
             .iter()
             .position(|entry| *entry == Some(object))
         {
-            if depth > self.depths[index] {
-                self.depths[index] = depth;
+            if depth != self.depths[index] {
+                return Err(DirectoryClosureError::InvalidProof);
             }
             return Ok(());
         }
@@ -1650,6 +1650,16 @@ mod tests {
         assert_eq!(
             proof.successor_closure::<3>().err(),
             Some(DirectoryClosureError::Capacity)
+        );
+        let mut inconsistent = DirectorySuccessorClosure::<2> {
+            objects: [None; 2],
+            depths: [0; 2],
+            count: 0,
+        };
+        inconsistent.insert(object(1), 1).unwrap();
+        assert_eq!(
+            inconsistent.insert(object(1), 2),
+            Err(DirectoryClosureError::InvalidProof)
         );
         assert!(matches!(
             prove_directory_move_ancestry::<2, _>(

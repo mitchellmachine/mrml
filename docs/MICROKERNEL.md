@@ -2731,7 +2731,8 @@ starts bind their independently loaded exact generations. This makes only the
 bounded in-memory namespace transition cycle-safe. A separate fixed-capacity
 closure planner inserts the moved directory first, merges both ancestor paths,
 deduplicates their shared suffix, orders deeper objects before shallower
-parents, leaves the root last, and rejects insufficient output capacity. It
+parents, leaves the root last, and rejects insufficient output capacity or a
+shared ancestor presented at inconsistent depths. It
 produces identities and order only; canonical successor construction and
 publication remain pending. Transactional publication must propagate every
 changed directory generation through its parent entry and continue through the
