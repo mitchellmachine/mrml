@@ -651,6 +651,12 @@ The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 contract requires locked feature-control policy, `CR4.VMXE`, valid revision
 headers, and complete VMCS host state. VMfail flags become explicit errors and
 physical-address operands remain live memory operands for the instructions.
+The adapter now also provides typed `VMREAD` and `VMWRITE` operations and checks
+VMfail after `VMXOFF`. A bounded first-exit decoder accepts only a non-entry-
+failure EPT violation with a hardware-valid guest-physical address inside the
+exact expected 4 KiB monitor-private page. VMREAD failure, malformed access
+qualification, another exit reason, or an adjacent-page access leaves the
+controller outside `GuestRunning` and cannot resume uncertain state.
 Both Windows and Linux LLVM assemblers accept the implementation. The
 instructions have not yet been executed by a bare-metal MRML boot, so this is
 not evidence of a successful hardware VM launch.

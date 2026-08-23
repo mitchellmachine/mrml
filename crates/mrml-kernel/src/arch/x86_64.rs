@@ -61,8 +61,8 @@ pub use topology::{
 };
 pub use trap::{HardwareTrapFrame, TrapDisposition, TrapError, TrapFrame};
 pub use vmx::{
-    EptPointer, NativeVmx, VmxCapabilities, VmxControl, VmxControlMask, VmxController, VmxError,
-    VmxInstructionError, VmxInstructions, VmxPrerequisites, VmxState,
+    EptPointer, EptViolation, NativeVmx, VmcsField, VmxCapabilities, VmxControl, VmxControlMask,
+    VmxController, VmxError, VmxInstructionError, VmxInstructions, VmxPrerequisites, VmxState,
 };
 pub use vtd::{
     CompleteVtdRoutes, DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamSegments,

@@ -249,6 +249,19 @@ mod tests {
         fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
             Ok(())
         }
+        fn vmwrite(
+            &mut self,
+            _: crate::arch::x86_64::VmcsField,
+            _: u64,
+        ) -> Result<(), VmxInstructionError> {
+            Ok(())
+        }
+        fn vmread(
+            &mut self,
+            _: crate::arch::x86_64::VmcsField,
+        ) -> Result<u64, VmxInstructionError> {
+            Ok(0)
+        }
         fn invept_single_context(&mut self, _: EptPointer) -> Result<(), VmxInstructionError> {
             self.invalidations += 1;
             if self.invalidations == self.fail_at {

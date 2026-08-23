@@ -13,12 +13,98 @@ pub enum VmxError {
     InvalidControl,
     InvalidEptPointer,
     InvalidState,
+    InvalidVmcsField,
+    InvalidVmExit,
     InstructionFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VmxInstructionError {
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmcsField(u32);
+
+impl VmcsField {
+    pub const VM_INSTRUCTION_ERROR: Self = Self(0x4400);
+    pub const EXIT_REASON: Self = Self(0x4402);
+    pub const EXIT_QUALIFICATION: Self = Self(0x6400);
+    pub const GUEST_PHYSICAL_ADDRESS: Self = Self(0x2400);
+    pub const GUEST_LINEAR_ADDRESS: Self = Self(0x640a);
+
+    pub const fn new(encoding: u32) -> Result<Self, VmxError> {
+        // Bits 15:13 select the architectural VMCS field width and bit 12 is
+        // reserved. Encodings above bit 15 are not architectural VMCS fields.
+        if encoding & 0x9000 != 0 {
+            return Err(VmxError::InvalidVmcsField);
+        }
+        Ok(Self(encoding))
+    }
+
+    pub const fn encoding(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EptViolation {
+    qualification: u64,
+    guest_physical_address: u64,
+    guest_linear_address: Option<u64>,
+}
+
+impl EptViolation {
+    pub const fn decode(
+        raw_reason: u32,
+        qualification: u64,
+        guest_physical_address: u64,
+        guest_linear_address: u64,
+    ) -> Result<Self, VmxError> {
+        const EPT_VIOLATION: u32 = 48;
+        const ENTRY_FAILURE: u32 = 1 << 31;
+        const ACCESS_MASK: u64 = 0b111;
+        const GPA_VALID: u64 = 1 << 7;
+        const GLA_VALID: u64 = 1 << 8;
+        if raw_reason & ENTRY_FAILURE != 0
+            || raw_reason & 0xffff != EPT_VIOLATION
+            || qualification & ACCESS_MASK == 0
+            || qualification & GPA_VALID == 0
+            || qualification & GLA_VALID != 0 && qualification & GPA_VALID == 0
+            || guest_physical_address > 0x000f_ffff_ffff_ffff
+        {
+            return Err(VmxError::InvalidVmExit);
+        }
+        Ok(Self {
+            qualification,
+            guest_physical_address,
+            guest_linear_address: if qualification & GLA_VALID != 0 {
+                Some(guest_linear_address)
+            } else {
+                None
+            },
+        })
+    }
+
+    pub const fn attempted_read(self) -> bool {
+        self.qualification & 1 != 0
+    }
+
+    pub const fn attempted_write(self) -> bool {
+        self.qualification & 2 != 0
+    }
+
+    pub const fn attempted_execute(self) -> bool {
+        self.qualification & 4 != 0
+    }
+
+    pub const fn guest_physical_address(self) -> u64 {
+        self.guest_physical_address
+    }
+
+    pub const fn guest_linear_address(self) -> Option<u64> {
+        self.guest_linear_address
+    }
 }
 
 /// Intel VMX control MSRs encode bits that may be zero in the low half and
@@ -248,6 +334,8 @@ pub trait VmxInstructions {
     fn vmptrld(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError>;
     fn vmlaunch(&mut self) -> Result<(), VmxInstructionError>;
     fn vmresume(&mut self) -> Result<(), VmxInstructionError>;
+    fn vmwrite(&mut self, field: VmcsField, value: u64) -> Result<(), VmxInstructionError>;
+    fn vmread(&mut self, field: VmcsField) -> Result<u64, VmxInstructionError>;
     fn invept_single_context(&mut self, ept: EptPointer) -> Result<(), VmxInstructionError>;
 }
 
@@ -334,8 +422,20 @@ impl VmxInstructions for NativeVmx {
     }
 
     fn vmxoff(&mut self) -> Result<(), VmxInstructionError> {
-        unsafe { core::arch::asm!("vmxoff", options(nostack)) };
-        Ok(())
+        let failed: u8;
+        unsafe {
+            core::arch::asm!(
+                "vmxoff",
+                "setna {failed}",
+                failed = lateout(reg_byte) failed,
+                options(nostack),
+            )
+        };
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
     }
 
     fn vmclear(&mut self, vmcs: PhysAddr) -> Result<(), VmxInstructionError> {
@@ -375,6 +475,45 @@ impl VmxInstructions for NativeVmx {
         };
         if failed == 0 {
             Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
+    }
+
+    fn vmwrite(&mut self, field: VmcsField, value: u64) -> Result<(), VmxInstructionError> {
+        let failed: u8;
+        unsafe {
+            core::arch::asm!(
+                "vmwrite {value}, {field}",
+                "setna {failed}",
+                value = in(reg) value,
+                field = in(reg) u64::from(field.encoding()),
+                failed = lateout(reg_byte) failed,
+                options(nostack),
+            )
+        };
+        if failed == 0 {
+            Ok(())
+        } else {
+            Err(VmxInstructionError::Failed)
+        }
+    }
+
+    fn vmread(&mut self, field: VmcsField) -> Result<u64, VmxInstructionError> {
+        let value: u64;
+        let failed: u8;
+        unsafe {
+            core::arch::asm!(
+                "vmread {field}, {value}",
+                "setna {failed}",
+                field = in(reg) u64::from(field.encoding()),
+                value = lateout(reg) value,
+                failed = lateout(reg_byte) failed,
+                options(nostack),
+            )
+        };
+        if failed == 0 {
+            Ok(value)
         } else {
             Err(VmxInstructionError::Failed)
         }
@@ -496,6 +635,45 @@ impl<I: VmxInstructions> VmxController<I> {
         Ok(())
     }
 
+    /// Consumes the first exit after launch and proves it was an access to the
+    /// exact monitor-private 4 KiB guest-physical page. Any VMREAD or decoding
+    /// failure leaves the controller out of GuestRunning so callers must fail
+    /// closed rather than resume uncertain guest state.
+    pub fn record_private_page_violation(
+        &mut self,
+        private_page: PhysAddr,
+    ) -> Result<EptViolation, VmxError> {
+        if private_page.get() & 0xfff != 0 {
+            return Err(VmxError::InvalidVmExit);
+        }
+        self.record_vm_exit()?;
+        let reason = self
+            .instructions
+            .vmread(VmcsField::EXIT_REASON)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        let qualification = self
+            .instructions
+            .vmread(VmcsField::EXIT_QUALIFICATION)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        let guest_physical = self
+            .instructions
+            .vmread(VmcsField::GUEST_PHYSICAL_ADDRESS)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        let guest_linear = self
+            .instructions
+            .vmread(VmcsField::GUEST_LINEAR_ADDRESS)
+            .map_err(|_| VmxError::InstructionFailed)?;
+        let reason = u32::try_from(reason).map_err(|_| VmxError::InvalidVmExit)?;
+        let violation = EptViolation::decode(reason, qualification, guest_physical, guest_linear)?;
+        if guest_physical
+            .checked_sub(private_page.get())
+            .is_none_or(|offset| offset >= 4096)
+        {
+            return Err(VmxError::InvalidVmExit);
+        }
+        Ok(violation)
+    }
+
     pub fn resume(&mut self) -> Result<(), VmxError> {
         if self.state != VmxState::VmcsLoaded || self.active_ept.is_none() {
             return Err(VmxError::InvalidState);
@@ -533,6 +711,10 @@ mod tests {
     struct EmulatedVmx {
         trace: u64,
         fail_at: u8,
+        exit_reason: u64,
+        exit_qualification: u64,
+        guest_physical: u64,
+        guest_linear: u64,
     }
 
     impl EmulatedVmx {
@@ -563,6 +745,19 @@ mod tests {
         }
         fn vmresume(&mut self) -> Result<(), VmxInstructionError> {
             self.step(7)
+        }
+        fn vmwrite(&mut self, _: VmcsField, _: u64) -> Result<(), VmxInstructionError> {
+            self.step(8)
+        }
+        fn vmread(&mut self, field: VmcsField) -> Result<u64, VmxInstructionError> {
+            self.step(9)?;
+            Ok(match field {
+                VmcsField::EXIT_REASON => self.exit_reason,
+                VmcsField::EXIT_QUALIFICATION => self.exit_qualification,
+                VmcsField::GUEST_PHYSICAL_ADDRESS => self.guest_physical,
+                VmcsField::GUEST_LINEAR_ADDRESS => self.guest_linear,
+                _ => return Err(VmxInstructionError::Failed),
+            })
         }
         fn invept_single_context(&mut self, _: EptPointer) -> Result<(), VmxInstructionError> {
             self.step(5)
@@ -650,6 +845,7 @@ mod tests {
             EmulatedVmx {
                 trace: 0,
                 fail_at: 1,
+                ..EmulatedVmx::default()
             },
             capabilities(),
         );
@@ -658,5 +854,70 @@ mod tests {
             Err(VmxError::InstructionFailed)
         );
         assert_eq!(controller.state(), VmxState::Disabled);
+    }
+
+    #[test]
+    fn vmcs_fields_and_ept_exit_are_adversarially_bounded() {
+        assert_eq!(VmcsField::new(0x1000), Err(VmxError::InvalidVmcsField));
+        assert_eq!(VmcsField::new(0x8000), Err(VmxError::InvalidVmcsField));
+        assert_eq!(VmcsField::new(0x4402), Ok(VmcsField::EXIT_REASON));
+
+        let violation = EptViolation::decode(48, 1 | (1 << 7) | (1 << 8), 0x4000, 0x5000).unwrap();
+        assert!(violation.attempted_read());
+        assert!(!violation.attempted_write());
+        assert_eq!(violation.guest_physical_address(), 0x4000);
+        assert_eq!(violation.guest_linear_address(), Some(0x5000));
+        assert_eq!(
+            EptViolation::decode(48, 1, 0x4000, 0),
+            Err(VmxError::InvalidVmExit)
+        );
+        assert_eq!(
+            EptViolation::decode((1 << 31) | 48, 1 | (1 << 7), 0x4000, 0),
+            Err(VmxError::InvalidVmExit)
+        );
+        assert_eq!(
+            EptViolation::decode(12, 1 | (1 << 7), 0x4000, 0),
+            Err(VmxError::InvalidVmExit)
+        );
+    }
+
+    #[test]
+    fn first_guest_exit_must_prove_the_exact_private_page_violation() {
+        let vmxon = PhysAddr::new(0x10_0000).unwrap();
+        let vmcs = PhysAddr::new(0x11_0000).unwrap();
+        let ept = EptPointer::new(PhysAddr::new(0x12_0000).unwrap(), true).unwrap();
+        let private = PhysAddr::new(0x20_0000).unwrap();
+        let instructions = EmulatedVmx {
+            exit_reason: 48,
+            exit_qualification: 1 | (1 << 7) | (1 << 8),
+            guest_physical: private.get() + 37,
+            guest_linear: 0x4000_0025,
+            ..EmulatedVmx::default()
+        };
+        let mut controller = VmxController::new(instructions, capabilities());
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        controller.launch().unwrap();
+        let exit = controller.record_private_page_violation(private).unwrap();
+        assert!(exit.attempted_read());
+        assert_eq!(controller.state(), VmxState::VmcsLoaded);
+
+        let instructions = EmulatedVmx {
+            exit_reason: 48,
+            exit_qualification: 2 | (1 << 7),
+            guest_physical: private.get() + 4096,
+            ..EmulatedVmx::default()
+        };
+        let mut controller = VmxController::new(instructions, capabilities());
+        controller.enter_root(vmxon).unwrap();
+        controller.clear_vmcs(vmcs).unwrap();
+        controller.load_vmcs(vmcs, ept).unwrap();
+        controller.launch().unwrap();
+        assert_eq!(
+            controller.record_private_page_violation(private),
+            Err(VmxError::InvalidVmExit)
+        );
+        assert_eq!(controller.state(), VmxState::VmcsLoaded);
     }
 }
