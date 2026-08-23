@@ -8667,7 +8667,10 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         &mut self,
         operator: crate::BinaryOperator,
     ) -> Result<(), CodegenError> {
-        use crate::BinaryOperator::{Add, Multiply, Subtract};
+        use crate::BinaryOperator::{Add, Divide, Multiply, Subtract};
+        if operator == Divide {
+            return self.emit_saturating_division();
+        }
         if operator == Multiply {
             return self.emit_saturating_multiplication();
         }
@@ -8676,7 +8679,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         } else {
             self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x89, 0xc8, 0x48, 0x29, 0xd0])?;
         }
-        debug_assert!(matches!(operator, Add | Subtract | Multiply));
+        debug_assert!(matches!(operator, Add | Subtract | Multiply | Divide));
 
         if !self.width.signed && operator == Subtract {
             let no_borrow = self.emit_forward_branch(0x83)?;
@@ -8764,6 +8767,29 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.patch_forward_branch(in_range)?;
             }
             self.patch_forward_branch(end)?;
+        }
+        self.emit_normalize()
+    }
+
+    fn emit_saturating_division(&mut self) -> Result<(), CodegenError> {
+        self.emit(&[0x48, 0x87, 0xc1, 0x48, 0x85, 0xc9])?;
+        self.emit_trap_branch(0x84)?;
+        if self.width.signed {
+            self.emit(&[0x48, 0x83, 0xf9, 0xff])?;
+            let ordinary_divisor = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let ordinary_dividend = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(ordinary_divisor)?;
+            self.patch_forward_branch(ordinary_dividend)?;
+            self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9])?;
+            self.patch_forward_branch(end)?;
+        } else {
+            self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
         }
         self.emit_normalize()
     }
@@ -12183,6 +12209,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, rhs: u64) -> u64 { input.saturating_mul(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32, rhs: i32) -> i32 { input.saturating_mul(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.saturating_mul(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, rhs: u32) -> u32 { input.saturating_div(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.saturating_div(rhs) }",
         ];
         for source in sources {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
@@ -12200,6 +12228,7 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.saturating_add(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.saturating_sub(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.saturating_mul(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8, rhs: i16) -> i8 { input.saturating_div(rhs) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

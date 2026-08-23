@@ -3861,6 +3861,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_add"
                         | "saturating_sub"
                         | "saturating_mul"
+                        | "saturating_div"
                         | "abs_diff"
                         | "count_ones"
                         | "count_zeros"
@@ -3944,6 +3945,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "saturating_add"
                     | "saturating_sub"
                     | "saturating_mul"
+                    | "saturating_div"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -4043,7 +4045,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         _ => unreachable!(),
                     },
                 },
-                "saturating_add" | "saturating_sub" | "saturating_mul" => {
+                "saturating_add" | "saturating_sub" | "saturating_mul" | "saturating_div" => {
                     ExprKind::SaturatingArithmetic {
                         base,
                         argument: argument.ok_or_else(|| {
@@ -4053,6 +4055,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                             "saturating_add" => BinaryOperator::Add,
                             "saturating_sub" => BinaryOperator::Subtract,
                             "saturating_mul" => BinaryOperator::Multiply,
+                            "saturating_div" => BinaryOperator::Divide,
                             _ => unreachable!(),
                         },
                     }

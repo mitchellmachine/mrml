@@ -2404,13 +2404,12 @@ fn evaluate_call_aware_integer<
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
-            saturating_integer_arithmetic(
-                recurse(base)?,
-                recurse(argument)?,
-                bits,
-                ty.is_signed(),
-                operator,
-            )
+            let left = recurse(base)?;
+            let right = recurse(argument)?;
+            if operator == BinaryOperator::Divide && right & signed_mask(bits) == 0 {
+                return Err(arithmetic_error(ConstEvalError::DivisionByZero));
+            }
+            saturating_integer_arithmetic(left, right, bits, ty.is_signed(), operator)
         }
         ExprKind::IntegerRotate {
             base,
@@ -3383,7 +3382,12 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
-            saturating_integer_arithmetic(recurse(base)?, recurse(argument)?, bits, true, operator)
+            let left = recurse(base)?;
+            let right = recurse(argument)?;
+            if operator == BinaryOperator::Divide && right & signed_mask(bits) == 0 {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::DivisionByZero));
+            }
+            saturating_integer_arithmetic(left, right, bits, true, operator)
         }
         _ => return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast)),
     };
@@ -3482,6 +3486,7 @@ fn saturating_integer_arithmetic(
             BinaryOperator::Add => left.saturating_add(right),
             BinaryOperator::Subtract => left.saturating_sub(right),
             BinaryOperator::Multiply => left.saturating_mul(right),
+            BinaryOperator::Divide => left.saturating_div(right),
             _ => unreachable!(),
         };
         let minimum = if bits == 128 {
@@ -3495,6 +3500,7 @@ fn saturating_integer_arithmetic(
             BinaryOperator::Add => left.saturating_add(right).min(mask),
             BinaryOperator::Subtract => left.saturating_sub(right),
             BinaryOperator::Multiply => left.saturating_mul(right).min(mask),
+            BinaryOperator::Divide => (left & mask) / (right & mask),
             _ => unreachable!(),
         }
     }

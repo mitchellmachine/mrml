@@ -1941,7 +1941,9 @@ Boolean receivers fail closed.
 Four emitted System V objects matched pinned Rust across minima, zero, ordinary
 negative and positive values, and maxima at 8, 16, 32, and 64 bits.
 Primitive signed and unsigned integers support `saturating_add`,
-`saturating_sub`, and `saturating_mul` in constants and runtime functions.
+`saturating_sub`, `saturating_mul`, and `saturating_div` in constants and runtime
+functions. Division by zero retains Rust's trap behavior, while signed minimum
+divided by negative one saturates to the signed maximum.
 They require an argument of the receiver's exact type and clamp overflow or
 underflow to that type's minimum or maximum independently of runtime
 overflow-check settings.
@@ -1949,6 +1951,9 @@ Four emitted System V objects matched pinned Rust across zero, ordinary signed
 and unsigned products, narrow saturation, 64-bit high-half overflow, both
 signed saturation directions, and the signed minimum multiplied by negative
 one.
+Two additional System V objects matched pinned Rust for ordinary signed and
+unsigned division, mixed signs, extrema, and signed minimum divided by negative
+one; the zero-divisor probe terminated with MRML's trap instruction.
 Signed integer `unsigned_abs` returns the corresponding same-width unsigned
 type in constants and runtime functions, including `isize -> usize`. It accepts
 every signed minimum without overflow and rejects unsigned or Boolean receivers
