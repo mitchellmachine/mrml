@@ -2571,8 +2571,8 @@ references do not implement `Default`. Captured parameters and locals remain
 available to the mapping closure.
 
 Runtime expressions can call a safe, non-const Rust-ABI function declared
-before or after the selected export, with up to four built-in integer or
-Boolean parameters and a scalar result.
+before or after the selected export, with up to four built-in integer, Boolean,
+or character parameters and a scalar result from the same families.
 Arguments execute eagerly in source order, are normalized to their declared
 types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
@@ -2671,6 +2671,12 @@ across 52 values and branch choices on both hosts, including forward calls from
 the export and between helpers, eager argument composition, conditional arms,
 and the final helper's early-return boundary. Separate direct and mutual cycles
 were rejected by the active-call check.
+A forward character-helper chain produced a 261-byte COFF object and a 656-byte
+ELF64 object. Pinned-nightly callers matched an independent Rust reference for
+14 input/branch combinations on both hosts, covering NUL, ASCII, non-ASCII,
+emoji, both valid sides of the surrogate gap, and `U+10FFFF`. Integer arguments
+to character parameters fail type checking rather than being reinterpreted as
+Unicode scalar values.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

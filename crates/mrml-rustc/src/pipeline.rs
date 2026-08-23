@@ -111,10 +111,10 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
 }
 
 fn scalar_type(name: &str) -> Option<crate::ScalarType> {
-    if name == "bool" {
-        Some(crate::ScalarType::Bool)
-    } else {
-        crate::IntegerType::from_name(name).map(crate::ScalarType::Integer)
+    match name {
+        "bool" => Some(crate::ScalarType::Bool),
+        "char" => Some(crate::ScalarType::Char),
+        _ => crate::IntegerType::from_name(name).map(crate::ScalarType::Integer),
     }
 }
 
@@ -362,6 +362,16 @@ mod tests {
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+        );
+
+        let character = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: char, choose: bool) -> char { select(value, choose) } fn select(value: char, choose: bool) -> char { if choose { identity(value) } else { identity('🦀') } } fn identity(value: char) -> char { value }";
+        assert!(compile(character, "answer", ObjectFormat::Coff).is_ok());
+
+        let wrong_character = "fn identity(value: char) -> char { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> char { identity(value) }";
+        let error = compile(wrong_character, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";

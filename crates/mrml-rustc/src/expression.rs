@@ -186,6 +186,7 @@ pub enum CheckedIntegerOptionOperation {
 pub enum ScalarType {
     Integer(IntegerType),
     Bool,
+    Char,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,10 +222,10 @@ pub enum CastType {
 
 impl ScalarType {
     fn from_name(name: &str) -> Option<Self> {
-        if name == "bool" {
-            Some(Self::Bool)
-        } else {
-            IntegerType::from_name(name).map(Self::Integer)
+        match name {
+            "bool" => Some(Self::Bool),
+            "char" => Some(Self::Char),
+            _ => IntegerType::from_name(name).map(Self::Integer),
         }
     }
 }
@@ -1080,7 +1081,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 target: ScalarType::Bool,
             } => self.is_boolean_expression(operand, depth + 1),
             ExprKind::Ascribe {
-                target: ScalarType::Integer(_),
+                target: ScalarType::Integer(_) | ScalarType::Char,
                 ..
             } => false,
             ExprKind::Sequence { then, .. } => self.is_boolean_expression(then, depth + 1),
@@ -1408,6 +1409,14 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                         Ok(u128::from(value != 0))
                     }
                     ScalarType::Bool => Err(ConstEvalError::InvalidCast),
+                    ScalarType::Char
+                        if self.expression(operand).is_some_and(|expression| {
+                            matches!(expression.kind, ExprKind::Char(_))
+                        }) =>
+                    {
+                        Ok(value)
+                    }
+                    ScalarType::Char => Err(ConstEvalError::InvalidCast),
                 }
             }
             ExprKind::Unary { operator, operand } => {
