@@ -2332,6 +2332,7 @@ fn validate_runtime_inline_const<
         }
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value)?,
         ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes)?,
+        ExprKind::IntegerToBytes { base, .. } => recurse(base)?,
         ExprKind::IntegerAssociatedConstant { .. } => {}
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
@@ -3401,6 +3402,28 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(RuntimeExpressionType::Integer(Some(integer_type)))
+        }
+        ExprKind::IntegerToBytes { base, .. } => {
+            let RuntimeExpressionType::Integer(Some(integer_type)) =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let count = integer_type
+                .bits(64)
+                .map(|bits| usize::from(bits / 8))
+                .ok_or(CodegenErrorKind::UnsupportedRuntimeType)?;
+            Ok(RuntimeExpressionType::Array {
+                element: RuntimeArrayElementType::Integer(Some(crate::IntegerType::U8)),
+                count,
+            })
         }
         ExprKind::IntegerAssociatedConstant {
             integer_type,
@@ -4868,6 +4891,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         match expression.kind {
             ExprKind::Unit | ExprKind::DefaultValue => self.emit(&[0x31, 0xc0])?,
             ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } => {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            ExprKind::IntegerToBytes { .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::Index { base, index } => {
@@ -7120,6 +7146,38 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     return Err(self.error(CodegenErrorKind::ValueOutOfRange));
                 }
                 self.emit_expression(tree, element, depth + 1)
+            }
+            ExprKind::IntegerToBytes { base, order } => {
+                let RuntimeExpressionType::Integer(Some(integer_type)) =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let width = runtime_width(integer_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let count = usize::from(width.bits / 8);
+                if index >= count {
+                    return Err(self.error(CodegenErrorKind::ValueOutOfRange));
+                }
+                self.emit_expression(tree, base, depth + 1)?;
+                let byte_index = if order == crate::expression::IntegerByteOrder::Big {
+                    count - index - 1
+                } else {
+                    index
+                };
+                let shift = byte_index * 8;
+                if shift != 0 {
+                    self.emit(&[0x48, 0xc1, 0xe8, shift as u8])?;
+                }
+                self.emit(&[0x25, 0xff, 0, 0, 0])
             }
             ExprKind::Identifier(name) => {
                 if let Some((local_index, local)) = self.locals[..self.saved_locals]
@@ -14878,6 +14936,37 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn converts_integers_to_byte_arrays() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> [u8; 1] { input.to_be_bytes() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> [u8; 2] { input.to_le_bytes() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> [u8; 4] { input.to_be_bytes() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> [u8; 8] { input.to_ne_bytes() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> u8 { input.to_be_bytes()[0] }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 2048, 2, 112>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> [u8; 1] { input.to_ne_bytes() }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(
+            compile_x86_64_function::<_, 1024, 2, 80>(&function, &NoConstants, X86_64Abi::Windows,)
+                .is_err()
+        );
     }
 
     #[test]

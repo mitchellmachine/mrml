@@ -2532,6 +2532,27 @@ fn rustc_integer_byte_array_constructors_reach_native_objects() {
 }
 
 #[test]
+fn rustc_integer_byte_array_outputs_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> [u8; 1] { input.to_be_bytes() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> [u8; 2] { input.to_le_bytes() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> [u8; 4] { input.to_be_bytes() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> [u8; 8] { input.to_ne_bytes() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: usize) -> u8 { input.to_be_bytes()[0] }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { 0x12345678u32.to_be_bytes()[0] }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { (-2i16).to_le_bytes()[1] }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_associated_constants_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { u8::MIN }",

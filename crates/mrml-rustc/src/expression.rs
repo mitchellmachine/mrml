@@ -446,6 +446,10 @@ pub enum ExprKind<'source> {
         integer_type: IntegerType,
         order: IntegerByteOrder,
     },
+    IntegerToBytes {
+        base: ExprId,
+        order: IntegerByteOrder,
+    },
     IntegerAssociatedConstant {
         integer_type: IntegerType,
         constant: IntegerAssociatedConstant,
@@ -770,6 +774,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
+            | ExprKind::IntegerToBytes { .. }
             | ExprKind::IntegerAssociatedConstant { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
@@ -982,7 +987,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     usize::try_from(index).map_err(|_| ConstEvalError::ArrayIndexOutOfBounds)?;
                 if self
                     .array_length(base, depth + 1)
-                    .is_none_or(|length| index >= length)
+                    .is_some_and(|length| index >= length)
                 {
                     return Err(ConstEvalError::ArrayIndexOutOfBounds);
                 }
@@ -1048,6 +1053,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerToBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerAssociatedConstant { .. } => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
@@ -1207,6 +1213,23 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 }
                 self.evaluate_node(element, resolver, depth + 1)
             }
+            ExprKind::IntegerToBytes { base, order } => {
+                let integer_type = self
+                    .resolved_integer_type(base, resolver, depth + 1)
+                    .ok_or(ConstEvalError::InvalidExpressionTree)?;
+                let bits = integer_type.bits(64).ok_or(ConstEvalError::InvalidCast)?;
+                let count = usize::from(bits / 8);
+                if index >= count {
+                    return Err(ConstEvalError::ArrayIndexOutOfBounds);
+                }
+                let value = self.evaluate_node(base, resolver, depth + 1)?;
+                let byte_index = if order == IntegerByteOrder::Big {
+                    count - index - 1
+                } else {
+                    index
+                };
+                Ok(value >> (byte_index * 8) & 0xff)
+            }
             ExprKind::If {
                 condition,
                 then_branch,
@@ -1241,6 +1264,22 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
         match expression.kind {
             ExprKind::Array { element_count, .. } => Some(element_count),
             ExprKind::ArrayRepeat { count, .. } => Some(count),
+            ExprKind::IntegerToBytes { base, .. } => self
+                .expression(base)
+                .and_then(|expression| match expression.kind {
+                    ExprKind::Integer(literal) => literal.suffix.and_then(IntegerType::from_name),
+                    ExprKind::Cast {
+                        target: CastType::Integer(integer_type),
+                        ..
+                    }
+                    | ExprKind::Ascribe {
+                        target: ScalarType::Integer(integer_type),
+                        ..
+                    } => Some(integer_type),
+                    _ => None,
+                })
+                .and_then(|integer_type| integer_type.bits(64))
+                .map(|bits| usize::from(bits / 8)),
             ExprKind::If {
                 then_branch,
                 else_branch,
@@ -1284,6 +1323,39 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             index += 1;
         }
         Ok(value)
+    }
+
+    fn resolved_integer_type<R: ConstantResolver>(
+        &self,
+        id: ExprId,
+        resolver: &R,
+        depth: usize,
+    ) -> Option<IntegerType> {
+        if depth == MAX_EXPRESSION_DEPTH {
+            return None;
+        }
+        match self.expression(id)?.kind {
+            ExprKind::Integer(literal) => literal.suffix.and_then(IntegerType::from_name),
+            ExprKind::Identifier(name) => resolver.resolve_type(name),
+            ExprKind::Cast {
+                target: CastType::Integer(integer_type),
+                ..
+            }
+            | ExprKind::Ascribe {
+                target: ScalarType::Integer(integer_type),
+                ..
+            }
+            | ExprKind::IntegerAssociatedConstant { integer_type, .. }
+            | ExprKind::IntegerEndianFrom { integer_type, .. }
+            | ExprKind::IntegerFromBytes { integer_type, .. } => Some(integer_type),
+            ExprKind::Unary { operand, .. }
+            | ExprKind::InlineConst { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::LoopBreak { operand } => {
+                self.resolved_integer_type(operand, resolver, depth + 1)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -2503,6 +2575,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerFromBytes { bytes, .. } => {
                 self.substitute_identifier(bytes, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerToBytes { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerAssociatedConstant { .. } => {}
             ExprKind::IntegerWrappingShift { base, distance, .. } => {
@@ -4158,6 +4233,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "reverse_bits"
                         | "to_be"
                         | "to_le"
+                        | "to_be_bytes"
+                        | "to_le_bytes"
+                        | "to_ne_bytes"
                         | "wrapping_neg"
                         | "strict_neg"
                         | "strict_abs"
@@ -4586,6 +4664,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
+                "to_be_bytes" | "to_le_bytes" | "to_ne_bytes" => ExprKind::IntegerToBytes {
+                    base,
+                    order: match method.text {
+                        "to_be_bytes" => IntegerByteOrder::Big,
+                        "to_le_bytes" => IntegerByteOrder::Little,
+                        "to_ne_bytes" => IntegerByteOrder::Native,
+                        _ => unreachable!(),
+                    },
+                },
                 "min" | "max" | "abs_diff" | "midpoint" | "carryless_mul" | "extract_bits"
                 | "deposit_bits" | "div_floor" | "div_ceil" | "next_multiple_of" => {
                     ExprKind::IntegerPairTransform {

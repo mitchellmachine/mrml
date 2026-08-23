@@ -2130,6 +2130,11 @@ array parameters are packed without allocation; big-endian input reverses the
 packed word on the supported little-endian targets, while little and native
 orders preserve it. Constant evaluation supports the full 16-byte `u128` and
 `i128` forms even though native scalar exports remain bounded to 64 bits.
+The inverse `to_be_bytes`, `to_le_bytes`, and `to_ne_bytes` methods produce an
+exact `[u8; size_of::<Self>()]` expression. Native 8- through 64-bit receivers
+may return that fixed array, store it through existing array paths, or index an
+individual byte; explicitly typed constant receivers use the same ordering in
+the bounded IR evaluator.
 All twelve primitive integer types expose their stable `MIN`, `MAX`, and `BITS`
 associated constants. `MIN` and `MAX` retain the named primitive type, including
 the target pointer width and signed two's-complement boundary, while `BITS`

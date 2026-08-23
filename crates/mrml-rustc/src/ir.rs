@@ -339,6 +339,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
+            | ExprKind::IntegerToBytes { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
@@ -573,6 +574,63 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
                     });
                 }
                 self.lower(element, depth + 1)?;
+            }
+            ExprKind::IntegerToBytes { base, order } => {
+                let integer_type = match self.tree.expression(base).map(|base| base.kind) {
+                    Some(ExprKind::Integer(literal)) => {
+                        literal.suffix.and_then(crate::IntegerType::from_name)
+                    }
+                    Some(ExprKind::Cast {
+                        target: crate::expression::CastType::Integer(integer_type),
+                        ..
+                    })
+                    | Some(ExprKind::Ascribe {
+                        target: crate::expression::ScalarType::Integer(integer_type),
+                        ..
+                    }) => Some(integer_type),
+                    Some(ExprKind::Unary { operand, .. }) => {
+                        match self.tree.expression(operand).map(|operand| operand.kind) {
+                            Some(ExprKind::Integer(literal)) => {
+                                literal.suffix.and_then(crate::IntegerType::from_name)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+                .ok_or(IrError {
+                    kind: IrErrorKind::InvalidExpressionTree,
+                    span: expression.span,
+                })?;
+                let bits = integer_type.bits(self.pointer_bits).ok_or(IrError {
+                    kind: IrErrorKind::InvalidExpressionTree,
+                    span: expression.span,
+                })?;
+                let count = usize::from(bits / 8);
+                if index >= count {
+                    return Err(IrError {
+                        kind: IrErrorKind::InvalidExpressionTree,
+                        span: expression.span,
+                    });
+                }
+                self.lower(base, depth + 1)?;
+                let byte_index = if order == crate::expression::IntegerByteOrder::Big {
+                    count - index - 1
+                } else {
+                    index
+                };
+                if byte_index != 0 {
+                    self.push(
+                        Instruction::PushInteger((byte_index * 8) as u128),
+                        expression.span,
+                    )?;
+                    self.push(
+                        Instruction::Binary(BinaryOperator::ShiftRight),
+                        expression.span,
+                    )?;
+                }
+                self.push(Instruction::PushInteger(0xff), expression.span)?;
+                self.push(Instruction::Binary(BinaryOperator::BitAnd), expression.span)?;
             }
             ExprKind::If {
                 condition,

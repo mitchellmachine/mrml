@@ -2088,6 +2088,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         }
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value, inside_inline_const),
         ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes, inside_inline_const),
+        ExprKind::IntegerToBytes { base, .. } => recurse(base, inside_inline_const),
         ExprKind::IntegerAssociatedConstant { .. } => false,
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
@@ -2228,6 +2229,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerClampMagnitude { base, limit } => recurse(base) || recurse(limit),
         ExprKind::IntegerEndianFrom { value, .. } => recurse(value),
         ExprKind::IntegerFromBytes { bytes, .. } => recurse(bytes),
+        ExprKind::IntegerToBytes { base, .. } => recurse(base),
         ExprKind::IntegerAssociatedConstant { .. } => false,
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
