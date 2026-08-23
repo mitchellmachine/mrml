@@ -4,15 +4,20 @@
 //!
 //! Names and stable object IDs identify resources but never authorize access.
 //! The storage service owns bounded generational handles and canonical metadata;
-//! extent mutation, allocation, transactions, and device I/O are later layers.
+//! allocation, COW mutation, transactions, and device I/O are later layers.
 
 mod authority;
+mod extent;
 mod format;
 mod identity;
 
 pub use authority::{
     StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
     StoragePrincipal, StorageRights,
+};
+pub use extent::{
+    EXTENT_RECORD_BYTES, ExtentError, ExtentKind, ExtentLocation, ExtentMap, ExtentRecord,
+    MAX_EXTENT_BLOCKS,
 };
 pub use format::{
     DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, DirectoryEntry, DirectoryMetadata,

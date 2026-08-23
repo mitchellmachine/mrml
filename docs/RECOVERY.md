@@ -102,9 +102,12 @@ explicitly and downgrade the status rather than guessing.
 - Native filesystem: `crates/mrml-storage` contains the first userspace-service
   foundation: stable volume/object identities, attenuated generational
   authority with descendant revocation, and canonical checksummed v1 volume,
-  superblock, directory-entry, directory, and file metadata. No block service,
-  extent map, COW tree, transaction engine, native file I/O, snapshot, or crash
-  recovery exists yet. UEFI Simple File System use is boot interoperability,
+  superblock, directory-entry, directory, file, and extent metadata. Its bounded
+  extent map checks exact logical coverage, physical volume bounds, reserved
+  blocks, and intra-file overlap. No block service, allocator, cross-file
+  allocation index, COW tree, transaction engine, native file I/O, snapshot, or
+  crash recovery exists yet. UEFI Simple File System use is boot
+  interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are

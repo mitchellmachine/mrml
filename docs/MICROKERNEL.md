@@ -2658,8 +2658,25 @@ nonzero identity/generation, metadata ranges, and a SHA3-256 self-check. That
 digest detects covered corruption only: it is not authority, authenticated
 storage, atomic publication, replay defense, or rollback protection. Ten
 focused unit tests and strict crate-local clippy pass on Windows gnullvm and
-Arch Linux under WSL2. Extent records, COW tree publication, directory
-operations, file I/O, transactions, crash recovery,
+Arch Linux under WSL2.
+
+The next dependency adds one canonical 144-byte extent record. It binds the
+exact file object and metadata generation to a nonempty bounded logical range,
+then represents either a physical data range with a 32-byte content digest or
+an explicit hole whose physical address and digest must be zero. A
+fixed-capacity `ExtentMap` requires records in exact logical order with gap-free
+coverage of the file length rounded to the volume block size. It bounds file
+length and physical ranges to checked volume capacity, excludes block zero and
+both superblocks, rejects intra-file physical overlap, and returns only the
+physical block or hole plus the bounded run remaining. Unknown future kinds,
+hidden bytes, wrong volumes/files/generations, overcoverage, arithmetic
+overflow, and capacity exhaustion fail closed. This map does not allocate
+blocks or prove cross-file ownership; those require the later allocation and
+COW metadata layers.
+
+Fifteen focused unit tests and strict crate-local clippy pass on Windows gnullvm
+and Arch Linux under WSL2. COW tree publication, directory operations, file I/O,
+transactions, crash recovery,
 snapshots, a block-device service, and configuration-checkpoint persistence
 remain unimplemented.
 
@@ -2670,7 +2687,8 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both unit-test runs passed 10 tests; both strict clippy invocations passed.
+Both current unit-test runs pass 15 tests, and both strict crate-local clippy
+invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 

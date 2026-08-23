@@ -203,6 +203,14 @@ impl VolumeHeader {
         self.block_count
     }
 
+    pub const fn primary_superblock(self) -> u64 {
+        self.primary_superblock
+    }
+
+    pub const fn secondary_superblock(self) -> u64 {
+        self.secondary_superblock
+    }
+
     pub fn encode(self, output: &mut [u8; VOLUME_HEADER_BYTES]) {
         *output = [0; VOLUME_HEADER_BYTES];
         output[..8].copy_from_slice(&VOLUME_MAGIC);

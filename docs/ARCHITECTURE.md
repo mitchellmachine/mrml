@@ -218,9 +218,12 @@ filesystem. The `mrml-storage` userspace-service foundation defines nonzero
 volume/object identities, principal-bound generational handles with attenuated
 derivation and transitive descendant revocation, and canonical checksummed
 volume, superblock, directory, directory-entry, and file metadata records.
-There is not yet a block-device service, extent mapper, COW tree, transaction
-engine, native file I/O, snapshot implementation, or crash-recovery path. The
-EFI System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
+It also validates fixed extent records into exact logical coverage containing
+data or explicit holes, rejects intra-file physical overlap and reserved volume
+blocks, and provides bounded logical-to-physical lookup. There is not yet a
+block-device service, allocator, cross-file allocation index, COW tree,
+transaction engine, native file I/O, snapshot implementation, or crash-recovery
+path. The EFI System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import
 services, but FAT32, legacy formats, POSIX permissions, and a universal global
 namespace do not define native MRML storage or security semantics.

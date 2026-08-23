@@ -204,6 +204,15 @@ authority; unrelated domains continue.
    across rename, rights confusion, stale handles, and descendant revocation.
 3. Implement extent mapping, checksummed COW metadata, directory operations,
    file reads/writes, explicit transactions, and crash recovery in that order.
+   **PARTIALLY IMPLEMENTED:** canonical extent records bind an exact file and
+   metadata generation to a bounded logical range, either a physical data range
+   with a content digest or an explicit hole. A fixed-capacity map requires
+   ordered gap-free coverage of the rounded file length, bounds data ranges to
+   the volume, excludes the volume header and both superblocks, rejects
+   intra-file physical overlap, and returns bounded logical lookup results.
+   Reserved future kinds are rejected rather than treated as compression,
+   encryption, or sharing. Allocation ownership across files, checksummed COW
+   metadata publication, and every later operation in this item remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

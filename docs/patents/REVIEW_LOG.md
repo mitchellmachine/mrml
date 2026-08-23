@@ -591,3 +591,17 @@ construction, on-disk tree, compression scheme, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional capability bookkeeping and
 defensive fixed-record filesystem metadata.
+
+## 2026-08-23 — bounded native extent mapping
+
+MRML source: `crates/mrml-storage/src/extent.rs`.
+
+The storage service uses conventional fixed extent records, explicit sparse
+holes, ordered logical coverage, linear bounded lookup, physical range checks,
+and SHA3-256 corruption digests. It reserves unknown record kinds without
+implementing compression, encryption, sharing, deduplication, allocation, or a
+novel on-disk tree. This adds no novel filesystem algorithm, storage
+optimization, cryptographic construction, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional extent validation and sparse-file
+mapping.
