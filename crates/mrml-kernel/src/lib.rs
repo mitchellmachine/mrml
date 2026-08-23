@@ -97,15 +97,15 @@ pub use service_lifecycle::{
 };
 pub use shared_memory::{
     HostResourceHandle, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,
-    SharedMemoryBindings,
+    SharedEndpointRequest, SharedMemoryBindings, SharedRevocation,
 };
 pub use syscall::{
     MAX_SYSCALL_INLINE_PAYLOAD, SyscallError, SyscallRequest, UserCallFrame, X86_USER_CALL_VECTOR,
 };
 pub use task_runtime::{
-    DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, FaultRetirement,
-    PeriodicDomainBalancer, TASK_INBOX_MESSAGES, TaskRuntime, TaskRuntimeError, TaskTermination,
-    TimerDomainBalanceOutcome,
+    ControlEvent, DetachedTaskDomain, DomainBalanceError, DomainBalanceOutcome, FaultRetirement,
+    PeerDeath, PeerDeathReason, PeriodicDomainBalancer, ReceivedMessage, TASK_CONTROL_PEERS,
+    TASK_INBOX_MESSAGES, TaskRuntime, TaskRuntimeError, TaskTermination, TimerDomainBalanceOutcome,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

@@ -258,6 +258,22 @@ impl GuestRegion {
     fn length(self) -> u64 {
         self.pages * PAGE_SIZE
     }
+
+    pub const fn host_start(self) -> PhysAddr {
+        self.host_start
+    }
+
+    pub const fn pages(self) -> u64 {
+        self.pages
+    }
+
+    pub const fn is_writable(self) -> bool {
+        self.writable
+    }
+
+    pub const fn is_executable(self) -> bool {
+        self.executable
+    }
 }
 
 pub struct GuestMemory<const N: usize> {

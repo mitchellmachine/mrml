@@ -208,6 +208,17 @@ impl Endpoint {
             .ok_or(IpcError::SequenceExhausted)?;
         Ok(sequence)
     }
+
+    pub(crate) fn authorize_member<const N: usize>(
+        &self,
+        space: &CapabilitySpace<N>,
+        capability: Capability,
+    ) -> Result<(), IpcError> {
+        if space.authorize(capability, Rights::SIGNAL)? != self.object {
+            return Err(IpcError::Unauthorized);
+        }
+        Ok(())
+    }
 }
 
 pub struct Receiver {

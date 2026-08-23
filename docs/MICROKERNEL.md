@@ -1609,6 +1609,20 @@ creating receiver capabilities. Windows and Linux pass 129 kernel tests,
 including block, wake, FIFO, overflow behavior, syscall continuation capture,
 and voluntary switching. The two-root signed probe exercises live delivery,
 wakeup, and syscall-visible receive results on WHP and KVM.
+Kernel-owned inbox entries now also retain the exact generational sender and
+endpoint sequence, allowing a receiver to distinguish multiple clients without
+trusting payload identity fields. A separate bounded control receive path can
+link at most eight exact-generation peers per task only after both domains
+prove `SIGNAL` authority for the exact endpoint object. Fault or clean-exit
+retirement removes the symmetric relation, publishes a typed peer-death result
+containing the fault vector and address when applicable, and wakes a blocked
+peer. Pending lifecycle results do not consume ordinary inbox capacity.
+Migration of a domain with a live relation or unconsumed death result fails
+closed rather than orphaning cross-CPU notification state. Windows gnullvm unit
+tests cover two independent senders, exact sequence attribution, fault wakeup,
+unrelated-domain survival, and the migration gate. This is kernel-policy test
+evidence only; the signed two-service probes and native WHP/KVM bulk-page
+revocation path have not yet been extended to this control event.
 
 Unit tests check the exact 16-byte gate encoding and prove malformed pointers,
 sizes, handlers, and selectors fail before privileged instructions. The kernel
@@ -2408,12 +2422,22 @@ plan and status vocabulary are authoritative in [ROADMAP.md](ROADMAP.md).
 1. Capability model, explicit directory grants, IPC wire format, and property
    tests. The fixed-size policy model and stable, versioned cross-VM control
    encoding are implemented. A fixed-capacity generational host-resource table
-   now binds an opaque nonzero host handle to exactly one live VM mapping and
-   capability object. Every use repeats object, `MAP`, read/write attenuation,
-   VM identity, mapping identity, and mapping-liveness checks; revocation
-   requires exact `CONTROL` authority, and stale generations cannot resolve a
-   replacement. The host token never enters guest memory. Multi-party
-   shared-memory transport and native KVM/WHP handle adapters remain pending.
+   binds an opaque nonzero host handle to one capability object and one or more
+   live VM mappings. Initial binding rejects reuse of an existing host handle;
+   only the explicit share operation can add another endpoint. Sharing requires
+   exact `CONTROL` authority for the source object, independent destination
+   `MAP` plus read/write authority, exact equality of the host physical extent,
+   a live distinct VM mapping, NX native permissions, and access that preserves
+   or reduces the source endpoint. Every resolution repeats object, `MAP`,
+   read/write attenuation, VM identity, mapping identity, mapping-liveness,
+   extent, and native-permission checks. Per-endpoint revocation requires exact
+   `CONTROL` authority and reports whether the last endpoint was removed, so a
+   caller cannot destroy the opaque resource while peers remain. Stale
+   generations cannot resolve a replacement and the host token never enters
+   guest memory. Windows gnullvm unit tests cover read/write attenuation,
+   mismatched extents, executable or insufficient native permissions, stale
+   bindings, and final-reference accounting. Native KVM/WHP handle adapters and
+   invalidate-before-resume integration remain pending.
 2. Original x86_64 UEFI loader, physical allocator, page tables, exceptions,
    timer, scheduler, and serial diagnostics under emulation.
 3. User address spaces and synchronous IPC; isolated storage, network, tool,

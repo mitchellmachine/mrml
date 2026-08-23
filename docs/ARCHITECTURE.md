@@ -40,7 +40,7 @@ native KVM and Windows WHP launch backends. Signed controlled probes exercise
 subsets of these mechanisms. See the evidence ledger in MICROKERNEL.md.
 
 **PARTIALLY IMPLEMENTED:** blocking receive and scheduler wakeup, bounded
-backpressure, attenuated capability transfer, shared-memory bindings, mapping
+backpressure, attenuated capability transfer, multi-party shared-memory bindings, mapping
 revocation, peer fault cleanup, multi-core balancing, protected-execution
 admission, VMX-root monitoring, VT-d table/control machinery, mediated GPU, boot
 admission, measured-boot plumbing, and monotonic release-state abstractions.

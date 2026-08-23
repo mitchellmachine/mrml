@@ -8,6 +8,7 @@ use crate::{
 };
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
+pub const TASK_CONTROL_PEERS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskRuntimeError {
@@ -22,6 +23,62 @@ pub enum TaskRuntimeError {
     Ipc(IpcError),
     InboxFull,
     InboxEmpty,
+    PeerTableFull,
+    ActiveControlPeers,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeerDeathReason {
+    Exited,
+    Faulted { vector: u8, address: Option<u64> },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeerDeath {
+    peer: TaskId,
+    reason: PeerDeathReason,
+}
+
+impl PeerDeath {
+    pub const fn peer(self) -> TaskId {
+        self.peer
+    }
+
+    pub const fn reason(self) -> PeerDeathReason {
+        self.reason
+    }
+}
+
+pub struct ReceivedMessage {
+    sender: TaskId,
+    sequence: u64,
+    message: Message,
+}
+
+impl ReceivedMessage {
+    pub const fn sender(&self) -> TaskId {
+        self.sender
+    }
+
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn message(&self) -> &Message {
+        &self.message
+    }
+
+    pub fn into_message(self) -> Message {
+        self.message
+    }
+}
+
+// The message stays inline because this no-allocation kernel boundary cannot
+// box it, and returning a borrowed inbox entry would prevent atomic dequeue.
+#[allow(clippy::large_enum_variant)]
+pub enum ControlEvent {
+    Message(ReceivedMessage),
+    PeerDied(PeerDeath),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,10 +100,12 @@ struct TaskDomain<const CAPS: usize> {
     task: TaskId,
     context: UserContext,
     capabilities: CapabilitySpace<CAPS>,
-    inbox: [Option<Message>; TASK_INBOX_MESSAGES],
+    inbox: [Option<ReceivedMessage>; TASK_INBOX_MESSAGES],
     inbox_head: u8,
     inbox_tail: u8,
     inbox_count: u8,
+    peers: [Option<TaskId>; TASK_CONTROL_PEERS],
+    peer_deaths: [Option<PeerDeath>; TASK_CONTROL_PEERS],
 }
 
 pub struct DetachedTaskDomain<const CAPS: usize> {
@@ -214,6 +273,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             inbox_head: 0,
             inbox_tail: 0,
             inbox_count: 0,
+            peers: [None; TASK_CONTROL_PEERS],
+            peer_deaths: [None; TASK_CONTROL_PEERS],
         });
         Ok(task)
     }
@@ -297,6 +358,12 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .iter()
             .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == task))
             .ok_or(TaskRuntimeError::MissingTask)?;
+        if self.domains[slot].as_ref().is_some_and(|domain| {
+            domain.peers.iter().any(Option::is_some)
+                || domain.peer_deaths.iter().any(Option::is_some)
+        }) {
+            return Err(TaskRuntimeError::ActiveControlPeers);
+        }
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
@@ -398,6 +465,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .scheduler
             .terminate_current()
             .map_err(TaskRuntimeError::Scheduler)?;
+        self.publish_peer_death(&domain, PeerDeathReason::Faulted { vector, address })?;
         Ok(FaultRetirement {
             task: current,
             context: domain.context,
@@ -427,7 +495,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .scheduler
             .terminate_current()
             .map_err(TaskRuntimeError::Scheduler)?;
-        let _ = domain;
+        self.publish_peer_death(&domain, PeerDeathReason::Exited)?;
         Ok(TaskTermination {
             task: current,
             next,
@@ -527,7 +595,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if domain.inbox[tail].is_some() {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
-        domain.inbox[tail] = Some(message);
+        domain.inbox[tail] = Some(ReceivedMessage {
+            sender,
+            sequence,
+            message,
+        });
         domain.inbox_tail = ((tail + 1) % TASK_INBOX_MESSAGES) as u8;
         domain.inbox_count += 1;
         self.scheduler
@@ -552,7 +624,138 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         domain.inbox_head = ((head + 1) % TASK_INBOX_MESSAGES) as u8;
         domain.inbox_count -= 1;
-        Ok(message)
+        Ok(message.into_message())
+    }
+
+    /// Links two live domains for typed lifecycle notification. The relation is
+    /// symmetric, bounded, and exact-generation; it is committed only after
+    /// both peer tables have capacity. Linked domains cannot migrate until the
+    /// relation and any pending death result have been consumed.
+    pub fn connect_control_peers(
+        &mut self,
+        first: TaskId,
+        second: TaskId,
+        endpoint: &Endpoint,
+        first_capability: Capability,
+        second_capability: Capability,
+    ) -> Result<(), TaskRuntimeError> {
+        if first == second {
+            return Err(TaskRuntimeError::SameTaskIpc);
+        }
+        let first_slot = self.domain_slot(first)?;
+        let second_slot = self.domain_slot(second)?;
+        let (first_domain, second_domain) =
+            two_domains_mut(&mut self.domains, first_slot, second_slot)
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        endpoint
+            .authorize_member(&first_domain.capabilities, first_capability)
+            .map_err(TaskRuntimeError::Ipc)?;
+        endpoint
+            .authorize_member(&second_domain.capabilities, second_capability)
+            .map_err(TaskRuntimeError::Ipc)?;
+        let first_has = first_domain.peers.contains(&Some(second));
+        let second_has = second_domain.peers.contains(&Some(first));
+        if first_has != second_has {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        if first_has {
+            return Ok(());
+        }
+        let first_used = first_domain.peers.iter().flatten().count()
+            + first_domain.peer_deaths.iter().flatten().count();
+        let second_used = second_domain.peers.iter().flatten().count()
+            + second_domain.peer_deaths.iter().flatten().count();
+        if first_used == TASK_CONTROL_PEERS || second_used == TASK_CONTROL_PEERS {
+            return Err(TaskRuntimeError::PeerTableFull);
+        }
+        *first_domain
+            .peers
+            .iter_mut()
+            .find(|peer| peer.is_none())
+            .ok_or(TaskRuntimeError::IntegrityFailure)? = Some(second);
+        *second_domain
+            .peers
+            .iter_mut()
+            .find(|peer| peer.is_none())
+            .ok_or(TaskRuntimeError::IntegrityFailure)? = Some(first);
+        Ok(())
+    }
+
+    pub fn receive_control(&mut self, task: TaskId) -> Result<ControlEvent, TaskRuntimeError> {
+        let slot = self.domain_slot(task)?;
+        let domain = self.domains[slot]
+            .as_mut()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        if let Some(death) = domain.peer_deaths.iter_mut().find_map(Option::take) {
+            return Ok(ControlEvent::PeerDied(death));
+        }
+        if domain.inbox_count == 0 {
+            return Err(TaskRuntimeError::InboxEmpty);
+        }
+        let head = usize::from(domain.inbox_head);
+        let message = domain.inbox[head]
+            .take()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        domain.inbox_head = ((head + 1) % TASK_INBOX_MESSAGES) as u8;
+        domain.inbox_count -= 1;
+        Ok(ControlEvent::Message(message))
+    }
+
+    pub fn receive_control_or_block_current(
+        &mut self,
+    ) -> Result<Result<ControlEvent, ScheduleOutcome>, TaskRuntimeError> {
+        let current = self
+            .scheduler
+            .current()
+            .ok_or(TaskRuntimeError::NoCurrentTask)?;
+        match self.receive_control(current) {
+            Ok(event) => Ok(Ok(event)),
+            Err(TaskRuntimeError::InboxEmpty) => self
+                .scheduler
+                .block_current()
+                .map(Err)
+                .map_err(TaskRuntimeError::Scheduler),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn domain_slot(&self, task: TaskId) -> Result<usize, TaskRuntimeError> {
+        self.domains
+            .iter()
+            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == task))
+            .ok_or(TaskRuntimeError::MissingTask)
+    }
+
+    fn publish_peer_death(
+        &mut self,
+        retired: &TaskDomain<CAPS>,
+        reason: PeerDeathReason,
+    ) -> Result<(), TaskRuntimeError> {
+        for peer in retired.peers.iter().flatten().copied() {
+            let slot = self.domain_slot(peer)?;
+            let domain = self.domains[slot]
+                .as_mut()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            let relation = domain
+                .peers
+                .iter_mut()
+                .find(|candidate| **candidate == Some(retired.task))
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            *relation = None;
+            let death_slot = domain
+                .peer_deaths
+                .iter_mut()
+                .find(|death| death.is_none())
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            *death_slot = Some(PeerDeath {
+                peer: retired.task,
+                reason,
+            });
+            self.scheduler
+                .wake(peer)
+                .map_err(TaskRuntimeError::Scheduler)?;
+        }
+        Ok(())
     }
 
     pub fn receive_or_block_current(
@@ -870,6 +1073,193 @@ mod tests {
             runtime.receive_ipc(receiver).err(),
             Some(TaskRuntimeError::InboxEmpty)
         );
+    }
+
+    #[test]
+    fn multi_client_messages_bind_sender_and_endpoint_sequence() {
+        let mut runtime = TaskRuntime::<3, 1>::new(1_000, 1).unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let object = ObjectId(0x71);
+        let first_capability = runtime
+            .capabilities_mut(first)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let second_capability = runtime
+            .capabilities_mut(second)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(object);
+
+        runtime
+            .deliver_ipc(first, receiver, &mut endpoint, first_capability, b"a", &[])
+            .unwrap();
+        runtime
+            .deliver_ipc(
+                second,
+                receiver,
+                &mut endpoint,
+                second_capability,
+                b"b",
+                &[],
+            )
+            .unwrap();
+
+        let ControlEvent::Message(first_message) = runtime.receive_control(receiver).unwrap()
+        else {
+            panic!("expected first message");
+        };
+        assert_eq!(first_message.sender(), first);
+        assert_eq!(first_message.sequence(), 1);
+        assert_eq!(first_message.message().payload(), b"a");
+        let ControlEvent::Message(second_message) = runtime.receive_control(receiver).unwrap()
+        else {
+            panic!("expected second message");
+        };
+        assert_eq!(second_message.sender(), second);
+        assert_eq!(second_message.sequence(), 2);
+        assert_eq!(second_message.message().payload(), b"b");
+    }
+
+    #[test]
+    fn fault_retirement_wakes_peer_with_typed_death_and_preserves_unrelated_domain() {
+        let mut runtime = TaskRuntime::<3, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let faulted = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let unrelated = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let object = ObjectId(0x72);
+        let observer_capability = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let faulted_capability = runtime
+            .capabilities_mut(faulted)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let endpoint = Endpoint::new(object);
+        runtime
+            .connect_control_peers(
+                observer,
+                faulted,
+                &endpoint,
+                observer_capability,
+                faulted_capability,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert!(matches!(
+            runtime.receive_control_or_block_current(),
+            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == faulted
+        ));
+
+        runtime
+            .terminate_current_fault(TrapDisposition::TerminateUser {
+                vector: 14,
+                address: Some(0x1234),
+            })
+            .unwrap();
+        let ControlEvent::PeerDied(death) = runtime.receive_control(observer).unwrap() else {
+            panic!("expected peer death");
+        };
+        assert_eq!(death.peer(), faulted);
+        assert_eq!(
+            death.reason(),
+            PeerDeathReason::Faulted {
+                vector: 14,
+                address: Some(0x1234),
+            }
+        );
+        assert_eq!(runtime.context(faulted), Err(TaskRuntimeError::MissingTask));
+        assert!(runtime.context(unrelated).is_ok());
+    }
+
+    #[test]
+    fn live_control_relation_blocks_domain_migration() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x73);
+        let first_capability = runtime
+            .capabilities_mut(first)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let second_capability = runtime
+            .capabilities_mut(second)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let endpoint = Endpoint::new(object);
+        runtime
+            .connect_control_peers(
+                first,
+                second,
+                &endpoint,
+                first_capability,
+                second_capability,
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.detach_domain(first),
+            Err(TaskRuntimeError::ActiveControlPeers)
+        ));
+        assert!(runtime.context(first).is_ok());
+        assert!(runtime.context(second).is_ok());
+    }
+
+    #[test]
+    fn control_relation_requires_exact_endpoint_authority_before_mutation() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let first_capability = runtime
+            .capabilities_mut(first)
+            .unwrap()
+            .insert(ObjectId(0x74), Rights::SIGNAL)
+            .unwrap();
+        let wrong_capability = runtime
+            .capabilities_mut(second)
+            .unwrap()
+            .insert(ObjectId(0x75), Rights::SIGNAL)
+            .unwrap();
+        let endpoint = Endpoint::new(ObjectId(0x74));
+        assert_eq!(
+            runtime.connect_control_peers(
+                first,
+                second,
+                &endpoint,
+                first_capability,
+                wrong_capability,
+            ),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert!(runtime.detach_domain(first).is_ok());
+        assert!(runtime.detach_domain(second).is_ok());
     }
 
     #[test]

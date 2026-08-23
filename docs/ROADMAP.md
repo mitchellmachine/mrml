@@ -20,6 +20,15 @@ remain independently attributable.
 two-message inbox backpressure, attenuated capability transfer with rollback,
 generational revocation, shared-memory bindings, mapping revocation, fault
 retirement, service cleanup/restart policy, and signed two-service probes.
+Kernel-owned receive envelopes now retain exact sender and endpoint sequence,
+and bounded explicitly linked peers receive typed fault/exit results with
+scheduler wakeup. Cross-CPU peer migration remains fail-closed until ownership
+transfer for those relations is implemented.
+The host-resource table now supports capability-authorized multi-party sharing
+of one exact host extent across distinct VM mappings. Each added endpoint
+independently proves mapping authority and liveness, cannot amplify the source
+access, and must remain NX. Per-endpoint revocation reports when the final
+reference is gone without exposing the opaque host handle to a guest.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
