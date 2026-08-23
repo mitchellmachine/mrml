@@ -146,22 +146,22 @@ impl<const RANGES: usize> PlatformMmioManifest<RANGES> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct VerifiedPlatformMmio {
     requirement: PlatformMmioRequirement,
     virtual_start: VirtAddr,
 }
 
 impl VerifiedPlatformMmio {
-    pub const fn requirement(self) -> PlatformMmioRequirement {
+    pub const fn requirement(&self) -> PlatformMmioRequirement {
         self.requirement
     }
 
-    pub const fn virtual_start(self) -> VirtAddr {
+    pub const fn virtual_start(&self) -> VirtAddr {
         self.virtual_start
     }
 
-    pub const fn as_mut_ptr(self) -> *mut u8 {
+    pub const fn as_mut_ptr(&self) -> *mut u8 {
         self.virtual_start.get() as *mut u8
     }
 }
@@ -179,6 +179,23 @@ pub(crate) fn verified_vtd_for_test(
             purpose: PlatformMmioPurpose::VtdBootstrap { segment },
         },
         virtual_start: VirtAddr::new(0xffff_9000_0000_0000).unwrap(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn verified_vtd_mapping_for_test(
+    physical: PhysAddr,
+    pages: u64,
+    segment: u16,
+    virtual_start: VirtAddr,
+) -> VerifiedPlatformMmio {
+    VerifiedPlatformMmio {
+        requirement: PlatformMmioRequirement {
+            physical,
+            pages,
+            purpose: PlatformMmioPurpose::VtdBootstrap { segment },
+        },
+        virtual_start,
     }
 }
 

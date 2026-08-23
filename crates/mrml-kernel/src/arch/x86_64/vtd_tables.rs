@@ -1,8 +1,8 @@
 use crate::{DeviceAddress, PhysAddr};
 
 use super::{
-    CompleteVtdRoutes, PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation, VtdDmaSet,
-    VtdError, VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
+    CompleteVtdRoutes, NativeVtdMmio, PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation,
+    VtdDmaSet, VtdError, VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
 };
 
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -43,6 +43,64 @@ pub enum VtdSetBindingError {
         index: usize,
         error: VtdBindingError,
     },
+}
+
+/// A one-shot verified MMIO token coupled to the sole invalidator that may use
+/// its remapping-unit register mapping.
+pub struct VerifiedVtdUnit<R> {
+    verified: VerifiedPlatformMmio,
+    invalidator: VtdInvalidator<R>,
+}
+
+impl VerifiedVtdUnit<NativeVtdMmio> {
+    /// Constructs the native register adapter and consumes the mapping proof so
+    /// it cannot authorize a second aliasing adapter.
+    ///
+    /// # Safety
+    ///
+    /// The verified mapping must be uncached and uniquely owned for the
+    /// returned unit's lifetime. Firmware topology and active page tables must
+    /// remain stable while it is used.
+    pub unsafe fn from_native(
+        verified: VerifiedPlatformMmio,
+        poll_limit: u32,
+    ) -> Result<Self, VtdBindingError> {
+        if !matches!(
+            verified.requirement().purpose(),
+            PlatformMmioPurpose::VtdBootstrap { .. }
+        ) {
+            return Err(VtdBindingError::UnitSubstitution);
+        }
+        let bytes = usize::try_from(verified.requirement().bytes())
+            .map_err(|_| VtdBindingError::Unit(VtdError::InvalidRegisterLayout))?;
+        // SAFETY: inherited from this function's unique, uncached verified
+        // mapping contract. The checked byte count is the verified extent.
+        let registers = unsafe { NativeVtdMmio::new(verified.as_mut_ptr(), bytes) }
+            .map_err(VtdBindingError::Unit)?;
+        let invalidator =
+            VtdInvalidator::new(registers, poll_limit).map_err(VtdBindingError::Unit)?;
+        if verified.requirement().pages() < invalidator.register_pages() {
+            return Err(VtdBindingError::InsufficientRegisterMapping);
+        }
+        Ok(Self {
+            verified,
+            invalidator,
+        })
+    }
+}
+
+impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
+    #[cfg(test)]
+    fn for_test(verified: VerifiedPlatformMmio, invalidator: VtdInvalidator<R>) -> Self {
+        Self {
+            verified,
+            invalidator,
+        }
+    }
+
+    fn into_parts(self) -> (VerifiedPlatformMmio, VtdInvalidator<R>) {
+        (self.verified, self.invalidator)
+    }
 }
 
 /// Exclusive access to live legacy VT-d translation tables.
@@ -251,15 +309,13 @@ pub unsafe fn bind_routed_legacy_identity_leaf<'a, M: VtdTableMemory>(
 ///
 /// # Safety
 ///
-/// `invalidator` must have been constructed from the exact verified MMIO token
-/// supplied here, and `memory` must meet its unsafe table-access contract. The
-/// caller must retain exclusive ownership until the resulting adapter is
-/// destroyed.
+/// `memory` must meet its unsafe table-access contract, and the native mapping
+/// consumed by `unit` must remain uniquely owned and stable. The caller must
+/// retain exclusive ownership until the resulting adapter is destroyed.
 pub unsafe fn bind_routed_dma_isolation<'a, M, R>(
     memory: &'a mut M,
     route: VtdRequesterRoute,
-    verified_unit: VerifiedPlatformMmio,
-    mut invalidator: VtdInvalidator<R>,
+    unit: VerifiedVtdUnit<R>,
     physical: PhysAddr,
     expected_domain: u16,
 ) -> Result<VtdDmaIsolation<'a, R>, VtdBindingError>
@@ -267,6 +323,7 @@ where
     M: VtdTableMemory,
     R: VtdRegisterIo,
 {
+    let (verified_unit, mut invalidator) = unit.into_parts();
     let requirement = verified_unit.requirement();
     if requirement.physical() != route.register_base()
         || !matches!(
@@ -300,15 +357,15 @@ where
 ///
 /// # Safety
 ///
-/// Each invalidator must originate from its corresponding verified MMIO token,
-/// and each table-memory element must exclusively control that unit's pinned
-/// translation tables. No transition may use the returned set if topology
-/// changes without obtaining a new complete-route proof and rebuilding it.
+/// Each table-memory element must exclusively control its corresponding unit's
+/// pinned translation tables. Every native mapping consumed by `units` must
+/// remain uniquely owned and stable. No transition may use the returned set if
+/// topology changes without obtaining a new complete-route proof and rebuilding
+/// it.
 pub unsafe fn bind_routed_dma_set<'a, M, R, const UNITS: usize>(
     memories: &'a mut [M; UNITS],
     complete_routes: CompleteVtdRoutes<UNITS>,
-    verified_units: [VerifiedPlatformMmio; UNITS],
-    invalidators: [VtdInvalidator<R>; UNITS],
+    units: [VerifiedVtdUnit<R>; UNITS],
     physical: PhysAddr,
     expected_domains: [u16; UNITS],
 ) -> Result<VtdDmaSet<'a, R, UNITS>, VtdSetBindingError>
@@ -330,20 +387,17 @@ where
     }
 
     let mut set = VtdDmaSet::new(physical);
-    for (index, ((((memory, route), verified), invalidator), domain)) in memories
+    for (index, (((memory, route), unit), domain)) in memories
         .iter_mut()
         .zip(routes)
-        .zip(verified_units)
-        .zip(invalidators)
+        .zip(units)
         .zip(expected_domains)
         .enumerate()
     {
         // SAFETY: inherited from this function's per-index correspondence and
         // complete-topology contract.
-        let isolation = unsafe {
-            bind_routed_dma_isolation(memory, route, verified, invalidator, physical, domain)
-        }
-        .map_err(|error| VtdSetBindingError::Unit { index, error })?;
+        let isolation = unsafe { bind_routed_dma_isolation(memory, route, unit, physical, domain) }
+            .map_err(|error| VtdSetBindingError::Unit { index, error })?;
         // SAFETY: distinct DRHD bases were checked above and every isolation
         // maps the same physical granule by construction.
         unsafe { set.push(isolation) }
@@ -363,7 +417,8 @@ fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
 #[cfg(test)]
 mod tests {
     use super::super::DmaIsolation;
-    use super::super::platform_mmio::verified_vtd_for_test;
+    use super::super::VirtAddr;
+    use super::super::platform_mmio::{verified_vtd_for_test, verified_vtd_mapping_for_test};
     use super::*;
     use crate::GranuleHardwareOutcome;
 
@@ -499,6 +554,19 @@ mod tests {
         }
     }
 
+    fn verified_unit(
+        register_base: PhysAddr,
+        registers: UnitRegisters,
+    ) -> VerifiedVtdUnit<UnitRegisters> {
+        VerifiedVtdUnit::for_test(
+            verified_vtd_for_test(register_base, 1, requester().segment()),
+            VtdInvalidator::new(registers, 4).unwrap(),
+        )
+    }
+
+    #[repr(align(4096))]
+    struct RegisterPage([u64; 512]);
+
     #[test]
     fn binds_exact_requester_domain_and_identity_leaf() {
         let physical = PhysAddr::new(0x20_0000).unwrap();
@@ -552,15 +620,13 @@ mod tests {
         let physical = PhysAddr::new(0x20_0000).unwrap();
         let register_base = PhysAddr::new(0xfed9_0000).unwrap();
         let route = VtdRequesterRoute::for_test(requester(), register_base);
-        let verified = verified_vtd_for_test(register_base, 1, requester().segment());
-        let invalidator = VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap();
+        let unit = verified_unit(register_base, UnitRegisters::active(ROOT));
         let mut tables = Tables::identity(physical, 9);
 
         {
-            let mut isolation = unsafe {
-                bind_routed_dma_isolation(&mut tables, route, verified, invalidator, physical, 9)
-            }
-            .unwrap();
+            let mut isolation =
+                unsafe { bind_routed_dma_isolation(&mut tables, route, unit, physical, 9) }
+                    .unwrap();
             assert_eq!(
                 isolation.deny_and_invalidate(physical),
                 GranuleHardwareOutcome::Applied
@@ -570,31 +636,55 @@ mod tests {
     }
 
     #[test]
+    fn native_unit_consumes_verified_extent_and_rejects_short_mapping() {
+        let physical = PhysAddr::new(0xfed9_0000).unwrap();
+        let mut registers = RegisterPage([0; 512]);
+        registers.0[0x08 / 8] = 0x40 << 24;
+        registers.0[0x10 / 8] = 0x20 << 8;
+        let virtual_start = VirtAddr::new(registers.0.as_mut_ptr() as u64).unwrap();
+        let verified = verified_vtd_mapping_for_test(physical, 1, 0, virtual_start);
+        {
+            let unit = unsafe { VerifiedVtdUnit::from_native(verified, 4) }.unwrap();
+            let (verified, invalidator) = unit.into_parts();
+            assert_eq!(verified.requirement().physical(), physical);
+            assert_eq!(invalidator.register_pages(), 1);
+        }
+
+        // SAFETY: the aligned test page is still exclusively owned here; use
+        // a volatile store to model a hardware-visible capability change.
+        unsafe {
+            registers
+                .0
+                .as_mut_ptr()
+                .add(0x08 / 8)
+                .write_volatile((0x3ff << 24) | (0xff << 40));
+        }
+        let verified = verified_vtd_mapping_for_test(physical, 1, 0, virtual_start);
+        assert!(matches!(
+            unsafe { VerifiedVtdUnit::from_native(verified, 4) },
+            Err(VtdBindingError::InsufficientRegisterMapping)
+        ));
+    }
+
+    #[test]
     fn coherent_unit_binding_rejects_substitution_and_inactive_root() {
         let physical = PhysAddr::new(0x20_0000).unwrap();
         let register_base = PhysAddr::new(0xfed9_0000).unwrap();
         let route = VtdRequesterRoute::for_test(requester(), register_base);
-        let substituted = verified_vtd_for_test(
-            PhysAddr::new(0xfeda_0000).unwrap(),
-            1,
-            requester().segment(),
+        let substituted = VerifiedVtdUnit::for_test(
+            verified_vtd_for_test(
+                PhysAddr::new(0xfeda_0000).unwrap(),
+                1,
+                requester().segment(),
+            ),
+            VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
         );
         let mut tables = Tables::identity(physical, 9);
         assert!(matches!(
-            unsafe {
-                bind_routed_dma_isolation(
-                    &mut tables,
-                    route,
-                    substituted,
-                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
-                    physical,
-                    9,
-                )
-            },
+            unsafe { bind_routed_dma_isolation(&mut tables, route, substituted, physical, 9,) },
             Err(VtdBindingError::UnitSubstitution)
         ));
 
-        let verified = verified_vtd_for_test(register_base, 1, requester().segment());
         let mut inactive = UnitRegisters::active(ROOT);
         inactive.status &= !(1 << 30);
         assert!(matches!(
@@ -602,8 +692,7 @@ mod tests {
                 bind_routed_dma_isolation(
                     &mut tables,
                     route,
-                    verified,
-                    VtdInvalidator::new(inactive, 4).unwrap(),
+                    verified_unit(register_base, inactive),
                     physical,
                     9,
                 )
@@ -621,13 +710,9 @@ mod tests {
             VtdRequesterRoute::for_test(requester(), first_base),
             VtdRequesterRoute::for_test(requester(), second_base),
         ];
-        let verified = [
-            verified_vtd_for_test(first_base, 1, requester().segment()),
-            verified_vtd_for_test(second_base, 1, requester().segment()),
-        ];
-        let invalidators = [
-            VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
-            VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+        let units = [
+            verified_unit(first_base, UnitRegisters::active(ROOT)),
+            verified_unit(second_base, UnitRegisters::active(ROOT)),
         ];
         let mut tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
 
@@ -636,8 +721,7 @@ mod tests {
                 bind_routed_dma_set(
                     &mut tables,
                     CompleteVtdRoutes::for_test(routes),
-                    verified,
-                    invalidators,
+                    units,
                     physical,
                     [9, 9],
                 )
@@ -661,7 +745,6 @@ mod tests {
                 &mut [],
                 CompleteVtdRoutes::for_test([]),
                 [],
-                [],
                 physical,
                 [],
             )
@@ -670,16 +753,14 @@ mod tests {
 
         let register_base = PhysAddr::new(0xfed9_0000).unwrap();
         let route = VtdRequesterRoute::for_test(requester(), register_base);
-        let verified = verified_vtd_for_test(register_base, 1, requester().segment());
         let mut duplicate_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
         let duplicate = unsafe {
             bind_routed_dma_set(
                 &mut duplicate_tables,
                 CompleteVtdRoutes::for_test([route, route]),
-                [verified, verified],
                 [
-                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
-                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                    verified_unit(register_base, UnitRegisters::active(ROOT)),
+                    verified_unit(register_base, UnitRegisters::active(ROOT)),
                 ],
                 physical,
                 [9, 9],
@@ -688,6 +769,32 @@ mod tests {
         assert!(matches!(duplicate, Err(VtdSetBindingError::DuplicateUnit)));
 
         let second_base = PhysAddr::new(0xfeda_0000).unwrap();
+        let mut swapped_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+        let swapped = unsafe {
+            bind_routed_dma_set(
+                &mut swapped_tables,
+                CompleteVtdRoutes::for_test([
+                    route,
+                    VtdRequesterRoute::for_test(requester(), second_base),
+                ]),
+                [
+                    verified_unit(second_base, UnitRegisters::active(ROOT)),
+                    verified_unit(register_base, UnitRegisters::active(ROOT)),
+                ],
+                physical,
+                [9, 9],
+            )
+        };
+        assert!(matches!(
+            swapped,
+            Err(VtdSetBindingError::Unit {
+                index: 0,
+                error: VtdBindingError::UnitSubstitution
+            })
+        ));
+        assert_eq!(swapped_tables[0].level1[0] & 0x3, 0x3);
+        assert_eq!(swapped_tables[1].level1[0] & 0x3, 0x3);
+
         let mut partial_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
         let partial = unsafe {
             bind_routed_dma_set(
@@ -697,12 +804,8 @@ mod tests {
                     VtdRequesterRoute::for_test(requester(), second_base),
                 ]),
                 [
-                    verified,
-                    verified_vtd_for_test(second_base, 1, requester().segment()),
-                ],
-                [
-                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
-                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                    verified_unit(register_base, UnitRegisters::active(ROOT)),
+                    verified_unit(second_base, UnitRegisters::active(ROOT)),
                 ],
                 physical,
                 [9, 10],

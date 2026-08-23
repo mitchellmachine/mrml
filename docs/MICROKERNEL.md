@@ -350,9 +350,9 @@ through checked DMAR and live bridge state, rejects duplicate unit coverage, and
 proves every discovered DRHD appears exactly once. The all-unit builder accepts
 this proof instead of an unchecked route array. This does not prove topology
 cannot change afterward; hot-plug and ownership changes invalidate the proof and
-require serialized reconstruction. Collecting the corresponding native MMIO,
-invalidator, table-view, and domain arrays remains platform boot integration,
-not an inferred protection claim.
+require serialized reconstruction. Collecting the corresponding table-view and
+domain arrays remains platform boot integration, not an inferred protection
+claim.
 
 Boot binding now starts from a fixed-capacity platform-MMIO manifest derived
 only from the validated DMAR and MCFG copies. It requests one bootstrap page
@@ -364,7 +364,15 @@ the active page tables are checked page by page against the manifest: physical
 identity must be exact and every leaf must be supervisor-only, writable, and
 non-executable under the dedicated MMIO permission class. A returned mapping
 token therefore proves the current page-table state, not merely an intended
-address-space policy record. The initial DRHD page is deliberately described as
+address-space policy record. Verified tokens are deliberately non-copyable. A
+native VT-d constructor consumes one token into a coupled unit containing the
+sole volatile register adapter and its capability-derived invalidator, so later
+binding cannot substitute an independently constructed invalidator or authorize
+two adapters from the same proof. Construction rejects a capability-reported
+register extent larger than the verified mapping before returning the unit. The
+remaining unsafe boundary requires the mapping to be uncached, uniquely owned,
+and stable; active-PTE verification alone does not prove cache attributes or the
+absence of aliases. The initial DRHD page is deliberately described as
 bootstrap-only. CAP and ECAP are decoded into one shared `VtdRegisterLayout`
 used by both mapping and invalidation code, covering the fixed status registers,
 the reported IOTLB register, and the complete reported primary fault array.
@@ -402,9 +410,8 @@ pointer, then accepts only a nonzero, aligned legacy-mode RTADDR. That root is
 walked for the routed requester and coupled to the invalidator that controls the
 same unit. Tests exercise successful revoke-and-flush, MMIO-unit substitution,
 and an inactive root pointer. The unsafe boundary still requires boot code to
-construct the register interface from that exact verified token and preserve
-the proof-to-array ordering. Native boot object collection and execution on
-physical hardware remain unverified.
+preserve unique mapping ownership and the proof-to-array ordering. Native
+table/domain collection and execution on physical hardware remain unverified.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 
