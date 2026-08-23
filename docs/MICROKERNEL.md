@@ -343,8 +343,16 @@ It consumes one route, verified mapping, invalidator, exclusive table view, and
 expected domain per unit. If any binding fails, construction returns no usable
 set and no leaf has been mutated. Tests prove both-unit revocation and rejection
 of empty, duplicate, and wrong-domain bundles without partial leaf mutation.
-Collecting a demonstrably complete bundle from live topology remains a platform
-boot integration task, not an inferred protection claim.
+Checked topology can now issue the route component as an opaque complete-route
+proof. Issuance requires exactly as many requesters as parsed DRHD units, verifies
+that every requester currently exists in PCI configuration space, resolves each
+through checked DMAR and live bridge state, rejects duplicate unit coverage, and
+proves every discovered DRHD appears exactly once. The all-unit builder accepts
+this proof instead of an unchecked route array. This does not prove topology
+cannot change afterward; hot-plug and ownership changes invalidate the proof and
+require serialized reconstruction. Collecting the corresponding native MMIO,
+invalidator, table-view, and domain arrays remains platform boot integration,
+not an inferred protection claim.
 
 Boot binding now starts from a fixed-capacity platform-MMIO manifest derived
 only from the validated DMAR and MCFG copies. It requests one bootstrap page
@@ -394,9 +402,9 @@ pointer, then accepts only a nonzero, aligned legacy-mode RTADDR. That root is
 walked for the routed requester and coupled to the invalidator that controls the
 same unit. Tests exercise successful revoke-and-flush, MMIO-unit substitution,
 and an inactive root pointer. The unsafe boundary still requires boot code to
-construct the register interface from that exact verified token and prove the
-input arrays cover every relevant live route. Live-topology bundle collection
-and execution on physical hardware remain unverified.
+construct the register interface from that exact verified token and preserve
+the proof-to-array ordering. Native boot object collection and execution on
+physical hardware remain unverified.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 

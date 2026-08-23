@@ -1,8 +1,8 @@
 use crate::{DeviceAddress, PhysAddr};
 
 use super::{
-    PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation, VtdDmaSet, VtdError,
-    VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
+    CompleteVtdRoutes, PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation, VtdDmaSet,
+    VtdError, VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
 };
 
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -300,15 +300,13 @@ where
 ///
 /// # Safety
 ///
-/// The arrays must contain every distinct remapping unit through which DMA can
-/// reach `physical`, as established from checked firmware and live PCI
-/// topology. Each invalidator must originate from its corresponding verified
-/// MMIO token, and each table-memory element must exclusively control that
-/// unit's pinned translation tables. No transition may use the returned set if
-/// topology changes without rebuilding it.
+/// Each invalidator must originate from its corresponding verified MMIO token,
+/// and each table-memory element must exclusively control that unit's pinned
+/// translation tables. No transition may use the returned set if topology
+/// changes without obtaining a new complete-route proof and rebuilding it.
 pub unsafe fn bind_routed_dma_set<'a, M, R, const UNITS: usize>(
     memories: &'a mut [M; UNITS],
-    routes: [VtdRequesterRoute; UNITS],
+    complete_routes: CompleteVtdRoutes<UNITS>,
     verified_units: [VerifiedPlatformMmio; UNITS],
     invalidators: [VtdInvalidator<R>; UNITS],
     physical: PhysAddr,
@@ -318,6 +316,7 @@ where
     M: VtdTableMemory,
     R: VtdRegisterIo,
 {
+    let routes = complete_routes.into_routes();
     if UNITS == 0 {
         return Err(VtdSetBindingError::Empty);
     }
@@ -636,7 +635,7 @@ mod tests {
             let mut set = unsafe {
                 bind_routed_dma_set(
                     &mut tables,
-                    routes,
+                    CompleteVtdRoutes::for_test(routes),
                     verified,
                     invalidators,
                     physical,
@@ -658,7 +657,14 @@ mod tests {
     fn complete_set_binding_rejects_empty_duplicate_and_partial_sets() {
         let physical = PhysAddr::new(0x20_0000).unwrap();
         let empty = unsafe {
-            bind_routed_dma_set::<Tables, UnitRegisters, 0>(&mut [], [], [], [], physical, [])
+            bind_routed_dma_set::<Tables, UnitRegisters, 0>(
+                &mut [],
+                CompleteVtdRoutes::for_test([]),
+                [],
+                [],
+                physical,
+                [],
+            )
         };
         assert!(matches!(empty, Err(VtdSetBindingError::Empty)));
 
@@ -669,7 +675,7 @@ mod tests {
         let duplicate = unsafe {
             bind_routed_dma_set(
                 &mut duplicate_tables,
-                [route, route],
+                CompleteVtdRoutes::for_test([route, route]),
                 [verified, verified],
                 [
                     VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
@@ -686,7 +692,10 @@ mod tests {
         let partial = unsafe {
             bind_routed_dma_set(
                 &mut partial_tables,
-                [route, VtdRequesterRoute::for_test(requester(), second_base)],
+                CompleteVtdRoutes::for_test([
+                    route,
+                    VtdRequesterRoute::for_test(requester(), second_base),
+                ]),
                 [
                     verified,
                     verified_vtd_for_test(second_base, 1, requester().segment()),

@@ -128,6 +128,8 @@ pub enum DmarError {
     NotPciBridge,
     InvalidBusRange,
     NoRemappingUnit,
+    IncompleteUnitCoverage,
+    DuplicateUnitCoverage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -438,6 +440,26 @@ pub struct VtdRequesterRoute {
     register_base: PhysAddr,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompleteVtdRoutes<const UNITS: usize> {
+    routes: [VtdRequesterRoute; UNITS],
+}
+
+impl<const UNITS: usize> CompleteVtdRoutes<UNITS> {
+    pub const fn routes(&self) -> &[VtdRequesterRoute; UNITS] {
+        &self.routes
+    }
+
+    pub const fn into_routes(self) -> [VtdRequesterRoute; UNITS] {
+        self.routes
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(routes: [VtdRequesterRoute; UNITS]) -> Self {
+        Self { routes }
+    }
+}
+
 impl VtdRequesterRoute {
     pub const fn requester(self) -> DeviceAddress {
         self.requester
@@ -610,11 +632,53 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
         requester: DeviceAddress,
         config: &mut C,
     ) -> Result<VtdRequesterRoute, DmarError> {
+        let identity = config
+            .read_u32(requester, 0)
+            .ok_or(DmarError::MissingDevice)?;
+        if identity == u32::MAX || identity as u16 == u16::MAX {
+            return Err(DmarError::MissingDevice);
+        }
         let unit = self.unit_for_requester(requester, config)?;
         Ok(VtdRequesterRoute {
             requester,
             register_base: unit.register_base,
         })
+    }
+
+    /// Resolves exactly one live requester through every discovered DRHD and
+    /// returns a proof that the resulting route array covers the topology once.
+    pub fn complete_routes<C: PciConfigSpace, const ROUTES: usize>(
+        &self,
+        requesters: [DeviceAddress; ROUTES],
+        config: &mut C,
+    ) -> Result<CompleteVtdRoutes<ROUTES>, DmarError> {
+        if ROUTES == 0 || ROUTES != self.unit_count {
+            return Err(DmarError::IncompleteUnitCoverage);
+        }
+        let first = self.route_for_requester(requesters[0], config)?;
+        let mut routes = [first; ROUTES];
+        for (index, requester) in requesters.into_iter().enumerate() {
+            let route = if index == 0 {
+                first
+            } else {
+                self.route_for_requester(requester, config)?
+            };
+            if routes[..index]
+                .iter()
+                .any(|existing| existing.register_base == route.register_base)
+            {
+                return Err(DmarError::DuplicateUnitCoverage);
+            }
+            routes[index] = route;
+        }
+        if self.units().any(|unit| {
+            !routes
+                .iter()
+                .any(|route| route.register_base == unit.register_base)
+        }) {
+            return Err(DmarError::IncompleteUnitCoverage);
+        }
+        Ok(CompleteVtdRoutes { routes })
     }
 
     fn parse_drhd(&mut self, bytes: &[u8]) -> Result<(), DmarError> {
@@ -1256,8 +1320,11 @@ mod tests {
         fn read_u32(&mut self, address: DeviceAddress, offset: u16) -> Option<u32> {
             let bridge = DeviceAddress::new(0, 2, 3, 0).unwrap();
             let endpoint = DeviceAddress::new(0, 5, 1, 0).unwrap();
+            let fallback = DeviceAddress::new(0, 7, 2, 0).unwrap();
             match (address, offset) {
-                (address, 0) if address == bridge || address == endpoint => Some(0x1234_8086),
+                (address, 0) if address == bridge || address == endpoint || address == fallback => {
+                    Some(0x1234_8086)
+                }
                 (address, 0x0c) if address == bridge => Some(self.bridge_header),
                 (address, 0x18) if address == bridge => Some(2 | (5 << 8) | (5 << 16)),
                 _ => None,
@@ -1414,6 +1481,43 @@ mod tests {
                 .register_base
                 .get(),
             0xfeda_0000
+        );
+    }
+
+    #[test]
+    fn complete_routes_cover_every_live_unit_exactly_once() {
+        let topology = DmarTopology::<2, 2>::parse(&routing_dmar()).unwrap();
+        let explicit = DeviceAddress::new(0, 5, 1, 0).unwrap();
+        let fallback = DeviceAddress::new(0, 7, 2, 0).unwrap();
+        let mut config = Config {
+            bridge_header: 1 << 16,
+        };
+        let complete = topology
+            .complete_routes([explicit, fallback], &mut config)
+            .unwrap();
+        assert_eq!(complete.routes()[0].register_base().get(), 0xfed9_0000);
+        assert_eq!(complete.routes()[1].register_base().get(), 0xfeda_0000);
+
+        assert_eq!(
+            topology.complete_routes([explicit], &mut config),
+            Err(DmarError::IncompleteUnitCoverage)
+        );
+        assert_eq!(
+            topology.complete_routes([fallback, fallback], &mut config),
+            Err(DmarError::DuplicateUnitCoverage)
+        );
+    }
+
+    #[test]
+    fn route_proof_rejects_nonexistent_requester() {
+        let topology = DmarTopology::<2, 2>::parse(&routing_dmar()).unwrap();
+        let missing = DeviceAddress::new(0, 9, 0, 0).unwrap();
+        let mut config = Config {
+            bridge_header: 1 << 16,
+        };
+        assert_eq!(
+            topology.route_for_requester(missing, &mut config),
+            Err(DmarError::MissingDevice)
         );
     }
 
