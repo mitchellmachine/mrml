@@ -6934,27 +6934,31 @@ impl<
             .map_err(|error| CodegenError {
                 kind: CodegenErrorKind::Expression(error.kind),
                 span: translate_span(body_start + loop_statement.condition_span.start, error.span),
-            })?
-            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-        let condition_type = runtime_expression_type_with_locals(
-            self.function,
-            self.resolver,
-            &self.locals[..self.saved_locals],
-            &condition,
-            condition.root(),
-            0,
-        )
-        .map_err(|kind| self.error(kind))?;
-        if condition_type != RuntimeExpressionType::Bool {
-            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            })?;
+        if let Some(condition) = condition.as_ref() {
+            let condition_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                condition,
+                condition.root(),
+                0,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if condition_type != RuntimeExpressionType::Bool {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
         }
         let loop_start = self.length;
-        self.emit_expression(&condition, condition.root(), 0)?;
-        self.emit(&[0x48, 0x85, 0xc0])?;
         let mut exit_patches =
             [None; 1 + crate::MAX_LOOP_OPERATIONS * (crate::MAX_CONDITIONAL_LOOP_ELSE_ARMS + 1)];
-        exit_patches[0] = Some(self.emit_forward_branch(0x84)?);
-        let mut exit_count = 1usize;
+        let mut exit_count = 0usize;
+        if let Some(condition) = condition.as_ref() {
+            self.emit_expression(condition, condition.root(), 0)?;
+            self.emit(&[0x48, 0x85, 0xc0])?;
+            exit_patches[exit_count] = Some(self.emit_forward_branch(0x84)?);
+            exit_count += 1;
+        }
         let local_checkpoint = self.saved_locals;
         let mut terminated = false;
         for operation in loop_statement.operations().iter().flatten() {
@@ -7062,9 +7066,7 @@ impl<
                         &mut exit_count,
                     )?;
                 }
-                crate::LoopOperation::NestedUnitLoop => {
-                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                }
+                crate::LoopOperation::NestedUnitLoop => {}
             }
         }
         if !terminated {
@@ -7241,9 +7243,6 @@ impl<
         outer_exit_patches: &mut [Option<usize>],
         outer_exit_count: &mut usize,
     ) -> Result<(), CodegenError> {
-        if block.entry_condition.is_none() {
-            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-        }
         let nested_checkpoint = self.saved_locals;
         let nested_start = self.length;
         let entry_exit = if let Some(condition) = block.entry_condition {

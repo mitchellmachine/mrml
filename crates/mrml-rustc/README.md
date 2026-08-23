@@ -2613,8 +2613,13 @@ control removes only inner iteration locals, a labeled outer control also
 removes the outer iteration frame, and a nested return removes the complete
 callee frame before joining caller execution. Inner and outer `break` and
 `continue`, zero-entry inner loops, and normal inner fallthrough are supported;
-unconditional nested loops and nesting beyond this parser representation still
-fail closed.
+nesting beyond this parser representation still fails closed.
+Statement-position unconditional `loop` bodies use the same bounded outer and
+nested representations. Explicit and conditional break, continue, and return
+edges retain their existing cleanup targets; a body without an exit emits a
+real backedge, so an unreachable later tail is not exposed to the caller.
+The parser does not yet accept a `loop` used directly as the function's tail
+expression.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2622,8 +2627,8 @@ skipping the remaining body, while a fallthrough tail performs the same cleanup
 once on its normal edge.
 Calls may nest to eight levels and are inlined into the selected exported
 function, so the object still contains one symbol and no call relocations.
-Forward calls, caller-local capture, unsafe or foreign-ABI callees,
-unconditional loops, deeper loop nesting, aggregates, references, and recursion
+Forward calls, caller-local capture, unsafe or foreign-ABI callees, tail-position
+loop expressions, deeper loop nesting, aggregates, references, and recursion
 fail closed. An original nested
 statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
 object. A separate multi-return probe produced a 334-byte COFF object and a
@@ -2645,6 +2650,12 @@ object and a 1208-byte ELF64 object; pinned-nightly callers matched an
 independent Rust reference across 128 combinations of loop bounds and inner
 continue, inner break, labeled outer continue, labeled outer break, nested
 return, and normal-completion choices on both hosts.
+A terminating unconditional-loop probe produced a 588-byte COFF object and a
+984-byte ELF64 object. Pinned-nightly callers matched an independent Rust
+reference across 26 combinations of bounds and nested-return selection,
+exercising unconditional outer and inner backedges, inner continue and break,
+labeled outer break, normal tail composition, and a nested early return on both
+hosts. A separate emission test retains an actually diverging empty backedge.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

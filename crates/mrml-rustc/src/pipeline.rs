@@ -419,17 +419,9 @@ mod tests {
         assert!(compile(nested_loop, "answer", ObjectFormat::Elf64).is_ok());
 
         let nested_unit_loop = "fn spin(value: u64) -> u64 { while value > 0 { loop {} } value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
-        let error = compile(nested_unit_loop, "answer", ObjectFormat::Elf64).unwrap_err();
-        assert_eq!(
-            error.kind,
-            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
-        );
+        assert!(compile(nested_unit_loop, "answer", ObjectFormat::Elf64).is_ok());
 
-        let unconditional_loop = "fn spin(value: u64) -> u64 { loop {} } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
-        let error = compile(unconditional_loop, "answer", ObjectFormat::Elf64).unwrap_err();
-        assert_eq!(
-            error.kind,
-            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
-        );
+        let unconditional_loop = "fn spin(value: u64) -> u64 { loop {} 0 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
+        assert!(compile(unconditional_loop, "answer", ObjectFormat::Elf64).is_ok());
     }
 }
