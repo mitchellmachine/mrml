@@ -503,3 +503,19 @@ optimization, device protocol, codec, or cryptographic construction.
 
 Patent review: `NOT_TRIGGERED` — conventional capability RPC and hosted launch
 integration.
+
+## 2026-08-23 — signed CPL3 configuration commit dispatch
+
+MRML source: `crates/mrml-config`, the signed kernel and service images, and the
+WHP/KVM hosted launch paths.
+
+The signed client encodes a conventional fixed-record one-update transaction,
+transfers separate root and setting capabilities through the existing bounded
+IPC mechanism, and the service performs ordinary exact-object authorization and
+optimistic revision validation before an atomic in-memory update. The hosted
+lifecycle proof repeats the operation after restoring a fresh volatile image.
+This introduces no novel algorithm, ABI optimization, device protocol, codec,
+or cryptographic construction.
+
+Patent review: `NOT_TRIGGERED` — conventional capability RPC and bounded
+transaction integration.

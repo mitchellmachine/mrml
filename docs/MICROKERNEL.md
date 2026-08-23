@@ -2617,8 +2617,8 @@ from trusted state rather than request bytes, and successful restart still
 passes exact CONTROL, completed cleanup, backoff, restart-limit, and fresh-task
 gates. Windows gnullvm tests cover eleven configuration/protocol/dispatch cases
 and the kernel suite covers authorized introspection. This is **PARTIALLY
-IMPLEMENTED** Phase 2 foundation: a read now runs through the signed CPL3
-service image, while signed commit execution and schema admission and native-
+IMPLEMENTED** Phase 2 foundation: read and atomic commit dispatch now run
+through the signed CPL3 service image, while signed schema admission and native-
 storage persistence/export remain incomplete.
 
 The next boundary layer now decodes buffered send and receive operations without
@@ -2656,13 +2656,17 @@ generation, rights, and object checks and returns only success or rejection.
 Every unused register and every result register is canonicalized so rejection
 does not disclose which check failed.
 
-The signed sender encodes a canonical 48-byte read request with zero authority
-placeholders and transfers one source capability attenuated to READ. The signed
-receiver obtains the derived opaque token in its buffered output, invokes the
-real `mrml-config` envelope decoder and read dispatcher, validates the handle
-through the kernel operation, and sends the canonical 112-byte unset-value
-response back to the sender. The sender independently decodes and checks that
-response before exiting or entering the generation-2 lifecycle proof. Pending
+The signed sender now encodes a canonical one-update commit request with zero
+authority placeholders and transfers configuration-root CONTROL and setting
+WRITE as two independently attenuated descriptors. The signed receiver obtains
+only the derived opaque tokens, invokes the real `mrml-config` envelope decoder
+and commit dispatcher, and validates both exact objects through separate kernel
+operations before the bounded transaction changes state. It checks the atomic
+revision-1 result and sends the canonical 112-byte response back to the sender,
+which independently decodes and checks it before exiting or entering the
+generation-2 lifecycle proof. The service-probe runtime allows four bounded
+capabilities per task so the endpoint plus both transaction authorities fit;
+derivation remains atomic and fail-closed. Pending
 buffered receives are a two-slot task-keyed table rather than one global value,
 so the client and service can block simultaneously without one overwriting the
 other. Sender exit still transitively revokes its derived authority.
@@ -2675,14 +2679,15 @@ revocation. Page-table frames remain supervisor-only self-mapped for active
 walking. This is a hosted launch contract, not authenticated evidence against
 the host.
 
-Fresh one-time Lamport-signed runs on 2026-08-23 completed the read, response,
-cleanup, restart, second-generation fault, derived-authority revocation, and
-restart-budget proof on both backends. Nested KVM reported
-`verify=23461us prepare=2425us execute=1183us total=51758us`; WHP reported
-`verify=18754us prepare=3969us execute=744us total=27495us`. These are hosted
-controlled probes, not physical-hardware, host-resistant isolation, or bare-
-metal evidence. Signed commit and supervision requests have not yet executed
-through this CPL3 path.
+Fresh one-time Lamport-signed runs on 2026-08-23 completed commit, response,
+cleanup, restart, a second commit from the replacement's fresh volatile state,
+derived-authority revocation, and the restart-budget proof on both backends.
+Nested KVM reported
+`verify=18150us prepare=2544us execute=1094us total=22931us`; WHP reported
+`verify=18493us prepare=3940us execute=752us total=26611us`. These are hosted
+controlled probes, not physical-hardware, host-resistant isolation, persistent
+configuration, or bare-metal evidence. Signed schema-admission and supervision
+requests have not yet executed through this CPL3 path.
 
 Focused verification after the live integration used:
 

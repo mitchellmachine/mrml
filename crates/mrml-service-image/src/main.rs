@@ -5,9 +5,10 @@ use core::arch::{asm, global_asm};
 
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_config::{
-    CONFIG_REQUEST_HEADER_BYTES, CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError,
-    ConfigurationResponse, ConfigurationService, ResponseStatus, SettingId, SettingSchema,
-    dispatch_configuration_envelope, encode_read_message_request,
+    CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError, ConfigTransaction, ConfigUpdate,
+    ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
+    ResponseStatus, SettingId, SettingSchema, dispatch_configuration_envelope,
+    encode_commit_message_request,
 };
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
@@ -27,6 +28,7 @@ global_asm!(
         efi_main:
             mov rdi, r13
             mov rsi, r14
+            mov rdx, r12
             call mrml_configuration_receiver
             ud2
 
@@ -38,7 +40,8 @@ global_asm!(
             mov rdi, r13
             mov rsi, r14
             mov rdx, r15
-            mov rcx, r12
+            mov rcx, rbx
+            mov r8, r12
             call mrml_configuration_sender
             ud2
     "#
@@ -86,7 +89,11 @@ impl CapabilityAuthorizer for KernelAuthorizer {
 
 #[cfg(not(feature = "preemption-probe"))]
 #[unsafe(no_mangle)]
-unsafe extern "sysv64" fn mrml_configuration_receiver(endpoint: u64, sender: u64) -> ! {
+unsafe extern "sysv64" fn mrml_configuration_receiver(
+    endpoint: u64,
+    sender: u64,
+    generation: u64,
+) -> ! {
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
     if unsafe { (*configuration).is_none() } {
@@ -107,6 +114,12 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(endpoint: u64, sender: u64
         *slot = Capability::from_token(token);
     }
     let mut response = [0u8; CONFIG_RESPONSE_BYTES];
+    let prior_revision = unsafe {
+        (*configuration)
+            .as_ref()
+            .unwrap_or_else(|| halt())
+            .revision()
+    };
     dispatch_configuration_envelope(
         unsafe { (*configuration).as_mut().unwrap_or_else(|| halt()) },
         &KernelAuthorizer,
@@ -116,10 +129,11 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(endpoint: u64, sender: u64
     )
     .unwrap_or_else(|_| halt());
     let decoded = ConfigurationResponse::decode(&response).unwrap_or_else(|_| halt());
-    if decoded.request_id != 1
+    let expected_revision = prior_revision.checked_add(1).unwrap_or_else(|| halt());
+    if decoded.request_id != generation
         || decoded.status != ResponseStatus::Ok
-        || decoded.revision != 0
-        || decoded.setting != Some(setting)
+        || decoded.revision != expected_revision
+        || decoded.setting.is_some()
         || decoded.value.is_some()
     {
         halt();
@@ -130,12 +144,12 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(endpoint: u64, sender: u64
 }
 
 #[cfg(not(feature = "preemption-probe"))]
-unsafe fn verify_response(response: &[u8; CONFIG_RESPONSE_BYTES]) {
+unsafe fn verify_response(response: &[u8; CONFIG_RESPONSE_BYTES], generation: u64) {
     let decoded = ConfigurationResponse::decode(response).unwrap_or_else(|_| halt());
-    if decoded.request_id != 1
+    if decoded.request_id != generation
         || decoded.status != ResponseStatus::Ok
-        || decoded.revision != 0
-        || decoded.setting != Some(SettingId::new(1).unwrap_or_else(|_| halt()))
+        || decoded.revision != 1
+        || decoded.setting.is_some()
         || decoded.value.is_some()
     {
         halt();
@@ -168,25 +182,33 @@ unsafe fn yield_now() {
 unsafe extern "sysv64" fn mrml_configuration_sender(
     endpoint: u64,
     receiver: u64,
+    root_capability: u64,
     setting_capability: u64,
     generation: u64,
 ) -> ! {
-    let mut request = [0u8; CONFIG_REQUEST_HEADER_BYTES];
-    encode_read_message_request(
-        1,
-        SettingId::new(1).unwrap_or_else(|_| halt()),
-        &mut request,
-    )
-    .unwrap_or_else(|_| halt());
-    let descriptor = capability_descriptor(setting_capability, Rights::READ);
-    unsafe { send_buffer(endpoint, receiver, &request, &descriptor) };
+    let mut transaction = ConfigTransaction::<1>::new(0);
+    transaction
+        .push(ConfigUpdate::new(
+            SettingId::new(1).unwrap_or_else(|_| halt()),
+            Capability::from_token(0),
+            ConfigValue::boolean(generation == 1),
+        ))
+        .unwrap_or_else(|_| halt());
+    let mut request = [0u8; MAX_CONFIG_REQUEST_BYTES];
+    let request_length = encode_commit_message_request(generation, &transaction, &mut request)
+        .unwrap_or_else(|_| halt());
+    let descriptors = capability_descriptors(
+        (root_capability, Rights::CONTROL),
+        (setting_capability, Rights::WRITE),
+    );
+    unsafe { send_buffer(endpoint, receiver, &request[..request_length], &descriptors) };
     let mut response = [0u8; CONFIG_RESPONSE_BYTES];
     let mut no_capabilities = [0u64; 0];
     let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
     if length != CONFIG_RESPONSE_BYTES || count != 0 {
         halt();
     }
-    unsafe { verify_response(&response) };
+    unsafe { verify_response(&response, generation) };
     if generation == 2 {
         unsafe { receive_buffer(&mut response, &mut no_capabilities) };
         halt();
@@ -195,11 +217,14 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
 }
 
 #[cfg(not(feature = "preemption-probe"))]
-fn capability_descriptor(capability: u64, rights: Rights) -> [u8; 16] {
-    let mut descriptor = [0u8; 16];
-    descriptor[..8].copy_from_slice(&capability.to_le_bytes());
-    descriptor[8..10].copy_from_slice(&rights.bits().to_le_bytes());
-    descriptor
+fn capability_descriptors(first: (u64, Rights), second: (u64, Rights)) -> [u8; 32] {
+    let mut descriptors = [0u8; 32];
+    for (index, (capability, rights)) in [first, second].into_iter().enumerate() {
+        let start = index * 16;
+        descriptors[start..start + 8].copy_from_slice(&capability.to_le_bytes());
+        descriptors[start + 8..start + 10].copy_from_slice(&rights.bits().to_le_bytes());
+    }
+    descriptors
 }
 
 #[cfg(not(feature = "preemption-probe"))]

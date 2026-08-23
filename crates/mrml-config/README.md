@@ -21,9 +21,12 @@ Implemented boundaries:
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The adapters are
-simulation-tested through the kernel's real capability-transfer path. A real
-read dispatcher now also runs in the signed CPL3 image under WHP and KVM: it
-receives a canonical 48-byte request and opaque derived READ handle, validates
-exact authority through a detail-free kernel syscall, and returns a canonical
-112-byte response. Signed commit execution and schema admission remain next,
-followed by persistent export/import and native-storage recovery.
+simulation-tested through the kernel's real capability-transfer path. Real read
+and commit dispatch now also run in the signed CPL3 image under WHP and KVM. The
+commit client sends a canonical one-update request with zero authority fields
+and independently delegates root CONTROL and setting WRITE. The service accepts
+only the two derived opaque handles, validates each exact object through the
+detail-free kernel syscall, commits revision 1 atomically, and returns a
+canonical 112-byte response. The supervised replacement repeats the commit from
+fresh volatile state; persistence is not implied. Signed schema admission
+remains next, followed by persistent export/import and native-storage recovery.
