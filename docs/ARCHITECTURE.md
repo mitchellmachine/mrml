@@ -9,7 +9,9 @@ are normative in [SECURITY.md](SECURITY.md); dependency order is in
 [COMPILER.md](COMPILER.md). The normative cross-cutting engineering and
 complexity rules are in
 [ENGINEERING_CONSTITUTION.md](ENGINEERING_CONSTITUTION.md); historical
-inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy.
+inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy. Relevant
+predecessors and deliberately bounded comparison claims are recorded in
+[HISTORY_AND_PRIOR_ART.md](HISTORY_AND_PRIOR_ART.md).
 
 ## Status vocabulary
 

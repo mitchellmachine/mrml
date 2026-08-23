@@ -43,6 +43,8 @@ The durable OS direction is split by purpose: [architecture](docs/ARCHITECTURE.m
 [context-loss recovery](docs/RECOVERY.md). The
 [Engineering Constitution](docs/ENGINEERING_CONSTITUTION.md) is normative for
 complexity, authority, dependencies, compatibility, and major design changes;
+[history and prior art](docs/HISTORY_AND_PRIOR_ART.md) records predecessors and
+carefully bounded comparison claims;
 [EULOGY.md](EULOGY.md) records historical inspiration without defining
 architecture. `docs/MICROKERNEL.md` remains the
 detailed implementation and evidence ledger. Architecture goals in those files
