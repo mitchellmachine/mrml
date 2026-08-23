@@ -2820,6 +2820,25 @@ bottom-type propagation for inlined safe Rust helpers, not a public never ABI,
 never parameters, arbitrary control-flow divergence analysis, or general
 never-type support.
 
+Assignment places now have a bounded source-independent parser representation:
+the base binding is stored once with either no projection or one dereference,
+index, or numeric tuple-field projection. Index expressions retain normalized
+text and an exact body-relative span without later bracket searches. Numeric
+tuple fields are parsed once, while non-numeric and suffixed tuple assignment
+fields fail closed after the parser confirms an assignment operator; method-call
+expressions are not misclassified as assignments. This is a prerequisite for
+typed place analysis only. Stable local/place IDs, arbitrary projection lists,
+explicit read/write/move/borrow accesses, CFG blocks, loans, regions, and a
+borrow checker remain unimplemented.
+
+The structured-place milestone passed all 562 compiler and driver tests on
+Windows gnullvm and all 562 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Verification temporarily used the last
+valid edition-2024 manifest value because an unrelated uncommitted root-only
+`edition = "future"` experiment cannot be loaded by current Cargo without
+per-package unstable-edition opt-ins; the unrelated manifest edit was restored
+after the gates and is not part of this compiler milestone.
+
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
 Windows development host and 0.005 seconds under Arch Linux WSL2. These are

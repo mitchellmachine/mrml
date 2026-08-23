@@ -12307,7 +12307,7 @@ impl<
         assignment: &crate::Assignment<'_>,
         body_start: usize,
     ) -> Result<(), CodegenError> {
-        if assignment.dereference {
+        if assignment.dereferences() {
             return self
                 .emit_dereference_assignment::<MAX_EXPRESSION_NODES>(assignment, body_start);
         }

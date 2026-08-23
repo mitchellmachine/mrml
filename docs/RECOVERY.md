@@ -121,6 +121,22 @@ substitute whichever nightly is installed. If advancing the oracle, retain the
 old record, run both generations, classify every delta, change semantics only
 deliberately, and retain original regression probes.
 
+Current typed-place recovery boundary: parsed assignments store their base
+binding separately from an explicit dereference, index, or numeric tuple-field
+projection. Do not regress this to target-string splitting in semantics or
+code generation. Index text is trimmed once with its exact body-relative span;
+non-numeric tuple assignment fields fail with `ExpectedAssignmentTarget` only
+after an assignment operator is recognized, so ordinary method-call expressions
+remain parseable. The next dependency is stable bounded local/place identity
+and projection lists in a typed body IR, followed by explicit access kinds and
+CFG edges; move/loan/region claims remain unimplemented.
+
+Forward-looking compiler policy does not make Cargo's experimental
+`edition = "future"` a clean-install default. The recoverable baseline remains
+edition 2024 until a pinned toolchain and complete per-package migration are
+committed together. A root-only switch leaves current Cargo unable to parse the
+workspace because inheriting packages require their own unstable-edition opt-in.
+
 ## 4. Select the next work
 
 Compare the current source and tests with the first incomplete security gate in

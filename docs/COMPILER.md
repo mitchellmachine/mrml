@@ -24,6 +24,14 @@ Observable language semantics are the compatibility target. Stable MRML/native
 boundaries remain explicit and versioned. Supporting modern Rust syntax does not
 make rustc's unstable native ABI the MRML application ABI.
 
+“Forward-looking” describes the semantic and roadmap direction; it is not an
+instruction to replace the workspace manifest with Cargo's experimental
+`edition = "future"` value. Keep the workspace on edition 2024 until a newer
+named edition is intentionally adopted with a pinned toolchain, complete
+workspace migration, and recorded oracle delta. An experimental edition that
+requires per-package Cargo feature opt-ins is not a usable clean-install
+baseline.
+
 ## Reproducible future-Rust oracles
 
 The bootstrap and upgrade chain is:
@@ -132,9 +140,13 @@ implementation accidents as MRML language semantics.
 
 The prerequisite refactor is a bounded typed body representation with stable
 local/place IDs, projection lists, explicit reads/writes/moves/borrows, and basic
-blocks/edges. Today, assignment targets retain source substrings and several
-runtime typing/emission paths rediscover type and place information recursively.
-That is adequate for the bootstrap subset but not a sound ownership foundation.
+blocks/edges. Assignment targets now retain a source-independent base binding
+plus one explicit direct, dereference, index, or numeric tuple-field projection;
+index source and spans are captured once, and ambiguous non-numeric tuple
+assignment projections fail closed. Runtime typing/emission still rediscovers
+local identity and type information and there is not yet a projection list,
+move path, loan, stable local ID, or CFG. The structured parser representation
+is therefore the first prerequisite, not a claim of ownership checking.
 
 ## Modern trait-solver roadmap
 

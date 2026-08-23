@@ -382,3 +382,16 @@ Verification used independent 398-byte COFF and 792-byte ELF64 objects across
 Windows and Arch Linux callers.
 
 Patent review: `NOT_TRIGGERED` — ordinary aggregate-place assignment.
+
+## 2026-08-23 — structured bounded assignment places
+
+MRML source: `crates/mrml-rustc/src/parser.rs` and
+`crates/mrml-rustc/src/codegen.rs`.
+
+Assignment targets now retain a base binding and an explicit bounded direct,
+dereference, index, or numeric tuple-field projection instead of repeatedly
+splitting the original target text. This is conventional compiler parsing and
+place representation; it introduces no novel algorithm, ABI, protocol,
+cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler place representation.

@@ -125,10 +125,25 @@ impl AssignmentOperator {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssignmentProjection<'source> {
+    Dereference {
+        span: Span,
+    },
+    Index {
+        expression: &'source str,
+        span: Span,
+    },
+    TupleField {
+        field: usize,
+        span: Span,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Assignment<'source> {
     pub name: &'source str,
     pub name_span: Span,
-    pub dereference: bool,
+    pub projection: Option<AssignmentProjection<'source>>,
     pub operator: AssignmentOperator,
     pub value: &'source str,
     pub value_span: Span,
@@ -538,39 +553,36 @@ impl<'source> WhileLoop<'source> {
 }
 
 impl<'source> Assignment<'source> {
-    pub fn binding_name(&self) -> &'source str {
-        let name = self.name.trim_start_matches('*').trim_start();
-        let end = [name.find('['), name.find('.')]
-            .into_iter()
-            .flatten()
-            .min()
-            .unwrap_or(name.len());
-        name[..end].trim()
-    }
-
-    pub fn index(&self) -> Option<&'source str> {
+    pub const fn binding_name(&self) -> &'source str {
         self.name
-            .split_once('[')
-            .and_then(|(_, rest)| rest.rsplit_once(']'))
-            .map(|(index, _)| index.trim())
     }
 
-    pub fn tuple_field(&self) -> Option<usize> {
-        let (_, field) = self.name.split_once('.')?;
-        field.trim().parse().ok()
+    pub const fn dereferences(&self) -> bool {
+        matches!(
+            self.projection,
+            Some(AssignmentProjection::Dereference { .. })
+        )
     }
 
-    pub fn index_span(&self) -> Option<Span> {
-        let open = self.name.find('[')?;
-        let close = self.name.rfind(']')?;
-        let inner = &self.name[open + 1..close];
-        let trimmed = inner.trim();
-        let leading = inner.len() - inner.trim_start().len();
-        let start = self.name_span.start + open + 1 + leading;
-        Some(Span {
-            start,
-            end: start + trimmed.len(),
-        })
+    pub const fn index(&self) -> Option<&'source str> {
+        match self.projection {
+            Some(AssignmentProjection::Index { expression, .. }) => Some(expression),
+            _ => None,
+        }
+    }
+
+    pub const fn tuple_field(&self) -> Option<usize> {
+        match self.projection {
+            Some(AssignmentProjection::TupleField { field, .. }) => Some(field),
+            _ => None,
+        }
+    }
+
+    pub const fn index_span(&self) -> Option<Span> {
+        match self.projection {
+            Some(AssignmentProjection::Index { span, .. }) => Some(span),
+            _ => None,
+        }
     }
 
     pub fn parse_index<const MAX_NODES: usize>(
@@ -771,6 +783,7 @@ pub enum ParseErrorKind {
     UnsupportedAbi,
     ExpectedAttributeDelimiter,
     ExpectedIdentifier,
+    ExpectedAssignmentTarget,
     ExpectedParameterSeparator,
     ExpectedType,
     ExpectedEquals,
@@ -1014,13 +1027,27 @@ impl<'source> BodyParser<'source> {
             }
             (first, false)
         };
-        let target_end = probe.assignment_target_end(name.span.end)?;
+        let (projection, target_end, invalid_projection) = if dereference {
+            (
+                Some(AssignmentProjection::Dereference { span: first.span }),
+                name.span.end,
+                None,
+            )
+        } else {
+            probe.assignment_projection(name.span.end)?
+        };
         let Some(operator_token) = probe.peek()? else {
             return Ok(false);
         };
         let Some(operator) = AssignmentOperator::from_text(operator_token.text) else {
             return Ok(false);
         };
+        if let Some(span) = invalid_projection {
+            return Err(ParseError {
+                kind: ParseErrorKind::ExpectedAssignmentTarget,
+                span,
+            });
+        }
         probe.take()?;
         if body.assignment_count == MAX_LOCALS {
             return Err(probe.error(ParseErrorKind::TooManyLocals, Some(name)));
@@ -1031,12 +1058,12 @@ impl<'source> BodyParser<'source> {
             Err(error) => return Err(error),
         };
         let assignment = Assignment {
-            name: &self.source[first.span.start..target_end],
+            name: name.text,
             name_span: Span {
                 start: first.span.start,
                 end: target_end,
             },
-            dereference,
+            projection,
             operator,
             value: &self.source[value_span.start..value_span.end],
             value_span,
@@ -1070,45 +1097,90 @@ impl<'source> BodyParser<'source> {
         } else {
             (first, false)
         };
-        let target_end = probe.assignment_target_end(name.span.end)?;
+        let (projection, target_end, invalid_projection) = if dereference {
+            (
+                Some(AssignmentProjection::Dereference { span: first.span }),
+                name.span.end,
+                None,
+            )
+        } else {
+            probe.assignment_projection(name.span.end)?
+        };
         let Some(operator_token) = probe.take()? else {
             return Ok(None);
         };
         let Some(operator) = AssignmentOperator::from_text(operator_token.text) else {
             return Ok(None);
         };
+        if let Some(span) = invalid_projection {
+            return Err(ParseError {
+                kind: ParseErrorKind::ExpectedAssignmentTarget,
+                span,
+            });
+        }
         let (value_span, _) = probe.delimited_until(";", ParseErrorKind::ExpectedSemicolon)?;
         *self = probe;
         Ok(Some(Assignment {
-            name: &self.source[first.span.start..target_end],
+            name: name.text,
             name_span: Span {
                 start: first.span.start,
                 end: target_end,
             },
-            dereference,
+            projection,
             operator,
             value: &self.source[value_span.start..value_span.end],
             value_span,
         }))
     }
 
-    fn assignment_target_end(&mut self, name_end: usize) -> Result<usize, ParseError> {
+    fn assignment_projection(
+        &mut self,
+        name_end: usize,
+    ) -> Result<(Option<AssignmentProjection<'source>>, usize, Option<Span>), ParseError> {
         if self.peek()?.is_some_and(|token| token.text == ".") {
-            self.take()?;
+            let dot = self.take()?.unwrap();
             let Some(field) = self.take()? else {
-                return Ok(name_end);
+                return Ok((None, dot.span.end, Some(dot.span)));
             };
-            return Ok(field.span.end);
+            if field.kind != TokenKind::Integer {
+                return Ok((None, field.span.end, Some(field.span)));
+            }
+            let Ok(field_index) = field.text.parse::<usize>() else {
+                return Ok((None, field.span.end, Some(field.span)));
+            };
+            return Ok((
+                Some(AssignmentProjection::TupleField {
+                    field: field_index,
+                    span: field.span,
+                }),
+                field.span.end,
+                None,
+            ));
         }
         if !self
             .peek()?
             .is_some_and(|token| token.kind == TokenKind::OpenBracket)
         {
-            return Ok(name_end);
+            return Ok((None, name_end, None));
         }
         self.take()?;
-        let (_, close) = self.delimited_until("]", ParseErrorKind::UnterminatedDelimiter)?;
-        Ok(close.span.end)
+        let (expression_span, close) =
+            self.delimited_until("]", ParseErrorKind::UnterminatedDelimiter)?;
+        let expression = &self.source[expression_span.start..expression_span.end];
+        let trimmed = expression.trim();
+        let leading = expression.len() - expression.trim_start().len();
+        let span = Span {
+            start: expression_span.start + leading,
+            end: expression_span.start + leading + trimmed.len(),
+        };
+        Ok((
+            Some(AssignmentProjection::Index {
+                expression: trimmed,
+                span,
+            }),
+            close.span.end,
+            None,
+        ))
     }
 
     fn expression_statement_record(
@@ -1567,7 +1639,7 @@ impl<'source> BodyParser<'source> {
         if first.kind == TokenKind::Identifier {
             let mut assignment_probe = self.clone();
             let name = assignment_probe.take()?.unwrap();
-            assignment_probe.assignment_target_end(name.span.end)?;
+            assignment_probe.assignment_projection(name.span.end)?;
             if assignment_probe
                 .peek()?
                 .is_some_and(|token| AssignmentOperator::from_text(token.text).is_some())
@@ -3259,11 +3331,8 @@ mod tests {
 
     #[test]
     fn parses_indexed_assignment_targets() {
-        let module = Parser::new(
-            "fn mutate(index: usize) -> usize { let mut values = [1usize, 2]; values[index + 1] += 3; values[0] }",
-        )
-        .parse_module::<2, 2>()
-        .unwrap();
+        let source = "fn mutate(index: usize) -> usize { let mut values = [1usize, 2]; values[  index + 1  ] += 3; values[0] }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
@@ -3271,6 +3340,22 @@ mod tests {
         let assignment = body.assignments()[0].unwrap();
         assert_eq!(assignment.binding_name(), "values");
         assert_eq!(assignment.index(), Some("index + 1"));
+        let index_start = function.body_expression.find("index + 1  ]").unwrap();
+        assert_eq!(
+            assignment.index_span(),
+            Some(Span {
+                start: index_start,
+                end: index_start + "index + 1".len(),
+            })
+        );
+        assert_eq!(assignment.name, "values");
+        assert_eq!(
+            assignment.projection,
+            Some(AssignmentProjection::Index {
+                expression: "index + 1",
+                span: assignment.index_span().unwrap(),
+            })
+        );
         assert_eq!(assignment.operator, AssignmentOperator::Add);
         assert_eq!(assignment.value, "3");
     }
@@ -3289,6 +3374,10 @@ mod tests {
         let assignment = body.assignments()[0].unwrap();
         assert_eq!(assignment.binding_name(), "pair");
         assert_eq!(assignment.tuple_field(), Some(0));
+        assert!(matches!(
+            assignment.projection,
+            Some(AssignmentProjection::TupleField { field: 0, .. })
+        ));
         assert_eq!(assignment.operator, AssignmentOperator::Add);
         assert_eq!(assignment.value, "3");
     }
@@ -3305,15 +3394,32 @@ mod tests {
         };
         let body = function.parse_body::<2>().unwrap();
         let compound = body.assignments()[0].unwrap();
-        assert!(compound.dereference);
+        assert!(compound.dereferences());
         assert_eq!(compound.binding_name(), "value");
         assert_eq!(compound.operator, AssignmentOperator::Add);
         assert_eq!(compound.value, "2");
         let plain = body.assignments()[1].unwrap();
-        assert!(plain.dereference);
+        assert!(plain.dereferences());
         assert_eq!(plain.binding_name(), "value");
         assert_eq!(plain.operator, AssignmentOperator::Assign);
         assert_eq!(plain.value, "*value + 1");
+    }
+
+    #[test]
+    fn rejects_ambiguous_assignment_projections() {
+        for source in [
+            "fn bad() { let mut pair = (1u8, 2u8); pair.left = 3; }",
+            "fn bad() { let mut pair = (1u8, 2u8); pair.0usize = 3; }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 1>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                function.parse_body::<2>().unwrap_err().kind,
+                ParseErrorKind::ExpectedAssignmentTarget
+            );
+        }
     }
 
     #[test]
