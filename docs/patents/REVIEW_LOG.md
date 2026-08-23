@@ -786,3 +786,14 @@ fact tables. This adds no novel parsing, ownership, borrowing, optimization,
 code-generation, or compiler-analysis technique.
 
 Patent review: `NOT_TRIGGERED` — conventional compiler fact collection.
+
+## 2026-08-23 — typed assignment-index read planning
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+The compiler uses conventional expression typing and constant evaluation to
+select the same fixed-capacity read-fact order as its existing reference and
+array-index lowering paths. This adds no novel type system, array
+representation, bounds check, optimization, or compiler-analysis technique.
+
+Patent review: `NOT_TRIGGERED` — conventional type-directed compiler traversal.

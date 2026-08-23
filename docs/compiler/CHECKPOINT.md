@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `6cce0c15c79cdc0fb53e7cb117d2166a8ef37b54`
-  (`Preanalyze nested assignment reads`)
+- Compiler checkpoint commit: `7b96948818389da07b6e334f18ca687c744cb35b`
+  (`Preanalyze typed assignment indexes`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -71,14 +71,18 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   and consumed through the ordinary identifier-read path; and
 - bounded recursive assignment-RHS traversal for casts, ascriptions, unary
   wrappers, return/break values, sequences, binary operands, and conditional
-  condition/arms in exact emission order, with one fact per discovered place.
+  condition/arms in exact emission order, with one fact per discovered place;
+  and
+- typed index dispatch that distinguishes reference-base reads, one constant
+  local-array element read, and every runtime local-array materialization read
+  before its runtime index.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Typed nested indexes, method/call and aggregate expression
+borrow checker. Compound array bases, method/call and aggregate expression
 families, and non-assignment body reads remain emission-time facts. Names are
 still resolved during emission, expanded inlined-helper declarations append
 dynamically, and read-place discovery is not yet body-wide. Parser locals do not
@@ -91,8 +95,8 @@ unimplemented.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. add typed lowering-family dispatch for nested assignment indexes, then expand
-   bounded read-place preanalysis across supported non-assignment body expressions;
+1. expand bounded read-place preanalysis across supported non-assignment body
+   expressions, retaining exact typed lowering-family order;
 2. add explicit basic blocks and control-flow edges;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
@@ -119,8 +123,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 574 tests on each host: 317
-library tests, 10 conformance tests, 245 replacement tests, and 2 driver tests.
+The checkpoint source passed 576 tests on each host: 318
+library tests, 10 conformance tests, 246 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

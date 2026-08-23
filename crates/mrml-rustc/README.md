@@ -2917,9 +2917,11 @@ including specialized projected emitters. Scalar compound RHS expressions now
 visit casts, ascriptions, unary wrappers, return/break values, sequences, binary
 operands, and conditional condition/arms in exact emission order. Each
 discoverable projected place remains one read rather than a projected read plus
-a duplicate empty base read. Nested indexes remain emission-time facts until
-the prepass has typed lowering-family dispatch; method/call, aggregate, and
-non-assignment body reads also remain outside this slice.
+a duplicate empty base read. Typed nested-index dispatch distinguishes
+reference-base reads, a constant local-array element read, and every element
+materialized for runtime local-array indexing before visiting its runtime index.
+Compound array bases, method/call, aggregate, and non-assignment body reads
+remain outside this slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
@@ -2933,6 +2935,14 @@ warnings-denied Clippy on both hosts. Its adversarial unit test proves exact
 left-to-right parameter and stable local-tuple-field identity order through
 nested binary and conditional expressions. Its original replacement emits both
 COFF and ELF64 objects through the same assignment shapes.
+
+The typed assignment-index milestone passed all 576 compiler and driver tests
+on Windows gnullvm and all 576 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Its adversarial unit test proves the exact
+distinct fact order for reference-array runtime indexing, two-element local-
+array runtime materialization, its runtime index, and constant local-array
+indexing. Its original replacement emits both COFF and ELF64 objects through
+the same typed index families.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

@@ -251,8 +251,11 @@ fixed 256-entry read-expectation table. The root is resolved against the active
 scope and consumed through the ordinary identifier-read recorder. Supported
 scalar compound RHS expressions recursively visit casts, ascriptions, unary
 wrappers, return/break values, sequences, binary operands, and conditional
-condition/arms in exact emission order. Typed nested indexes, method/call and
-aggregate families, and non-assignment body reads remain emission-time facts.
+condition/arms in exact emission order. Typed nested indexes distinguish
+reference-base reads, constant local-array element reads, and runtime local-
+array element materialization before the runtime index. Compound array bases,
+method/call and aggregate families, and non-assignment body reads remain
+emission-time facts.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
@@ -264,12 +267,12 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. Typed nested-index, method/call, aggregate, and non-
+classified as a borrow. Compound array-base, method/call, aggregate, and non-
 assignment body reads are not yet preanalyzed, and parser-level IDs,
 initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
-milestone is typed lowering-family dispatch for nested assignment indexes, then
-supported non-assignment body reads before CFG and initialization/move facts.
+milestone is supported non-assignment body reads before CFG and
+initialization/move facts.
 
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains
