@@ -214,6 +214,8 @@ except that direct array literals, single-evaluation array repeats, and tuple
 literals now preanalyze their scalar operands in the same order as stack
 materialization. Direct identifier-backed array and tuple copies also reserve
 the emitter's exact per-element `Index` or numbered `TupleField` projections.
+Conditional tuple initializers with direct tuple-literal branches reserve the
+condition once followed by both branches' source-ordered scalar operands.
 The visitor also runs for every supported scalar expression statement at the
 top level, in conditional arms, in direct and nested loop actions, and after
 loops. Each statement is parsed once and its reads are reserved against the
@@ -247,10 +249,10 @@ by the supported runtime body and loop parsers, plus root-place and supported
 nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
-It does not yet preanalyze compound array-base materialization, conditional or
-wrapped aggregate values, fat-reference initializers or returns, method/call,
-aggregate returns/tails, or other body reads, or replace name lookup across the
-whole body. Expanded
+It does not yet preanalyze compound array-base materialization, conditional
+arrays or wrapped aggregate values, fat-reference initializers or returns,
+method/call, aggregate returns/tails, or other body reads, or replace name lookup
+across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of

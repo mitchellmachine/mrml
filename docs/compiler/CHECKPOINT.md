@@ -80,7 +80,8 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   previous-binding identity across sequential and scoped shadowing, including
   source-ordered scalar operands of direct array literals, single-evaluation
   array repeats, and tuple literals, plus exact per-element projections for
-  direct identifier-backed array and tuple copies; and
+  direct identifier-backed array and tuple copies and single-condition planning
+  for conditional tuple initializers with direct literal branches; and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
   statements in the emitter's exact scoped order; and
@@ -94,9 +95,10 @@ allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Conditional or wrapped aggregates, fat-reference initializers
-and returns, compound array bases, method/call families, aggregate returns/tails,
-and other body reads remain emission-time facts. Names are still resolved during
+borrow checker. Conditional arrays and wrapped aggregates, fat-reference
+initializers and returns, compound array bases, method/call families, aggregate
+returns/tails, and other body reads remain emission-time facts. Names are still
+resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Initialization/move paths, body basic blocks and edges, borrows, loans, regions,
@@ -135,8 +137,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 588 tests on each host: 324
-library tests, 10 conformance tests, 252 replacement tests, and 2 driver tests.
+The checkpoint source passed 590 tests on each host: 325
+library tests, 10 conformance tests, 253 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
