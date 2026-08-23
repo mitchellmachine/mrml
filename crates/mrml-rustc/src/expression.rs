@@ -382,6 +382,11 @@ pub enum ExprKind<'source> {
         distance: ExprId,
         left: bool,
     },
+    IntegerWrappingShift {
+        base: ExprId,
+        distance: ExprId,
+        left: bool,
+    },
     IntegerBitTransform {
         base: ExprId,
         transform: IntegerBitTransform,
@@ -618,6 +623,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::WrappingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
+            | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::Integer(_)
@@ -881,6 +887,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             }
             ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerWrappingShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
@@ -2172,6 +2179,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(argument, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerRotate { base, distance, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(distance, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerWrappingShift { base, distance, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;
             }
@@ -3763,6 +3774,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_mul"
                         | "rotate_left"
                         | "rotate_right"
+                        | "wrapping_shl"
+                        | "wrapping_shr"
                         | "swap_bytes"
                         | "reverse_bits"
                         | "to_be"
@@ -3848,6 +3861,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_mul"
                     | "rotate_left"
                     | "rotate_right"
+                    | "wrapping_shl"
+                    | "wrapping_shr"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -3940,6 +3955,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                     left: method.text == "rotate_left",
+                },
+                "wrapping_shl" | "wrapping_shr" => ExprKind::IntegerWrappingShift {
+                    base,
+                    distance: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    left: method.text == "wrapping_shl",
                 },
                 "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
                 | "wrapping_abs" => ExprKind::IntegerBitTransform {

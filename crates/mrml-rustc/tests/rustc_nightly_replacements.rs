@@ -1859,6 +1859,27 @@ fn rustc_integer_rotations_reach_native_objects() {
 }
 
 #[test]
+fn rustc_wrapping_integer_shifts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.wrapping_shl(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, distance: u32) -> i16 { input.wrapping_shr(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, distance: u32) -> u32 { input.wrapping_shr(distance) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, distance: u32) -> i64 { input.wrapping_shl(distance) }",
+        "const VALUE: u8 = 0x81u8.wrapping_shl(9); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-2i16).wrapping_shr(17); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+        "const VALUE: u32 = 0x80000001u32.wrapping_shr(68); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.reverse_bits() }",

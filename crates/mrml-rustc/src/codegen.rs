@@ -2299,6 +2299,10 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(distance)?;
         }
+        ExprKind::IntegerWrappingShift { base, distance, .. } => {
+            recurse(base)?;
+            recurse(distance)?;
+        }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base)?,
         ExprKind::IntegerBitCount { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
@@ -3093,6 +3097,33 @@ fn runtime_expression_type_with_locals<
             }
         }
         ExprKind::IntegerRotate { base, distance, .. } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || !matches!(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        distance,
+                        depth + 1,
+                    )?,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
+        }
+        ExprKind::IntegerWrappingShift { base, distance, .. } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -4939,6 +4970,43 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     (64, true) => self.emit(&[0x48, 0xd3, 0xc0])?,
                     (64, false) => self.emit(&[0x48, 0xd3, 0xc8])?,
                     _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                }
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerWrappingShift {
+                base,
+                distance,
+                left,
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.width = runtime_width("u32")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, distance, depth + 1)?;
+                self.emit(&[0x48, 0x89, 0xc1, 0x58, 0x83, 0xe1, operand_width.bits - 1])?;
+                self.evaluation_depth -= 1;
+                self.width = operand_width;
+                if left {
+                    self.emit(&[0x48, 0xd3, 0xe0])?;
+                } else if operand_width.signed {
+                    self.emit(&[0x48, 0xd3, 0xf8])?;
+                } else {
+                    self.emit(&[0x48, 0xd3, 0xe8])?;
                 }
                 self.emit_normalize()?;
                 self.width = previous_width;
@@ -11659,6 +11727,48 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u16) -> u8 { input.rotate_left(distance) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, distance: u32) -> bool { input.rotate_right(distance) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn wraps_primitive_integer_shifts() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u32) -> u8 { input.wrapping_shl(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, distance: u32) -> i16 { input.wrapping_shr(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, distance: u32) -> u32 { input.wrapping_shr(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, distance: u32) -> i64 { input.wrapping_shl(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, distance: u32) -> usize { input.wrapping_shr(distance) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, distance: u16) -> u8 { input.wrapping_shl(distance) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, distance: u32) -> bool { input.wrapping_shr(distance) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

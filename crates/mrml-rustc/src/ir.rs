@@ -302,6 +302,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::AsciiPredicate { .. }
             | ExprKind::WrappingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
+            | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerBitCount { .. } => {
                 return Err(IrError {

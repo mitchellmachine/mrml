@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 394 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 396 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1919,6 +1919,13 @@ Primitive signed and unsigned integers also support `rotate_left(u32)` and
 `rotate_right(u32)` in constants and runtime functions. Native 8-, 16-, 32-,
 and 64-bit objects matched pinned Rust for zero, sub-width, exact-width, and
 multiple-width distances while retaining signed values as raw bit patterns.
+The `wrapping_shl(u32)` and `wrapping_shr(u32)` methods apply the distance modulo
+the receiver width in constants and runtime functions. Right shifts preserve
+Rust's arithmetic behavior for signed receivers and logical behavior for
+unsigned receivers; non-`u32` distances fail closed.
+Four emitted System V objects matched pinned Rust through zero, width-adjacent,
+hardware-mask-adjacent, and `u32::MAX` distances across narrow and full-width
+signed and unsigned receivers.
 The unary `swap_bytes`, `reverse_bits`, `to_be`, and `to_le` methods now retain
 the receiver width and signed bit pattern in constants and native functions.
 The current little-endian targets use byte reversal for big-endian conversion

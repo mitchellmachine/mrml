@@ -210,6 +210,7 @@ pub fn analyze_constants<
                     expression.kind,
                     ExprKind::WrappingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
+                        | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerBitTransform { .. }
                         | ExprKind::IntegerBitCount { .. }
                 )
@@ -1907,6 +1908,7 @@ fn evaluate_integer_const_expression<
             expression.kind,
             ExprKind::WrappingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
+                | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerBitTransform { .. }
                 | ExprKind::IntegerBitCount { .. }
         )
@@ -2042,6 +2044,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerRotate { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
+        ExprKind::IntegerWrappingShift { base, distance, .. } => {
+            recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
+        }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base, inside_inline_const),
         ExprKind::IntegerBitCount { base, .. } => recurse(base, inside_inline_const),
         ExprKind::StrIsCharBoundary { base, index } => {
@@ -2146,6 +2151,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
+        ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
         ExprKind::IntegerBitCount { base, .. } => recurse(base),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
@@ -2363,6 +2369,31 @@ fn evaluate_call_aware_integer<
                 depth,
             )?;
             rotate_integer_bits(value, distance, bits, left)
+        }
+        ExprKind::IntegerWrappingShift {
+            base,
+            distance,
+            left,
+        } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || integer_expression_type(context, symbol_count, tree, distance, constants)
+                    .is_some_and(|distance_type| distance_type != crate::IntegerType::U32)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)?;
+            let distance = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                distance,
+                crate::IntegerType::U32,
+                constants,
+                depth,
+            )?;
+            wrapping_shift_integer_bits(value, distance, bits, left, ty.is_signed())
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
@@ -3078,6 +3109,25 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .map_err(ExecutionError::Arithmetic)?;
             rotate_integer_bits(value, distance, bits, left)
         }
+        ExprKind::IntegerWrappingShift {
+            base,
+            distance,
+            left,
+        } => {
+            let base_type = expression_integer_type(tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || expression_integer_type(tree, distance, constants)
+                    .is_some_and(|distance_type| distance_type != crate::IntegerType::U32)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)?;
+            let distance = tree
+                .evaluate_at(distance, constants)
+                .map_err(ExecutionError::Arithmetic)?;
+            wrapping_shift_integer_bits(value, distance, bits, left, true)
+        }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = expression_integer_type(tree, base, constants);
             if base_type.is_some_and(|base_type| base_type != ty)
@@ -3140,6 +3190,9 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
             .or_else(|| expression_integer_type(tree, right, constants)),
         ExprKind::WrappingArithmetic { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::IntegerRotate { base, .. } => expression_integer_type(tree, base, constants),
+        ExprKind::IntegerWrappingShift { base, .. } => {
+            expression_integer_type(tree, base, constants)
+        }
         ExprKind::IntegerBitTransform { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
@@ -3173,6 +3226,25 @@ fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u12
         ((value << distance) | (value >> (u32::from(bits) - distance))) & mask
     } else {
         ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
+    }
+}
+
+fn wrapping_shift_integer_bits(
+    value: u128,
+    distance: u128,
+    bits: u8,
+    left: bool,
+    signed: bool,
+) -> u128 {
+    let mask = signed_mask(bits);
+    let value = value & mask;
+    let distance = (distance % u128::from(bits)) as u32;
+    if left {
+        (value << distance) & mask
+    } else if signed && value & (1_u128 << (bits - 1)) != 0 {
+        ((value | !mask) as i128 >> distance) as u128 & mask
+    } else {
+        value >> distance
     }
 }
 
