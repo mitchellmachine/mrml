@@ -21,12 +21,14 @@ into a functional commit.
 
 ## 2. Reconstruct intent
 
-Read `AGENTS.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, this
-file, `docs/ROADMAP.md`, and `docs/MICROKERNEL.md` completely. Then inspect recent
-history for the affected subsystem. README gives repository-wide rules;
-ARCHITECTURE gives stable direction; SECURITY gives normative boundaries;
-ROADMAP gives dependency order; MICROKERNEL is the detailed dated evidence
-ledger. Source and tests decide whether a stated item actually exists.
+Read `AGENTS.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
+`docs/APPLICATION_PLATFORM.md`, this file, `docs/ROADMAP.md`, and
+`docs/MICROKERNEL.md` completely. Then inspect recent history for the affected
+subsystem. README gives repository-wide rules; ARCHITECTURE gives stable
+direction; SECURITY gives normative boundaries; APPLICATION_PLATFORM gives the
+native/VM/browser/GUI/AI contract; ROADMAP gives dependency order; MICROKERNEL
+is the detailed dated evidence ledger. Source and tests decide whether a stated
+item actually exists.
 
 If documents disagree, prefer in this order for factual implementation status:
 
@@ -52,6 +54,12 @@ explicitly and downgrade the status rather than guessing.
   `AuthenticatedAdmission`, `receipt`, and `sealed` across the workspace.
 - Capabilities/IPC/lifecycle: `capability.rs`, `ipc.rs`, `shared_memory.rs`,
   `scheduler.rs`, `task_runtime.rs`, `service_lifecycle.rs`.
+- Compiler: `crates/mrml-rustc/`, `crates/mrml-rustc-driver/`; never infer a
+  complete compiler or application ABI from supported subset code generation.
+- Host browser automation: `crates/mrml-tools/src/browser.rs` and `web.rs`; this
+  is not an MRML browser engine, compositor, or OS application implementation.
+- Application/GUI/browser OS work: search the whole tree; absence is meaningful
+  and planned documentation must not be promoted to implementation status.
 
 Use `rg` to locate definitions, callers, tests, TODOs, probe modes, and feature
 gates. Inspect manifests and the pinned toolchain before assuming build targets.

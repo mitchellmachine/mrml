@@ -10,9 +10,10 @@ IPC, device, or security code, read completely:
 1. `README.md`
 2. `docs/ARCHITECTURE.md`
 3. `docs/SECURITY.md`
-4. `docs/ROADMAP.md`
-5. `docs/RECOVERY.md`
-6. `docs/MICROKERNEL.md`
+4. `docs/APPLICATION_PLATFORM.md`
+5. `docs/ROADMAP.md`
+6. `docs/RECOVERY.md`
+7. `docs/MICROKERNEL.md`
 
 Treat the README contribution, testing, provenance, dependency, formatting,
 and claims rules as hard acceptance gates. Inspect `git status`, recent
@@ -47,6 +48,15 @@ Architectural invariants:
   transitions fail closed;
 - all parsers, arithmetic, identities, generations, boundary copies,
   capabilities, and state transitions remain bounded and adversarially tested.
+- ordinary native applications are memory-safe by admission policy and do not
+  gain a general-purpose C/C++ ABI; stable contracts are versioned service
+  protocols rather than Rust's internal ABI;
+- WebAssembly remains browser content, the browser remains no-JIT/W^X, and
+  neither web content nor browser possession silently delegates hardware
+  authority;
+- the compositor owns trusted display surfaces, semantic GUI state is primary
+  for accessibility and automation, and raw input or visual access remains a
+  separately privileged fallback.
 
 Implement OS work in the dependency order in `docs/ROADMAP.md`. Determine the
 next milestone from current code, tests, documentation, TODOs, and Git history,

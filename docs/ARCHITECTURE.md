@@ -3,7 +3,9 @@
 This is the durable architectural overview. Detailed implementation history and
 probe evidence remain in [MICROKERNEL.md](MICROKERNEL.md); security boundaries
 are normative in [SECURITY.md](SECURITY.md); dependency order is in
-[ROADMAP.md](ROADMAP.md); context-loss recovery is in [RECOVERY.md](RECOVERY.md).
+[ROADMAP.md](ROADMAP.md); the application contract is in
+[APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md); context-loss recovery is in
+[RECOVERY.md](RECOVERY.md).
 
 ## Status vocabulary
 
@@ -51,9 +53,10 @@ benchmarks. Backend-specific evidence is not evidence for another backend.
 
 **PLANNED:** practical storage, network, firewall, configuration, authority-
 broker, trusted-consent, security-monitor, audit-event, tool, inference, driver,
-and GPU services; production shared-memory queues; TPM-backed rollback state;
-complete physical VT-d/device-reset validation; recovery and release key
-rotation.
+and GPU services; a safe native application SDK and versioned protocols;
+application microVM projection; trusted compositor and semantic GUI; a no-JIT
+browser; production shared-memory queues; TPM-backed rollback state; complete
+physical VT-d/device-reset validation; recovery and release key rotation.
 
 **ASPIRATIONAL:** a production-secure sovereign local-AI OS, broad device
 support, machine-checked noninterference, independently audited security, and
@@ -146,3 +149,11 @@ available.
 Local AI is eventually exposed as a capability such as
 `ai.inference:<model/resource>`. AI agents receive the same least-authority
 discipline as all software: **AI-native does not mean AI-privileged**.
+
+The application platform does not inherit POSIX/C as its foundational ABI.
+Ordinary native applications are intended to be admitted as memory-safe code
+using a safe SDK over stable service protocols. Unsafe/legacy applications live
+behind explicit VM compatibility boundaries. The trusted compositor, semantic
+scene graph, HiDPI coordinate model, browser rules, and AI interaction boundary
+are specified in [APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md). None is
+currently implemented as an MRML OS application platform.

@@ -50,7 +50,44 @@ Security gate: services start with explicit least authority; paths, ports,
 names, identity, and signatures do not grant ambient access; raw packet/device
 access is separately privileged; service failure is contained.
 
-## Phase 3 — Authority, consent, and observation
+## Phase 3 — Safe applications and trusted GUI foundation
+
+Before trusted consent UI, establish the application-facing foundation:
+
+1. Specify bounded versioned service protocols and a safe SDK without freezing
+   Rust's internal ABI or creating a general public C/C++ ABI.
+2. Define transitive memory-safe application admission and dependency/FFI rules.
+3. Project the same capability-preserving API into application microVMs.
+4. Define logical display coordinates and output identities for fractional
+   per-monitor HiDPI.
+5. Implement the trusted compositor boundary and non-spoofable domain identity.
+6. Implement a bounded, generational semantic scene graph with authorized
+   incremental subscriptions and resynchronization.
+7. Benchmark scene updates, input-to-action latency, composition, and scaling.
+
+Security gate: ordinary native apps cannot introduce unsafe native code or
+ambient authority; VM transport cannot widen capabilities; applications cannot
+spoof trusted surfaces; stale semantic identities/deltas cannot target reused
+objects; semantic inspection and raw input remain separate authority.
+
+## Phase 4 — Browser and AI application control
+
+1. Build the browser as isolated services with no JIT and strict W^X.
+2. Keep WebAssembly inside the browser boundary and mediate every sensitive API
+   per origin and capability.
+3. Expose a sanitized semantic document tree with deliberate bounded actions.
+4. Represent visual web/media content as lazy capability-controlled objects.
+5. Add cohort-normalized fingerprint surfaces and regression testing against
+   independent fingerprinting suites.
+6. Add local/remote AI disclosure controls, incremental graph transport, and
+   explicit visual-inspection requests.
+
+Security gate: web content cannot reach native admission, arbitrary JavaScript
+control, browser memory/debug authority, raw devices, or W+X execution; AI does
+not receive secrets, screenshots, media, HID injection, or global GUI control
+without the exact capability. Fingerprint claims require empirical evidence.
+
+## Phase 5 — Authority, consent, and observation
 
 1. Implement a capability-native authority broker with narrow scope, duration,
    and one-shot grants.
@@ -64,7 +101,11 @@ Security gate: identity is not authority; temporary grants expire/revoke on all
 specified paths; applications cannot forge consent or privileged events; the
 monitor cannot exceed its explicit capabilities.
 
-## Phase 4 — Persistent security state and boot
+Trusted consent depends on the Phase 3 compositor boundary. The authority broker
+and non-UI policy core may be developed earlier, but no application-rendered UI
+can count as trusted consent.
+
+## Phase 6 — Persistent security state and boot
 
 1. Implement a TPM NV or equivalent authenticated, monotonic, power-loss-atomic
    release-state backend.
@@ -77,7 +118,7 @@ Security gate: older signed vulnerable releases cannot be admitted after a
 committed advance; loss/corruption fails safely and has a documented recovery
 path. No rollback-resistance claim precedes physical testing.
 
-## Phase 5 — Bare-metal hardware isolation
+## Phase 7 — Bare-metal hardware isolation
 
 1. Run VMX-root entry, non-root launch, EPT ownership, exits, and teardown on a
    supported physical machine.
@@ -91,14 +132,18 @@ Security gate: monitor authority fails closed and retains its keys; CPU and DMA
 translations agree before grant/resume; uncertain invalidation/reset never
 returns a device or granule to use. Nested KVM and QEMU do not satisfy this gate.
 
-## Phase 6 — Hardening and expansion
+## Phase 8 — Hardening and expansion
 
 Continuously fuzz parsers, IPC, shared-memory metadata, capability abuse, and
 corruption paths. Stress SMP races, mapping/revocation races, interrupts,
 crashes, exhaustion, network adversaries, and power loss. Perform unsafe/FFI
-review, side-channel analysis, formal specification of critical capability and
-noninterference properties, reproducible release review, and external audit.
-Only then consider broad drivers, production claims, AArch64, and RISC-V64.
+review, application dependency/admission tests, browser fingerprint regressions,
+semantic-graph desynchronization and spoofing tests, side-channel analysis,
+formal specification of critical capability and noninterference properties,
+reproducible release review, and external audit. Investigate CET/IBT only as
+defense in depth for relevant trusted native boundaries; do not claim or depend
+on enforcement until implemented and exercised. Only then consider broad
+drivers, production claims, AArch64, and RISC-V64.
 
 Every milestone requires proportional Windows gnullvm and Linux testing,
 backend-specific signed probes where applicable, exact commands/results, and

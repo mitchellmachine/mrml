@@ -87,3 +87,30 @@ only when trustworthy. Events must avoid secrets and cannot be forgeable or
 erasable by ordinary services. Monitoring and remediation remain separate,
 narrow capabilities; high-impact remediation requires policy authorization or
 trusted consent.
+
+## Application and GUI boundary
+
+The native application model is memory-safe by default. A safe-language label
+alone is insufficient: ordinary application admission must eventually exclude
+unsafe code, native FFI, and memory-unsafe dependencies unless the application
+is moved behind an explicitly stronger compatibility boundary. The experimental
+MRML compiler does not yet establish this admission property. Rust's unstable
+native ABI and a public C/C++ ABI are not stable application authority surfaces.
+
+Legacy and memory-unsafe applications belong in compatibility VMs. Application
+microVM projection must preserve exact capability identity, rights,
+generations, revocation, and protocol validation across the transport. Hosted
+WHP/KVM still does not protect such a VM from its host.
+
+The planned compositor owns trusted identity indicators, secure prompts, focus,
+input routing, capture policy, and final composition. Application pixels cannot
+draw or obscure the trusted portion of those surfaces. Semantic inspection,
+semantic interaction, media inspection, clipboard/capture, and global HID
+injection are distinct authorities.
+
+WebAssembly remains inside the browser sandbox and cannot bypass application
+admission. The browser is no-JIT and W^X by design. Browser-level access to a
+device is not delegated to an origin without separate authorization. The
+sanitized semantic document tree, not arbitrary browser internals or JavaScript
+execution, is the normal AI boundary. Remote AI receives no UI, media, secret,
+or browsing state without explicit disclosure authority.
