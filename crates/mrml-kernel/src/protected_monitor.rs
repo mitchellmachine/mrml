@@ -1,4 +1,8 @@
-use crate::{PhysAddr, ProtectionBackend, ProtectionClaims, ProtectionError, ProtectionReport};
+use crate::{
+    AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LaunchRequest, PhysAddr, ProtectedChannelError,
+    ProtectionBackend, ProtectionClaims, ProtectionError, ProtectionPolicy, ProtectionReport,
+    ProtectionSession,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DomainId(u64);
@@ -155,7 +159,12 @@ pub enum MonitorError {
     DomainHasUncertainGranule,
     HardwareStateUncertain,
     InvalidSecurityVersion,
+    InvalidAuthorityKey,
+    AuthorityKeyAlreadyProvisioned,
+    AuthorityKeyNotProvisioned,
+    InvalidLaunchRequest,
     Report(ProtectionError),
+    Receipt(ProtectedChannelError),
 }
 
 #[derive(Clone, Copy)]
@@ -195,6 +204,8 @@ pub struct ProtectedMonitor<const DOMAINS: usize, const GRANULES: usize> {
     granule_generations: [u32; GRANULES],
     security_version: u64,
     report_sequence: u64,
+    authority_key: [u8; 32],
+    authority_key_provisioned: bool,
 }
 
 impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRANULES> {
@@ -206,6 +217,8 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             granule_generations: [0; GRANULES],
             security_version: 1,
             report_sequence: 0,
+            authority_key: [0; 32],
+            authority_key_provisioned: false,
         }
     }
 
@@ -234,6 +247,24 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             measurement: [0; 64],
         });
         Ok(DomainId::new(index, generation))
+    }
+
+    /// Installs the local receipt key before any protected-domain state exists.
+    /// The trusted boot path must provision this from authenticated entropy;
+    /// this method does not itself establish secrecy or remote identity.
+    pub fn provision_authority_key(&mut self, key: [u8; 32]) -> Result<(), MonitorError> {
+        if key == [0; 32] {
+            return Err(MonitorError::InvalidAuthorityKey);
+        }
+        if self.authority_key_provisioned {
+            return Err(MonitorError::AuthorityKeyAlreadyProvisioned);
+        }
+        if self.domains.iter().any(Option::is_some) || self.granules.iter().any(Option::is_some) {
+            return Err(MonitorError::InvalidDomainState);
+        }
+        self.authority_key = key;
+        self.authority_key_provisioned = true;
+        Ok(())
     }
 
     pub fn seal_domain(&mut self, id: DomainId, measurement: [u8; 64]) -> Result<(), MonitorError> {
@@ -497,6 +528,21 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         id: DomainId,
         nonce: [u8; 32],
     ) -> Result<ProtectionReport, MonitorError> {
+        let sequence = self
+            .report_sequence
+            .checked_add(1)
+            .ok_or(MonitorError::SequenceExhausted)?;
+        let report = self.build_report(id, nonce, sequence)?;
+        self.report_sequence = sequence;
+        Ok(report)
+    }
+
+    fn build_report(
+        &self,
+        id: DomainId,
+        nonce: [u8; 32],
+        sequence: u64,
+    ) -> Result<ProtectionReport, MonitorError> {
         if self.domain_has_pending_transition(id) {
             return Err(MonitorError::DomainHasPendingTransition);
         }
@@ -522,11 +568,7 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
         if owns_private && !owns_shared {
             claims = claims.union(ProtectionClaims::DOMAIN_ISOLATION);
         }
-        let sequence = self
-            .report_sequence
-            .checked_add(1)
-            .ok_or(MonitorError::SequenceExhausted)?;
-        let report = ProtectionReport::new(
+        ProtectionReport::new(
             ProtectionBackend::BareMetalMonitor,
             claims,
             false,
@@ -535,9 +577,40 @@ impl<const DOMAINS: usize, const GRANULES: usize> ProtectedMonitor<DOMAINS, GRAN
             domain.measurement,
             nonce,
         )
-        .map_err(MonitorError::Report)?;
-        self.report_sequence = sequence;
-        Ok(report)
+        .map_err(MonitorError::Report)
+    }
+
+    /// Authenticates a decision derived from the current live domain table and
+    /// binds it to the caller's exact canonical request and approved policy.
+    pub fn issue_authenticated_receipt(
+        &mut self,
+        id: DomainId,
+        request: LaunchRequest,
+        policy: ProtectionPolicy,
+    ) -> Result<[u8; AUTHORITY_RECEIPT_BYTES], MonitorError> {
+        if !self.authority_key_provisioned {
+            return Err(MonitorError::AuthorityKeyNotProvisioned);
+        }
+        let next_sequence = self
+            .report_sequence
+            .checked_add(1)
+            .ok_or(MonitorError::SequenceExhausted)?;
+        let domain = self.domain(id)?;
+        if request.sequence() != next_sequence
+            || request.image_measurement() != domain.measurement
+            || request.policy_measurement() != policy.commitment()
+        {
+            return Err(MonitorError::InvalidLaunchRequest);
+        }
+        let report = self.build_report(id, request.nonce(), next_sequence)?;
+        let mut session = ProtectionSession::new(request.nonce()).map_err(MonitorError::Report)?;
+        session
+            .admit(report, policy)
+            .map_err(MonitorError::Report)?;
+        let receipt = AuthorityReceipt::seal(&self.authority_key, request, report)
+            .map_err(MonitorError::Receipt)?;
+        self.report_sequence = next_sequence;
+        Ok(receipt)
     }
 
     fn prepare_transition(
@@ -809,6 +882,137 @@ mod tests {
             ProtectedMonitor::<1, 0>::with_security_version(0),
             Err(MonitorError::InvalidSecurityVersion)
         ));
+    }
+
+    #[test]
+    fn monitor_receipt_authenticates_exact_live_domain_mode() {
+        const KEY: [u8; 32] = [0x44; 32];
+        const MEASUREMENT: [u8; 64] = [0xb1; 64];
+        const NONCE: [u8; 32] = [0xb2; 32];
+        let mut monitor = ProtectedMonitor::<1, 1>::with_security_version(9).unwrap();
+        monitor.provision_authority_key(KEY).unwrap();
+        let domain = monitor.create_domain().unwrap();
+        let granule = monitor
+            .register_granule(PhysAddr::new(0x70_0000).unwrap())
+            .unwrap();
+        let transition = monitor.prepare_delegate(granule).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        let transition = monitor.prepare_assign_private(granule, domain).unwrap();
+        monitor.complete_transition(transition, true).unwrap();
+        monitor.seal_domain(domain, MEASUREMENT).unwrap();
+        let claims = ProtectionClaims::MEASURED.union(ProtectionClaims::DOMAIN_ISOLATION);
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            claims,
+            false,
+            9,
+            MEASUREMENT,
+        );
+        let request = LaunchRequest::new(1, NONCE, MEASUREMENT, policy.commitment()).unwrap();
+        let receipt = monitor
+            .issue_authenticated_receipt(domain, request, policy)
+            .unwrap();
+        let mut session = ProtectionSession::new(NONCE).unwrap();
+        let admitted = AuthorityReceipt::verify_and_admit(
+            &KEY,
+            request,
+            &receipt,
+            policy.commitment(),
+            &mut session,
+            policy,
+        )
+        .unwrap();
+        assert!(admitted.mode().is_bare_metal_vmx_root());
+        assert_eq!(admitted.claims(), claims);
+        assert!(!admitted.permits_secret_release());
+    }
+
+    #[test]
+    fn monitor_authority_rejects_late_keys_and_request_or_policy_substitution() {
+        const KEY: [u8; 32] = [0x54; 32];
+        const MEASUREMENT: [u8; 64] = [0xc1; 64];
+        let mut monitor = ProtectedMonitor::<1, 0>::new();
+        assert_eq!(
+            monitor.provision_authority_key([0; 32]),
+            Err(MonitorError::InvalidAuthorityKey)
+        );
+        let domain = monitor.create_domain().unwrap();
+        assert_eq!(
+            monitor.provision_authority_key(KEY),
+            Err(MonitorError::InvalidDomainState)
+        );
+        monitor.seal_domain(domain, MEASUREMENT).unwrap();
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            ProtectionClaims::MEASURED,
+            false,
+            1,
+            MEASUREMENT,
+        );
+        let request = LaunchRequest::new(1, [0xc2; 32], MEASUREMENT, policy.commitment()).unwrap();
+        assert_eq!(
+            monitor.issue_authenticated_receipt(domain, request, policy),
+            Err(MonitorError::AuthorityKeyNotProvisioned)
+        );
+
+        let mut monitor = ProtectedMonitor::<1, 0>::new();
+        monitor.provision_authority_key(KEY).unwrap();
+        assert_eq!(
+            monitor.provision_authority_key([0x55; 32]),
+            Err(MonitorError::AuthorityKeyAlreadyProvisioned)
+        );
+        let domain = monitor.create_domain().unwrap();
+        monitor.seal_domain(domain, MEASUREMENT).unwrap();
+        let wrong_sequence =
+            LaunchRequest::new(2, [0xc2; 32], MEASUREMENT, policy.commitment()).unwrap();
+        assert_eq!(
+            monitor.issue_authenticated_receipt(domain, wrong_sequence, policy),
+            Err(MonitorError::InvalidLaunchRequest)
+        );
+        let wrong_image =
+            LaunchRequest::new(1, [0xc2; 32], [0xc3; 64], policy.commitment()).unwrap();
+        assert_eq!(
+            monitor.issue_authenticated_receipt(domain, wrong_image, policy),
+            Err(MonitorError::InvalidLaunchRequest)
+        );
+        let substituted_policy = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            ProtectionClaims::MEASURED,
+            false,
+            2,
+            MEASUREMENT,
+        );
+        assert_eq!(
+            monitor.issue_authenticated_receipt(domain, request, substituted_policy),
+            Err(MonitorError::InvalidLaunchRequest)
+        );
+        let impossible_policy = ProtectionPolicy::new(
+            ProtectionBackend::BareMetalMonitor,
+            ProtectionClaims::MEASURED.union(ProtectionClaims::DOMAIN_ISOLATION),
+            false,
+            1,
+            MEASUREMENT,
+        );
+        let impossible_request =
+            LaunchRequest::new(1, [0xc2; 32], MEASUREMENT, impossible_policy.commitment()).unwrap();
+        assert_eq!(
+            monitor.issue_authenticated_receipt(domain, impossible_request, impossible_policy),
+            Err(MonitorError::Report(
+                ProtectionError::InsufficientProtection
+            ))
+        );
+        assert!(
+            monitor
+                .issue_authenticated_receipt(domain, request, policy)
+                .is_ok()
+        );
+        monitor.destroy_domain(domain).unwrap();
+        let stale_request =
+            LaunchRequest::new(2, [0xc4; 32], MEASUREMENT, policy.commitment()).unwrap();
+        assert_eq!(
+            monitor.issue_authenticated_receipt(domain, stale_request, policy),
+            Err(MonitorError::StaleDomain)
+        );
     }
 
     #[test]

@@ -161,6 +161,11 @@ secret release.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.
+The bare-metal monitor can provision a nonzero receipt key exactly once before
+any domain or granule exists and issue the same canonical authenticated receipt
+format directly from live ownership state. Key provisioning is part of the
+trusted boot boundary; this local receipt does not claim TPM sealing or remote
+attestation.
 
 ## Kernel state
 
