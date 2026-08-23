@@ -248,8 +248,13 @@ allocation index remain simulated. Explicit fixed-capacity transactions admit
 multiple prepared file successors, bind their independently advancing object
 generations to one later volume-publication generation, require every derived
 metadata image in one COW plan, and issue one-use participant receipts only
-after root publication succeeds. Directory/allocator participants, snapshots,
-and crash recovery remain unimplemented. The EFI
+after root publication succeeds. Redundant-root recovery decodes both exact
+superblock images, requires complete reachable-metadata validation through a
+fail-closed backend contract, selects only identical or adjacent valid
+generations, and permits fallback only when the other candidate is proven
+invalid. The complete validator, block backend, directory/allocator
+participants, snapshots, power-loss testing, and persistent anti-rollback state
+remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import
 services, but FAT32, legacy formats, POSIX permissions, and a universal global

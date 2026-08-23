@@ -727,3 +727,16 @@ filesystem tree, allocation algorithm, cryptographic construction, device
 protocol, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded transaction batching.
+
+## 2026-08-23 — redundant COW root recovery selection
+
+MRML source: `crates/mrml-storage/src/recovery.rs` and the canonical superblock
+format.
+
+The service uses conventional redundant checksummed superblocks, complete-tree
+validation callbacks, generation comparison, corruption fallback, and
+fail-closed rejection of inconsistent or indeterminate state. This adds no
+novel recovery algorithm, filesystem tree, repair method, cryptographic
+construction, device protocol, or anti-rollback technique.
+
+Patent review: `NOT_TRIGGERED` — conventional redundant-root selection.

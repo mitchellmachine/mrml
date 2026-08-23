@@ -13,6 +13,7 @@ mod extent;
 mod file;
 mod format;
 mod identity;
+mod recovery;
 mod transaction;
 
 pub use authority::{
@@ -39,6 +40,10 @@ pub use format::{
     MetadataPointer, SUPERBLOCK_BYTES, StorageName, Superblock, VOLUME_HEADER_BYTES, VolumeHeader,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
+pub use recovery::{
+    CandidateValidationError, CowRecoveryValidator, RecoveredSuperblock, RecoveryError,
+    recover_superblock,
+};
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,
     TransactionPublishError, TransactionReceipt,

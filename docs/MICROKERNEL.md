@@ -2765,10 +2765,24 @@ entry once before exposing its new immutable state. A rejected plan reaches no
 backend, and consuming the same receipt entry twice fails closed. Directory and
 allocator participants and persistent recovery remain later gates.
 
-Forty-one focused unit tests and strict crate-local clippy pass on Windows
+The redundant-root recovery prerequisite accepts the two exact superblock
+images from the block-service boundary and decodes each canonical checksum
+independently. An unsafe validator contract must establish the complete
+reachable root and allocation graph from the same immutable device generation,
+including digests, identities, generations, bounds, ownership, and
+cross-references. A proven-invalid image is unusable; an indeterminate backend
+failure aborts recovery and can never be reclassified as corruption to permit
+rollback. Two usable candidates must be identical at one generation or exactly
+adjacent, and the newer adjacent generation wins. A lone usable candidate is
+returned with an explicit fallback marker. Gaps and same-generation disagreement
+fail closed. This is bounded state selection over emulated images, not a
+complete metadata-tree validator, physical-device, power-loss, repair,
+durability, or anti-rollback result.
+
+Forty-six focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, directory/allocator transaction
-participation, crash recovery, snapshots, a block-device service, and
+participation, complete crash recovery, snapshots, a block-device service, and
 configuration-checkpoint persistence remain unimplemented.
 
 ```text
@@ -2778,7 +2792,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 41 tests, and both strict crate-local clippy
+Both current unit-test runs pass 46 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

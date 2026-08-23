@@ -249,6 +249,15 @@ authority; unrelated domains continue.
    before backend I/O. One COW root transition produces a receipt whose exact
    participants can each activate once. Directory/allocator participation,
    concrete block/allocation integration, and crash recovery remain pending.
+   The bounded redundant-root recovery selector is now implemented: both exact
+   superblock records are decoded and passed to a complete-graph validation
+   contract; two usable candidates must be identical at one generation or
+   adjacent generations, and only the newer is selected. A single usable
+   candidate is explicitly reported as fallback. Proven-invalid candidates may
+   be bypassed, but indeterminate backend failures abort instead of silently
+   rolling back. A concrete reachable-tree validator, block backend, power-loss
+   harness, repair, and authenticated anti-rollback state remain pending, so
+   crash recovery is still only partially implemented.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

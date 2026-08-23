@@ -121,8 +121,13 @@ explicitly and downgrade the status rather than guessing.
   before data flush. Fixed-capacity transactions group multiple prepared file
   successors under one independently generated COW root publication and return
   one-use activation receipts; directory/allocator transaction participants and
-  concrete block/allocation integration are not yet implemented. UEFI Simple
-  File System use is boot interoperability,
+  concrete block/allocation integration are not yet implemented. Redundant-root
+  selection decodes both canonical superblocks, requires complete candidate
+  validation, accepts only identical or adjacent usable generations, and marks
+  single-candidate fallback. Validator uncertainty aborts rather than becoming
+  rollback. The complete reachable-tree validator, real block backend,
+  power-loss evidence, repair, and anti-rollback state do not yet exist. UEFI
+  Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are
