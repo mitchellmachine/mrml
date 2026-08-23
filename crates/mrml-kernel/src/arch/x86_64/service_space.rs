@@ -1,6 +1,7 @@
 use super::{
     AddressSpace, AddressSpaceError, Mapping, MappingId, PagePermissions, PageTableBuildError,
-    PageTableBuilder, PageTableStore, PeMappingError, VirtAddr, map_pe_image,
+    PageTableBuilder, PageTableStore, PeMappingError, UserBuffer, UserBufferAccess,
+    UserBufferError, UserCopyError, UserMemory, VirtAddr, map_pe_image,
 };
 use crate::{
     ArtifactKind, MAX_PE_SECTIONS, PAGE_SIZE, PeAllocatedRegion, PeAllocationError, PeError,
@@ -244,6 +245,39 @@ impl<const MAPPINGS: usize> ServiceAddressSpace<MAPPINGS> {
 
     pub fn mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
         self.space.mappings()
+    }
+
+    pub fn resolve_user_buffer(
+        &self,
+        virtual_address: u64,
+        length: usize,
+        maximum_length: usize,
+        access: UserBufferAccess,
+    ) -> Result<UserBuffer, UserBufferError> {
+        self.space
+            .resolve_user_buffer(virtual_address, length, maximum_length, access)
+    }
+
+    pub fn copy_from_user<M: UserMemory>(
+        &self,
+        memory: &mut M,
+        virtual_address: u64,
+        output: &mut [u8],
+        maximum_length: usize,
+    ) -> Result<(), UserCopyError<M::Error>> {
+        self.space
+            .copy_from_user(memory, virtual_address, output, maximum_length)
+    }
+
+    pub fn copy_to_user<M: UserMemory>(
+        &self,
+        memory: &mut M,
+        virtual_address: u64,
+        input: &[u8],
+        maximum_length: usize,
+    ) -> Result<(), UserCopyError<M::Error>> {
+        self.space
+            .copy_to_user(memory, virtual_address, input, maximum_length)
     }
 }
 

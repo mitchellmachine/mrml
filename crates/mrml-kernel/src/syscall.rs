@@ -1,8 +1,9 @@
 use crate::arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
-use crate::{Capability, TaskId};
+use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, Rights, TaskId};
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
+pub const CAPABILITY_TRANSFER_DESCRIPTOR_BYTES: usize = 16;
 const USER_RETURN_FLAGS: u64 = 2
     | (1 << 0)
     | (1 << 2)
@@ -23,10 +24,54 @@ pub enum SyscallError {
     InvalidCapability,
     InvalidTask,
     PayloadTooLarge,
+    TooManyCapabilities,
+    InvalidBuffer,
     InvalidPrivilege,
     InvalidInstruction,
     InvalidStack,
     InvalidFlags,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityTransferDescriptor {
+    pub capability: Capability,
+    pub rights: Rights,
+}
+
+pub fn decode_capability_transfers(
+    input: &[u8],
+    count: usize,
+    output: &mut [Option<CapabilityTransferDescriptor>; MAX_CAPABILITIES],
+) -> Result<(), SyscallError> {
+    if count > MAX_CAPABILITIES
+        || input.len()
+            != count
+                .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
+                .ok_or(SyscallError::InvalidBuffer)?
+    {
+        return Err(SyscallError::InvalidBuffer);
+    }
+    *output = [None; MAX_CAPABILITIES];
+    let (chunks, remainder) = input.as_chunks::<CAPABILITY_TRANSFER_DESCRIPTOR_BYTES>();
+    if !remainder.is_empty() {
+        return Err(SyscallError::InvalidBuffer);
+    }
+    for (index, chunk) in chunks.iter().enumerate() {
+        if chunk[10..].iter().any(|byte| *byte != 0) {
+            return Err(SyscallError::ReservedArgument);
+        }
+        let token = u64::from_le_bytes(chunk[..8].try_into().expect("fixed descriptor token"));
+        if token == 0 || token >> 32 == 0 {
+            return Err(SyscallError::InvalidCapability);
+        }
+        let rights = Rights::from_bits(u16::from_le_bytes([chunk[8], chunk[9]]))
+            .map_err(|_| SyscallError::InvalidCapability)?;
+        output[index] = Some(CapabilityTransferDescriptor {
+            capability: Capability::from_token(token),
+            rights,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +139,14 @@ impl UserCallFrame {
         self.r8 = words[1];
         self.r9 = words[2];
     }
+
+    pub fn complete_buffer(&mut self, payload_length: usize, capability_count: usize) {
+        self.rax = 0;
+        self.rdx = payload_length as u64;
+        self.r10 = capability_count as u64;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
 }
 
 const fn user_address(address: u64) -> bool {
@@ -110,6 +163,20 @@ pub enum SyscallRequest {
         receiver: TaskId,
         payload: [u8; MAX_SYSCALL_INLINE_PAYLOAD],
         length: u8,
+    },
+    SendBuffer {
+        endpoint: Capability,
+        receiver: TaskId,
+        payload_address: u64,
+        payload_length: u16,
+        capabilities_address: u64,
+        capability_count: u8,
+    },
+    ReceiveBuffer {
+        payload_address: u64,
+        payload_capacity: u16,
+        capabilities_address: u64,
+        capability_capacity: u8,
     },
 }
 
@@ -168,18 +235,97 @@ impl SyscallRequest {
                 }
                 Ok(Self::Exit)
             }
+            4 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi == 0 || rsi >> 32 == 0 {
+                    return Err(SyscallError::InvalidTask);
+                }
+                let payload_length =
+                    usize::try_from(r10).map_err(|_| SyscallError::PayloadTooLarge)?;
+                if payload_length == 0 || payload_length > MAX_INLINE_PAYLOAD {
+                    return Err(SyscallError::PayloadTooLarge);
+                }
+                let capability_count =
+                    usize::try_from(r9).map_err(|_| SyscallError::TooManyCapabilities)?;
+                if capability_count > MAX_CAPABILITIES {
+                    return Err(SyscallError::TooManyCapabilities);
+                }
+                validate_buffer_address(rdx, 1)?;
+                validate_optional_descriptor_buffer(r8, capability_count)?;
+                Ok(Self::SendBuffer {
+                    endpoint: Capability::from_token(rdi),
+                    receiver: TaskId::from_token(rsi),
+                    payload_address: rdx,
+                    payload_length: payload_length as u16,
+                    capabilities_address: r8,
+                    capability_count: capability_count as u8,
+                })
+            }
+            5 => {
+                let payload_capacity =
+                    usize::try_from(rsi).map_err(|_| SyscallError::PayloadTooLarge)?;
+                if payload_capacity == 0 || payload_capacity > MAX_INLINE_PAYLOAD {
+                    return Err(SyscallError::PayloadTooLarge);
+                }
+                let capability_capacity =
+                    usize::try_from(r10).map_err(|_| SyscallError::TooManyCapabilities)?;
+                if capability_capacity > MAX_CAPABILITIES {
+                    return Err(SyscallError::TooManyCapabilities);
+                }
+                if r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                validate_buffer_address(rdi, 1)?;
+                validate_optional_descriptor_buffer(rdx, capability_capacity)?;
+                Ok(Self::ReceiveBuffer {
+                    payload_address: rdi,
+                    payload_capacity: payload_capacity as u16,
+                    capabilities_address: rdx,
+                    capability_capacity: capability_capacity as u8,
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
 
     pub fn payload(&self) -> &[u8] {
         match self {
-            Self::Yield | Self::Receive | Self::Exit => &[],
+            Self::Yield
+            | Self::Receive
+            | Self::Exit
+            | Self::SendBuffer { .. }
+            | Self::ReceiveBuffer { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
         }
     }
+}
+
+fn validate_buffer_address(address: u64, alignment: u64) -> Result<(), SyscallError> {
+    if address == 0 || address >= 1 << 47 || !address.is_multiple_of(alignment) {
+        return Err(SyscallError::InvalidBuffer);
+    }
+    Ok(())
+}
+
+fn validate_optional_descriptor_buffer(
+    address: u64,
+    capability_count: usize,
+) -> Result<(), SyscallError> {
+    if capability_count == 0 {
+        if address != 0 {
+            return Err(SyscallError::ReservedArgument);
+        }
+        return Ok(());
+    }
+    validate_buffer_address(address, 8)?;
+    capability_count
+        .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
+        .ok_or(SyscallError::InvalidBuffer)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -236,6 +382,19 @@ mod tests {
     }
 
     #[test]
+    fn buffer_completion_returns_only_bounded_result_counts() {
+        let mut frame = valid_yield_frame();
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_buffer(368, 5);
+        assert_eq!(frame.rax, 0);
+        assert_eq!(frame.rdx, 368);
+        assert_eq!(frame.r10, 5);
+        assert_eq!(frame.r8, 0);
+        assert_eq!(frame.r9, 0);
+    }
+
+    #[test]
     fn inline_send_is_pointer_free_canonical_and_bounded() {
         let endpoint = (7u64 << 32) | 3;
         let receiver = (9u64 << 32) | 2;
@@ -261,6 +420,102 @@ mod tests {
         assert_eq!(
             SyscallRequest::decode(1, endpoint, 2, 0, 0, 0, 0),
             Err(SyscallError::InvalidTask)
+        );
+    }
+
+    #[test]
+    fn buffered_calls_bound_addresses_lengths_and_capability_descriptors() {
+        let endpoint = (7u64 << 32) | 3;
+        let receiver = (9u64 << 32) | 2;
+        assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 368, 0x7000, 5),
+            Ok(SyscallRequest::SendBuffer {
+                endpoint: Capability::from_token(endpoint),
+                receiver: TaskId::from_token(receiver),
+                payload_address: 0x6000,
+                payload_length: 368,
+                capabilities_address: 0x7000,
+                capability_count: 5,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(5, 0x8000, 112, 0x9000, 8, 0, 0),
+            Ok(SyscallRequest::ReceiveBuffer {
+                payload_address: 0x8000,
+                payload_capacity: 112,
+                capabilities_address: 0x9000,
+                capability_capacity: 8,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0, 48, 0, 0),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 0, 0, 0),
+            Err(SyscallError::PayloadTooLarge)
+        );
+        assert_eq!(
+            SyscallRequest::decode(
+                4,
+                endpoint,
+                receiver,
+                0x6000,
+                MAX_INLINE_PAYLOAD as u64 + 1,
+                0,
+                0,
+            ),
+            Err(SyscallError::PayloadTooLarge)
+        );
+        assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 48, 0, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 48, 0x7001, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
+            SyscallRequest::decode(5, 0x8000, 112, 0, 0, 1, 0),
+            Err(SyscallError::ReservedArgument)
+        );
+        assert_eq!(
+            SyscallRequest::decode(5, 0x8000, 112, 0, MAX_CAPABILITIES as u64 + 1, 0, 0),
+            Err(SyscallError::TooManyCapabilities)
+        );
+    }
+
+    #[test]
+    fn capability_transfer_descriptors_are_exact_and_canonical() {
+        let capability = Capability::from_token((4u64 << 32) | 2);
+        let mut wire = [0u8; CAPABILITY_TRANSFER_DESCRIPTOR_BYTES * 2];
+        wire[..8].copy_from_slice(&capability.token().to_le_bytes());
+        wire[8..10].copy_from_slice(&Rights::READ.bits().to_le_bytes());
+        wire[16..24].copy_from_slice(&((5u64 << 32) | 3).to_le_bytes());
+        wire[24..26].copy_from_slice(&Rights::WRITE.bits().to_le_bytes());
+        let mut decoded = [None; MAX_CAPABILITIES];
+        decode_capability_transfers(&wire, 2, &mut decoded).unwrap();
+        assert_eq!(
+            decoded[0],
+            Some(CapabilityTransferDescriptor {
+                capability,
+                rights: Rights::READ,
+            })
+        );
+        assert_eq!(
+            decode_capability_transfers(&wire[..31], 2, &mut decoded),
+            Err(SyscallError::InvalidBuffer)
+        );
+        wire[10] = 1;
+        assert_eq!(
+            decode_capability_transfers(&wire, 2, &mut decoded),
+            Err(SyscallError::ReservedArgument)
+        );
+        wire[10] = 0;
+        wire[8..10].copy_from_slice(&0x8000u16.to_le_bytes());
+        assert_eq!(
+            decode_capability_transfers(&wire, 2, &mut decoded),
+            Err(SyscallError::InvalidCapability)
         );
     }
 

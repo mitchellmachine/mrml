@@ -383,9 +383,11 @@ canonical zero placeholders, and extra, missing, or payload-forged authority
 fails closed. The supervision adapter composes query and restart with existing
 exact-object, cleanup, backoff, restart-limit, and trusted-context gates. Names,
 numeric setting IDs, and service handles never authorize. A bounded CPL3
-request-buffer syscall path, signed service execution, signed schema admission,
-persistent export/import, and storage-backed recovery remain planned. It is not
-a clone of the Windows Registry, and secrets remain separate.
+request-buffer ABI now decodes fixed payload/capability-buffer descriptors and
+validates every active user leaf before a directional copy, but its service-
+probe dispatch is not yet connected. Signed service execution, signed schema
+admission, persistent export/import, and storage-backed recovery remain
+planned. It is not a clone of the Windows Registry, and secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

@@ -2622,6 +2622,26 @@ inline bytes, so these 48--368-byte requests have not yet crossed a bounded
 user-buffer syscall or run as a signed CPL3 service. Signed schema admission and
 native-storage persistence/export also remain incomplete.
 
+The next boundary layer now decodes buffered send and receive operations without
+dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
+IPC maximum and capability arrays by eight canonical 16-byte descriptors. Each
+descriptor requires a live-looking generational token, nonempty known rights,
+and zero reserved bytes; derivation still performs the authoritative generation,
+DELEGATE, attenuation, capacity, and rollback checks. Zero, noncanonical,
+misaligned, oversized, inconsistent optional buffers and nonzero reserved
+arguments fail during register decoding.
+
+`AddressSpace::resolve_user_buffer` proves a nonempty bounded range lies wholly
+inside one user mapping and has the requested read/write direction before
+returning its checked translation. Its copy helpers hold the immutable mapping
+borrow across validation and the memory-backend call, and tests prove invalid
+ranges never invoke that backend. `ActivePageTables::resolve_user_buffer`
+additionally binds the current CR3 to the exact task root and validates every
+touched live user leaf, including cross-page ranges. These mechanisms are
+**IMPLEMENTED** and Windows/Linux unit-tested; buffered syscall dispatch and a
+signed CPL3 service probe are still **PARTIALLY IMPLEMENTED**, so no live user
+pointer was dereferenced in this milestone.
+
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,
 optimistic transactional revision checks, bounded audit rings, and capability
 authorization.

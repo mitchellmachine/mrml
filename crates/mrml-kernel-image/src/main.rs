@@ -631,7 +631,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             SyscallRequest::SendInline {
                 endpoint, receiver, ..
             } => (*endpoint, *receiver),
-            SyscallRequest::Yield | SyscallRequest::Receive | SyscallRequest::Exit => halt(),
+            SyscallRequest::Yield
+            | SyscallRequest::Receive
+            | SyscallRequest::Exit
+            | SyscallRequest::SendBuffer { .. }
+            | SyscallRequest::ReceiveBuffer { .. } => halt(),
         };
         let payload = request.payload();
         let runtime = match (*core::ptr::addr_of_mut!(USER_RUNTIME)).as_mut() {
@@ -805,6 +809,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     _ => halt(),
                 }
             }
+            SyscallRequest::SendBuffer { .. } | SyscallRequest::ReceiveBuffer { .. } => halt(),
         }
     }
     #[cfg(feature = "smp-service-migration-probe")]

@@ -1,6 +1,9 @@
 use core::arch::asm;
 
-use super::{ADDRESS_MASK, Mapping, PageError, PagePermissions, PageTableEntry, VirtAddr};
+use super::{
+    ADDRESS_MASK, Mapping, PageError, PagePermissions, PageTableEntry, UserBufferAccess,
+    UserBufferError, VirtAddr,
+};
 use crate::{PAGE_SIZE, PhysAddr};
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
@@ -453,6 +456,22 @@ pub struct ActivePageTables {
     root: PhysAddr,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActiveUserBuffer {
+    virtual_address: u64,
+    length: usize,
+}
+
+impl ActiveUserBuffer {
+    pub const fn virtual_address(self) -> u64 {
+        self.virtual_address
+    }
+
+    pub const fn length(self) -> usize {
+        self.length
+    }
+}
+
 impl ActivePageTables {
     /// Opens the current CR3 for exact-match leaf protection without allocating
     /// new page-table frames.
@@ -494,6 +513,56 @@ impl ActivePageTables {
             executable: bits & (1 << 63) == 0,
             user: bits & (1 << 2) != 0,
         }))
+    }
+
+    /// Validates every active leaf touched by a bounded user copy. The caller
+    /// must keep page-table mutation excluded through the subsequent copy.
+    pub fn resolve_user_buffer(
+        &self,
+        expected_root: PhysAddr,
+        virtual_address: u64,
+        length: usize,
+        maximum_length: usize,
+        access: UserBufferAccess,
+    ) -> Result<ActiveUserBuffer, UserBufferError> {
+        if self.root != expected_root {
+            return Err(UserBufferError::AccessDenied);
+        }
+        if length == 0 {
+            return Err(UserBufferError::Empty);
+        }
+        if length > maximum_length {
+            return Err(UserBufferError::TooLarge);
+        }
+        let length_u64 = u64::try_from(length).map_err(|_| UserBufferError::Overflow)?;
+        let end = virtual_address
+            .checked_add(length_u64)
+            .ok_or(UserBufferError::Overflow)?;
+        if virtual_address == 0 || virtual_address >= 1 << 47 || end > 1 << 47 {
+            return Err(UserBufferError::Overflow);
+        }
+        let first_page = virtual_address & !(PAGE_SIZE - 1);
+        let last_page = (end - 1) & !(PAGE_SIZE - 1);
+        let mut page = first_page;
+        loop {
+            let leaf = self
+                .leaf(VirtAddr::new(page).map_err(|_| UserBufferError::Overflow)?)
+                .map_err(|_| UserBufferError::Unmapped)?
+                .ok_or(UserBufferError::Unmapped)?;
+            if !leaf.user() || (access == UserBufferAccess::Write && !leaf.writable()) {
+                return Err(UserBufferError::AccessDenied);
+            }
+            if page == last_page {
+                break;
+            }
+            page = page
+                .checked_add(PAGE_SIZE)
+                .ok_or(UserBufferError::Overflow)?;
+        }
+        Ok(ActiveUserBuffer {
+            virtual_address,
+            length,
+        })
     }
 
     /// Applies an exact-match permission transition and invalidates every

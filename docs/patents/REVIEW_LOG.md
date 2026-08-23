@@ -330,6 +330,21 @@ or optimization.
 Patent review: `NOT_TRIGGERED` — conventional capability-envelope validation
 and service dispatch.
 
+## 2026-08-23 — bounded CPL3 buffer validation foundation
+
+MRML source: `crates/mrml-kernel/src/{syscall,capability}.rs` and
+`crates/mrml-kernel/src/arch/x86_64/{address_space,page_table,service_space}.rs`.
+
+The kernel now decodes bounded buffer descriptors, validates canonical
+capability-transfer records, resolves complete ranges against user mappings,
+and checks each active user page before directional copy. These are conventional
+syscall marshalling, page-table walking, bounds checking, and capability
+attenuation techniques; they introduce no novel algorithm, ABI optimization,
+device protocol, codec, or cryptographic construction.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded user-copy validation and
+syscall descriptor parsing.
+
 ## 2026-08-23 — lazy tuple-valued compiler control flow
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

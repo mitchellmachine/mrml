@@ -19,7 +19,10 @@ mod vmx;
 mod vtd;
 mod vtd_tables;
 pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt, copy_mcfg};
-pub use address_space::{AddressSpace, AddressSpaceError, Mapping, MappingId};
+pub use address_space::{
+    AddressSpace, AddressSpaceError, Mapping, MappingId, UserBuffer, UserBufferAccess,
+    UserBufferError, UserCopyError, UserMemory,
+};
 pub use ap_online::{ApOnlineError, ApOnlineTable};
 pub use ap_trampoline::{
     ActiveApTrampolinePage, ApTrampolineError, ApTrampolineImage, ApTrampolinePage,
@@ -43,8 +46,8 @@ pub use local_apic::{
     ApStartupTiming, ApicIpi, LocalApicController, LocalApicError, LocalApicTimer, TimerDivide,
 };
 pub use page_table::{
-    ActiveLeaf, ActivePageTables, PageTableBuildError, PageTableBuilder, PageTableStore,
-    PreallocatedPageTableStore,
+    ActiveLeaf, ActivePageTables, ActiveUserBuffer, PageTableBuildError, PageTableBuilder,
+    PageTableStore, PreallocatedPageTableStore,
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{

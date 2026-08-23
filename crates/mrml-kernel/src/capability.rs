@@ -24,6 +24,24 @@ impl Rights {
         self.0 & requested.0 == requested.0
     }
 
+    pub const fn bits(self) -> u16 {
+        self.0
+    }
+
+    pub const fn from_bits(bits: u16) -> Result<Self, CapabilityError> {
+        let known = Self::READ.0
+            | Self::WRITE.0
+            | Self::EXECUTE.0
+            | Self::MAP.0
+            | Self::SIGNAL.0
+            | Self::DELEGATE.0
+            | Self::CONTROL.0;
+        if bits == 0 || bits & !known != 0 {
+            return Err(CapabilityError::Invalid);
+        }
+        Ok(Self(bits))
+    }
+
     const fn intersect(self, limit: Self) -> Self {
         Self(self.0 & limit.0)
     }
