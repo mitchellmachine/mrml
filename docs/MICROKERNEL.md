@@ -272,8 +272,18 @@ An invalidation failure after a leaf write returns `FailStop`. Its platform
 IOMMU implementation remains inside the trusted bare-metal monitor boundary.
 The supplied scrubber binds a unique pinned physical-page mapping and performs
 volatile byte zeroization across the entire page before an ordering fence. The
-IOMMU path and scrub primitive must still be validated on hardware before
-stronger claims are enabled.
+consumer Intel path now includes a register-based VT-d primitive for a bound
+4 KiB second-level leaf. It verifies the leaf identity, checks that context and
+IOTLB command registers are idle before mutation, clears DMA read/write access,
+then performs bounded global context-cache and IOTLB invalidations with read and
+write draining requested. Invalid completion or timeout after the leaf write is
+`FailStop`; a pre-write busy condition is a clean rejection. The native MMIO
+constructor requires a unique uncached mapping, and the binding contract
+requires coverage of every remapping unit capable of reaching the granule.
+DMAR discovery, multi-unit assembly, fault-record handling, and real-hardware
+validation remain required before stronger claims are enabled. Register fields
+and ordering follow the Intel VT-d Architecture Specification rather than
+third-party implementation code.
 
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context

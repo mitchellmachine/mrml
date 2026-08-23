@@ -34,8 +34,10 @@ impl EptAccess {
 /// denies DMA for every protected granule; device assignment can later refine
 /// this behind an equally ordered IOMMU implementation.
 pub trait DmaIsolation {
-    fn deny(&mut self, physical: PhysAddr) -> bool;
-    fn invalidate(&mut self) -> bool;
+    /// Revokes DMA access and completes every required IOMMU invalidation.
+    /// `Rejected` is only valid when no permissive change may remain pending;
+    /// uncertainty after a table write must return `FailStop`.
+    fn deny_and_invalidate(&mut self, physical: PhysAddr) -> GranuleHardwareOutcome;
 }
 
 pub trait GranuleScrubber {
@@ -151,8 +153,9 @@ unsafe impl<I: VmxInstructions, D: DmaIsolation, S: GranuleScrubber> GranuleHard
         if expected_domain.is_some() && expected_domain != self.binding.domain {
             return GranuleHardwareOutcome::Rejected;
         }
-        if !self.dma.deny(transition.physical()) || !self.dma.invalidate() {
-            return GranuleHardwareOutcome::Rejected;
+        match self.dma.deny_and_invalidate(transition.physical()) {
+            GranuleHardwareOutcome::Applied => {}
+            outcome => return outcome,
         }
 
         let (host_access, domain_access, scrub) = match transition.kind() {
@@ -251,15 +254,13 @@ mod tests {
     struct TestDma {
         denied: bool,
         invalidated: bool,
+        outcome: Option<GranuleHardwareOutcome>,
     }
     impl DmaIsolation for TestDma {
-        fn deny(&mut self, _: PhysAddr) -> bool {
+        fn deny_and_invalidate(&mut self, _: PhysAddr) -> GranuleHardwareOutcome {
             self.denied = true;
-            true
-        }
-        fn invalidate(&mut self) -> bool {
             self.invalidated = true;
-            true
+            self.outcome.unwrap_or(GranuleHardwareOutcome::Applied)
         }
     }
     struct TestScrubber(bool);
