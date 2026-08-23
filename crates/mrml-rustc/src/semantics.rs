@@ -217,6 +217,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerUnsignedAbsolute { .. }
                         | ExprKind::IntegerAbsoluteDifference { .. }
                         | ExprKind::IntegerBitCount { .. }
+                        | ExprKind::IntegerLogarithm { .. }
                 )
             });
         let call_value = if requires_typed_evaluation {
@@ -1919,6 +1920,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerUnsignedAbsolute { .. }
                 | ExprKind::IntegerAbsoluteDifference { .. }
                 | ExprKind::IntegerBitCount { .. }
+                | ExprKind::IntegerLogarithm { .. }
         )
     }) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
@@ -2068,6 +2070,10 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const) || recurse(other, inside_inline_const)
         }
         ExprKind::IntegerBitCount { base, .. } => recurse(base, inside_inline_const),
+        ExprKind::IntegerLogarithm { base, radix, .. } => {
+            recurse(base, inside_inline_const)
+                || radix.is_some_and(|radix| recurse(radix, inside_inline_const))
+        }
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2178,6 +2184,9 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::IntegerUnsignedAbsolute { base } => recurse(base),
         ExprKind::IntegerAbsoluteDifference { base, other } => recurse(base) || recurse(other),
         ExprKind::IntegerBitCount { base, .. } => recurse(base),
+        ExprKind::IntegerLogarithm { base, radix, .. } => {
+            recurse(base) || radix.is_some_and(recurse)
+        }
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -2603,6 +2612,54 @@ fn evaluate_call_aware_integer<
                 depth,
             )?;
             u128::from(count_integer_bits(value, base_bits, count))
+        }
+        ExprKind::IntegerLogarithm {
+            base,
+            radix,
+            binary,
+        } => {
+            if ty != crate::IntegerType::U32 {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants)
+                .unwrap_or(crate::IntegerType::I32);
+            let base_bits = base_type
+                .bits(context.target.pointer_bits())
+                .ok_or(SemanticErrorKind::UnsupportedConstCall)?;
+            if radix.is_some_and(|radix| {
+                integer_expression_type(context, symbol_count, tree, radix, constants)
+                    .is_some_and(|radix_type| radix_type != base_type)
+            }) {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                base,
+                base_type,
+                constants,
+                depth,
+            )?;
+            let radix = if let Some(radix) = radix {
+                evaluate_call_aware_integer(
+                    context,
+                    symbol_count,
+                    tree,
+                    radix,
+                    base_type,
+                    constants,
+                    depth,
+                )?
+            } else if binary {
+                2
+            } else {
+                10
+            };
+            u128::from(
+                integer_logarithm(value, radix, base_bits, base_type.is_signed())
+                    .map_err(arithmetic_error)?,
+            )
         }
         _ => return Err(arithmetic_error(ConstEvalError::InvalidCast)),
     };
@@ -3476,7 +3533,9 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
                 expression_integer_type(tree, base, constants).unwrap_or(crate::IntegerType::I32);
             Some(base_type.unsigned_counterpart().unwrap_or(base_type))
         }
-        ExprKind::IntegerBitCount { .. } => Some(crate::IntegerType::U32),
+        ExprKind::IntegerBitCount { .. } | ExprKind::IntegerLogarithm { .. } => {
+            Some(crate::IntegerType::U32)
+        }
         ExprKind::If {
             then_branch,
             else_branch,
@@ -3748,6 +3807,30 @@ fn count_integer_bits(value: u128, bits: u8, count: crate::expression::IntegerBi
             .trailing_zeros()
             .min(u32::from(bits)),
     }
+}
+
+fn integer_logarithm(
+    value: u128,
+    radix: u128,
+    bits: u8,
+    signed: bool,
+) -> Result<u32, ConstEvalError> {
+    let mask = signed_mask(bits);
+    if value & mask == 0
+        || (signed && decode_signed(value & mask, bits) <= 0)
+        || radix & mask < 2
+        || (signed && decode_signed(radix & mask, bits) < 2)
+    {
+        return Err(ConstEvalError::InvalidCast);
+    }
+    let mut value = value & mask;
+    let radix = radix & mask;
+    let mut result = 0_u32;
+    while value >= radix {
+        value /= radix;
+        result += 1;
+    }
+    Ok(result)
 }
 
 const fn signed_maximum(bits: u8) -> i128 {

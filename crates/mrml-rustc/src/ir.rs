@@ -309,7 +309,8 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerBitTransform { .. }
             | ExprKind::IntegerUnsignedAbsolute { .. }
             | ExprKind::IntegerAbsoluteDifference { .. }
-            | ExprKind::IntegerBitCount { .. } => {
+            | ExprKind::IntegerBitCount { .. }
+            | ExprKind::IntegerLogarithm { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
                     span: expression.span,

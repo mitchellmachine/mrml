@@ -431,6 +431,11 @@ pub enum ExprKind<'source> {
         base: ExprId,
         count: IntegerBitCount,
     },
+    IntegerLogarithm {
+        base: ExprId,
+        radix: Option<ExprId>,
+        binary: bool,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -677,6 +682,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerUnsignedAbsolute { .. }
             | ExprKind::IntegerAbsoluteDifference { .. }
             | ExprKind::IntegerBitCount { .. }
+            | ExprKind::IntegerLogarithm { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -949,6 +955,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
             ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerLogarithm { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -2268,6 +2275,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerBitCount { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerLogarithm { base, radix, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                if let Some(radix) = radix {
+                    self.substitute_identifier(radix, name, replacement, depth + 1)?;
+                }
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3864,6 +3877,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "rem_euclid"
                         | "wrapping_div_euclid"
                         | "wrapping_rem_euclid"
+                        | "ilog"
+                        | "ilog2"
+                        | "ilog10"
                         | "signum"
                         | "is_positive"
                         | "is_negative"
@@ -3969,6 +3985,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "rem_euclid"
                     | "wrapping_div_euclid"
                     | "wrapping_rem_euclid"
+                    | "ilog"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -4132,6 +4149,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "saturating_pow" => IntegerPowerMode::Saturating,
                         _ => unreachable!(),
                     },
+                },
+                "ilog" | "ilog2" | "ilog10" => ExprKind::IntegerLogarithm {
+                    base,
+                    radix: if method.text == "ilog" {
+                        Some(argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?)
+                    } else {
+                        None
+                    },
+                    binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
                 "abs_diff" => ExprKind::IntegerAbsoluteDifference {

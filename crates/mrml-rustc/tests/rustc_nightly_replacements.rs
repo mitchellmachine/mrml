@@ -2180,6 +2180,28 @@ fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_integer_logarithms_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u32 { input.ilog2() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> u32 { input.ilog10() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, radix: u64) -> u32 { input.ilog(radix) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, radix: i64) -> u32 { input.ilog(radix) }",
+        "const VALUE: u32 = 255u8.ilog2(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: u32 = 999i16.ilog10(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: u32 = 81u32.ilog(3); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+        "const VALUE: u32 = 625i64.ilog(5); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_bit_counts_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u32 { input.count_ones() }",
