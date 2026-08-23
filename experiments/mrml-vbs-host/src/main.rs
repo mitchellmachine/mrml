@@ -5,7 +5,8 @@ use mrml_error::{Result, anyhow};
 #[cfg(windows)]
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    VBS_AUTHORITY_CONTEXT_BYTES, VbsAuthorityContext, VbsAuthorityOperation,
+    ProtectionBackend, ProtectionPolicy, ProtectionSession, VBS_AUTHORITY_CONTEXT_BYTES,
+    VbsAuthorityContext, VbsAuthorityOperation,
 };
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
@@ -82,12 +83,22 @@ fn application_main() -> Result<()> {
             authority_status
         ));
     }
-    let verified = AuthorityReceipt::verify(&AUTHORITY_KEY, request, &receipt)
-        .map_err(|error| anyhow!("authority receipt verification failed: {:?}", error))?;
+    let policy = ProtectionPolicy::new(
+        ProtectionBackend::VbsEnclave,
+        ProtectionBackend::VbsEnclave.maximum_claims(),
+        false,
+        1,
+        AUTHORITY_MEASUREMENT,
+    );
+    let mut session = ProtectionSession::new(nonce)
+        .map_err(|error| anyhow!("protection session rejected: {:?}", error))?;
+    let admitted =
+        AuthorityReceipt::verify_and_admit(&AUTHORITY_KEY, request, &receipt, &mut session, policy)
+            .map_err(|error| anyhow!("authority receipt admission failed: {:?}", error))?;
     mrml_println!(
         "verified VTL1 authority receipt: backend={:?} claims={:?}",
-        verified.report().backend(),
-        verified.report().claims()
+        admitted.backend(),
+        admitted.claims()
     );
     Ok(())
 }

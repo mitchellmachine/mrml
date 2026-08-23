@@ -44,6 +44,17 @@ are implemented, but a report is not attestation until a hardware-backed launch
 authority authenticates it. Secrets must not be released on a self-asserted or
 ordinary hosted report.
 
+Policy names one exact backend in addition to its required claims. This is
+necessary because claim sets intentionally overlap: for example, both VBS and
+bare-metal reports may honestly claim only `MEASURED`. A correctly authenticated
+report from the wrong mode returns `BackendMismatch` before sequence state is
+advanced, so a subsequent correct same-sequence report remains admissible. The
+authority-receipt API provides one `verify_and_admit` operation that verifies
+the request-bound MAC first and immediately applies backend, claims, version,
+measurement, nonce, replay, and debug policy. The VBS host probe uses this
+combined operation rather than treating MAC verification alone as launch
+admission.
+
 The intended x86_64 layers are:
 
 - ordinary WHP or KVM remains explicitly unprotected against its host;

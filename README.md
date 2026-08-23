@@ -114,6 +114,9 @@ never inferred from a VMM name. Ordinary WHP/KVM is unprotected; the planned
 Windows VBS authority protects only against VTL0 and still trusts Hyper-V and
 the secure kernel; the bare-metal path uses an MRML VMX-root monitor. The
 consumer-PC design does not depend on server confidential-computing extensions.
+Admission policy requires the exact backend as well as claims, measurement,
+security version, nonce, sequence, and debug state. A valid receipt from another
+mode cannot satisfy a weaker overlapping claim set or consume replay state.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.

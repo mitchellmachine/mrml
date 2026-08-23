@@ -79,6 +79,7 @@ pub enum ProtectionError {
     SecurityVersionTooOld,
     MeasurementMismatch,
     InsufficientProtection,
+    BackendMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -206,6 +207,7 @@ impl ProtectionReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProtectionPolicy {
+    required_backend: ProtectionBackend,
     required_claims: ProtectionClaims,
     allow_debug: bool,
     minimum_security_version: u64,
@@ -214,12 +216,14 @@ pub struct ProtectionPolicy {
 
 impl ProtectionPolicy {
     pub const fn new(
+        required_backend: ProtectionBackend,
         required_claims: ProtectionClaims,
         allow_debug: bool,
         minimum_security_version: u64,
         expected_measurement: [u8; 64],
     ) -> Self {
         Self {
+            required_backend,
             required_claims,
             allow_debug,
             minimum_security_version,
@@ -287,6 +291,9 @@ impl ProtectionSession {
     ) -> Result<ProtectionAdmission, ProtectionError> {
         if report.nonce != self.nonce {
             return Err(ProtectionError::MissingNonce);
+        }
+        if report.backend != policy.required_backend {
+            return Err(ProtectionError::BackendMismatch);
         }
         if self
             .last_sequence
@@ -384,7 +391,13 @@ mod tests {
     #[test]
     fn admission_rejects_downgrade_debug_replay_and_wrong_measurement() {
         let required = ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED);
-        let policy = ProtectionPolicy::new(required, false, 7, MEASUREMENT);
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            required,
+            false,
+            7,
+            MEASUREMENT,
+        );
         let mut session = ProtectionSession::new(NONCE).unwrap();
         let admitted = session.admit(vbs(4), policy).unwrap();
         assert!(!admitted.permits_secret_release());
@@ -405,14 +418,20 @@ mod tests {
             Err(ProtectionError::DebugDenied)
         );
 
-        let weak_policy =
-            ProtectionPolicy::new(ProtectionClaims::HOST_VMM_ISOLATION, false, 7, MEASUREMENT);
+        let weak_policy = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::HOST_VMM_ISOLATION,
+            false,
+            7,
+            MEASUREMENT,
+        );
         assert_eq!(
             session.admit(vbs(6), weak_policy),
             Err(ProtectionError::InsufficientProtection)
         );
 
-        let wrong_measurement = ProtectionPolicy::new(required, false, 7, [1; 64]);
+        let wrong_measurement =
+            ProtectionPolicy::new(ProtectionBackend::VbsEnclave, required, false, 7, [1; 64]);
         assert_eq!(
             session.admit(vbs(7), wrong_measurement),
             Err(ProtectionError::MeasurementMismatch)
@@ -435,10 +454,46 @@ mod tests {
         let admission = session
             .admit(
                 report,
-                ProtectionPolicy::new(ProtectionClaims::NONE, false, 0, [0; 64]),
+                ProtectionPolicy::new(
+                    ProtectionBackend::Unprotected,
+                    ProtectionClaims::NONE,
+                    false,
+                    0,
+                    [0; 64],
+                ),
             )
             .unwrap();
         assert!(!admission.permits_secret_release());
+    }
+
+    #[test]
+    fn exact_backend_is_required_before_sequence_is_consumed() {
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            false,
+            1,
+            MEASUREMENT,
+        );
+        let bare_metal = ProtectionReport::new(
+            ProtectionBackend::BareMetalMonitor,
+            ProtectionClaims::MEASURED,
+            false,
+            7,
+            4,
+            MEASUREMENT,
+            NONCE,
+        )
+        .unwrap();
+        let mut session = ProtectionSession::new(NONCE).unwrap();
+        assert_eq!(
+            session.admit(bare_metal, policy),
+            Err(ProtectionError::BackendMismatch)
+        );
+        assert_eq!(
+            session.admit(vbs(4), policy).unwrap().backend(),
+            ProtectionBackend::VbsEnclave
+        );
     }
 
     #[test]

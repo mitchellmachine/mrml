@@ -1,4 +1,7 @@
-use crate::{PROTECTION_REPORT_BYTES, ProtectionError, ProtectionReport};
+use crate::{
+    PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionError, ProtectionPolicy,
+    ProtectionReport, ProtectionSession,
+};
 use mrml_crypto::{Sha3_512, hmac_sha256};
 
 pub const LAUNCH_REQUEST_BYTES: usize = 184;
@@ -295,6 +298,22 @@ impl AuthorityReceipt {
         })
     }
 
+    /// Authenticates the authority decision and immediately applies the exact
+    /// backend/claim/version/measurement/session policy. Callers that gate a
+    /// launch should prefer this over inspecting a verified report manually.
+    pub fn verify_and_admit(
+        key: &[u8; 32],
+        request: LaunchRequest,
+        input: &[u8],
+        session: &mut ProtectionSession,
+        policy: ProtectionPolicy,
+    ) -> Result<ProtectionAdmission, ProtectedChannelError> {
+        let receipt = Self::verify(key, request, input)?;
+        session
+            .admit(receipt.report, policy)
+            .map_err(ProtectedChannelError::Report)
+    }
+
     pub const fn report(self) -> ProtectionReport {
         self.report
     }
@@ -400,6 +419,55 @@ mod tests {
                 .report()
                 .backend(),
             ProtectionBackend::Unprotected
+        );
+    }
+
+    #[test]
+    fn authenticated_receipt_still_requires_exact_backend_admission() {
+        let bare = ProtectionReport::new(
+            ProtectionBackend::BareMetalMonitor,
+            ProtectionClaims::MEASURED,
+            false,
+            1,
+            4,
+            IMAGE,
+            NONCE,
+        )
+        .unwrap();
+        let bare_receipt = AuthorityReceipt::seal(&KEY, request(4), bare).unwrap();
+        let policy = ProtectionPolicy::new(
+            ProtectionBackend::VbsEnclave,
+            ProtectionClaims::MEASURED,
+            false,
+            1,
+            IMAGE,
+        );
+        let mut session = ProtectionSession::new(NONCE).unwrap();
+        assert_eq!(
+            AuthorityReceipt::verify_and_admit(
+                &KEY,
+                request(4),
+                &bare_receipt,
+                &mut session,
+                policy,
+            ),
+            Err(ProtectedChannelError::Report(
+                ProtectionError::BackendMismatch
+            ))
+        );
+
+        let vbs_receipt = AuthorityReceipt::seal(&KEY, request(4), report(4)).unwrap();
+        assert_eq!(
+            AuthorityReceipt::verify_and_admit(
+                &KEY,
+                request(4),
+                &vbs_receipt,
+                &mut session,
+                policy,
+            )
+            .unwrap()
+            .backend(),
+            ProtectionBackend::VbsEnclave
         );
     }
 
