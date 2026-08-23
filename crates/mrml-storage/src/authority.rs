@@ -115,6 +115,7 @@ struct Entry {
     rights: StorageRights,
     owner: Option<StoragePrincipal>,
     parent: Option<StorageHandle>,
+    reserved: bool,
     retired: bool,
 }
 impl Entry {
@@ -125,12 +126,23 @@ impl Entry {
         rights: StorageRights::NONE,
         owner: None,
         parent: None,
+        reserved: false,
         retired: false,
     };
 }
 
 pub struct StorageAuthorityTable<const N: usize> {
     entries: [Entry; N],
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct StorageAuthorityReservation {
+    slot: u32,
+    generation: u32,
+    object: StorageObjectId,
+    kind: StorageObjectKind,
+    rights: StorageRights,
+    owner: StoragePrincipal,
 }
 
 impl<const N: usize> StorageAuthorityTable<N> {
@@ -152,6 +164,60 @@ impl<const N: usize> StorageAuthorityTable<N> {
         self.entries.iter().enumerate().any(|(slot, entry)| {
             entry.object.is_none() && !entry.retired && u32::try_from(slot).is_ok()
         })
+    }
+
+    pub fn reserve_insert(
+        &mut self,
+        object: StorageObjectId,
+        kind: StorageObjectKind,
+        rights: StorageRights,
+        owner: StoragePrincipal,
+    ) -> Result<StorageAuthorityReservation, StorageAuthorityError> {
+        if !rights.valid_for(kind) {
+            return Err(StorageAuthorityError::InvalidRights);
+        }
+        let (slot, entry) = self
+            .entries
+            .iter_mut()
+            .enumerate()
+            .find(|(_, entry)| entry.object.is_none() && !entry.retired)
+            .ok_or(StorageAuthorityError::Full)?;
+        let slot = u32::try_from(slot).map_err(|_| StorageAuthorityError::Full)?;
+        entry.object = Some(object);
+        entry.kind = kind;
+        entry.rights = rights;
+        entry.owner = Some(owner);
+        entry.parent = None;
+        entry.reserved = true;
+        Ok(StorageAuthorityReservation {
+            slot,
+            generation: entry.generation,
+            object,
+            kind,
+            rights,
+            owner,
+        })
+    }
+
+    pub fn activate_reservation(
+        &mut self,
+        reservation: StorageAuthorityReservation,
+    ) -> Result<StorageHandle, StorageAuthorityError> {
+        let entry = self.reserved_entry_mut(&reservation)?;
+        entry.reserved = false;
+        Ok(StorageHandle {
+            slot: reservation.slot,
+            generation: reservation.generation,
+        })
+    }
+
+    pub fn cancel_reservation(
+        &mut self,
+        reservation: StorageAuthorityReservation,
+    ) -> Result<(), StorageAuthorityError> {
+        let entry = self.reserved_entry_mut(&reservation)?;
+        Self::retire(entry);
+        Ok(())
     }
     pub fn authorize(
         &self,
@@ -206,6 +272,7 @@ impl<const N: usize> StorageAuthorityTable<N> {
             .get(slot)
             .ok_or(StorageAuthorityError::InvalidHandle)?;
         if entry.object.is_none()
+            || entry.reserved
             || entry.generation != handle.generation
             || entry.owner != Some(owner)
         {
@@ -260,6 +327,7 @@ impl<const N: usize> StorageAuthorityTable<N> {
         entry.rights = rights;
         entry.owner = Some(owner);
         entry.parent = parent;
+        entry.reserved = false;
         Ok(StorageHandle {
             slot,
             generation: entry.generation,
@@ -270,6 +338,7 @@ impl<const N: usize> StorageAuthorityTable<N> {
         entry.rights = StorageRights::NONE;
         entry.owner = None;
         entry.parent = None;
+        entry.reserved = false;
         if let Some(next) = entry.generation.checked_add(1) {
             entry.generation = next;
         } else {
@@ -281,8 +350,30 @@ impl<const N: usize> StorageAuthorityTable<N> {
             usize::try_from(handle.slot).map_err(|_| StorageAuthorityError::InvalidHandle)?;
         self.entries
             .get(slot)
-            .filter(|entry| entry.object.is_some() && entry.generation == handle.generation)
+            .filter(|entry| {
+                entry.object.is_some() && !entry.reserved && entry.generation == handle.generation
+            })
             .ok_or(StorageAuthorityError::InvalidHandle)
+    }
+
+    fn reserved_entry_mut(
+        &mut self,
+        reservation: &StorageAuthorityReservation,
+    ) -> Result<&mut Entry, StorageAuthorityError> {
+        let slot = usize::try_from(reservation.slot)
+            .map_err(|_| StorageAuthorityError::InvalidReservation)?;
+        self.entries
+            .get_mut(slot)
+            .filter(|entry| {
+                entry.reserved
+                    && entry.generation == reservation.generation
+                    && entry.object == Some(reservation.object)
+                    && entry.kind == reservation.kind
+                    && entry.rights == reservation.rights
+                    && entry.owner == Some(reservation.owner)
+                    && entry.parent.is_none()
+            })
+            .ok_or(StorageAuthorityError::InvalidReservation)
     }
 }
 impl<const N: usize> Default for StorageAuthorityTable<N> {
@@ -300,6 +391,7 @@ pub enum StorageAuthorityError {
     InvalidLineage,
     Denied,
     DelegationDenied,
+    InvalidReservation,
 }
 
 #[cfg(test)]
@@ -349,6 +441,78 @@ mod tests {
                 StorageRights::LOOKUP
             ),
             Err(StorageAuthorityError::Denied)
+        );
+    }
+
+    #[test]
+    fn inactive_authority_reservations_cancel_or_activate_exactly_once() {
+        let mut table = StorageAuthorityTable::<1>::new();
+        let reservation = table
+            .reserve_insert(
+                object(9),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(1),
+            )
+            .unwrap();
+        let guessed = StorageHandle {
+            slot: reservation.slot,
+            generation: reservation.generation,
+        };
+        assert_eq!(
+            table.authorize(
+                guessed,
+                principal(1),
+                StorageObjectKind::File,
+                StorageRights::READ
+            ),
+            Err(StorageAuthorityError::InvalidHandle)
+        );
+        assert!(!table.has_capacity());
+        let stale = StorageAuthorityReservation {
+            slot: reservation.slot,
+            generation: reservation.generation,
+            object: reservation.object,
+            kind: reservation.kind,
+            rights: reservation.rights,
+            owner: reservation.owner,
+        };
+        table.cancel_reservation(reservation).unwrap();
+        assert_eq!(
+            table.activate_reservation(stale),
+            Err(StorageAuthorityError::InvalidReservation)
+        );
+
+        let reservation = table
+            .reserve_insert(
+                object(10),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(1),
+            )
+            .unwrap();
+        let replay = StorageAuthorityReservation {
+            slot: reservation.slot,
+            generation: reservation.generation,
+            object: reservation.object,
+            kind: reservation.kind,
+            rights: reservation.rights,
+            owner: reservation.owner,
+        };
+        let handle = table.activate_reservation(reservation).unwrap();
+        assert_eq!(handle.generation, 2);
+        assert_eq!(
+            table.authorize(
+                handle,
+                principal(1),
+                StorageObjectKind::File,
+                StorageRights::READ
+            ),
+            Ok(object(10))
+        );
+        assert_eq!(
+            table.activate_reservation(replay),
+            Err(StorageAuthorityError::InvalidReservation)
         );
     }
     #[test]

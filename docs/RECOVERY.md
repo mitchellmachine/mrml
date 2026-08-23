@@ -156,7 +156,10 @@ explicitly and downgrade the status rather than guessing.
   stages a generation-bound successor and activates a reserved stable ID only
   through its distinct one-use transaction participant. Allocation ownership,
   directory-create integration, recovery traversal, and concrete block I/O are
-  not yet implemented. Redundant-root
+  not yet implemented. Inactive child-authority reservations consume capacity
+  without authorizing access and either activate once or retire their generation
+  on cancellation, preventing a durable create from racing an unrelated handle
+  insertion once orchestration is added. Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming

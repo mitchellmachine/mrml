@@ -2771,7 +2771,13 @@ reserved stable ID and successor only after consuming its exact one-use receipt.
 Zero cannot alias exhaustion, the maximum ID is reservable exactly once, and
 generation/identity exhaustion fail before staging. Allocation-record ownership,
 recovery validation, and directory-create integration remain pending, so create
-is not yet crash-safe.
+is not yet crash-safe. The authority table now supplies the corresponding
+inactive slot reservation. A reservation binds exact object, kind, rights,
+owner, slot, and generation, consumes capacity without becoming authorizing,
+rejects guessed handles, activates exactly once, and advances the slot
+generation when canceled. This prevents intervening insertions from stealing
+capacity reserved for a later durable create; end-to-end create orchestration
+and cancellation on prepublication failure remain pending.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and
@@ -2941,7 +2947,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Sixty-six focused unit tests and strict crate-local clippy pass on Windows
+Sixty-seven focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, allocator/create integration,
 complete crash recovery, snapshots, a block-device service, and
@@ -2954,7 +2960,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 66 tests, and both strict crate-local clippy
+Both current unit-test runs pass 67 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -2979,7 +2985,9 @@ pairwise range disjointness, exact allocation ownership, complete COW-plan
 membership, atomic batch receipt consumption, replay rejection, and fail-closed
 backend uncertainty. Allocator images additionally require canonical exhaustion,
 checked identity/generation advance, zero padding, distinct embedded and
-complete-image digests, and one-use activation. This agent review is not
+complete-image digests, and one-use activation. Authority reservations remain
+inactive until exact activation, reject guessed/stale tokens, and retire their
+generation on cancellation. This agent review is not
 independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without

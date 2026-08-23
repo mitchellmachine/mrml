@@ -283,7 +283,12 @@ exhausted state, COW pointer, full-image checksum, and zero padding. Reservation
 stages an unreachable successor without changing the active allocator, admits
 one distinct allocator transaction resource, and exposes the allocated ID and
 successor only after its one-use receipt. Allocation-record ownership, recovery
-validation, and directory-create integration remain pending.
+validation, and directory-create integration remain pending. The storage
+authority table now supports opaque inactive insertion reservations: reserved
+slots consume capacity but cannot authorize, guessed handles are rejected,
+activation succeeds once, and cancellation retires the slot generation before
+reuse. This closes the authority-capacity race needed by later prepared create;
+publication/cancellation orchestration remains pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.
@@ -350,7 +355,7 @@ is present in the COW plan and its one-use receipt is consumed. Directory
 successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The concrete
-block backend, allocator participant integration, snapshots, power-loss
+block backend, complete create integration, snapshots, power-loss
 testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

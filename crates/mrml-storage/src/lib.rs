@@ -24,8 +24,8 @@ pub use allocation::{
     AllocationWriteBackend, MAX_ALLOCATION_BLOCKS, PreparedAllocationUpdate,
 };
 pub use authority::{
-    StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
-    StoragePrincipal, StorageRights,
+    StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,
+    StorageObjectKind, StoragePrincipal, StorageRights,
 };
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,

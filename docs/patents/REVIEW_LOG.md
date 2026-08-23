@@ -896,7 +896,8 @@ MRML source: `crates/mrml-storage/src/object_id_allocator.rs` and
 
 The service uses a conventional monotonic integer allocator, canonical
 checksummed COW image, disjoint successor staging, typed transaction resource,
-and one-use activation receipt. This adds no novel identity-allocation,
+one-use activation receipt, and inactive generational authority-slot
+reservation. This adds no novel identity-allocation,
 persistence, transaction, cryptographic, or storage technique.
 
 Patent review: `NOT_TRIGGERED` — conventional persistent monotonic allocator

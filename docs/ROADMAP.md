@@ -256,7 +256,11 @@ authority; unrelated domains continue.
    state unchanged, stages and flushes one successor, participates as a distinct
    volume transaction resource, and activates once from an exact receipt.
    Allocation ownership and directory-create integration remain pending, so
-   directory operations are not yet complete or crash-safe.
+   directory operations are not yet complete or crash-safe. An inactive
+   authority-slot reservation now closes the create activation race: it consumes
+   bounded capacity without authorizing access, rejects guessed handles,
+   activates once, and advances its generation when canceled. Prepared-create
+   orchestration remains pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -348,7 +352,9 @@ authority; unrelated domains continue.
    entry-list images, flush both through one narrow durability contract, bind
    both ranges to a directory transaction participant, and expose the immutable
    next object generation only after its one-use publication receipt is
-   consumed. Persistent object-ID allocation, concrete block integration, and
+   consumed. Persistent object-ID allocation and inactive authority-slot
+   reservation are implemented independently; complete prepared-create
+   coupling, concrete block integration, and
    physical power-loss evidence remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
