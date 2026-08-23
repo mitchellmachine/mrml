@@ -1596,15 +1596,29 @@ next eligible scheduler tick with checked arithmetic; delay doubles after each
 completed restart and saturates at the configured maximum. Exact `CONTROL`
 authorization precedes budget/timing disclosure, an early attempt neither
 allocates a task nor advances a generation, and exhausting the count is
-permanent for that service record. Time overflow is rejected before the retiring
-domain is revoked, preserving the live task and cleanup handoff. Windows and Linux tests cover invalid
-policies, unauthorized probes, early retry, saturation, exhaustion, and time
-overflow. The signed two-service policy permits one immediate restart and its
+permanent for that service record. Time overflow is rejected before the
+retiring domain is revoked, preserving the live task and cleanup handoff.
+Windows and Linux tests cover invalid policies, unauthorized probes, early
+retry, saturation, exhaustion, and time overflow. The signed two-service policy
+permits one immediate restart and its
 terminal marker is emitted only after the kernel proves a second restart is
 rejected. A general policy/configuration service remains future work.
 As elsewhere, these host-visible markers are test evidence, not attestation
 against a compromised host; protecting guest memory from that host requires the
 confidential-computing boundary described in the threat model.
+
+Task-owned shared endpoints now carry the exact generational `TaskId` alongside
+their VM and mapping identities. `ServiceResourceEraser` composes cleanup-ticket
+completion with native-first mapping invalidation, common mapping retirement,
+shared-binding retirement, final opaque host-handle destruction, and then
+address-space reprovisioning. Other tasks' endpoints remain live. Native
+failure preserves the current mapping and binding; host-handle or address-space
+failure retains completed obligations for retry and continues to block restart.
+Focused Windows gnullvm tests cover surviving peers, wrong-task substitution,
+final-reference reporting, native failure, host-resource failure, eraser
+failure, and retry without duplicated destruction. The existing signed backend
+probes exercise reprovisioning, but have not yet exercised this composite
+task-owned shared-resource path live.
 
 Each `TaskRuntime` domain now owns a fixed two-message inbox in addition to its
 context and capability space. `receive_or_block_current` dequeues immediately

@@ -96,8 +96,10 @@ pub use service_lifecycle::{
     ServiceError, ServiceFault, ServiceId, ServiceRetirement, ServiceState, ServiceSupervisor,
 };
 pub use shared_memory::{
-    HostResourceHandle, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,
-    SharedEndpointRequest, SharedMemoryBindings, SharedRevocation,
+    HostResourceHandle, HostResourceRetirer, ServiceResourceCleanupError, ServiceResourceEraser,
+    SharedAccess, SharedBindingError, SharedBindingId, SharedCleanupError, SharedCleanupReport,
+    SharedEndpoint, SharedEndpointRequest, SharedMemoryBindings, SharedRevocation,
+    revoke_task_shared_bindings_before_resume,
 };
 pub use syscall::{
     MAX_SYSCALL_INLINE_PAYLOAD, SyscallError, SyscallRequest, UserCallFrame, X86_USER_CALL_VECTOR,

@@ -37,6 +37,11 @@ Service retirement now preflights restart timing and publishes an exact one-use
 cleanup ticket. Restart remains blocked until the corresponding KVM/WHP eraser
 proves the retired task and page-table root and completes exact-artifact
 reprovisioning; failed erasure is retryable and ticket replay is rejected.
+Shared endpoints may now bind an exact task generation in addition to their VM
+and mapping identities. Cleanup invalidates each failed task's native mapping
+before retiring its common mapping and binding, preserves peer endpoints, and
+requires successful final host-resource retirement before restart. Completed
+obligations survive retry across host-resource or address-space erasure failure.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
@@ -59,9 +64,11 @@ confidentiality.
    **IMPLEMENTED** in code and focused simulation tests; live backend probes
    remain outstanding.
 7. Integrate fault cleanup, peer notification, erasure, and bounded restart.
-   **PARTIALLY IMPLEMENTED:** typed peer notification, task-domain revocation,
-   exact cleanup gating, hosted eraser binding, and bounded restart exist;
-   transitive external shared-resource cleanup remains incomplete.
+   **IMPLEMENTED** in kernel mechanism and focused simulation tests: typed peer
+   notification, task-domain revocation, native-first task-owned shared-resource
+   cleanup, final host-handle retirement, exact erasure gating, and bounded
+   restart are coupled. A signed live composite cleanup probe remains evidence
+   work rather than a missing mechanism.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
 
