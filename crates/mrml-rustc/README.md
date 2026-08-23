@@ -2340,6 +2340,9 @@ unsigned integers and `checked_cast_unsigned` on signed integers. Unsafe
 functions can additionally use
 `unchecked_cast::<T>` for every integer pair; safe functions and constants
 reject it, and valid callers receive the direct representability-assuming cast.
+Pinned-nightly `checked_truncate::<T>` is also available through those consumers
+for every same-signedness `TruncateTarget` pair, returning `None` when the value
+does not fit the same-size-or-smaller target.
 
 Unsafe functions can use the stable `unchecked_add`, `unchecked_sub`,
 `unchecked_mul`, `unchecked_neg`, `unchecked_shl`, and `unchecked_shr` integer

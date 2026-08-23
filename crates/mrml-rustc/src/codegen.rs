@@ -3360,6 +3360,12 @@ fn runtime_expression_type_with_locals<
                 {
                     RuntimeExpressionType::Integer(Some(target))
                 }
+                crate::expression::CheckedIntegerOptionOperation::Truncate(target)
+                    if argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.supports_width_cast(target, crate::expression::IntegerWidthCastMode::Truncate)) =>
+                {
+                    RuntimeExpressionType::Integer(Some(target))
+                }
                 crate::expression::CheckedIntegerOptionOperation::SignedUnary { absolute }
                     if argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !absolute || source.is_signed()) =>
@@ -3675,6 +3681,10 @@ fn runtime_expression_type_with_locals<
                     })
                 }
                 crate::expression::CheckedIntegerOptionOperation::Cast(_) => argument.is_none(),
+                crate::expression::CheckedIntegerOptionOperation::Truncate(target) => {
+                    argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.supports_width_cast(target, crate::expression::IntegerWidthCastMode::Truncate))
+                }
                 crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
                     argument.is_none()
                         && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed() != signed)
@@ -10961,6 +10971,17 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.emit_expression(tree, base, depth + 1)?;
         let cast_target = match operation {
             crate::expression::CheckedIntegerOptionOperation::Cast(target) => Some(target),
+            crate::expression::CheckedIntegerOptionOperation::Truncate(target) => {
+                let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                if !source
+                    .supports_width_cast(target, crate::expression::IntegerWidthCastMode::Truncate)
+                {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                }
+                Some(target)
+            }
             crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
                 let RuntimeExpressionType::Integer(Some(source)) = base_type else {
                     return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
@@ -16757,6 +16778,47 @@ mod tests {
                     &function,
                     &NoConstants,
                     X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_generic_checked_truncation_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, fallback: u8) -> u8 { input.checked_truncate::<u8>().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i16 { input.checked_truncate::<i16>().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> bool { input.checked_truncate::<u32>().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> bool { input.checked_truncate::<i8>().is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> i8 { input.checked_truncate::<i8>().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u16 { input.checked_truncate::<u16>().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, fallback: i32) -> i16 { input.checked_truncate::<i16>().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u32 { input.checked_truncate::<u32>() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV
                 )
                 .is_err(),
                 "{source}"

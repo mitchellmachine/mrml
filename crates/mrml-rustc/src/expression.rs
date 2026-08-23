@@ -177,6 +177,7 @@ pub enum CheckedIntegerOptionOperation {
     SignedMixedArithmetic { subtract: bool },
     SquareRoot,
     SignedDifference,
+    Truncate(IntegerType),
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4292,6 +4293,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 matches!(
                     method.text,
                     "truncate"
+                        | "checked_truncate"
                         | "saturating_truncate"
                         | "widen"
                         | "saturating_cast"
@@ -4330,11 +4332,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 let Some(close) = close.filter(|token| token.kind == TokenKind::CloseParen) else {
                     return Err(self.error(ExpressionErrorKind::ExpectedExpression, close));
                 };
-                let kind = if method.text == "checked_cast" {
+                let kind = if matches!(method.text, "checked_cast" | "checked_truncate") {
                     ExprKind::CheckedIntegerOption {
                         base,
                         argument: None,
-                        operation: CheckedIntegerOptionOperation::Cast(target_type),
+                        operation: if method.text == "checked_truncate" {
+                            CheckedIntegerOptionOperation::Truncate(target_type)
+                        } else {
+                            CheckedIntegerOptionOperation::Cast(target_type)
+                        },
                     }
                 } else {
                     let mode = match method.text {
