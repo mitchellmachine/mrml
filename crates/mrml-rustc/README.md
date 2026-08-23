@@ -2930,8 +2930,10 @@ literals now plan their scalar operand reads in exact materialization order.
 Direct identifier-backed array and tuple copies additionally plan the same
 per-element `Index` or numbered `TupleField` reads used by emission. Conditional
 tuple initializers with direct literal branches plan the condition once and both
-branches' scalar operands. Conditional arrays, wrapped aggregates, and fat-
-reference initializer materialization remain emission-time fact families.
+branches' scalar operands. Direct conditional array literals follow their
+different emitter order by planning condition, then element, and else element
+for every materialized index. Wrapped or non-literal conditional aggregates and
+fat-reference initializer materialization remain emission-time fact families.
 Supported scalar expression statements now use that visitor at top level,
 inside conditional arms, in direct and nested loop actions, and after loops.
 Their reads are reserved in exact scoped emission order without introducing a
@@ -3018,6 +3020,13 @@ plus warnings-denied Clippy on both hosts. Its adversarial unit test proves one
 condition read followed by both direct tuple-literal branch operand orders and
 the final projected local read. Its original replacement emits both COFF and
 ELF64 objects through the same single-condition tuple materialization.
+
+The conditional array-literal read milestone passed all 592 compiler and driver
+tests on Windows gnullvm and all 592 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves the
+emitter's exact repeated sequence of condition, then-element reads, and else-
+element reads for each index, followed by the projected local tail. Its original
+replacement emits both COFF and ELF64 objects through the same materialization.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

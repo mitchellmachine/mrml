@@ -81,7 +81,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   source-ordered scalar operands of direct array literals, single-evaluation
   array repeats, and tuple literals, plus exact per-element projections for
   direct identifier-backed array and tuple copies and single-condition planning
-  for conditional tuple initializers with direct literal branches; and
+  for conditional tuple initializers with direct literal branches, plus exact
+  repeated-condition per-element planning for direct conditional array literals;
+  and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
   statements in the emitter's exact scoped order; and
@@ -95,7 +97,7 @@ allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Conditional arrays and wrapped aggregates, fat-reference
+borrow checker. Wrapped or non-literal conditional aggregates, fat-reference
 initializers and returns, compound array bases, method/call families, aggregate
 returns/tails, and other body reads remain emission-time facts. Names are still
 resolved during
@@ -137,8 +139,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 590 tests on each host: 325
-library tests, 10 conformance tests, 253 replacement tests, and 2 driver tests.
+The checkpoint source passed 592 tests on each host: 326
+library tests, 10 conformance tests, 254 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
