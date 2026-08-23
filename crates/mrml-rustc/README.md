@@ -2353,13 +2353,15 @@ bit-or are rejected; unsafe blocks are not accepted as a substitute because
 this bounded parser does not yet represent their safety context.
 
 Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
-and `checked_mul`, pinned-nightly `checked_div_exact`, generic
+`checked_mul`, `checked_div`, and `checked_rem`, pinned-nightly
+`checked_div_exact`, generic
 `checked_cast::<T>`, and same-width checked sign-cast results with
 `Option::unwrap_or` and
 `Option::unwrap_or_default`, or observe them with `Option::is_some` and
-`Option::is_none`. Non-overflowing arithmetic, exact nonzero divisions, and representable casts return
-their quotient, converted value, or `Some`; inexact divisions, zero divisors,
-signed `MIN / -1`, and out-of-range casts select the eagerly evaluated fallback,
+`Option::is_none`. Non-overflowing arithmetic, valid divisions and remainders,
+exact nonzero divisions, and representable casts return their scalar value or
+`Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
+out-of-range casts select the eagerly evaluated fallback,
 zero default, or `None` without trapping. Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while

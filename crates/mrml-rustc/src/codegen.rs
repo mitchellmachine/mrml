@@ -3339,6 +3339,7 @@ fn runtime_expression_type_with_locals<
             )?;
             let result_type = match operation {
                 crate::expression::CheckedIntegerOptionOperation::ExactDivision
+                | crate::expression::CheckedIntegerOptionOperation::Division { .. }
                 | crate::expression::CheckedIntegerOptionOperation::Arithmetic(_)
                     if argument.is_some_and(|argument| {
                         runtime_expression_type_with_locals(
@@ -3420,6 +3421,17 @@ fn runtime_expression_type_with_locals<
             )?;
             let producer_valid = match operation {
                 crate::expression::CheckedIntegerOptionOperation::ExactDivision => argument
+                    .is_some_and(|argument| {
+                        runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            argument,
+                            depth + 1,
+                        ) == Ok(base_type)
+                    }),
+                crate::expression::CheckedIntegerOptionOperation::Division { .. } => argument
                     .is_some_and(|argument| {
                         runtime_expression_type_with_locals(
                             function,
@@ -10712,6 +10724,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 )
             }
             crate::expression::CheckedIntegerOptionOperation::ExactDivision => None,
+            crate::expression::CheckedIntegerOptionOperation::Division { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Arithmetic(_) => None,
         };
         if let Some(target) = cast_target {
@@ -10815,9 +10828,19 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
         }
-        let crate::expression::CheckedIntegerOptionOperation::ExactDivision = operation else {
+        let exact = operation == crate::expression::CheckedIntegerOptionOperation::ExactDivision;
+        let remainder_result = matches!(
+            operation,
+            crate::expression::CheckedIntegerOptionOperation::Division { remainder: true }
+        );
+        if !exact
+            && !matches!(
+                operation,
+                crate::expression::CheckedIntegerOptionOperation::Division { .. }
+            )
+        {
             return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-        };
+        }
         let argument =
             argument.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
         self.emit(&[0x50])?;
@@ -10842,14 +10865,23 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         } else {
             self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
         }
-        self.emit(&[0x48, 0x85, 0xd2])?;
-        let remainder = self.emit_forward_branch(0x85)?;
+        let inexact = if exact {
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            Some(self.emit_forward_branch(0x85)?)
+        } else {
+            None
+        };
+        if remainder_result {
+            self.emit(&[0x48, 0x89, 0xd0])?;
+        }
         self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
         self.patch_forward_branch(zero_divisor)?;
         if let Some(signed_overflow) = signed_overflow {
             self.patch_forward_branch(signed_overflow)?;
         }
-        self.patch_forward_branch(remainder)?;
+        if let Some(inexact) = inexact {
+            self.patch_forward_branch(inexact)?;
+        }
         Ok((source_width, previous_width))
     }
 
@@ -15546,6 +15578,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_add(b).unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_sub(b).unwrap_or(fallback) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_mul(b) }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_division_and_remainder_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, b: u32, fallback: u32) -> u32 { a.checked_div(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: i64) -> i64 { a.checked_rem(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16, b: i16) -> bool { a.checked_div(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_rem(b).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_rem(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_div(b) }",
         ] {
             let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
