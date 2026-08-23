@@ -2979,6 +2979,8 @@ fn rustc_checked_signed_unary_options_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64) -> i64 { a.checked_abs().unwrap_or_default() }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: isize) -> bool { a.checked_neg().is_some() }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i16) -> bool { a.checked_abs().is_none() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, fallback: u8) -> u8 { a.checked_neg().unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64) -> bool { a.checked_neg().is_some() }",
     ];
     for source in sources {
         assert_eq!(

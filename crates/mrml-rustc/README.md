@@ -2367,6 +2367,8 @@ exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
 signed `MIN` negation/absolute-value, and out-of-range casts select the eagerly
 evaluated fallback, zero default, or `None` without trapping.
+Unsigned `checked_neg` succeeds only for zero and otherwise selects the same
+fallback/default/predicate outcome.
 Shift counts use Rust's required `u32` type and counts at least as large as the
 receiver width likewise select the fallback, zero default, or `None`.
 Checked exponentiation uses exponentiation by squaring, accepts Rust's required

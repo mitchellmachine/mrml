@@ -3360,9 +3360,9 @@ fn runtime_expression_type_with_locals<
                 {
                     RuntimeExpressionType::Integer(Some(target))
                 }
-                crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. }
+                crate::expression::CheckedIntegerOptionOperation::SignedUnary { absolute }
                     if argument.is_none()
-                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed()) =>
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !absolute || source.is_signed()) =>
                 {
                     base_type
                 }
@@ -3554,9 +3554,9 @@ fn runtime_expression_type_with_locals<
                             depth + 1,
                         ) == Ok(base_type)
                     }),
-                crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => {
+                crate::expression::CheckedIntegerOptionOperation::SignedUnary { absolute } => {
                     argument.is_none()
-                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed())
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if !absolute || source.is_signed())
                 }
                 crate::expression::CheckedIntegerOptionOperation::NextPowerOfTwo => {
                     argument.is_none()
@@ -11202,12 +11202,16 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         if let crate::expression::CheckedIntegerOptionOperation::SignedUnary { absolute } =
             operation
         {
-            if argument.is_some() || !source_width.signed {
+            if argument.is_some() || (absolute && !source_width.signed) {
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
             }
-            self.emit(&[0x48, 0xba])?;
-            self.emit(&(source_width.minimum as u64).to_le_bytes())?;
-            self.emit(&[0x48, 0x39, 0xd0, 0x41, 0x0f, 0x95, 0xc0])?;
+            if source_width.signed {
+                self.emit(&[0x48, 0xba])?;
+                self.emit(&(source_width.minimum as u64).to_le_bytes())?;
+                self.emit(&[0x48, 0x39, 0xd0, 0x41, 0x0f, 0x95, 0xc0])?;
+            } else {
+                self.emit(&[0x48, 0x85, 0xc0, 0x41, 0x0f, 0x94, 0xc0])?;
+            }
             if absolute {
                 self.emit(&[0x48, 0x85, 0xc0])?;
                 let nonnegative = self.emit_forward_branch(0x89)?;
@@ -16313,6 +16317,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_abs().unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: isize) -> bool { a.checked_neg().is_some() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16) -> bool { a.checked_abs().is_none() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, fallback: u8) -> u8 { a.checked_neg().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64) -> bool { a.checked_neg().is_some() }",
         ] {
             let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -16326,7 +16332,6 @@ mod tests {
         }
 
         for source in [
-            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.checked_neg().unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32) -> bool { a.checked_abs().is_some() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_neg() }",
         ] {
