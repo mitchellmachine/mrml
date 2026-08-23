@@ -285,20 +285,21 @@ one distinct allocator transaction resource, and exposes the allocated ID and
 successor only after its one-use receipt. Its successor must now be present in
 the prepared allocation successor under a distinct allocator-metadata purpose,
 bound to the exact root lifetime anchor, allocator generation, and pointer
-range; this accounting anchor grants no authority. Recovery validation and
-directory-create integration remain pending. The storage
+range; this accounting anchor grants no authority. Recovery validation remains
+pending. The storage
 authority table now supports opaque inactive insertion reservations: reserved
 slots consume capacity but cannot authorize, guessed handles are rejected,
 activation succeeds once, and cancellation retires the slot generation before
-reuse. This closes the authority-capacity race needed by later prepared create;
-publication/cancellation orchestration remains pending.
+reuse. The prepared-create coordinator now validates that exact reservation
+before consuming any receipt and activates it only after the complete receipt
+set is consumed; prepublication cancellation retires it.
 Canonical empty-file and empty-directory initialization is now staged without
 making either child reachable. Both bind generation 1, exact stable identity,
 disjoint metadata ranges, canonical zero-padded empty subordinate images, and
 complete-image digests; the directory additionally binds its parent. Each is an
 explicit typed `0 -> 1` creation participant rather than an ordinary update.
 Parent-directory, allocation, ID-allocator, child, and authority-reservation
-orchestration remains pending. A general one-directory mutation proof now walks
+are now assembled by one bounded prepared-create coordinator. A general one-directory mutation proof now walks
 the exact target generation to the selected root through the immutable backend.
 For create it reloads every predecessor, inserts the generation-1 child only in
 the target successor, advances every affected directory once, and rewrites each
@@ -306,8 +307,13 @@ parent entry bottom-up through the root. Staging and publication of this create
 closure now reuse the same whole-plan layout preflight as directory moves:
 every metadata/entry range is valid, exactly sized, and pairwise disjoint before
 the first write; all successors stage child-before-parent and enter one bounded
-directory transaction. Full child/allocator/allocation/authority publication
-remains pending.
+directory transaction. The coordinator requires exact ownership for every
+directory, child, and allocator image; admits the closure, typed child,
+object-ID allocator, and allocation successor to one transaction; builds one
+COW-root publication; and atomically consumes all participants before exposing
+successor states or activating authority. A focused empty-file create exercises
+this path. Concrete block integration, interrupted-create/recovery evidence,
+and a separate end-to-end empty-directory create scenario remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

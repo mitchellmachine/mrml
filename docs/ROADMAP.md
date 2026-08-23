@@ -276,7 +276,15 @@ authority; unrelated domains continue.
    child-before-parent to one bounded directory transaction. Receipt handling
    can now atomically preflight and consume the variable directory closure with
    fixed create participants, rejecting missing or cross-group duplicates
-   without partial consumption. Full create transaction assembly remains pending.
+   without partial consumption. The bounded prepared-create coordinator now
+   binds the exact allocated ID, child kind, inactive authority reservation,
+   directory closure, initial child images, allocator successor, and allocation
+   successor. It admits all four resource classes to one transaction, requires
+   exact purpose-specific allocation ownership, builds one COW-root plan, and
+   exposes successors plus the new handle only after atomic receipt consumption
+   and authority activation. An empty-file create is covered end to end in the
+   in-memory model. Concrete block integration, interrupted-create recovery,
+   and separate end-to-end empty-directory coverage remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -368,10 +376,10 @@ authority; unrelated domains continue.
    entry-list images, flush both through one narrow durability contract, bind
    both ranges to a directory transaction participant, and expose the immutable
    next object generation only after its one-use publication receipt is
-   consumed. Persistent object-ID allocation and inactive authority-slot
-   reservation are implemented independently; complete prepared-create
-   coupling, concrete block integration, and
-   physical power-loss evidence remain pending.
+   consumed. Persistent object-ID allocation, inactive authority reservation,
+   and complete in-memory prepared-create coupling are implemented. Concrete
+   block integration, interrupted-create recovery, and physical power-loss
+   evidence remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

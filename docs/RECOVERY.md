@@ -167,8 +167,13 @@ explicitly and downgrade the status rather than guessing.
   a bounded exact-generation mutation path constructs the parent-to-root
   directory successor closure and propagates child generations bottom-up.
   The closure's disjoint canonical images are staged child-before-parent and
-  admitted to one directory transaction. Complete create publication and
-  recovery traversal remain pending.
+  admitted to one directory transaction. A bounded coordinator now combines
+  that closure with the exact initial child, persistent ID reservation,
+  purpose-owned allocation successor, and inactive authority reservation in
+  one COW publication and one atomic receipt activation. Focused evidence covers
+  an empty-file create in memory. Recovery traversal of interrupted creates,
+  concrete block durability, and a separate empty-directory end-to-end scenario
+  remain pending.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

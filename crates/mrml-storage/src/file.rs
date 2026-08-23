@@ -105,6 +105,10 @@ impl PreparedInitialFile {
         receipt.consume(self.transaction_participant()?)?;
         Ok(self.state)
     }
+
+    pub(crate) fn into_state(self) -> FileState<0> {
+        self.state
+    }
 }
 
 /// Persistence boundary for a new unreachable empty file.

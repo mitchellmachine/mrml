@@ -211,6 +211,26 @@ impl<const N: usize> StorageAuthorityTable<N> {
         })
     }
 
+    pub(crate) fn reservation_is_valid(&self, reservation: &StorageAuthorityReservation) -> bool {
+        usize::try_from(reservation.slot)
+            .ok()
+            .and_then(|slot| self.entries.get(slot))
+            .is_some_and(|entry| reservation.matches(*entry))
+    }
+
+    pub(crate) fn activate_validated(
+        &mut self,
+        reservation: StorageAuthorityReservation,
+    ) -> StorageHandle {
+        let slot = reservation.slot as usize;
+        debug_assert!(self.reservation_is_valid(&reservation));
+        self.entries[slot].reserved = false;
+        StorageHandle {
+            slot: reservation.slot,
+            generation: reservation.generation,
+        }
+    }
+
     pub fn cancel_reservation(
         &mut self,
         reservation: StorageAuthorityReservation,
@@ -364,16 +384,28 @@ impl<const N: usize> StorageAuthorityTable<N> {
             .map_err(|_| StorageAuthorityError::InvalidReservation)?;
         self.entries
             .get_mut(slot)
-            .filter(|entry| {
-                entry.reserved
-                    && entry.generation == reservation.generation
-                    && entry.object == Some(reservation.object)
-                    && entry.kind == reservation.kind
-                    && entry.rights == reservation.rights
-                    && entry.owner == Some(reservation.owner)
-                    && entry.parent.is_none()
-            })
+            .filter(|entry| reservation.matches(**entry))
             .ok_or(StorageAuthorityError::InvalidReservation)
+    }
+}
+
+impl StorageAuthorityReservation {
+    pub(crate) const fn object(&self) -> StorageObjectId {
+        self.object
+    }
+
+    pub(crate) const fn kind(&self) -> StorageObjectKind {
+        self.kind
+    }
+
+    fn matches(&self, entry: Entry) -> bool {
+        entry.reserved
+            && entry.generation == self.generation
+            && entry.object == Some(self.object)
+            && entry.kind == self.kind
+            && entry.rights == self.rights
+            && entry.owner == Some(self.owner)
+            && entry.parent.is_none()
     }
 }
 impl<const N: usize> Default for StorageAuthorityTable<N> {

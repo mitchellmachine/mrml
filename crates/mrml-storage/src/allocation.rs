@@ -446,6 +446,10 @@ impl<const N: usize> PreparedAllocationUpdate<N> {
         receipt.consume(self.transaction_participant()?)?;
         Ok(self.successor)
     }
+
+    pub(crate) fn into_successor(self) -> AllocationImage<N> {
+        self.successor
+    }
 }
 
 impl<const N: usize> AllocationImage<N> {

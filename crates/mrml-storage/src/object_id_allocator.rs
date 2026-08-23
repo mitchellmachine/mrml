@@ -239,6 +239,10 @@ impl PreparedObjectIdReservation {
         receipt.consume(self.transaction_participant()?)?;
         Ok((self.successor, self.allocated))
     }
+
+    pub(crate) fn into_successor(self) -> (ObjectIdAllocatorImage, StorageObjectId) {
+        (self.successor, self.allocated)
+    }
 }
 
 /// Persistence boundary for an unreachable object-ID allocator successor.

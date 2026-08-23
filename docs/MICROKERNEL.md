@@ -2772,22 +2772,25 @@ Zero cannot alias exhaustion, the maximum ID is reservable exactly once, and
 generation/identity exhaustion fail before staging. Its prepared allocation
 successor must now contain the exact allocator image under a distinct purpose,
 root lifetime anchor, allocator generation, and pointer range; the anchor grants
-no authority. Recovery validation and directory-create integration remain pending, so create
-is not yet crash-safe. The authority table now supplies the corresponding
+no authority. Recovery validation remains pending, so create is not yet proven
+crash-safe on a block device. The authority table now supplies the corresponding
 inactive slot reservation. A reservation binds exact object, kind, rights,
 owner, slot, and generation, consumes capacity without becoming authorizing,
 rejects guessed handles, activates exactly once, and advances the slot
 generation when canceled. This prevents intervening insertions from stealing
-capacity reserved for a later durable create; end-to-end create orchestration
-and cancellation on prepublication failure remain pending.
+capacity reserved for a later durable create. The prepared-create coordinator
+validates the exact reservation before receipt consumption, activates it only
+after every participant is consumed, and can retire it on prepublication
+cancellation.
 The child side of creation now has canonical initialization for both native
 kinds. An empty file stages generation-1 `FileMetadata` with the SHA3-256 empty
 content digest and a canonical empty extent image. An empty directory stages
 generation-1 directory metadata with its exact parent and a canonical empty
 entry image. Both require disjoint valid ranges before backend I/O, flush both
 unreachable images, and enter transactions through an explicit typed `0 -> 1`
-creation participant. Full parent/child/allocation/allocator/authority assembly
-remains pending; neither initializer alone makes an object reachable. The
+creation participant. A bounded coordinator now assembles the complete
+parent/child/allocation/allocator/authority publication; neither initializer
+alone makes an object reachable. The
 general mutation proof now retains one exact target-to-root path from the same
 immutable selected generation. Create construction reloads every bound
 predecessor, inserts the new generation-1 entry only at the target, advances
@@ -2972,9 +2975,9 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-two focused unit tests and strict crate-local clippy pass on Windows
+Seventy-three focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
-complete directory hierarchy/lifetime handling, allocator/create integration,
+complete directory hierarchy/lifetime handling, interrupted-create recovery,
 complete crash recovery, snapshots, a block-device service, and
 configuration-checkpoint persistence remain unimplemented.
 
@@ -2985,7 +2988,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 72 tests, and both strict crate-local clippy
+Both current unit-test runs pass 73 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3022,7 +3025,14 @@ the exact target-to-root predecessor chain and fails closed on stale parent
 entries or incomplete propagation; shared staging rejects every cross-successor
 range overlap before I/O. Grouped receipt consumption preflights the variable
 directory set and fixed create participants as one exact set, rejecting missing
-or cross-group duplicate membership without partial consumption. This agent review is not
+or cross-group duplicate membership without partial consumption. The complete
+coordinator additionally binds the allocated ID and child type to the inactive
+authority reservation, requires purpose-specific allocation ownership for every
+new image, admits all participants to one publication generation, and exposes
+no successor or handle until exact receipt consumption. An unrelated authority
+table, guessed inactive handle, insufficient transaction/COW capacity, stale
+generation, missing image, or substituted allocation purpose fails closed.
+This agent review is not
 independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without

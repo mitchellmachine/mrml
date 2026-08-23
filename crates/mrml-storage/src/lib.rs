@@ -9,6 +9,7 @@
 mod allocation;
 mod authority;
 mod cow;
+mod create;
 mod directory;
 mod extent;
 mod file;
@@ -30,6 +31,10 @@ pub use authority::{
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
     CowPublishError,
+};
+pub use create::{
+    CommittedCreate, CreateCommitError, InitialObjectState, PreparedCreate, PreparedCreateError,
+    PreparedInitialObject,
 };
 pub use directory::{
     CommittedDirectoryMovePlan, DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend,

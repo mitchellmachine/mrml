@@ -879,6 +879,32 @@ impl<const C: usize, const E: usize> PreparedDirectoryMovePlan<C, E> {
             count: self.count,
         })
     }
+
+    pub(crate) fn participants(
+        &self,
+    ) -> Result<([Option<TransactionParticipant>; C], usize), TransactionError> {
+        let mut participants = [None; C];
+        for (index, update) in self.updates[..self.count].iter().enumerate() {
+            participants[index] = Some(
+                update
+                    .as_ref()
+                    .ok_or(TransactionError::ParticipantMismatch)?
+                    .transaction_participant()?,
+            );
+        }
+        Ok((participants, self.count))
+    }
+
+    pub(crate) fn into_committed(self) -> CommittedDirectoryMovePlan<C, E> {
+        let mut states = core::array::from_fn(|_| None);
+        for (index, update) in self.updates.into_iter().take(self.count).enumerate() {
+            states[index] = update.map(PreparedDirectoryUpdate::into_successor);
+        }
+        CommittedDirectoryMovePlan {
+            states,
+            count: self.count,
+        }
+    }
 }
 
 pub struct CommittedDirectoryMovePlan<const C: usize, const E: usize> {
@@ -1659,6 +1685,10 @@ impl PreparedInitialDirectory {
     ) -> Result<DirectoryState<0>, TransactionError> {
         receipt.consume(self.transaction_participant()?)?;
         Ok(self.state)
+    }
+
+    pub(crate) fn into_state(self) -> DirectoryState<0> {
+        self.state
     }
 }
 

@@ -926,6 +926,20 @@ no novel transaction, capability, filesystem, or persistence technique.
 
 Patent review: `NOT_TRIGGERED` — conventional atomic receipt bookkeeping.
 
+## 2026-08-23 — complete prepared storage create assembly
+
+MRML source: `crates/mrml-storage/src/create.rs` and its existing directory,
+file, allocation, allocator, authority, COW, and transaction primitives.
+
+The service conventionally groups a staged parent-directory closure, empty
+child metadata, monotonic object-ID successor, allocation-index successor, and
+inactive capability-table slot into one copy-on-write transaction. It checks
+exact identity, type, generation, range, purpose, and receipt membership before
+exposing state or activating the handle. This adds no novel filesystem-create,
+allocation, capability, transaction, or persistence technique.
+
+Patent review: `NOT_TRIGGERED` — conventional transactional create assembly.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and
