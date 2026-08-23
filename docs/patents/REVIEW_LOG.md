@@ -940,6 +940,20 @@ allocation, capability, transaction, or persistence technique.
 
 Patent review: `NOT_TRIGGERED` — conventional transactional create assembly.
 
+## 2026-08-23 — reachable object-ID allocator recovery validation
+
+MRML source: `crates/mrml-storage/src/recovery.rs` and the canonical allocator
+and allocation formats.
+
+The recovery validator conventionally requires one purpose-tagged allocator
+allocation, decodes its canonical generation-bound image, and compares a
+concrete next integer with the maximum reachable object integer to prevent
+reuse. Missing, duplicate, corrupt, stale, or substituted state is rejected;
+exhaustion remains valid. This adds no novel recovery, allocation, identity,
+transaction, or cryptographic technique.
+
+Patent review: `NOT_TRIGGERED` — conventional allocator recovery validation.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

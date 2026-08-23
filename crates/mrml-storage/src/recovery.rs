@@ -1,7 +1,7 @@
 use crate::{
     AllocationImage, AllocationKind, DIRECTORY_METADATA_BYTES, DirectoryImage, DirectoryMetadata,
-    ExtentImage, FILE_METADATA_BYTES, FileMetadata, MetadataPointer, StorageObjectId,
-    StorageObjectKind, Superblock, VolumeHeader,
+    ExtentImage, FILE_METADATA_BYTES, FileMetadata, MetadataPointer, ObjectIdAllocatorImage,
+    StorageObjectId, StorageObjectKind, Superblock, VolumeHeader,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,6 +147,37 @@ unsafe impl<
             .ok_or(CandidateValidationError::Invalid)?;
         claimed[allocation_record] = true;
 
+        let mut allocator_record = None;
+        for index in 0..allocation.index().len() {
+            let record = allocation
+                .index()
+                .record(index)
+                .ok_or(CandidateValidationError::Invalid)?;
+            if record.kind() == AllocationKind::ObjectIdAllocatorMetadata {
+                if allocator_record.is_some()
+                    || record.owner() != candidate.root()
+                    || record.owner_generation() != candidate.generation()
+                {
+                    return Err(CandidateValidationError::Invalid);
+                }
+                allocator_record = Some((index, record));
+            }
+        }
+        let (allocator_record_index, allocator_record) =
+            allocator_record.ok_or(CandidateValidationError::Invalid)?;
+        let allocator_pointer =
+            MetadataPointer::new(allocator_record.block(), allocator_record.block_count())
+                .map_err(|_| CandidateValidationError::Invalid)?;
+        let allocator_bytes = self.read(allocator_pointer)?;
+        let allocator = ObjectIdAllocatorImage::decode(
+            header,
+            candidate.generation(),
+            allocator_pointer,
+            allocator_bytes,
+        )
+        .map_err(|_| CandidateValidationError::Invalid)?;
+        claimed[allocator_record_index] = true;
+
         let mut nodes = [None; O];
         nodes[0] = Some(RecoveryNode {
             object: candidate.root(),
@@ -157,6 +188,7 @@ unsafe impl<
         });
         let mut count = 1;
         let mut cursor = 0;
+        let mut maximum_local = candidate.root().local();
         while cursor < count {
             let node = nodes[cursor].ok_or(CandidateValidationError::Invalid)?;
             match node.kind {
@@ -238,6 +270,7 @@ unsafe impl<
                             parent: (entry.kind() == StorageObjectKind::Directory)
                                 .then_some(node.object),
                         });
+                        maximum_local = maximum_local.max(entry.object().local());
                         count += 1;
                     }
                 }
@@ -317,6 +350,11 @@ unsafe impl<
                 StorageObjectKind::Volume => return Err(CandidateValidationError::Invalid),
             }
             cursor += 1;
+        }
+        match allocator.next_local() {
+            Some(next_local) if next_local > maximum_local => {}
+            None => {}
+            Some(_) => return Err(CandidateValidationError::Invalid),
         }
         if claimed[..allocation.index().len()]
             .iter()
@@ -619,6 +657,7 @@ mod tests {
         file: [u8; 4096],
         extents: [u8; 4096],
         allocation: [u8; 4096],
+        object_ids: [u8; 4096],
     }
 
     unsafe impl RecoveryMetadataBackend for MetadataBackend {
@@ -635,6 +674,7 @@ mod tests {
                 12 => &self.file,
                 13 => &self.extents,
                 20 => &self.allocation,
+                21 => &self.object_ids,
                 _ => return Err(()),
             };
             if pointer.blocks() != 1 || output.len() != source.len() {
@@ -677,6 +717,7 @@ mod tests {
         let entries_pointer = MetadataPointer::new(11, 1).unwrap();
         let extents_pointer = MetadataPointer::new(13, 1).unwrap();
         let allocation_pointer = MetadataPointer::new(20, 1).unwrap();
+        let object_ids_pointer = MetadataPointer::new(21, 1).unwrap();
         let candidate =
             Superblock::new(header(), 5, 4, root, root_pointer, allocation_pointer).unwrap();
 
@@ -721,6 +762,8 @@ mod tests {
             AllocationRecord::new(file, 3, 12, 1, AllocationKind::ObjectMetadata).unwrap(),
             AllocationRecord::new(file, 3, 13, 1, AllocationKind::FileExtents).unwrap(),
             AllocationRecord::new(root, 5, 20, 1, AllocationKind::AllocationMetadata).unwrap(),
+            AllocationRecord::new(root, 5, 21, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                .unwrap(),
             AllocationRecord::new(file, 3, 30, 1, AllocationKind::FileData).unwrap(),
             AllocationRecord::new(
                 StorageObjectId::new(volume(), 99).unwrap(),
@@ -732,16 +775,21 @@ mod tests {
             .unwrap(),
         ];
         let record_count = if include_orphan {
-            7
+            8
         } else if include_data_owner {
-            6
+            7
         } else {
-            5
+            6
         };
         let mut allocation = [0; 4096];
-        AllocationImage::<7>::build(header(), 5, allocation_pointer, &records[..record_count])
+        AllocationImage::<8>::build(header(), 5, allocation_pointer, &records[..record_count])
             .unwrap()
             .encode(&mut allocation)
+            .unwrap();
+        let mut object_ids = [0; 4096];
+        ObjectIdAllocatorImage::build(header(), 5, Some(8), object_ids_pointer)
+            .unwrap()
+            .encode(&mut object_ids)
             .unwrap();
         (
             candidate,
@@ -751,6 +799,7 @@ mod tests {
                 file: file_bytes,
                 extents,
                 allocation,
+                object_ids,
             },
         )
     }
@@ -760,13 +809,13 @@ mod tests {
         let (candidate, backend) = reachable_backend(true, false);
         let mut scratch = [0; 4096];
         let mut validator =
-            ReachableRecoveryValidator::<_, 7, 1, 1, 2>::new(header(), backend, &mut scratch);
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
         assert_eq!(validator.validate_candidate(1, candidate), Ok(()));
 
         let (candidate, backend) = reachable_backend(false, false);
         let mut scratch = [0; 4096];
         let mut validator =
-            ReachableRecoveryValidator::<_, 7, 1, 1, 2>::new(header(), backend, &mut scratch);
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
         assert_eq!(
             validator.validate_candidate(1, candidate),
             Err(CandidateValidationError::Invalid)
@@ -775,7 +824,136 @@ mod tests {
         let (candidate, backend) = reachable_backend(true, true);
         let mut scratch = [0; 4096];
         let mut validator =
-            ReachableRecoveryValidator::<_, 7, 1, 1, 2>::new(header(), backend, &mut scratch);
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
+        assert_eq!(
+            validator.validate_candidate(1, candidate),
+            Err(CandidateValidationError::Invalid)
+        );
+    }
+
+    #[test]
+    fn reachable_validator_requires_unique_forward_allocator_state() {
+        let (candidate, mut backend) = reachable_backend(true, false);
+        ObjectIdAllocatorImage::build(header(), 5, None, MetadataPointer::new(21, 1).unwrap())
+            .unwrap()
+            .encode(&mut backend.object_ids)
+            .unwrap();
+        let mut scratch = [0; 4096];
+        let mut validator =
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
+        assert_eq!(validator.validate_candidate(1, candidate), Ok(()));
+
+        let (candidate, mut backend) = reachable_backend(true, false);
+        ObjectIdAllocatorImage::build(header(), 5, Some(7), MetadataPointer::new(21, 1).unwrap())
+            .unwrap()
+            .encode(&mut backend.object_ids)
+            .unwrap();
+        let mut validator =
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
+        assert_eq!(
+            validator.validate_candidate(1, candidate),
+            Err(CandidateValidationError::Invalid)
+        );
+
+        let (candidate, mut backend) = reachable_backend(true, false);
+        ObjectIdAllocatorImage::build(header(), 4, Some(8), MetadataPointer::new(21, 1).unwrap())
+            .unwrap()
+            .encode(&mut backend.object_ids)
+            .unwrap();
+        let mut validator =
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
+        assert_eq!(
+            validator.validate_candidate(1, candidate),
+            Err(CandidateValidationError::Invalid)
+        );
+
+        let (candidate, mut backend) = reachable_backend(true, false);
+        backend.object_ids[40] ^= 1;
+        let mut validator =
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
+        assert_eq!(
+            validator.validate_candidate(1, candidate),
+            Err(CandidateValidationError::Invalid)
+        );
+
+        let (candidate, mut backend) = reachable_backend(true, false);
+        let allocation_pointer = candidate.allocation_metadata();
+        let decoded = AllocationImage::<8>::decode(
+            header(),
+            candidate.generation(),
+            allocation_pointer,
+            &backend.allocation,
+        )
+        .unwrap();
+        let first = decoded.index().record(0).unwrap();
+        let mut without_allocator = [first; 8];
+        let mut count = 0;
+        for index in 0..decoded.index().len() {
+            let record = decoded.index().record(index).unwrap();
+            if record.kind() != AllocationKind::ObjectIdAllocatorMetadata {
+                without_allocator[count] = record;
+                count += 1;
+            }
+        }
+        AllocationImage::<8>::build(
+            header(),
+            candidate.generation(),
+            allocation_pointer,
+            &without_allocator[..count],
+        )
+        .unwrap()
+        .encode(&mut backend.allocation)
+        .unwrap();
+        let mut validator =
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
+        assert_eq!(
+            validator.validate_candidate(1, candidate),
+            Err(CandidateValidationError::Invalid)
+        );
+
+        let (candidate, mut backend) = reachable_backend(true, false);
+        let decoded = AllocationImage::<8>::decode(
+            header(),
+            candidate.generation(),
+            candidate.allocation_metadata(),
+            &backend.allocation,
+        )
+        .unwrap();
+        let duplicate = AllocationRecord::new(
+            candidate.root(),
+            candidate.generation(),
+            22,
+            1,
+            AllocationKind::ObjectIdAllocatorMetadata,
+        )
+        .unwrap();
+        let first = decoded.index().record(0).unwrap();
+        let mut duplicated = [first; 8];
+        let mut count = 0;
+        for index in 0..decoded.index().len() {
+            let record = decoded.index().record(index).unwrap();
+            if record.block() > duplicate.block() && count == index {
+                duplicated[count] = duplicate;
+                count += 1;
+            }
+            duplicated[count] = record;
+            count += 1;
+        }
+        if count == decoded.index().len() {
+            duplicated[count] = duplicate;
+            count += 1;
+        }
+        AllocationImage::<8>::build(
+            header(),
+            candidate.generation(),
+            candidate.allocation_metadata(),
+            &duplicated[..count],
+        )
+        .unwrap()
+        .encode(&mut backend.allocation)
+        .unwrap();
+        let mut validator =
+            ReachableRecoveryValidator::<_, 8, 1, 1, 2>::new(header(), backend, &mut scratch);
         assert_eq!(
             validator.validate_candidate(1, candidate),
             Err(CandidateValidationError::Invalid)
@@ -795,7 +973,7 @@ mod tests {
         )
         .unwrap();
         let mut scratch = [0; 4096];
-        let recovered = recover_reachable_superblock::<_, 7, 1, 1, 2>(
+        let recovered = recover_reachable_superblock::<_, 8, 1, 1, 2>(
             header(),
             &encoded(older),
             &encoded(newer),
@@ -822,14 +1000,14 @@ mod tests {
         .unwrap();
         let mut scratch = [0; 4096];
         assert_eq!(
-            recover_reachable_superblock::<_, 7, 1, 1, 2>(
+            recover_reachable_superblock::<_, 8, 1, 1, 2>(
                 header(),
                 &encoded(older),
                 &encoded(newer),
                 FailAfter {
                     inner: backend,
                     calls: 0,
-                    successful_reads: 5,
+                    successful_reads: 6,
                 },
                 &mut scratch,
             ),

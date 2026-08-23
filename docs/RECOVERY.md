@@ -124,8 +124,9 @@ explicitly and downgrade the status rather than guessing.
   concrete block service, persistent allocation/free engine, complete COW tree,
   concrete native block I/O, snapshot, or crash recovery exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,
-  enumeration, create, rename, remove, and cross-directory file moves, but its
-  object-ID allocator is volatile. Cross-directory directory moves require a
+  enumeration, create, rename, remove, and cross-directory file moves. Its
+  object-ID allocator is now canonical, COW-persistent, transaction-bound, and
+  part of mandatory reachable recovery validation. Cross-directory directory moves require a
   bounded immutable-generation ancestry proof that reaches the selected root
   without encountering the moved object and binds the moved generation's current
   source parent. It retains both bounded source-to-root and destination-to-root
@@ -140,8 +141,7 @@ explicitly and downgrade the status rather than guessing.
   that one allocation successor owns every exact new directory range, binds all
   directory/allocation images into one COW plan, publishes once, and consumes
   the complete directory receipt set atomically before exposing successors.
-  Concrete block integration, power-loss evidence, and persistent identity
-  allocation remain pending.
+  Concrete block integration and power-loss evidence remain pending.
   Capability-authorized
   bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
@@ -157,8 +157,11 @@ explicitly and downgrade the status rather than guessing.
   through its distinct one-use transaction participant. A prepared allocation
   successor can now prove exact ownership of the allocator image using a
   distinct purpose, root lifetime anchor, allocator generation, and pointer;
-  the anchor is not authority. Directory-create integration of that proof and
-  concrete block I/O are not yet implemented. Inactive child-authority reservations consume capacity
+  the anchor is not authority. Reachable recovery now requires exactly one such
+  record and canonical allocator image at the candidate generation, rejecting
+  removal, duplication, corruption, stale state, substitution, and a concrete
+  next ID that could reuse a reachable object. Exhaustion remains valid and
+  non-allocating. Concrete block I/O is not yet implemented. Inactive child-authority reservations consume capacity
   without authorizing access and either activate once or retire their generation
   on cancellation, preventing a durable create from racing an unrelated handle
   insertion once orchestration is added. Initial empty files and directories

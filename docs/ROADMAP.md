@@ -258,12 +258,15 @@ authority; unrelated domains continue.
    The prepared allocator successor now requires an exact allocation record
    with a distinct allocator-metadata purpose, root lifetime anchor, allocator
    generation, and pointer range. This record is accounting, not authority.
-   Directory-create integration remains pending, so
-   directory operations are not yet complete or crash-safe. An inactive
+   Reachable recovery now requires exactly one canonical root-anchored allocator
+   image at the selected generation and rejects missing, duplicate, stale,
+   corrupt, substituted, or reachable-ID-reusing state. Authenticated rollback
+   resistance and physical durability remain pending, so directory operations
+   are not yet proven crash-safe. An inactive
    authority-slot reservation now closes the create activation race: it consumes
    bounded capacity without authorizing access, rejects guessed handles,
    activates once, and advances its generation when canceled. Prepared-create
-   orchestration remains pending. Canonical initial child staging now supports
+   orchestration is implemented as described below. Canonical initial child staging now supports
    both admitted kinds: an empty file has generation-1 file metadata plus an
    empty extent image, while an empty directory has generation-1 directory
    metadata plus an empty entry image and exact parent. Disjoint layouts are
@@ -340,7 +343,11 @@ authority; unrelated domains continue.
    generation links, checks purpose-specific metadata ownership, reconstructs
    extent maps, requires exact ownership for every data extent, rejects repeated
    object references and capacity overflow, and finally rejects any allocation
-   record not claimed by the reachable graph. The backend remains an emulated
+   record not claimed by the reachable graph. The volume-scoped object-ID
+   allocator is now part of that mandatory graph: exactly one root-owned,
+   candidate-generation, purpose-specific record must decode canonically, and
+   a concrete next ID must exceed every reachable local object ID; exhausted
+   state remains valid and non-allocating. The backend remains an emulated
    immutable image; physical block integration, interrupted-write/power-loss
    evidence, repair, and authenticated anti-rollback remain pending.
    The selector and traversal now compose into one recovery entry point. A

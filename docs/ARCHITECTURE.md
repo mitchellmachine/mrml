@@ -285,8 +285,13 @@ one distinct allocator transaction resource, and exposes the allocated ID and
 successor only after its one-use receipt. Its successor must now be present in
 the prepared allocation successor under a distinct allocator-metadata purpose,
 bound to the exact root lifetime anchor, allocator generation, and pointer
-range; this accounting anchor grants no authority. Recovery validation remains
-pending. The storage
+range; this accounting anchor grants no authority. Reachable recovery now
+requires exactly one such root-anchored record, decodes the exact canonical
+allocator image at the candidate generation, and rejects a concrete next ID
+that could reuse any reachable object ID. Missing, duplicate, corrupt, stale,
+wrong-purpose, wrong-owner, and wrong-range state invalidates the candidate;
+canonical exhaustion remains valid and strictly non-allocating. Authenticated
+anti-rollback and physical durability evidence remain pending. The storage
 authority table now supports opaque inactive insertion reservations: reserved
 slots consume capacity but cannot authorize, guessed handles are rejected,
 activation succeeds once, and cancellation retires the slot generation before

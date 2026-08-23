@@ -2772,8 +2772,12 @@ Zero cannot alias exhaustion, the maximum ID is reservable exactly once, and
 generation/identity exhaustion fail before staging. Its prepared allocation
 successor must now contain the exact allocator image under a distinct purpose,
 root lifetime anchor, allocator generation, and pointer range; the anchor grants
-no authority. Recovery validation remains pending, so create is not yet proven
-crash-safe on a block device. The authority table now supplies the corresponding
+no authority. Reachable recovery now requires exactly one allocator record,
+decodes its canonical candidate-generation image, and rejects missing,
+duplicate, stale, corrupt, substituted, or reachable-ID-reusing state. A
+canonical exhausted allocator remains valid and cannot allocate. Authenticated
+anti-rollback and block-device durability remain pending, so create is not yet
+proven crash-safe on a block device. The authority table now supplies the corresponding
 inactive slot reservation. A reservation binds exact object, kind, rights,
 owner, slot, and generation, consumes capacity without becoming authorizing,
 rejects guessed handles, activates exactly once, and advances the slot
@@ -2975,7 +2979,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-three focused unit tests and strict crate-local clippy pass on Windows
+Seventy-four focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, interrupted-create recovery,
 complete crash recovery, snapshots, a block-device service, and
@@ -2988,7 +2992,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 73 tests, and both strict crate-local clippy
+Both current unit-test runs pass 74 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3032,6 +3036,11 @@ new image, admits all participants to one publication generation, and exposes
 no successor or handle until exact receipt consumption. An unrelated authority
 table, guessed inactive handle, insufficient transaction/COW capacity, stale
 generation, missing image, or substituted allocation purpose fails closed.
+Recovery additionally treats the allocator as a mandatory reachable volume
+resource: exact record cardinality, owner, generation, purpose, range,
+canonical bytes, and forward next-ID relation are checked; exhaustion is
+accepted as the more restrictive state, and backend uncertainty never becomes
+permission to roll back.
 This agent review is not
 independent human audit.
 
