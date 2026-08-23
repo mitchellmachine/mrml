@@ -6671,8 +6671,9 @@ impl<
             self.saved_locals += 1;
         }
         self.evaluation_depth -= argument_slots;
-        let body = crate::parser::parse_function_body::<MAX_PARAMETERS>(target.body_expression)
-            .map_err(|error| self.error(CodegenErrorKind::Body(error.kind)))?;
+        let body =
+            crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
+                .map_err(|error| self.error(CodegenErrorKind::Body(error.kind)))?;
         let return_type = runtime_type_from_scalar(target.return_type);
         let return_type_name = target.return_type_name;
         let previous_width = self.width;
@@ -11375,11 +11376,18 @@ impl<
             self.emit(&[0x50, 0x52])?;
             return Ok(());
         }
-        if let Some(ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        }) = tree.expression(id).map(|expression| expression.kind)
+        if let Some(
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            }
+            | ExprKind::LoopBreakIf {
+                condition,
+                then_branch,
+                else_branch,
+            },
+        ) = tree.expression(id).map(|expression| expression.kind)
         {
             self.emit_expression(tree, condition, depth + 1)?;
             self.emit(&[0x48, 0x85, 0xc0])?;
@@ -11390,6 +11398,20 @@ impl<
             self.emit_slice_value_to_stack(tree, else_branch, depth + 1)?;
             self.patch_forward_branch(end_patch)?;
             return Ok(());
+        }
+        if let Some(
+            ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::InlineConst { operand },
+        ) = tree.expression(id).map(|expression| expression.kind)
+        {
+            return self.emit_slice_value_to_stack(tree, operand, depth + 1);
+        }
+        if let Some(ExprKind::Sequence { first, then }) =
+            tree.expression(id).map(|expression| expression.kind)
+        {
+            self.emit_expression(tree, first, depth + 1)?;
+            return self.emit_slice_value_to_stack(tree, then, depth + 1);
         }
         if self.emit_range_slice_to_stack(tree, id, depth)? {
             return Ok(());

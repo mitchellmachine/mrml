@@ -79,6 +79,21 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler type propagation, multiword
 value transport, and inline lowering within the existing Rust-subset compiler
 category.
 
+## 2026-08-23 — value-producing loop helper tails
+
+MRML source: `crates/mrml-rustc/src/{parser,codegen,pipeline}.rs`.
+
+The helper-body parser now preserves a tail value-producing loop when the
+existing bounded expression parser accepts the complete remainder. Existing
+scalar and reference result emitters then lower its conditional break choices
+before ordinary inline-frame cleanup. Statement loops and unsupported loop
+graphs retain their separate fail-closed path. The change adds no distinctive
+optimization, calling convention, memory layout, or algorithm.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler parsing, control-flow
+lowering, and inline-frame cleanup within the existing Rust-subset compiler
+category.
+
 ## 2026-08-23 — native guest-mapping revocation ordering
 
 MRML source: `crates/mrml-kernel/src/vm.rs`,
@@ -108,3 +123,18 @@ codec, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional fail-closed lifecycle and
 zeroization gating over existing service reset mechanisms.
+
+## 2026-08-23 — task-owned shared-resource cleanup
+
+MRML source: `crates/mrml-kernel/src/shared_memory.rs`.
+
+Shared mappings may now bind an exact task generation. Service cleanup removes
+each native mapping before its policy identity and binding, retains peer
+endpoints, destroys the opaque host resource only at the final reference, and
+retains completed obligations across retry. This is ordinary reference-counted
+resource lifetime, generational identity checking, and fail-closed teardown
+ordering; it adds no novel algorithm, device protocol, codec, cryptographic
+construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional capability-bound resource
+lifecycle and cleanup composition.

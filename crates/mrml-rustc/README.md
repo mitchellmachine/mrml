@@ -2626,8 +2626,13 @@ edges retain their existing cleanup targets; a body without an exit emits a
 real backedge, so an unreachable later tail is not exposed to the caller.
 A diverging statement loop may be the callee's effective tail and therefore
 inhabits its declared scalar return type without emitting cleanup or caller
-fallthrough. Value-producing `loop { break value; }` expressions are not yet
-part of this loop IR.
+fallthrough. A helper's effective tail may instead be a bounded value-producing
+`loop { break value; }` expression accepted by the existing expression parser.
+Conditional break alternatives preserve scalar, unit, thin-reference, slice,
+and string result transport after earlier helper locals and before caller-frame
+cleanup. This does not add arbitrary actions or backedges to the value-loop
+expression grammar; more complex statement loops continue through the separate
+loop IR above.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2637,12 +2642,11 @@ Calls may nest to eight levels and are inlined into the selected exported
 function, so the object still contains one symbol and no call relocations. The
 bounded active-call-name stack rejects direct and mutual recursion before
 expanding a cycle; acyclic forward and backward chains remain declaration-order
-independent. Caller-local capture, unsafe or foreign-ABI callees,
-value-producing loop expressions, deeper loop nesting, aggregates, references,
-and recursion fail closed. An original nested
-statement-body probe produced a 516-byte COFF object and a 904-byte ELF64
-object. A separate multi-return probe produced a 334-byte COFF object and a
-728-byte ELF64 object. A conditional-action probe produced 402-byte COFF and
+independent. Caller-local capture, unsafe or foreign-ABI callees, deeper loop
+nesting, by-value aggregate helper signatures, and recursion fail closed. An
+original nested statement-body probe produced a 516-byte COFF object and a
+904-byte ELF64 object. A separate multi-return probe produced 334-byte COFF and
+728-byte ELF64 objects. A conditional-action probe produced 402-byte COFF and
 792-byte ELF64 objects. A mixed action/return probe produced 345-byte COFF and
 736-byte ELF64 objects. A normal-exit loop probe produced 274-byte COFF and
 664-byte ELF64 objects. A controlled-loop probe produced 398-byte COFF and
@@ -2723,6 +2727,14 @@ locals. Separate adversarial sources reject element, mutability, and slice/strin
 kind mismatches. These references use a compiler-internal two-register return
 transport while calls remain inlined; this is not a general public Rust ABI
 implementation.
+A value-producing helper-loop chain produced a 797-byte COFF object and a
+1192-byte ELF64 object. Pinned-nightly callers matched 72 independent cases on
+Windows and Arch Linux, covering both conditional break alternatives across six
+boundary-value pairs and scalar, mutable-reference, and slice result consumers.
+The slice path selected observably different full and one-element subslices;
+the same chain also exercised a valueless unit break and helper-local cleanup.
+Object-emission tests additionally cover character references and Boolean
+slices. A mixed Boolean/integer break source fails type checking.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

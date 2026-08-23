@@ -3494,6 +3494,10 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[char]) -> char { identity(values)[0] } fn identity(values: &[char]) -> &[char] { values }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &mut [bool]) -> bool { let returned: &mut [bool] = identity(values); returned[0] = !returned[0]; returned[0] } fn identity(values: &mut [bool]) -> &mut [bool] { values }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { let values: [(); 2] = [(); 2]; identity(&values[..])[1] } fn identity(values: &[()]) -> &[()] { values }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u16, alternate: u16, first: bool) -> u16 { choose(value, alternate, first) } fn choose(value: u16, alternate: u16, first: bool) -> u16 { let offset: u16 = 1; loop { if first { break value + offset; } break alternate + offset; } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(value: &mut char, first: bool) -> char { *choose(value, first) } fn choose(value: &mut char, first: bool) -> &mut char { loop { if first { break value; } break value; } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[bool], first: bool) -> usize { let returned: &[bool] = choose(values, first); returned.len() } fn choose(values: &[bool], first: bool) -> &[bool] { loop { if first { break values; } break values; } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() { finish() } fn finish() { loop { break; } }",
     ];
     for source in sources {
         assert_eq!(

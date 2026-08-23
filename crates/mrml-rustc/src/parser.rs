@@ -20,6 +20,7 @@ pub const MAX_CONDITIONAL_RETURN_BRANCHES: usize = 4;
 pub const MAX_BODY_CONDITIONAL_ASSIGNMENTS: usize = 8;
 pub const MAX_CONDITIONAL_ASSIGNMENT_BRANCHES: usize = 4;
 pub const MAX_CONDITIONAL_BRANCH_ACTIONS: usize = 4;
+const MAX_BODY_TAIL_EXPRESSION_NODES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypeRef<'source> {
@@ -75,7 +76,7 @@ impl<'source, const MAX_PARAMETERS: usize> Function<'source, MAX_PARAMETERS> {
     pub fn parse_body<const MAX_LOCALS: usize>(
         &self,
     ) -> Result<FunctionBody<'source, MAX_LOCALS>, ParseError> {
-        BodyParser::new(self.body_expression).parse()
+        BodyParser::new(self.body_expression).parse::<MAX_LOCALS, MAX_BODY_TAIL_EXPRESSION_NODES>()
     }
 }
 
@@ -705,10 +706,14 @@ impl<'source, const MAX_LOCALS: usize> FunctionBody<'source, MAX_LOCALS> {
     }
 }
 
-pub(crate) fn parse_function_body<'source, const MAX_LOCALS: usize>(
+pub(crate) fn parse_function_body<
+    'source,
+    const MAX_LOCALS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
     source: &'source str,
 ) -> Result<FunctionBody<'source, MAX_LOCALS>, ParseError> {
-    BodyParser::new(source).parse()
+    BodyParser::new(source).parse::<MAX_LOCALS, MAX_EXPRESSION_NODES>()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1606,7 +1611,7 @@ impl<'source> BodyParser<'source> {
         Ok(true)
     }
 
-    fn parse<const MAX_LOCALS: usize>(
+    fn parse<const MAX_LOCALS: usize, const MAX_EXPRESSION_NODES: usize>(
         mut self,
     ) -> Result<FunctionBody<'source, MAX_LOCALS>, ParseError> {
         let mut body = FunctionBody {
@@ -1647,6 +1652,23 @@ impl<'source> BodyParser<'source> {
             }
         }
         let mut tail = self.peek()?;
+        if let Some(tail_token) =
+            tail.filter(|token| token.text == "loop" || token.kind == TokenKind::Lifetime)
+        {
+            let tail_end = self.source.trim_end().len();
+            let candidate = &self.source[tail_token.span.start..tail_end];
+            if ExpressionParser::<MAX_EXPRESSION_NODES>::new(candidate)
+                .parse()
+                .is_ok()
+            {
+                body.tail_span = Span {
+                    start: tail_token.span.start,
+                    end: tail_end,
+                };
+                body.tail_expression = candidate;
+                return Ok(body);
+            }
+        }
         while self.peek()?.is_some_and(|token| {
             matches!(token.text, "while" | "loop") || token.kind == TokenKind::Lifetime
         }) {
