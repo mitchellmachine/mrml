@@ -2334,8 +2334,10 @@ Pinned-nightly generic `saturating_cast::<T>`, `wrapping_cast::<T>`, and
 `BoundedCastFromInt` and `CheckedCastFromInt`. Runtime and constant paths apply
 numeric-bound saturation, Rust `as` wrapping, and unconditional strict overflow
 traps across signedness and width changes. The `Option`-returning `checked_cast`
-and unsafe `unchecked_cast` remain outside this scalar milestone until their
-result and unsafe-expression forms can be represented without partial behavior.
+`checked_cast` remains outside this scalar milestone until `Option` results can
+be represented without partial behavior. Unsafe functions can additionally use
+`unchecked_cast::<T>` for every integer pair; safe functions and constants
+reject it, and valid callers receive the direct representability-assuming cast.
 
 Unsafe functions can use the stable `unchecked_add`, `unchecked_sub`,
 `unchecked_mul`, `unchecked_neg`, `unchecked_shl`, and `unchecked_shr` integer

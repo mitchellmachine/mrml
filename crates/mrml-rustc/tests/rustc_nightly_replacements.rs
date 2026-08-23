@@ -2791,6 +2791,8 @@ fn rustc_generic_integer_casts_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> i16 { input.wrapping_cast::<i16>() }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> usize { input.strict_cast::<usize>() }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: usize) -> i8 { input.strict_cast::<i8>() }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: i64) -> u8 { input.unchecked_cast::<u8>() }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: u8) -> i64 { input.unchecked_cast::<i64>() }",
         "const VALUE: u8 = (-42i16).saturating_cast::<u8>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
         "const VALUE: i8 = 300u16.saturating_cast::<i8>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
         "const VALUE: u8 = (-42i16).wrapping_cast::<u8>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
@@ -2807,6 +2809,11 @@ fn rustc_generic_integer_casts_reach_native_objects() {
 
     assert!(compile_wide(
         "const VALUE: u8 = (-1i8).strict_cast::<u8>(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+    assert!(compile_wide(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u16 { input.unchecked_cast::<u16>() }",
         ObjectFormat::Elf64,
     )
     .is_err());

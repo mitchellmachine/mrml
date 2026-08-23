@@ -4244,6 +4244,9 @@ fn width_cast_bits(
     use crate::expression::IntegerWidthCastMode;
 
     let target_mask = signed_mask(target_bits);
+    if mode == IntegerWidthCastMode::Unchecked {
+        return Err(ConstEvalError::InvalidCast);
+    }
     if mode == IntegerWidthCastMode::Wrapping {
         return Ok(value & target_mask);
     }
@@ -5980,5 +5983,10 @@ mod tests {
             .parse_module::<1, 2>()
             .unwrap();
         assert!(analyze_constants::<1, 16, 1, 2>(&overflow, TargetLayout::X86_64).is_err());
+
+        let unchecked = Parser::new("const VALUE: u16 = 42u8.unchecked_cast::<u16>();")
+            .parse_module::<1, 2>()
+            .unwrap();
+        assert!(analyze_constants::<1, 16, 1, 2>(&unchecked, TargetLayout::X86_64).is_err());
     }
 }

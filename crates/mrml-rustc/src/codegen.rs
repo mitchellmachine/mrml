@@ -3437,6 +3437,11 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::Integer(Some(target_type)))
         }
         ExprKind::IntegerWidthCast { base, target, mode } => {
+            if mode == crate::expression::IntegerWidthCastMode::Unchecked
+                && !function.unsafe_function
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let RuntimeExpressionType::Integer(Some(source_type)) =
                 runtime_expression_type_with_locals(
                     function,
@@ -15005,6 +15010,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> i16 { input.wrapping_cast::<i16>() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> usize { input.strict_cast::<usize>() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> i8 { input.strict_cast::<i8>() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: i64) -> u8 { input.unchecked_cast::<u8>() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: u8) -> i64 { input.unchecked_cast::<i64>() }",
         ];
         for source in sources {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
@@ -15022,6 +15029,7 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> u8 { input.wrapping_cast::<u8>() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { input.saturating_cast::<u8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u16 { input.unchecked_cast::<u16>() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

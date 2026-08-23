@@ -159,6 +159,7 @@ pub enum IntegerWidthCastMode {
     Saturating,
     Wrapping,
     Strict,
+    Unchecked,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -206,6 +207,7 @@ impl IntegerType {
             IntegerWidthCastMode::Saturating
                 | IntegerWidthCastMode::Wrapping
                 | IntegerWidthCastMode::Strict
+                | IntegerWidthCastMode::Unchecked
         ) {
             return true;
         }
@@ -215,7 +217,8 @@ impl IntegerType {
         match mode {
             IntegerWidthCastMode::Saturating
             | IntegerWidthCastMode::Wrapping
-            | IntegerWidthCastMode::Strict => unreachable!(),
+            | IntegerWidthCastMode::Strict
+            | IntegerWidthCastMode::Unchecked => unreachable!(),
             IntegerWidthCastMode::Truncate | IntegerWidthCastMode::SaturatingTruncate => match self
             {
                 Self::U8 | Self::I8 => matches!(target, Self::U8 | Self::I8),
@@ -4243,6 +4246,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_cast"
                         | "wrapping_cast"
                         | "strict_cast"
+                        | "unchecked_cast"
                 )
             }) {
                 let method = method.expect("method was checked");
@@ -4281,6 +4285,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     "saturating_cast" => IntegerWidthCastMode::Saturating,
                     "wrapping_cast" => IntegerWidthCastMode::Wrapping,
                     "strict_cast" => IntegerWidthCastMode::Strict,
+                    "unchecked_cast" => IntegerWidthCastMode::Unchecked,
                     _ => unreachable!(),
                 };
                 base = self.push(Expr {
