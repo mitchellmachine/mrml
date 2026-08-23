@@ -23,6 +23,7 @@ pub enum AllocationKind {
     AllocationMetadata = 3,
     DirectoryEntries = 4,
     FileExtents = 5,
+    ObjectIdAllocatorMetadata = 6,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +122,7 @@ impl AllocationRecord {
             3 => AllocationKind::AllocationMetadata,
             4 => AllocationKind::DirectoryEntries,
             5 => AllocationKind::FileExtents,
+            6 => AllocationKind::ObjectIdAllocatorMetadata,
             _ => return Err(AllocationError::InvalidRecord),
         };
         Self::new(

@@ -154,9 +154,11 @@ explicitly and downgrade the status rather than guessing.
   metadata and entry-list images and activate only through a directory
   transaction receipt. A canonical volume-scoped object-ID allocator image now
   stages a generation-bound successor and activates a reserved stable ID only
-  through its distinct one-use transaction participant. Allocation ownership,
-  directory-create integration, recovery traversal, and concrete block I/O are
-  not yet implemented. Inactive child-authority reservations consume capacity
+  through its distinct one-use transaction participant. A prepared allocation
+  successor can now prove exact ownership of the allocator image using a
+  distinct purpose, root lifetime anchor, allocator generation, and pointer;
+  the anchor is not authority. Directory-create integration of that proof and
+  concrete block I/O are not yet implemented. Inactive child-authority reservations consume capacity
   without authorizing access and either activate once or retire their generation
   on cancellation, preventing a durable create from racing an unrelated handle
   insertion once orchestration is added. Initial empty files and directories

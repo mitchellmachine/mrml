@@ -282,8 +282,11 @@ allocator image now binds its nonzero generation, exact next stable ID or
 exhausted state, COW pointer, full-image checksum, and zero padding. Reservation
 stages an unreachable successor without changing the active allocator, admits
 one distinct allocator transaction resource, and exposes the allocated ID and
-successor only after its one-use receipt. Allocation-record ownership, recovery
-validation, and directory-create integration remain pending. The storage
+successor only after its one-use receipt. Its successor must now be present in
+the prepared allocation successor under a distinct allocator-metadata purpose,
+bound to the exact root lifetime anchor, allocator generation, and pointer
+range; this accounting anchor grants no authority. Recovery validation and
+directory-create integration remain pending. The storage
 authority table now supports opaque inactive insertion reservations: reserved
 slots consume capacity but cannot authorize, guessed handles are rejected,
 activation succeeds once, and cancellation retires the slot generation before

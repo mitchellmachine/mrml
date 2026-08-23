@@ -1,8 +1,8 @@
 use mrml_crypto::Sha3_256;
 
 use crate::{
-    CowMetadataImage, MetadataPointer, StorageObjectId, TransactionError, TransactionParticipant,
-    TransactionReceipt, VolumeHeader, VolumeId,
+    AllocationKind, CowMetadataImage, MetadataPointer, PreparedAllocationUpdate, StorageObjectId,
+    TransactionError, TransactionParticipant, TransactionReceipt, VolumeHeader, VolumeId,
 };
 
 pub const OBJECT_ID_ALLOCATOR_HEADER_BYTES: usize = 96;
@@ -198,6 +198,26 @@ impl PreparedObjectIdReservation {
         self.metadata
     }
 
+    /// Returns whether the prepared allocation successor owns this allocator
+    /// image at its exact root anchor, generation, range, and allocation purpose.
+    ///
+    /// The root object anchors the lifetime accounting for this volume-scoped
+    /// metadata. It does not grant authority to use either the root or the
+    /// allocated object.
+    pub fn allocation_owned_by<const N: usize>(
+        &self,
+        allocation: &PreparedAllocationUpdate<N>,
+        root: StorageObjectId,
+    ) -> bool {
+        root.volume() == self.successor.volume
+            && allocation.owns_image(
+                root,
+                self.successor.generation,
+                self.successor.pointer,
+                AllocationKind::ObjectIdAllocatorMetadata,
+            )
+    }
+
     pub(crate) fn transaction_participant(
         &self,
     ) -> Result<TransactionParticipant, TransactionError> {
@@ -352,6 +372,7 @@ fn put_u64(output: &mut [u8], offset: usize, value: u64) {
 mod tests {
     use super::*;
     use crate::{
+        AllocationChange, AllocationImage, AllocationRecord, AllocationWriteBackend,
         CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, StorageTransaction,
         StorageTransactionId, Superblock,
     };
@@ -392,6 +413,24 @@ mod tests {
         }
 
         fn flush_object_id_allocator(&mut self) -> Result<(), Self::Error> {
+            self.flushed += 1;
+            Ok(())
+        }
+    }
+
+    unsafe impl AllocationWriteBackend for Backend {
+        type Error = ();
+
+        fn stage_allocation_image(
+            &mut self,
+            _image: CowMetadataImage,
+            _encoded: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn flush_allocation_image(&mut self) -> Result<(), Self::Error> {
             self.flushed += 1;
             Ok(())
         }
@@ -501,6 +540,74 @@ mod tests {
         assert_eq!(successor.next_local(), Some(11));
         assert_eq!(receipt.remaining(), 0);
         assert_eq!((backend.verified, backend.replaced), (3, 1));
+    }
+
+    #[test]
+    fn reservation_requires_exact_allocator_metadata_ownership() {
+        let active_allocator =
+            ObjectIdAllocatorImage::build(header(), 5, Some(10), pointer(30)).unwrap();
+        let root = object(1);
+        let active_allocation = AllocationImage::<4>::build(
+            header(),
+            5,
+            pointer(20),
+            &[
+                AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+                AllocationRecord::new(root, 5, 20, 1, AllocationKind::AllocationMetadata).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut allocator_encoded = [0; 4096];
+        let mut allocation_encoded = [0; 4096];
+        let mut backend = Backend {
+            staged: 0,
+            flushed: 0,
+            verified: 0,
+            replaced: 0,
+        };
+        let reservation = active_allocator
+            .prepare_reservation(header(), pointer(31), &mut allocator_encoded, &mut backend)
+            .unwrap();
+        let exact = AllocationRecord::new(
+            root,
+            reservation.generation(),
+            reservation.pointer().block(),
+            reservation.pointer().blocks(),
+            AllocationKind::ObjectIdAllocatorMetadata,
+        )
+        .unwrap();
+        let prepared_allocation = active_allocation
+            .prepare_successor(
+                header(),
+                root,
+                pointer(50),
+                &[AllocationChange::Allocate(exact)],
+                &mut allocation_encoded,
+                &mut backend,
+            )
+            .unwrap();
+        assert!(reservation.allocation_owned_by(&prepared_allocation, root));
+        assert!(!reservation.allocation_owned_by(&prepared_allocation, object(2)));
+
+        let wrong_kind = AllocationRecord::new(
+            root,
+            reservation.generation(),
+            32,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap();
+        let wrong_allocation = active_allocation
+            .prepare_successor(
+                header(),
+                root,
+                pointer(51),
+                &[AllocationChange::Allocate(wrong_kind)],
+                &mut allocation_encoded,
+                &mut backend,
+            )
+            .unwrap();
+        assert!(!reservation.allocation_owned_by(&wrong_allocation, root));
     }
 
     #[test]

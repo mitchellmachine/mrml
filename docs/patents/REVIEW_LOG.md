@@ -903,6 +903,19 @@ persistence, transaction, cryptographic, or storage technique.
 Patent review: `NOT_TRIGGERED` — conventional persistent monotonic allocator
 metadata.
 
+## 2026-08-23 — exact allocator-metadata allocation ownership
+
+MRML source: `crates/mrml-storage/src/allocation.rs` and
+`object_id_allocator.rs`.
+
+The service uses a conventional purpose tag and exact owner, generation, and
+range comparison to require that a staged object-ID allocator image is present
+in the prepared allocation index. The root object is only a conventional
+lifetime-accounting anchor and does not authorize access. This adds no novel
+allocation, identity, capability, persistence, or cryptographic technique.
+
+Patent review: `NOT_TRIGGERED` — conventional exact allocation bookkeeping.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

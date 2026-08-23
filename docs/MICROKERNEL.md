@@ -2769,8 +2769,10 @@ Reservation advances a disjoint unreachable successor without mutating active
 state, admits a distinct allocator resource to the transaction, and returns the
 reserved stable ID and successor only after consuming its exact one-use receipt.
 Zero cannot alias exhaustion, the maximum ID is reservable exactly once, and
-generation/identity exhaustion fail before staging. Allocation-record ownership,
-recovery validation, and directory-create integration remain pending, so create
+generation/identity exhaustion fail before staging. Its prepared allocation
+successor must now contain the exact allocator image under a distinct purpose,
+root lifetime anchor, allocator generation, and pointer range; the anchor grants
+no authority. Recovery validation and directory-create integration remain pending, so create
 is not yet crash-safe. The authority table now supplies the corresponding
 inactive slot reservation. A reservation binds exact object, kind, rights,
 owner, slot, and generation, consumes capacity without becoming authorizing,
@@ -2951,8 +2953,11 @@ one-use receipt exposes the immutable successor. A focused simulation publishes
 the root directory metadata, entry image, and allocation image in one COW plan.
 The earlier allocation image in that focused test was a plan write rather than
 a prepared allocator participant. A separate canonical object-ID allocator now
-has staging and transaction participation, but it is not yet coupled to
-directory creation or allocation ownership.
+has staging and transaction participation. Its prepared successor now requires
+an exact allocation record with a distinct allocator-metadata purpose, root
+lifetime anchor, allocator generation, and pointer range. The root anchor is
+only lifetime accounting and grants no authority. This proof is not yet coupled
+to complete directory creation.
 
 The `DIGITAL-RIGHTS REVIEW` found no new collection, retention, correlation,
 remote disclosure, tracking identity, publisher control, DRM, accessibility
@@ -2967,7 +2972,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy focused unit tests and strict crate-local clippy pass on Windows
+Seventy-one focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, allocator/create integration,
 complete crash recovery, snapshots, a block-device service, and
@@ -2980,7 +2985,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 70 tests, and both strict crate-local clippy
+Both current unit-test runs pass 71 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3005,7 +3010,10 @@ pairwise range disjointness, exact allocation ownership, complete COW-plan
 membership, atomic batch receipt consumption, replay rejection, and fail-closed
 backend uncertainty. Allocator images additionally require canonical exhaustion,
 checked identity/generation advance, zero padding, distinct embedded and
-complete-image digests, and one-use activation. Authority reservations remain
+complete-image digests, and one-use activation. Allocator metadata ownership
+additionally requires a distinct allocation purpose and exact root anchor,
+allocator generation, and pointer range; kind, owner, generation, and range
+substitution fail closed, and the anchor conveys no authority. Authority reservations remain
 inactive until exact activation, reject guessed/stale tokens, and retire their
 generation on cancellation. Initial children bind exact type, identity, parent
 where applicable, generation 1, canonical empty subordinate images, and an

@@ -255,7 +255,10 @@ authority; unrelated domains continue.
    or exhaustion, pointer, digest, and zero padding. Reservation leaves active
    state unchanged, stages and flushes one successor, participates as a distinct
    volume transaction resource, and activates once from an exact receipt.
-   Allocation ownership and directory-create integration remain pending, so
+   The prepared allocator successor now requires an exact allocation record
+   with a distinct allocator-metadata purpose, root lifetime anchor, allocator
+   generation, and pointer range. This record is accounting, not authority.
+   Directory-create integration remains pending, so
    directory operations are not yet complete or crash-safe. An inactive
    authority-slot reservation now closes the create activation race: it consumes
    bounded capacity without authorizing access, rejects guessed handles,
