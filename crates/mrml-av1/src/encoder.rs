@@ -7,9 +7,115 @@
 
 use crate::{
     ChromaSampling, Error, ObuType, ScalabilityMetadata, TimecodeMetadata, vector_extend,
-    vector_push, write_obu,
+    vector_from_slice, vector_push, write_obu,
 };
 use mrml_runtime::Vector;
+
+/// CPU-side stream assembler.
+///
+/// This is intentionally minimal at present: it builds AV1 OBUs and IVF packets
+/// through already-implemented helpers while keeping explicit API shape for future
+/// full-frame mode and hardware-backed implementation.
+#[derive(Default)]
+pub struct Encoder {
+    stream: ObuStream,
+    sequence_config: Option<SequenceConfig>,
+}
+
+impl Encoder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_capacity(capacity: usize) -> Result<Self, Error> {
+        Ok(Self {
+            stream: ObuStream {
+                bytes: Vector::with_capacity(capacity).map_err(|_| Error::LimitExceeded)?,
+            },
+            sequence_config: None,
+        })
+    }
+
+    pub fn push_sequence_header(&mut self, config: SequenceConfig) -> Result<(), Error> {
+        let obu = sequence_header(config)?;
+        self.stream.push_encoded(&obu)?;
+        self.sequence_config = Some(config);
+        Ok(())
+    }
+
+    pub fn push_video_sequence_header(&mut self, config: VideoSequenceConfig) -> Result<(), Error> {
+        let obu = video_sequence_header(config)?;
+        self.stream.push_encoded(&obu)?;
+        self.sequence_config = Some(config.sequence);
+        Ok(())
+    }
+
+    pub fn push_reduced_still_frame_header(
+        &mut self,
+        config: ReducedStillFrameConfig,
+    ) -> Result<(), Error> {
+        let obu = reduced_still_frame_header(config)?;
+        self.stream.push_encoded(&obu)?;
+        Ok(())
+    }
+
+    pub fn push_temporal_delimiter(&mut self) -> Result<(), Error> {
+        let obu = temporal_delimiter()?;
+        self.stream.push_encoded(&obu)
+    }
+
+    /// Push already-authoritative OBU bytes. This is used by encode backends
+    /// that own a full-frame packet serializer.
+    pub fn push_obu(&mut self, obu: &[u8]) -> Result<(), Error> {
+        self.stream.push_encoded(obu)
+    }
+
+    /// Convenience for encoding an arbitrary-bytes frame payload into an OBU.
+    ///
+    /// This does not perform AV1 semantic validation and is intentionally
+    /// conservative. Backends that emit fully formed packet syntax should use
+    /// `push_obu` instead.
+    pub fn push_frame_payload(
+        &mut self,
+        temporal_id: u8,
+        spatial_id: u8,
+        payload: &[u8],
+    ) -> Result<(), Error> {
+        let obu = write_obu(ObuType::Frame, temporal_id, spatial_id, payload)?;
+        self.stream.push_encoded(&obu)?;
+        Ok(())
+    }
+
+    pub fn push_frame_header_payload(
+        &mut self,
+        temporal_id: u8,
+        spatial_id: u8,
+        payload: &[u8],
+    ) -> Result<(), Error> {
+        let obu = write_obu(ObuType::FrameHeader, temporal_id, spatial_id, payload)?;
+        self.stream.push_encoded(&obu)
+    }
+
+    /// Encode only if a full sequence description exists.
+    pub fn write_to_ivf(&self, time_base_num: u32, time_base_den: u32) -> Result<Vector<u8>, Error> {
+        let config = self
+            .sequence_config
+            .ok_or(Error::MissingSequence)?;
+        let mut packets = Vector::new();
+        vector_push(&mut packets, vector_from_slice(self.stream.as_bytes())?)?;
+        crate::write_ivf(
+            &packets,
+            u16::from(config.width),
+            u16::from(config.height),
+            time_base_num,
+            time_base_den,
+        )
+    }
+
+    pub fn packets(&self) -> &[u8] {
+        self.stream.as_bytes()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SequenceConfig {
@@ -780,5 +886,23 @@ mod tests {
         let mut decoder = Decoder::new();
         decoder.decode_obus(&obu).unwrap();
         assert_eq!(decoder.metadata(), &[Metadata::Scalability(metadata)]);
+    }
+
+    #[test]
+    fn encoder_stream_builder_round_trips_headers() {
+        let mut builder = Encoder::new();
+        builder
+            .push_sequence_header(SequenceConfig::default())
+            .unwrap();
+        builder.push_temporal_delimiter().unwrap();
+        let frame_header = reduced_still_frame_header(ReducedStillFrameConfig {
+            sequence: SequenceConfig::default(),
+            reduced_tx_set: false,
+        })
+        .unwrap();
+        builder.push_obu(&frame_header).unwrap();
+
+        let mut decoder = Decoder::new();
+        assert_eq!(decoder.decode_obus(builder.packets()).unwrap().len(), 0);
     }
 }
