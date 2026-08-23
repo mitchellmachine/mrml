@@ -2541,6 +2541,15 @@ fn evaluate_call_aware_integer<
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
             let value = recurse(base)?;
+            if transform == crate::expression::IntegerBitTransform::StrictNegate
+                && if ty.is_signed() {
+                    value == 1_u128 << (bits - 1)
+                } else {
+                    value != 0
+                }
+            {
+                return Err(arithmetic_error(ConstEvalError::Overflow));
+            }
             if transform == crate::expression::IntegerBitTransform::IntegerSquareRoot
                 && ty.is_signed()
                 && value & (1_u128 << (bits - 1)) != 0
@@ -3460,6 +3469,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
             let value = recurse(base)?;
+            if transform == crate::expression::IntegerBitTransform::StrictNegate
+                && value == 1_u128 << (bits - 1)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::Overflow));
+            }
             if transform == crate::expression::IntegerBitTransform::IntegerSquareRoot
                 && value & (1_u128 << (bits - 1)) != 0
             {
@@ -3870,7 +3884,9 @@ fn transform_integer_bits(
         }
         IntegerBitTransform::ReverseBits => value.reverse_bits() >> (128 - bits),
         IntegerBitTransform::ToLittleEndian => value,
-        IntegerBitTransform::WrappingNegate => 0_u128.wrapping_sub(value) & mask,
+        IntegerBitTransform::WrappingNegate | IntegerBitTransform::StrictNegate => {
+            0_u128.wrapping_sub(value) & mask
+        }
         IntegerBitTransform::SaturatingNegate => {
             if value == 1_u128 << (bits - 1) {
                 (1_u128 << (bits - 1)) - 1

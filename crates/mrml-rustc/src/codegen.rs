@@ -5379,6 +5379,10 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.emit(&[0x48, 0x89, 0xc8])?;
                     }
                     IntegerBitTransform::WrappingNegate => self.emit(&[0x48, 0xf7, 0xd8])?,
+                    IntegerBitTransform::StrictNegate => {
+                        self.emit(&[0x48, 0xf7, 0xd8])?;
+                        self.emit_trap_branch(if operand_width.signed { 0x80 } else { 0x82 })?;
+                    }
                     IntegerBitTransform::SaturatingNegate
                     | IntegerBitTransform::SaturatingAbsolute => {
                         self.emit(&[0x48, 0xba])?;
@@ -12607,6 +12611,43 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn checks_strict_primitive_integer_negation() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.strict_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { input.strict_neg() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.strict_neg() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                for options in [CodegenOptions::CHECKED, CodegenOptions::WRAPPING] {
+                    let result = compile_x86_64_function_with_options::<_, 1024, 2, 96>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                        options,
+                    );
+                    assert!(result.is_ok(), "{source}: {result:?}");
+                }
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.strict_neg() }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]

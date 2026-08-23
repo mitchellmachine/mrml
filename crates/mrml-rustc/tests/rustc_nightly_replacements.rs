@@ -1888,6 +1888,25 @@ fn rustc_strict_division_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_strict_negation_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.strict_neg() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> i16 { input.strict_neg() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.strict_neg() }",
+        "const VALUE: u8 = 0u8.strict_neg(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = 42i16.strict_neg(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_euclidean_integer_division_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.div_euclid(rhs) }",

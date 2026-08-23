@@ -511,6 +511,7 @@ pub enum IntegerBitTransform {
     ToBigEndian,
     ToLittleEndian,
     WrappingNegate,
+    StrictNegate,
     WrappingAbsolute,
     Absolute,
     SaturatingNegate,
@@ -3899,6 +3900,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "to_be"
                         | "to_le"
                         | "wrapping_neg"
+                        | "strict_neg"
                         | "wrapping_abs"
                         | "abs"
                         | "unsigned_abs"
@@ -4225,6 +4227,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 | "to_be"
                 | "to_le"
                 | "wrapping_neg"
+                | "strict_neg"
                 | "wrapping_abs"
                 | "abs"
                 | "saturating_neg"
@@ -4240,6 +4243,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "to_be" => IntegerBitTransform::ToBigEndian,
                         "to_le" => IntegerBitTransform::ToLittleEndian,
                         "wrapping_neg" => IntegerBitTransform::WrappingNegate,
+                        "strict_neg" => IntegerBitTransform::StrictNegate,
                         "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
                         "abs" => IntegerBitTransform::Absolute,
                         "saturating_neg" => IntegerBitTransform::SaturatingNegate,
