@@ -378,10 +378,16 @@ mod tests {
         assert!(compile(conditional_actions, "answer", ObjectFormat::Elf64).is_ok());
 
         let branch_return = "fn adjust(value: u64, choose: bool) -> u64 { let mut total: u64 = value; if choose { total += 1; return total; } else { total += 2; } total } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, choose: bool) -> u64 { adjust(value, choose) }";
-        let error = compile(branch_return, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert!(compile(branch_return, "answer", ObjectFormat::Elf64).is_ok());
+
+        let exhaustive_actions = "fn adjust(value: u64, choose: bool) -> u64 { let mut total: u64 = value; if choose { total += 1; return total; } else { total += 2; return total; } } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, choose: bool) -> u64 { adjust(value, choose) }";
+        assert!(compile(exhaustive_actions, "answer", ObjectFormat::Coff).is_ok());
+
+        let wrong_branch_return = "fn adjust(value: u64, choose: bool) -> u64 { let mut total: u64 = value; if choose { total += 1; return false; } else { total += 2; } total } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, choose: bool) -> u64 { adjust(value, choose) }";
+        let error = compile(wrong_branch_return, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
-            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
         let loop_body = "fn count(value: u64) -> u64 { let mut current: u64 = value; while current < 10 { current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";

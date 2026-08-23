@@ -6664,25 +6664,17 @@ impl<
                     crate::BodyStatement::ConditionalAssignment(index) => {
                         let conditional = body.conditional_assignments()[*index]
                             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                        let has_return = conditional
-                            .branches()
-                            .iter()
-                            .flatten()
-                            .flat_map(crate::ConditionalAssignmentBranch::actions)
-                            .flatten()
-                            .chain(conditional.else_actions().iter().flatten())
-                            .any(|action| {
-                                matches!(action, crate::ConditionalAssignmentAction::Return(_))
-                            });
-                        if has_return {
-                            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                        }
-                        self.emit_conditional_assignment::<MAX_NODES>(
+                        if self.emit_inline_conditional_actions::<MAX_NODES>(
                             &conditional,
                             return_type,
                             return_type_name,
+                            checkpoint,
                             body_start,
-                        )?;
+                            &mut return_patches,
+                            &mut return_count,
+                        )? {
+                            tail_unreachable = true;
+                        }
                     }
                     crate::BodyStatement::Loop(_) => {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
@@ -6799,6 +6791,121 @@ impl<
             self.emit_inline_return::<MAX_NODES>(&value, expected_type, checkpoint, body_start)?;
         self.patch_forward_branch(skip)?;
         Ok(return_patch)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_inline_conditional_actions<const MAX_NODES: usize>(
+        &mut self,
+        conditional: &crate::ConditionalAssignment<'tree>,
+        expected_type: RuntimeExpressionType,
+        operand_type: &str,
+        call_checkpoint: usize,
+        body_start: usize,
+        return_patches: &mut [Option<usize>],
+        return_count: &mut usize,
+    ) -> Result<bool, CodegenError> {
+        let mut end_patches = [None; crate::MAX_CONDITIONAL_ASSIGNMENT_BRANCHES];
+        let mut end_count = 0usize;
+        let mut every_branch_returns = true;
+        for branch in conditional.branches().iter().flatten() {
+            let condition =
+                branch
+                    .parse_condition::<MAX_NODES>()
+                    .map_err(|error| CodegenError {
+                        kind: CodegenErrorKind::Expression(error.kind),
+                        span: translate_span(body_start + branch.condition_span.start, error.span),
+                    })?;
+            let condition_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                &condition,
+                condition.root(),
+                0,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if condition_type != RuntimeExpressionType::Bool {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_expression(&condition, condition.root(), 0)?;
+            self.emit(&[0x48, 0x85, 0xc0])?;
+            let false_branch = self.emit_forward_branch(0x84)?;
+            let branch_checkpoint = self.saved_locals;
+            let returned = self.emit_inline_conditional_action_list::<MAX_NODES>(
+                branch.actions(),
+                expected_type,
+                operand_type,
+                call_checkpoint,
+                branch_checkpoint,
+                body_start,
+                return_patches,
+                return_count,
+            )?;
+            every_branch_returns &= returned;
+            if !returned {
+                end_patches[end_count] = Some(self.emit_unconditional_forward_branch()?);
+                end_count += 1;
+            }
+            self.patch_forward_branch(false_branch)?;
+        }
+        let else_checkpoint = self.saved_locals;
+        let else_returns = self.emit_inline_conditional_action_list::<MAX_NODES>(
+            conditional.else_actions(),
+            expected_type,
+            operand_type,
+            call_checkpoint,
+            else_checkpoint,
+            body_start,
+            return_patches,
+            return_count,
+        )?;
+        for patch in end_patches[..end_count].iter().flatten().copied() {
+            self.patch_forward_branch(patch)?;
+        }
+        Ok(every_branch_returns && else_returns)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_inline_conditional_action_list<const MAX_NODES: usize>(
+        &mut self,
+        actions: &[Option<crate::ConditionalAssignmentAction<'tree>>],
+        expected_type: RuntimeExpressionType,
+        operand_type: &str,
+        call_checkpoint: usize,
+        branch_checkpoint: usize,
+        body_start: usize,
+        return_patches: &mut [Option<usize>],
+        return_count: &mut usize,
+    ) -> Result<bool, CodegenError> {
+        for action in actions.iter().flatten() {
+            match action {
+                crate::ConditionalAssignmentAction::Local(local) => {
+                    self.emit_local::<MAX_NODES>(local, operand_type, body_start)?;
+                }
+                crate::ConditionalAssignmentAction::Assignment(assignment) => {
+                    self.emit_assignment::<MAX_NODES>(assignment, body_start)?;
+                }
+                crate::ConditionalAssignmentAction::Expression(statement) => {
+                    self.emit_expression_statement::<MAX_NODES>(statement, body_start)?;
+                }
+                crate::ConditionalAssignmentAction::Return(return_statement) => {
+                    let patch = self.emit_inline_return::<MAX_NODES>(
+                        return_statement,
+                        expected_type,
+                        call_checkpoint,
+                        body_start,
+                    )?;
+                    *return_patches
+                        .get_mut(*return_count)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                    *return_count += 1;
+                    self.truncate_scoped_locals(branch_checkpoint)?;
+                    return Ok(true);
+                }
+            }
+        }
+        self.emit_scoped_local_cleanup(branch_checkpoint)?;
+        Ok(false)
     }
 
     fn emit_expression_with_width<const MAX_NODES: usize>(
