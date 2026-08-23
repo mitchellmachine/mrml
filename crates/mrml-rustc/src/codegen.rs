@@ -2446,7 +2446,7 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
     })
 }
 
-fn preanalyze_runtime_assignment_root_read<
+fn preanalyze_runtime_assignment_reads<
     'source,
     const MAX_PARAMETERS: usize,
     const MAX_EXPRESSION_NODES: usize,
@@ -2462,50 +2462,150 @@ fn preanalyze_runtime_assignment_root_read<
             kind: CodegenErrorKind::Expression(error.kind),
             span: translate_span(assignment.value_span.start, error.span),
         })?;
-    let Some(place) =
-        discover_runtime_read_place(&tree, tree.root()).map_err(|kind| CodegenError {
+
+    fn recurse<'source, const MAX_PARAMETERS: usize, const MAX_EXPRESSION_NODES: usize>(
+        facts: &mut RuntimeBodyFacts<'source>,
+        locals: &[Option<RuntimeLocal<'source>>],
+        function: &Function<'source, MAX_PARAMETERS>,
+        tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
+        id: crate::ExprId,
+        depth: usize,
+        assignment_span: Span,
+    ) -> Result<(), CodegenError> {
+        if depth == 64 {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::Lowering(IrErrorKind::NestingLimitExceeded),
+                span: assignment_span,
+            });
+        }
+        let expression = tree.expression(id).ok_or(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: assignment_span,
+        })?;
+        if depth != 0 && matches!(expression.kind, ExprKind::Index { .. }) {
+            // Nested indexes have lowering-family-specific read shapes: reference
+            // indexes read the reference and index, while local arrays may
+            // materialize every element. Preserve emission-time facts until the
+            // prepass carries the typed dispatch needed to mirror those shapes.
+            return Ok(());
+        }
+        if let Some(place) = discover_runtime_read_place(tree, id).map_err(|kind| CodegenError {
             kind,
-            span: assignment.value_span,
-        })?
-    else {
-        return Ok(());
-    };
-    let (base, ty) = if let Some(local) = locals
-        .iter()
-        .rev()
-        .flatten()
-        .find(|local| local.name == place.name)
-    {
-        (RuntimePlaceIdentity::Local(local.id), local.ty)
-    } else if let Some((index, parameter)) = function
-        .parameters()
-        .iter()
-        .flatten()
-        .enumerate()
-        .find(|(_, parameter)| parameter.name == place.name)
-    {
-        (
-            RuntimePlaceIdentity::Parameter(index),
-            runtime_type_from_text(parameter.ty.text).ok_or(CodegenError {
-                kind: CodegenErrorKind::UnsupportedRuntimeType,
-                span: assignment.value_span,
-            })?,
-        )
-    } else {
-        return Ok(());
-    };
-    facts
-        .push_assignment_read(RuntimePlaceAccessFact {
-            base,
-            projections: place.projections,
-            ty,
-            access: RuntimePlaceAccess::Read,
-            span: place.span,
-        })
-        .map_err(|kind| CodegenError {
-            kind,
-            span: assignment.value_span,
-        })
+            span: assignment_span,
+        })? {
+            let resolved = locals
+                .iter()
+                .rev()
+                .flatten()
+                .find(|local| local.name == place.name)
+                .map(|local| (RuntimePlaceIdentity::Local(local.id), local.ty))
+                .or_else(|| {
+                    function
+                        .parameters()
+                        .iter()
+                        .flatten()
+                        .enumerate()
+                        .find(|(_, parameter)| parameter.name == place.name)
+                        .and_then(|(index, parameter)| {
+                            runtime_type_from_text(parameter.ty.text)
+                                .map(|ty| (RuntimePlaceIdentity::Parameter(index), ty))
+                        })
+                });
+            if let Some((base, ty)) = resolved {
+                facts
+                    .push_assignment_read(RuntimePlaceAccessFact {
+                        base,
+                        projections: place.projections,
+                        ty,
+                        access: RuntimePlaceAccess::Read,
+                        span: place.span,
+                    })
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: assignment_span,
+                    })?;
+            }
+            if let ExprKind::Index { index, .. } = expression.kind {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    tree,
+                    index,
+                    depth + 1,
+                    assignment_span,
+                )?;
+            }
+            return Ok(());
+        }
+
+        let mut visit = |operand| {
+            recurse(
+                facts,
+                locals,
+                function,
+                tree,
+                operand,
+                depth + 1,
+                assignment_span,
+            )
+        };
+        match expression.kind {
+            ExprKind::Cast { operand, .. }
+            | ExprKind::Ascribe { operand, .. }
+            | ExprKind::Return { operand }
+            | ExprKind::LoopBreak { operand } => visit(operand)?,
+            ExprKind::Unary {
+                operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
+                operand,
+            } => match tree.expression(operand).map(|expression| expression.kind) {
+                Some(ExprKind::Identifier(_)) | Some(ExprKind::Index { .. }) => visit(operand)?,
+                Some(ExprKind::Unary {
+                    operator: crate::UnaryOperator::Dereference,
+                    operand: reference,
+                }) => visit(reference)?,
+                Some(ExprKind::RangeIndex { base, .. }) => visit(base)?,
+                _ => {}
+            },
+            ExprKind::Unary { operand, .. } => visit(operand)?,
+            ExprKind::Sequence { first, then } => {
+                visit(first)?;
+                visit(then)?;
+            }
+            ExprKind::Binary { left, right, .. } => {
+                visit(left)?;
+                visit(right)?;
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            }
+            | ExprKind::LoopBreakIf {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit(condition)?;
+                visit(then_branch)?;
+                visit(else_branch)?;
+            }
+            // Inline const operands cannot capture runtime locals. Other compound
+            // expression families remain outside this bounded preanalysis slice.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    recurse(
+        facts,
+        locals,
+        function,
+        &tree,
+        tree.root(),
+        0,
+        assignment.value_span,
+    )
 }
 
 fn preanalyze_runtime_assignment_access<
@@ -2518,7 +2618,7 @@ fn preanalyze_runtime_assignment_access<
     function: &Function<'source, MAX_PARAMETERS>,
     assignment: &crate::Assignment<'source>,
 ) -> Result<(), CodegenError> {
-    preanalyze_runtime_assignment_root_read::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+    preanalyze_runtime_assignment_reads::<MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
         facts, locals, function, assignment,
     )?;
     if assignment.binding_name() == "_" {
@@ -17369,6 +17469,56 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 2048, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_order_nested_assignment_expression_reads() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(seed: u16, left: u16, right: u16, choose: bool) -> u16 { let mut result: u16 = seed; let pair: (u16, bool) = (right, choose); result = left + pair.0 * right; result = if choose { right } else { left }; result }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_access_count, 2);
+        assert_eq!(facts.assignment_read_count, 6);
+        for (fact, identity) in facts.assignment_reads[..6].iter().zip([
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(1),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().access, RuntimePlaceAccess::Read);
+        }
+        assert_eq!(
+            facts.assignment_reads[1].unwrap().projections,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(0))
+        );
+        for index in [0, 2, 3, 4, 5] {
+            assert_eq!(
+                facts.assignment_reads[index].unwrap().projections,
+                RuntimePlaceProjections::EMPTY
+            );
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
         }
     }
 

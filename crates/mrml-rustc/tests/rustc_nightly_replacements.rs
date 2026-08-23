@@ -1040,6 +1040,24 @@ fn rustc_mutable_tuple_fields_reach_native_objects() {
 }
 
 #[test]
+fn rustc_nested_assignment_operands_reach_native_objects() {
+    // Original bounded replacement for left-to-right compound RHS evaluation,
+    // projected tuple reads, and lazy conditional operands at assignment sites.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(seed: u16, left: u16, right: u16, choose: bool) -> u16 { let mut result: u16 = seed; let pair: (u16, bool) = (right, choose); result = left + pair.0 * right; result = if choose { result ^ right } else { result ^ left }; result }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<2048, 1536, 8, 8, 8, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.
