@@ -566,6 +566,10 @@ pub enum ExprKind<'source> {
         option: ExprId,
         closure: ExprId,
     },
+    IntegerOptionInspect {
+        option: ExprId,
+        closure: ExprId,
+    },
     IntegerOptionFilter {
         option: ExprId,
         closure: ExprId,
@@ -994,6 +998,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerOptionMapOrElse { .. }
             | ExprKind::IntegerOptionMapOrDefault { .. }
             | ExprKind::IntegerOptionMap { .. }
+            | ExprKind::IntegerOptionInspect { .. }
             | ExprKind::IntegerOptionFilter { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
@@ -1288,6 +1293,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
             ExprKind::IntegerOptionMap { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerOptionInspect { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionFilter { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2907,6 +2913,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(map_closure, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerOptionMap { option, closure } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
+                self.substitute_identifier(closure, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionInspect { option, closure } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
                 self.substitute_identifier(closure, name, replacement, depth + 1)?;
             }
@@ -4713,6 +4723,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "map_or_else"
                         | "map_or_default"
                         | "map"
+                        | "inspect"
                         | "filter"
                         | "clamp_magnitude"
                         | "wrapping_shl"
@@ -4905,6 +4916,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "map_or_else"
                     | "map_or_default"
                     | "map"
+                    | "inspect"
                     | "filter"
                     | "unwrap_or"
                     | "unwrap_or_else"
@@ -5413,6 +5425,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                 },
                 "map" => ExprKind::IntegerOptionMap {
+                    option: base,
+                    closure: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "inspect" => ExprKind::IntegerOptionInspect {
                     option: base,
                     closure: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))

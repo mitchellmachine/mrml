@@ -2451,6 +2451,11 @@ filtered again before reaching any existing checked-option terminal consumer.
 Non-integer mapped option payloads remain outside the current scalar option
 representation.
 
+Checked integer options also support composable `Option::inspect`. Its closure
+receives an immutable reference to a present candidate, must return unit, and
+is skipped for `None`. After inspection the original candidate, integer type,
+and validity are preserved for subsequent maps, filters, or terminal consumers.
+
 Checked-option `map_or` evaluates its default eagerly, then executes its
 bounded one-argument mapping closure only for `Some`. The closure may capture
 parameters and locals, and its mapped result has an independent compatible
