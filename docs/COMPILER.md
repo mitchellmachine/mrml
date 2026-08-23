@@ -205,6 +205,11 @@ shapes: reference indexes reserve the base and runtime index; constant local-
 array indexes reserve one projected element read; runtime local-array indexes
 reserve every materialized element read before the runtime index. Method/call
 and aggregate families remain outside this slice.
+The same bounded visitor now runs for scalar local initializers before the new
+binding enters the active environment. Sequential and scoped shadowing therefore
+records reads against the previous binding identity; the replacement binding
+receives its monotonic ID only after initializer emission. Aggregate and fat-
+reference initializers retain their specialized emission-time materialization.
 Emission must consume every preassigned declaration exactly once. Inlined helper
 parameters and later scoped locals append to a checked dynamic tail and cannot
 steal a preassigned source identity; mismatches fail as
@@ -222,10 +227,11 @@ empty base read. Specialized direct aggregate paths reuse the same recorder.
 The discovery is not yet universally consumed by nested emission paths. The
 prepass now enumerates every declaration and assignment-target form represented
 by the supported runtime body and loop parsers, plus root-place and supported
-nested scalar reads of assignment RHS expressions. It does not yet preanalyze
-compound array-base materialization, method/call, aggregate, or non-assignment
-body reads or replace name lookup across the whole body. Expanded inlined-helper
-locals still append dynamically. There is not
+nested scalar reads of assignment RHS expressions and scalar initializer reads.
+It does not yet preanalyze compound array-base materialization, aggregate/fat-
+reference initializers, method/call, expression-statement, condition/control,
+tail, or other body reads or replace name lookup across the whole body. Expanded
+inlined-helper locals still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of
 ownership checking.

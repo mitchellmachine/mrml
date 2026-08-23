@@ -2922,6 +2922,11 @@ reference-base reads, a constant local-array element read, and every element
 materialized for runtime local-array indexing before visiting its runtime index.
 Compound array bases, method/call, aggregate, and non-assignment body reads
 remain outside this slice.
+Scalar local initializers use the same bounded visitor before the declared
+binding enters the active environment. Reads in a shadowing initializer retain
+the previous binding's stable ID; the replacement binding receives its new ID
+afterward. Aggregate and fat-reference initializer materialization remains an
+emission-time fact family.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
@@ -2943,6 +2948,14 @@ distinct fact order for reference-array runtime indexing, two-element local-
 array runtime materialization, its runtime index, and constant local-array
 indexing. Its original replacement emits both COFF and ELF64 objects through
 the same typed index families.
+
+The scalar initializer-read milestone passed all 578 compiler and driver tests
+on Windows gnullvm and all 578 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Its adversarial unit test proves nine exact
+parameter and local identities across initializer-before-binding shadowing and
+a lazy conditional initializer. Existing branch and loop fact tests now include
+their initializer reads. Its original replacement emits both COFF and ELF64
+objects through the same shadowing and conditional shapes.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
