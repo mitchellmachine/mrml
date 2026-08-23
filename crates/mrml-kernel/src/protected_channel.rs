@@ -10,6 +10,9 @@ pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
 pub const VBS_ATTESTATION_DATA_BYTES: usize = 64;
 pub const VBS_ATTESTATION_REPORT_MAX_BYTES: usize = 64 * 1024;
 pub const VBS_ATTESTATION_ENVELOPE_BYTES: usize = 8 + VBS_ATTESTATION_REPORT_MAX_BYTES;
+pub const VBS_REPORT_PACKAGE_HEADER_BYTES: usize = 24;
+pub const VBS_REPORT_SIGNED_STATEMENT_BYTES: usize = 224;
+pub const VBS_ENCLAVE_IDENTITY_BYTES: usize = 152;
 const REQUEST_MAGIC: [u8; 8] = *b"MRMLLR01";
 const RECEIPT_MAGIC: [u8; 8] = *b"MRMLAR01";
 const VBS_CONTEXT_MAGIC: [u8; 8] = *b"MRMLVC01";
@@ -48,6 +51,198 @@ pub struct VbsAttestationData {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VbsAttestationEnvelope<'a> {
     report: &'a [u8],
+}
+
+/// Parsed but cryptographically unverified VBS report identity. None of these
+/// fields are trustworthy until a separate VBS enclave successfully calls
+/// `EnclaveVerifyAttestationReport` over the exact original report bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UnverifiedVbsAttestationReport<'a> {
+    report: &'a [u8],
+    binding: VbsAttestationData,
+    owner_id: [u8; 32],
+    unique_id: [u8; 32],
+    author_id: [u8; 32],
+    family_id: [u8; 16],
+    image_id: [u8; 16],
+    enclave_security_version: u32,
+    secure_kernel_security_version: u32,
+    platform_security_version: u32,
+    signature_scheme: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VbsAttestationExpectation {
+    owner_id: [u8; 32],
+    unique_id: [u8; 32],
+    author_id: [u8; 32],
+    family_id: [u8; 16],
+    image_id: [u8; 16],
+    minimum_enclave_security_version: u32,
+    minimum_secure_kernel_security_version: u32,
+    minimum_platform_security_version: u32,
+}
+
+impl VbsAttestationExpectation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        owner_id: [u8; 32],
+        unique_id: [u8; 32],
+        author_id: [u8; 32],
+        family_id: [u8; 16],
+        image_id: [u8; 16],
+        minimum_enclave_security_version: u32,
+        minimum_secure_kernel_security_version: u32,
+        minimum_platform_security_version: u32,
+    ) -> Result<Self, ProtectedChannelError> {
+        if unique_id == [0; 32]
+            || author_id == [0; 32]
+            || family_id == [0; 16]
+            || image_id == [0; 16]
+            || minimum_enclave_security_version == 0
+            || minimum_secure_kernel_security_version == 0
+            || minimum_platform_security_version == 0
+        {
+            return Err(ProtectedChannelError::AttestationIdentityMismatch);
+        }
+        Ok(Self {
+            owner_id,
+            unique_id,
+            author_id,
+            family_id,
+            image_id,
+            minimum_enclave_security_version,
+            minimum_secure_kernel_security_version,
+            minimum_platform_security_version,
+        })
+    }
+}
+
+impl<'a> UnverifiedVbsAttestationReport<'a> {
+    pub fn parse(report: &'a [u8]) -> Result<Self, ProtectedChannelError> {
+        let minimum = VBS_REPORT_PACKAGE_HEADER_BYTES
+            .checked_add(VBS_REPORT_SIGNED_STATEMENT_BYTES)
+            .and_then(|bytes| bytes.checked_add(1))
+            .ok_or(ProtectedChannelError::Malformed)?;
+        if report.len() < minimum || report.len() > VBS_ATTESTATION_REPORT_MAX_BYTES {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let package_size = read_u32(report, 0)? as usize;
+        let package_version = read_u32(report, 4)?;
+        let signature_scheme = read_u32(report, 8)?;
+        let statement_size = read_u32(report, 12)? as usize;
+        let signature_size = read_u32(report, 16)? as usize;
+        if package_size != report.len()
+            || package_version != 1
+            || signature_scheme == 0
+            || statement_size != VBS_REPORT_SIGNED_STATEMENT_BYTES
+            || signature_size == 0
+            || read_u32(report, 20)? != 0
+            || VBS_REPORT_PACKAGE_HEADER_BYTES
+                .checked_add(statement_size)
+                .and_then(|bytes| bytes.checked_add(signature_size))
+                != Some(report.len())
+        {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let statement = &report[VBS_REPORT_PACKAGE_HEADER_BYTES
+            ..VBS_REPORT_PACKAGE_HEADER_BYTES + VBS_REPORT_SIGNED_STATEMENT_BYTES];
+        if read_u32(statement, 0)? as usize != statement.len() || read_u32(statement, 4)? != 1 {
+            return Err(ProtectedChannelError::Malformed);
+        }
+        let binding = VbsAttestationData::decode(&statement[8..72])?;
+        let identity = &statement[72..72 + VBS_ENCLAVE_IDENTITY_BYTES];
+        let flags = read_u32(identity, 140)?;
+        if flags != 0 || read_u32(identity, 144)? != 0 || read_u32(identity, 148)? != 0 {
+            return Err(ProtectedChannelError::AttestationIdentityMismatch);
+        }
+        Ok(Self {
+            report,
+            binding,
+            owner_id: copy_array(identity, 0)?,
+            unique_id: copy_array(identity, 32)?,
+            author_id: copy_array(identity, 64)?,
+            family_id: copy_array(identity, 96)?,
+            image_id: copy_array(identity, 112)?,
+            enclave_security_version: read_u32(identity, 128)?,
+            secure_kernel_security_version: read_u32(identity, 132)?,
+            platform_security_version: read_u32(identity, 136)?,
+            signature_scheme,
+        })
+    }
+
+    pub const fn report(self) -> &'a [u8] {
+        self.report
+    }
+
+    pub const fn binding(self) -> VbsAttestationData {
+        self.binding
+    }
+
+    pub const fn owner_id(self) -> [u8; 32] {
+        self.owner_id
+    }
+
+    pub const fn unique_id(self) -> [u8; 32] {
+        self.unique_id
+    }
+
+    pub const fn author_id(self) -> [u8; 32] {
+        self.author_id
+    }
+
+    pub const fn family_id(self) -> [u8; 16] {
+        self.family_id
+    }
+
+    pub const fn image_id(self) -> [u8; 16] {
+        self.image_id
+    }
+
+    pub const fn enclave_security_version(self) -> u32 {
+        self.enclave_security_version
+    }
+
+    pub const fn secure_kernel_security_version(self) -> u32 {
+        self.secure_kernel_security_version
+    }
+
+    pub const fn platform_security_version(self) -> u32 {
+        self.platform_security_version
+    }
+
+    pub const fn signature_scheme(self) -> u32 {
+        self.signature_scheme
+    }
+
+    /// Checks signed fields against verifier-owned expectations. This remains
+    /// untrusted data unless the caller first obtained a successful Windows
+    /// `EnclaveVerifyAttestationReport` result for `self.report()`.
+    pub fn matches_expectation(
+        self,
+        expected_binding: VbsAttestationData,
+        expected_identity: VbsAttestationExpectation,
+    ) -> Result<(), ProtectedChannelError> {
+        if self.binding != expected_binding {
+            return Err(ProtectedChannelError::AttestationBindingMismatch);
+        }
+        if self.owner_id != expected_identity.owner_id
+            || self.unique_id != expected_identity.unique_id
+            || self.author_id != expected_identity.author_id
+            || self.family_id != expected_identity.family_id
+            || self.image_id != expected_identity.image_id
+        {
+            return Err(ProtectedChannelError::AttestationIdentityMismatch);
+        }
+        if self.enclave_security_version < expected_identity.minimum_enclave_security_version
+            || self.secure_kernel_security_version
+                < expected_identity.minimum_secure_kernel_security_version
+            || self.platform_security_version < expected_identity.minimum_platform_security_version
+        {
+            return Err(ProtectedChannelError::AttestationSecurityVersionTooOld);
+        }
+        Ok(())
+    }
 }
 
 impl<'a> VbsAttestationEnvelope<'a> {
@@ -223,6 +418,27 @@ fn read_u16(encoded: &[u8], offset: usize) -> Result<u16, ProtectedChannelError>
     ))
 }
 
+fn read_u32(encoded: &[u8], offset: usize) -> Result<u32, ProtectedChannelError> {
+    Ok(u32::from_le_bytes(
+        encoded
+            .get(offset..offset + 4)
+            .ok_or(ProtectedChannelError::Malformed)?
+            .try_into()
+            .map_err(|_| ProtectedChannelError::Malformed)?,
+    ))
+}
+
+fn copy_array<const BYTES: usize>(
+    encoded: &[u8],
+    offset: usize,
+) -> Result<[u8; BYTES], ProtectedChannelError> {
+    encoded
+        .get(offset..offset + BYTES)
+        .ok_or(ProtectedChannelError::Malformed)?
+        .try_into()
+        .map_err(|_| ProtectedChannelError::Malformed)
+}
+
 fn read_u64(encoded: &[u8], offset: usize) -> Result<u64, ProtectedChannelError> {
     Ok(u64::from_le_bytes(
         encoded
@@ -240,6 +456,9 @@ pub enum ProtectedChannelError {
     MissingMeasurement,
     PolicyMeasurementMismatch,
     InvalidTag,
+    AttestationIdentityMismatch,
+    AttestationBindingMismatch,
+    AttestationSecurityVersionTooOld,
     Report(ProtectionError),
 }
 
@@ -540,6 +759,30 @@ mod tests {
         request_for_policy(sequence, policy(false))
     }
 
+    fn synthetic_vbs_report(binding: VbsAttestationData) -> [u8; 280] {
+        let mut report = [0; 280];
+        report[..4].copy_from_slice(&280u32.to_le_bytes());
+        report[4..8].copy_from_slice(&1u32.to_le_bytes());
+        report[8..12].copy_from_slice(&1u32.to_le_bytes());
+        report[12..16].copy_from_slice(&(VBS_REPORT_SIGNED_STATEMENT_BYTES as u32).to_le_bytes());
+        report[16..20].copy_from_slice(&32u32.to_le_bytes());
+        let statement = &mut report[24..248];
+        statement[..4].copy_from_slice(&(VBS_REPORT_SIGNED_STATEMENT_BYTES as u32).to_le_bytes());
+        statement[4..8].copy_from_slice(&1u32.to_le_bytes());
+        statement[8..72].copy_from_slice(&binding.encode());
+        let identity = &mut statement[72..224];
+        identity[..32].fill(0x10);
+        identity[32..64].fill(0x20);
+        identity[64..96].fill(0x30);
+        identity[96..112].copy_from_slice(b"MRML-VBS-FAMILY!");
+        identity[112..128].copy_from_slice(b"MRML-AUTHORITY!!");
+        identity[128..132].copy_from_slice(&1u32.to_le_bytes());
+        identity[132..136].copy_from_slice(&2u32.to_le_bytes());
+        identity[136..140].copy_from_slice(&3u32.to_le_bytes());
+        report[248..].fill(0xa5);
+        report
+    }
+
     fn report(sequence: u64) -> ProtectionReport {
         ProtectionReport::new(
             ProtectionBackend::VbsEnclave,
@@ -835,6 +1078,80 @@ mod tests {
         assert_eq!(
             VbsAttestationEnvelope::decode(&encoded),
             Err(ProtectedChannelError::Malformed)
+        );
+    }
+
+    #[test]
+    fn unverified_vbs_report_parser_is_strict_and_preserves_identity() {
+        let binding = VbsAttestationData::for_policy(NONCE, policy(false)).unwrap();
+        let report = synthetic_vbs_report(binding);
+        let parsed = UnverifiedVbsAttestationReport::parse(&report).unwrap();
+        assert_eq!(parsed.report(), report);
+        assert_eq!(parsed.binding(), binding);
+        assert_eq!(parsed.owner_id(), [0x10; 32]);
+        assert_eq!(parsed.unique_id(), [0x20; 32]);
+        assert_eq!(parsed.author_id(), [0x30; 32]);
+        assert_eq!(parsed.family_id(), *b"MRML-VBS-FAMILY!");
+        assert_eq!(parsed.image_id(), *b"MRML-AUTHORITY!!");
+        assert_eq!(parsed.enclave_security_version(), 1);
+        assert_eq!(parsed.secure_kernel_security_version(), 2);
+        assert_eq!(parsed.platform_security_version(), 3);
+        assert_eq!(parsed.signature_scheme(), 1);
+        let expected = VbsAttestationExpectation::new(
+            [0x10; 32],
+            [0x20; 32],
+            [0x30; 32],
+            *b"MRML-VBS-FAMILY!",
+            *b"MRML-AUTHORITY!!",
+            1,
+            2,
+            3,
+        )
+        .unwrap();
+        assert_eq!(parsed.matches_expectation(binding, expected), Ok(()));
+    }
+
+    #[test]
+    fn unverified_vbs_report_rejects_layout_and_debug_ambiguity() {
+        let binding = VbsAttestationData::for_policy(NONCE, policy(false)).unwrap();
+        let mut report = synthetic_vbs_report(binding);
+        report[12..16].copy_from_slice(&225u32.to_le_bytes());
+        assert_eq!(
+            UnverifiedVbsAttestationReport::parse(&report),
+            Err(ProtectedChannelError::Malformed)
+        );
+        report = synthetic_vbs_report(binding);
+        report[24 + 72 + 140..24 + 72 + 144].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            UnverifiedVbsAttestationReport::parse(&report),
+            Err(ProtectedChannelError::AttestationIdentityMismatch)
+        );
+    }
+
+    #[test]
+    fn unverified_vbs_report_expectation_rejects_rebinding_and_rollback() {
+        let binding = VbsAttestationData::for_policy(NONCE, policy(false)).unwrap();
+        let report = synthetic_vbs_report(binding);
+        let parsed = UnverifiedVbsAttestationReport::parse(&report).unwrap();
+        let expected = VbsAttestationExpectation::new(
+            [0x10; 32],
+            [0x20; 32],
+            [0x30; 32],
+            *b"MRML-VBS-FAMILY!",
+            *b"MRML-AUTHORITY!!",
+            1,
+            2,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.matches_expectation(binding, expected),
+            Err(ProtectedChannelError::AttestationSecurityVersionTooOld)
+        );
+        let other_binding = VbsAttestationData::for_policy([0xb3; 32], policy(false)).unwrap();
+        assert_eq!(
+            parsed.matches_expectation(other_binding, expected),
+            Err(ProtectedChannelError::AttestationBindingMismatch)
         );
     }
 

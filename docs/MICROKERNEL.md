@@ -206,6 +206,18 @@ enclave on the same machine, so this is a foundation for an enclave-to-enclave
 authority channel, not remote attestation and not protection from compromised
 Hyper-V or the secure kernel.
 
+The kernel protocol now has a strict allocation-free parser for the documented
+VBS report package. It validates package arithmetic, versions, reserved fields,
+signature presence, the exact 224-byte single-primary-module signed statement,
+the 64-byte nonce/policy binding, and the complete 152-byte primary identity.
+Verifier-owned policy can then require exact owner, code, author, family, and
+image identifiers plus minimum enclave, secure-kernel, and platform security
+versions; every debug flag is rejected. The result type is deliberately named
+`UnverifiedVbsAttestationReport`: these comparisons become meaningful only after
+another VBS enclave successfully calls `EnclaveVerifyAttestationReport` over the
+same original bytes. That verifier enclave and its build-time authority identity
+pin remain incomplete.
+
 The enclave now implements that authority entry rather than only a boundary
 probe. It copies the fixed-size call context and request into strict enclave
 memory with `EnclaveCopyIntoEnclave`, never directly dereferences a host

@@ -134,6 +134,10 @@ The authority can emit a bounded Windows-signed local VBS report binding a fresh
 verifier nonce to the exact policy digest. Only another VBS enclave on the same
 machine can use Microsoft's verification API, so the ordinary host transports
 this report without treating it as verified evidence.
+An allocation-free parser validates the complete signed-statement layout and can
+compare exact code/signer identities, debug state, and security-version floors,
+but its type remains explicitly unverified until a separate verifier enclave
+authenticates the same report bytes through Windows.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.
