@@ -85,6 +85,22 @@ preserves the VBS initialization structure as mutable because Windows returns
 the actual created thread count through it. These transitions are implemented
 and malformed-state tested; an MRML enclave PE has not yet passed the load gate.
 
+`experiments/mrml-vbs-enclave` is the first standalone enclave image source. It
+is original dependency-free `no_std` Rust, builds as a PE DLL with the Windows
+GNU/LLVM toolchain, exports `DllMain` and a non-dereferencing call-boundary
+probe, and embeds an 80-byte x86_64 enclave configuration. The configuration is
+non-debug, uses strict containing-process memory isolation, declares one
+thread, a 2 MiB private range, explicit family/image identities, security
+version one, no imports, and primary-image status. Its Windows and Linux source
+tests pass and the resulting DLL passes MRML's Authenticode PE parser.
+
+The bundled LLVM GNU linker does not implement Microsoft's `/ENCLAVE` linker
+switch (while LLVM's MSVC-flavor linker is incompatible with the installed GNU
+target). Therefore this DLL is not yet loadable as a VBS enclave. MRML must
+finish the equivalent PE load-configuration metadata itself, validate it
+structurally, set force-integrity semantics, and attach a Windows-accepted
+enclave signature before claiming the image-load milestone.
+
 The untrusted broker protocol uses fixed-size canonical launch requests and
 authority receipts. A request binds a fresh nonce and sequence to the exact
 SHA3-512 image and policy measurements. The authority receipt binds that full
