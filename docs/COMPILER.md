@@ -219,6 +219,9 @@ condition once followed by both branches' source-ordered scalar operands.
 Conditional array initializers with direct array-literal branches instead mirror
 the emitter's per-element traversal: condition, then element, else element for
 each materialized index.
+Sequence-wrapped direct tuple literals plan the prefix once before all tuple
+operands, while sequence-wrapped direct array literals plan the prefix before
+each element, matching their distinct materializers.
 The visitor also runs for every supported scalar expression statement at the
 top level, in conditional arms, in direct and nested loop actions, and after
 loops. Each statement is parsed once and its reads are reserved against the
@@ -252,7 +255,7 @@ by the supported runtime body and loop parsers, plus root-place and supported
 nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
-It does not yet preanalyze compound array-base materialization, wrapped or
+It does not yet preanalyze compound array-base materialization, other wrapped or
 non-literal conditional aggregate values, fat-reference initializers or returns,
 method/call, aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded

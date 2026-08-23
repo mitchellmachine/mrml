@@ -2934,6 +2934,9 @@ branches' scalar operands. Direct conditional array literals follow their
 different emitter order by planning condition, then element, and else element
 for every materialized index. Wrapped or non-literal conditional aggregates and
 fat-reference initializer materialization remain emission-time fact families.
+Direct sequence-wrapped tuple literals additionally plan their prefix once,
+whereas direct sequence-wrapped array literals plan their prefix before every
+element, preserving the two materializers' actual order.
 Supported scalar expression statements now use that visitor at top level,
 inside conditional arms, in direct and nested loop actions, and after loops.
 Their reads are reserved in exact scoped emission order without introducing a
@@ -3027,6 +3030,13 @@ plus warnings-denied Clippy on both hosts. Its adversarial unit test proves the
 emitter's exact repeated sequence of condition, then-element reads, and else-
 element reads for each index, followed by the projected local tail. Its original
 replacement emits both COFF and ELF64 objects through the same materialization.
+
+The sequence-wrapped aggregate read milestone passed all 594 compiler and driver
+tests on Windows gnullvm and all 594 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves one
+tuple prefix followed by its two operands, then an array prefix repeated before
+each element, followed by projected reads from both locals. Its original
+replacement emits both COFF and ELF64 objects through the same wrappers.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
