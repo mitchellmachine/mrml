@@ -474,3 +474,19 @@ cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary bounded compiler place representation
 and type validation within the existing Rust-subset compiler category.
+
+## 2026-08-23 — signed CPL3 configuration read dispatch
+
+MRML source: `crates/mrml-config`, `crates/mrml-kernel`, the signed kernel and
+service images, and the WHP/KVM hosted launch paths.
+
+The signed service now decodes a conventional fixed-record configuration read,
+asks the kernel to validate an opaque capability against exact rights and object
+identity, and returns a fixed response through bounded IPC. Task-keyed blocked
+receives, supervisor metadata mappings, verified-PE entry publication, and
+lifecycle revocation reuse conventional syscall, capability, scheduling, page-
+table, and hosted-launch techniques. This introduces no novel algorithm, ABI
+optimization, device protocol, codec, or cryptographic construction.
+
+Patent review: `NOT_TRIGGERED` — conventional capability RPC and hosted launch
+integration.

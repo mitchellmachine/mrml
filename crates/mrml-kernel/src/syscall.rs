@@ -1,5 +1,5 @@
 use crate::arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
-use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, Rights, TaskId};
+use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, Rights, TaskId};
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
@@ -22,6 +22,8 @@ pub enum SyscallError {
     UnknownOperation,
     ReservedArgument,
     InvalidCapability,
+    InvalidObject,
+    InvalidRights,
     InvalidTask,
     PayloadTooLarge,
     TooManyCapabilities,
@@ -147,6 +149,14 @@ impl UserCallFrame {
         self.r8 = 0;
         self.r9 = 0;
     }
+
+    pub fn complete_authorization(&mut self, authorized: bool) {
+        self.rax = u64::from(!authorized);
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
 }
 
 const fn user_address(address: u64) -> bool {
@@ -177,6 +187,11 @@ pub enum SyscallRequest {
         payload_capacity: u16,
         capabilities_address: u64,
         capability_capacity: u8,
+    },
+    AuthorizeCapability {
+        capability: Capability,
+        object: ObjectId,
+        rights: Rights,
     },
 }
 
@@ -286,6 +301,24 @@ impl SyscallRequest {
                     capability_capacity: capability_capacity as u8,
                 })
             }
+            6 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi == 0 {
+                    return Err(SyscallError::InvalidObject);
+                }
+                let bits = u16::try_from(rdx).map_err(|_| SyscallError::InvalidRights)?;
+                let rights = Rights::from_bits(bits).map_err(|_| SyscallError::InvalidRights)?;
+                if r10 | r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                Ok(Self::AuthorizeCapability {
+                    capability: Capability::from_token(rdi),
+                    object: ObjectId(rsi),
+                    rights,
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -296,7 +329,8 @@ impl SyscallRequest {
             | Self::Receive
             | Self::Exit
             | Self::SendBuffer { .. }
-            | Self::ReceiveBuffer { .. } => &[],
+            | Self::ReceiveBuffer { .. }
+            | Self::AuthorizeCapability { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
@@ -395,6 +429,25 @@ mod tests {
     }
 
     #[test]
+    fn authorization_completion_is_detail_free() {
+        let mut frame = valid_yield_frame();
+        frame.rdx = u64::MAX;
+        frame.r10 = u64::MAX;
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_authorization(false);
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (1, 0, 0, 0, 0)
+        );
+        frame.complete_authorization(true);
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (0, 0, 0, 0, 0)
+        );
+    }
+
+    #[test]
     fn inline_send_is_pointer_free_canonical_and_bounded() {
         let endpoint = (7u64 << 32) | 3;
         let receiver = (9u64 << 32) | 2;
@@ -482,6 +535,35 @@ mod tests {
         assert_eq!(
             SyscallRequest::decode(5, 0x8000, 112, 0, MAX_CAPABILITIES as u64 + 1, 0, 0),
             Err(SyscallError::TooManyCapabilities)
+        );
+    }
+
+    #[test]
+    fn capability_authorization_binds_handle_object_and_rights() {
+        let token = (7u64 << 32) | 3;
+        assert_eq!(
+            SyscallRequest::decode(6, token, 0x42, u64::from(Rights::READ.bits()), 0, 0, 0),
+            Ok(SyscallRequest::AuthorizeCapability {
+                capability: Capability::from_token(token),
+                object: ObjectId(0x42),
+                rights: Rights::READ,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(6, token, 0, u64::from(Rights::READ.bits()), 0, 0, 0),
+            Err(SyscallError::InvalidObject)
+        );
+        assert_eq!(
+            SyscallRequest::decode(6, token, 0x42, 0, 0, 0, 0),
+            Err(SyscallError::InvalidRights)
+        );
+        assert_eq!(
+            SyscallRequest::decode(6, token, 0x42, 1 << 16, 0, 0, 0),
+            Err(SyscallError::InvalidRights)
+        );
+        assert_eq!(
+            SyscallRequest::decode(6, token, 0x42, u64::from(Rights::READ.bits()), 1, 0, 0),
+            Err(SyscallError::ReservedArgument)
         );
     }
 

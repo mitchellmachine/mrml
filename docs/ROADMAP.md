@@ -169,17 +169,18 @@ authority; unrelated domains continue.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-
-   context gates. This path is unit-tested through actual `TaskRuntime` IPC
-   transfer, but the configuration dispatcher has not yet run in CPL3. Buffered
-   syscall operations now
-   canonically bound payload and capability-descriptor addresses/counts, and
+   context gates. Buffered syscall operations canonically bind payload and
+   capability-descriptor addresses/counts, and
    mapping policy validates every complete user leaf and access direction before
-   invoking a copy backend. Signed WHP and KVM probes now send and receive a
-   48-byte payload through those validated copies, including deferred completion
-   of a blocked receiver under its exact address-space root. The next gate is
-   linking the real `mrml-config` dispatcher into that signed CPL3 path. Signed
-   schema admission and storage-backed export/recovery follow before this item
-   is complete.
+   invoking a copy backend. Signed WHP and KVM probes now execute a real
+   `mrml-config` read in CPL3: the client delegates attenuated READ authority
+   with a canonical 48-byte request, the service validates the opaque receiver
+   handle through a detail-free exact-object kernel syscall, and a canonical
+   112-byte response returns over buffered IPC. The same proof retains bounded
+   lifecycle cleanup/restart and covers two simultaneously blocked buffered
+   receivers. The next gate is signed commit execution with explicit root and
+   setting capabilities, followed by signed schema admission and storage-backed
+   export/recovery before this item is complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
 3. Implement extent mapping, checksummed COW metadata, directory operations,

@@ -2617,9 +2617,9 @@ from trusted state rather than request bytes, and successful restart still
 passes exact CONTROL, completed cleanup, backoff, restart-limit, and fresh-task
 gates. Windows gnullvm tests cover eleven configuration/protocol/dispatch cases
 and the kernel suite covers authorized introspection. This is **PARTIALLY
-IMPLEMENTED** Phase 2 foundation: the configuration dispatcher is tested over
-kernel IPC but is not yet linked into the signed CPL3 service image. Signed
-schema admission and native-storage persistence/export also remain incomplete.
+IMPLEMENTED** Phase 2 foundation: a read now runs through the signed CPL3
+service image, while signed commit execution and schema admission and native-
+storage persistence/export remain incomplete.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
@@ -2647,28 +2647,56 @@ tokens, restores the previous root, and completes the saved context. The hosted
 launchers self-map every allocated service page-table frame supervisor-only so
 this active walk remains available without exposing the frames to CPL3.
 
-Fresh one-time Lamport-signed service images sent and checked six exact qwords
-(48 bytes) with no transferred capability under both hosted backends. On
-2026-08-23 nested KVM reported `verify=21106us prepare=2584us execute=1027us
-total=56250us`; WHP reported `verify=18303us prepare=4072us execute=657us
-total=26967us`. These are hosted controlled probes, not physical-hardware,
-host-resistant isolation, or bare-metal evidence. The real configuration
-dispatcher and its 48--368-byte protocol records have not yet executed through
-this signed path.
+The real service now separates capability authorization from service state.
+`CapabilityAuthorizer` lets the configuration core consume opaque receiver
+handles without owning or enumerating the kernel capability space. Syscall
+operation 6 binds one handle to an exact nonzero object and nonempty requested
+rights; `TaskRuntime::authorize_capability` repeats task identity, slot,
+generation, rights, and object checks and returns only success or rejection.
+Every unused register and every result register is canonicalized so rejection
+does not disclose which check failed.
+
+The signed sender encodes a canonical 48-byte read request with zero authority
+placeholders and transfers one source capability attenuated to READ. The signed
+receiver obtains the derived opaque token in its buffered output, invokes the
+real `mrml-config` envelope decoder and read dispatcher, validates the handle
+through the kernel operation, and sends the canonical 112-byte unset-value
+response back to the sender. The sender independently decodes and checks that
+response before exiting or entering the generation-2 lifecycle proof. Pending
+buffered receives are a two-slot task-keyed table rather than one global value,
+so the client and service can block simultaneously without one overwriting the
+other. Sender exit still transitively revokes its derived authority.
+
+Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
+entry derived from the verified signed executable in a hosted metadata page.
+That page is supervisor-only identity mapped in the kernel and service roots;
+its distinct CPL3 mapping remains subject to ordinary shared-page lifecycle
+revocation. Page-table frames remain supervisor-only self-mapped for active
+walking. This is a hosted launch contract, not authenticated evidence against
+the host.
+
+Fresh one-time Lamport-signed runs on 2026-08-23 completed the read, response,
+cleanup, restart, second-generation fault, derived-authority revocation, and
+restart-budget proof on both backends. Nested KVM reported
+`verify=23461us prepare=2425us execute=1183us total=51758us`; WHP reported
+`verify=18754us prepare=3969us execute=744us total=27495us`. These are hosted
+controlled probes, not physical-hardware, host-resistant isolation, or bare-
+metal evidence. Signed commit and supervision requests have not yet executed
+through this CPL3 path.
 
 Focused verification after the live integration used:
 
 ```text
 cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel -p mrml-config -p mrml-whp --release --no-default-features
-cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-config -p mrml-whp --release --no-default-features --no-deps -- -D warnings
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-config -p mrml-whp -p mrml-whp-run --release --no-default-features --no-deps -- -D warnings
 cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel-image --release --target x86_64-unknown-uefi --features service-probe --no-deps -- -D warnings
 cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-service-image --release --target x86_64-unknown-uefi --no-deps -- -D warnings
 cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-default-features
-cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-default-features --no-deps -- -D warnings
+cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 11 configuration, 306 kernel, and 19 WHP tests with one ignored;
-Linux passed 11 configuration, 306 kernel, and 16 KVM tests with one ignored.
+Windows passed 11 configuration, 309 kernel, and 19 WHP tests with one ignored;
+Linux passed 11 configuration, 309 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

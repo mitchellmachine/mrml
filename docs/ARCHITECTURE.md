@@ -401,14 +401,17 @@ exact-object, cleanup, backoff, restart-limit, and trusted-context gates. Names,
 numeric setting IDs, and service handles never authorize. A bounded CPL3
 request-buffer ABI now decodes fixed payload/capability-buffer descriptors and
 validates every active user leaf before a directional copy. The signed service
-probe now sends and receives a 48-byte payload through that ABI under both WHP
-and KVM, including a blocked receive completed after switching to the exact
-receiver address-space root. Service page-table frames are supervisor-only
-self-mapped so active-root validation can walk them without granting CPL3
-access. The configuration dispatcher itself has not yet run in the signed CPL3
-image; signed schema admission, persistent export/import, and storage-backed
-recovery also remain planned. It is not a clone of the Windows Registry, and
-secrets remain separate.
+probe now executes the real `mrml-config` read dispatcher under both WHP and
+KVM. A sender transfers a canonical 48-byte read request plus an attenuated
+READ capability; the receiver obtains only its opaque derived handle, asks the
+kernel to validate exact generation, rights, and expected object through a
+detail-free syscall, and returns a canonical 112-byte response. Two simultaneous
+blocked buffered receives retain independent bounded state. Service page-table
+frames and a host-published signed-image entry page are supervisor-only mapped
+so active-root validation and recovery remain available without granting CPL3
+access. Signed commit execution and schema admission, persistent export/import,
+and storage-backed recovery remain planned. It is not a clone of the Windows
+Registry, and secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

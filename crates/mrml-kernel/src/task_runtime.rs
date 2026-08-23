@@ -3,8 +3,8 @@ use core::array;
 use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
     BalancePolicyError, BalanceTarget, Capability, CapabilitySpace, DetachedTask, Endpoint,
-    IpcError, KernelScheduleError, KernelScheduler, Message, OwnershipMailbox, PeriodicBalancer,
-    Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId, TaskMigration,
+    IpcError, KernelScheduleError, KernelScheduler, Message, ObjectId, OwnershipMailbox,
+    PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId, TaskMigration,
 };
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
@@ -457,6 +457,31 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .find(|domain| domain.task == task)
             .map(|domain| &mut domain.capabilities)
             .ok_or(TaskRuntimeError::MissingTask)
+    }
+
+    /// Resolves one opaque task-local handle against its exact generation,
+    /// requested rights, and expected object without exposing capability-space
+    /// contents to userspace.
+    pub fn authorize_capability(
+        &self,
+        task: TaskId,
+        capability: Capability,
+        rights: Rights,
+        expected: ObjectId,
+    ) -> Result<(), TaskRuntimeError> {
+        let object = self
+            .domains
+            .iter()
+            .flatten()
+            .find(|domain| domain.task == task)
+            .ok_or(TaskRuntimeError::MissingTask)?
+            .capabilities
+            .authorize(capability, rights)
+            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+        if object != expected {
+            return Err(TaskRuntimeError::Ipc(IpcError::Unauthorized));
+        }
+        Ok(())
     }
 
     /// Revokes one exact capability and every capability transitively derived
@@ -1904,6 +1929,31 @@ mod tests {
                 .unwrap()
                 .page_table(),
             PhysAddr::new(0x20_0000).unwrap()
+        );
+    }
+
+    #[test]
+    fn task_authorization_is_exact_and_detail_free() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let capability = runtime
+            .capabilities_mut(task)
+            .unwrap()
+            .insert(ObjectId(7), Rights::READ)
+            .unwrap();
+        assert_eq!(
+            runtime.authorize_capability(task, capability, Rights::READ, ObjectId(7)),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.authorize_capability(task, capability, Rights::WRITE, ObjectId(7)),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert_eq!(
+            runtime.authorize_capability(task, capability, Rights::READ, ObjectId(8)),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
         );
     }
 

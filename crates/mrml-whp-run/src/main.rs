@@ -317,13 +317,21 @@ fn application_main() -> Result<()> {
         guest = guest
             .attach_service_shared_page(shared)
             .map_err(|error| anyhow!("WHP service shared-page attachment failed: {:?}", error))?;
-        if guest.service_entry() != Some(0x0000_0001_4000_1000)
-            || guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
-            || guest.service_entry_at(1) != Some(0x0000_0001_4000_1000)
+        let service_entry = guest
+            .service_entry()
+            .ok_or_else(|| anyhow!("missing WHP service entry"))?;
+        if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
+            || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
         {
             return Err(anyhow!("isolated WHP service layout mismatch"));
         }
+        VmBackend::write_guest(
+            &mut guest,
+            SERVICE_SHARED_PHYSICAL + 8,
+            &service_entry.to_le_bytes(),
+        )
+        .map_err(|_| anyhow!("failed to publish WHP service entry"))?;
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
@@ -592,9 +600,28 @@ fn application_main() -> Result<()> {
         {
             return Err(anyhow!("isolated WHP service send mismatch: {:?}", exit));
         }
-        let exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+        let mut exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!("WHP execution entering sender cleanup failed: {:?}", error)
         })?;
+        for stage in [1u32, 2, 3] {
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: stage,
+                })
+            {
+                return Err(anyhow!(
+                    "WHP configuration response stage {} mismatch: {:?}",
+                    stage,
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!("WHP configuration response execution failed: {:?}", error)
+            })?;
+        }
         if exit
             != (VmExit::Io {
                 port: SERVICE_PROBE_PORT,
@@ -744,22 +771,28 @@ fn application_main() -> Result<()> {
                 )
             })?;
         }
-        if exit
-            != (VmExit::Io {
-                port: SERVICE_CALL_PORT,
-                size: 4,
-                write: true,
-                value: 1,
-            })
-        {
-            return Err(anyhow!("restarted WHP live peer did not block: {:?}", exit));
+        for stage in [1u32, 2, 3, 1] {
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: stage,
+                })
+            {
+                return Err(anyhow!(
+                    "restarted WHP configuration response stage {} mismatch: {:?}",
+                    stage,
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!(
+                    "WHP execution during restarted configuration response failed: {:?}",
+                    error
+                )
+            })?;
         }
-        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
-            anyhow!(
-                "WHP execution entering restarted receiver fault failed: {:?}",
-                error
-            )
-        })?;
         if exit
             != (VmExit::Io {
                 port: SERVICE_FRAME_PORT,
@@ -942,7 +975,7 @@ fn complete_whp_service_cleanup(
     VmBackend::read_guest(guest, stack, &mut erased)
         .map_err(|error| anyhow!("failed to inspect WHP service cleanup: {:?}", error))?;
     if erased != [0; 32]
-        || entry != SERVICE_VIRTUAL + 0x1000
+        || entry != SERVICE_VIRTUAL + u64::from(service.image().entry_rva())
         || root
             != PhysAddr::new(expected_root)
                 .map_err(|_| anyhow!("invalid fixed WHP service root"))?

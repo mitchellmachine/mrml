@@ -210,7 +210,6 @@ const SERVICE_ROOT: u64 = 0x00c0_0000;
 #[cfg(feature = "service-probe")]
 const SERVICE_B_ROOT: u64 = 0x00d0_0000;
 #[cfg(any(
-    feature = "service-probe",
     feature = "smp-service-migration-probe",
     all(
         feature = "service-preemption-probe",
@@ -219,7 +218,7 @@ const SERVICE_B_ROOT: u64 = 0x00d0_0000;
 ))]
 const SERVICE_ENTRY: u64 = 0x0000_0001_4000_1000;
 #[cfg(feature = "service-probe")]
-const SERVICE_SENDER_ENTRY: u64 = SERVICE_ENTRY + 0x200;
+const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
 #[cfg(any(
     feature = "service-probe",
     feature = "smp-service-migration-probe",
@@ -360,7 +359,7 @@ struct PendingBufferReceive {
 }
 
 #[cfg(feature = "service-probe")]
-static mut SERVICE_PENDING_BUFFER: Option<PendingBufferReceive> = None;
+static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; 2] = [None; 2];
 #[cfg(feature = "service-probe")]
 static mut SERVICE_SYSCALL_PAYLOAD: [u8; MAX_INLINE_PAYLOAD] = [0; MAX_INLINE_PAYLOAD];
 #[cfg(feature = "service-probe")]
@@ -658,7 +657,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             | SyscallRequest::Receive
             | SyscallRequest::Exit
             | SyscallRequest::SendBuffer { .. }
-            | SyscallRequest::ReceiveBuffer { .. } => halt(),
+            | SyscallRequest::ReceiveBuffer { .. }
+            | SyscallRequest::AuthorizeCapability { .. } => halt(),
         };
         let payload = request.payload();
         let runtime = match (*core::ptr::addr_of_mut!(USER_RUNTIME)).as_mut() {
@@ -727,7 +727,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     );
                     if core::ptr::addr_of!(SERVICE_RESTARTED).read()
                         && root.get() == SERVICE_B_ROOT
-                        && core::ptr::addr_of!(SERVICE_PENDING_BUFFER).read().is_none()
+                        && pending_buffer(current).is_none()
                     {
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
                         runtime
@@ -842,7 +842,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 {
                     Ok(message) => complete_buffer_current(root, pending, &message, frame),
                     Err(ScheduleOutcome::Switch { to, .. }) => {
-                        core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFER).write(Some(pending));
+                        insert_pending_buffer(pending);
                         asm!(
                             "out dx, eax",
                             in("dx") SERVICE_CALL_PORT,
@@ -854,13 +854,25 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     _ => halt(),
                 }
             }
+            SyscallRequest::AuthorizeCapability {
+                capability,
+                object,
+                rights,
+            } => {
+                let authorized = runtime
+                    .authorize_capability(current, capability, rights, object)
+                    .is_ok();
+                frame.complete_authorization(authorized);
+            }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
-                    let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
-                    runtime
-                        .context_mut(to)
-                        .unwrap_or_else(|_| halt())
-                        .complete_message(message.payload());
+                    if pending_buffer(to).is_none() {
+                        let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
+                        runtime
+                            .context_mut(to)
+                            .unwrap_or_else(|_| halt())
+                            .complete_message(message.payload());
+                    }
                     asm!(
                         "out dx, eax",
                         in("dx") SERVICE_CALL_PORT,
@@ -898,21 +910,6 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             in("eax") 0x22u32,
                             options(nomem, nostack)
                         );
-                        if core::ptr::addr_of!(SERVICE_PENDING_BUFFER).read().is_none() {
-                            let ControlEvent::Message(received) =
-                                runtime.receive_control(to).unwrap_or_else(|_| halt())
-                            else {
-                                halt()
-                            };
-                            if received.sender() != current || received.sequence() == 0 {
-                                halt();
-                            }
-                            let message = received.into_message();
-                            runtime
-                                .context_mut(to)
-                                .unwrap_or_else(|_| halt())
-                                .complete_message(message.payload());
-                        }
                         asm!(
                             "out dx, eax",
                             in("dx") SERVICE_CALL_PORT,
@@ -1501,7 +1498,7 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             let controls = (*core::ptr::addr_of!(SERVICE_CONTROLS)).unwrap_or_else(|| halt());
             let mut fresh_context = UserContext::new(
                 PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
-                SERVICE_ENTRY,
+                hosted_service_entry(),
                 SERVICE_STACK_TOP,
             )
             .unwrap_or_else(|_| halt());
@@ -2179,15 +2176,16 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "service-probe")]
     unsafe {
+        let service_entry = hosted_service_entry();
         let mut context_a = UserContext::new(
             PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
-            SERVICE_ENTRY,
+            service_entry,
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
         let mut context_b = UserContext::new(
             PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
-            SERVICE_SENDER_ENTRY,
+            service_entry + 0x200,
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
@@ -2231,13 +2229,25 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        let setting_capability = runtime
+            .capabilities_mut(sender)
+            .and_then(|space| {
+                space
+                    .insert(ObjectId(0x93), Rights::READ.union(Rights::DELEGATE))
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
         let endpoint = Endpoint::new(endpoint_object);
         runtime
             .connect_control_peers(receiver, sender, &endpoint, receiver_capability, capability)
             .unwrap_or_else(|_| halt());
+        let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
+        receiver_context.r13 = receiver_capability.token();
+        receiver_context.r14 = sender.token();
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
+        sender_context.r15 = setting_capability.token();
         if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver)
         {
             halt();
@@ -2692,7 +2702,9 @@ unsafe fn restart_service_pair(
     let retired = unsafe { (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt()) };
     let mut sender_context = UserContext::new(
         PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
-        SERVICE_SENDER_ENTRY,
+        unsafe { hosted_service_entry() }
+            .checked_add(0x200)
+            .unwrap_or_else(|| halt()),
         SERVICE_STACK_TOP,
     )
     .unwrap_or_else(|_| halt());
@@ -2751,13 +2763,25 @@ unsafe fn restart_service_pair(
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
+    let setting_capability = runtime
+        .capabilities_mut(sender)
+        .and_then(|space| {
+            space
+                .insert(ObjectId(0x93), Rights::READ.union(Rights::DELEGATE))
+                .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+        })
+        .unwrap_or_else(|_| halt());
     runtime
         .connect_control_peers(receiver, sender, endpoint, receiver_capability, capability)
         .unwrap_or_else(|_| halt());
     unsafe { service_restart_stage(0x36) };
+    let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
+    receiver_context.r13 = receiver_capability.token();
+    receiver_context.r14 = sender.token();
     let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
     sender_context.r13 = capability.token();
     sender_context.r14 = receiver.token();
+    sender_context.r15 = setting_capability.token();
     unsafe { service_restart_stage(0x37) };
     match runtime.start() {
         ScheduleOutcome::Switch { from: None, to } if to == receiver => {}
@@ -2803,7 +2827,7 @@ unsafe fn verify_restart_budget_exhausted(
     let services = unsafe { (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt()) };
     let context = UserContext::new(
         PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
-        SERVICE_ENTRY,
+        unsafe { hosted_service_entry() },
         SERVICE_STACK_TOP,
     )
     .unwrap_or_else(|_| halt());
@@ -2818,6 +2842,19 @@ unsafe fn verify_restart_budget_exhausted(
     {
         halt();
     }
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn hosted_service_entry() -> u64 {
+    let entry = unsafe { core::ptr::read_volatile((SERVICE_SHARED_PHYSICAL + 8) as *const u64) };
+    let image_base = 0x0000_0001_4000_0000u64;
+    let image_end = image_base
+        .checked_add(u64::from(mrml_kernel::MAX_SERVICE_IMAGE_BYTES))
+        .unwrap_or_else(|| halt());
+    if !(image_base..image_end).contains(&entry) || entry.checked_add(0x200).is_none() {
+        halt();
+    }
+    entry
 }
 
 #[cfg(feature = "service-preemption-probe")]
@@ -2937,12 +2974,9 @@ unsafe fn complete_buffer_current(
 
 #[cfg(feature = "service-probe")]
 unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<2, 2>, task: mrml_kernel::TaskId) {
-    let Some(pending) = (unsafe { core::ptr::addr_of!(SERVICE_PENDING_BUFFER).read() }) else {
+    let Some((slot, pending)) = (unsafe { pending_buffer(task) }) else {
         return;
     };
-    if pending.task != task {
-        return;
-    }
     let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
     let previous = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
     let target = runtime
@@ -2962,7 +2996,36 @@ unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<2, 2>, task: mrml_ke
         .context_mut(task)
         .unwrap_or_else(|_| halt())
         .complete_buffer(result.0, result.1);
-    unsafe { core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFER).write(None) };
+    unsafe { (*core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS))[slot] = None };
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn pending_buffer(task: mrml_kernel::TaskId) -> Option<(usize, PendingBufferReceive)> {
+    unsafe { core::ptr::addr_of!(SERVICE_PENDING_BUFFERS).read() }
+        .into_iter()
+        .enumerate()
+        .find_map(|(slot, pending)| {
+            pending
+                .filter(|pending| pending.task == task)
+                .map(|pending| (slot, pending))
+        })
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn insert_pending_buffer(pending: PendingBufferReceive) {
+    let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
+    if buffers
+        .iter()
+        .flatten()
+        .any(|existing| existing.task == pending.task)
+    {
+        halt();
+    }
+    let slot = buffers
+        .iter_mut()
+        .find(|slot| slot.is_none())
+        .unwrap_or_else(|| halt());
+    *slot = Some(pending);
 }
 
 #[cfg(feature = "service-probe")]

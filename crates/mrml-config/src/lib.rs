@@ -31,6 +31,34 @@ const CONFIG_RESPONSE_MAGIC: [u8; 4] = *b"MRCP";
 const SUPERVISION_REQUEST_MAGIC: [u8; 4] = *b"MRSQ";
 const SUPERVISION_RESPONSE_MAGIC: [u8; 4] = *b"MRSP";
 
+/// The service asks the kernel to validate opaque handles; it never owns or
+/// enumerates the kernel capability space. Rejection deliberately carries no
+/// object or rights detail.
+pub trait CapabilityAuthorizer {
+    fn authorize_exact(
+        &self,
+        capability: Capability,
+        rights: Rights,
+        expected: ObjectId,
+    ) -> Result<(), ConfigError>;
+}
+
+impl<const CAPS: usize> CapabilityAuthorizer for CapabilitySpace<CAPS> {
+    fn authorize_exact(
+        &self,
+        capability: Capability,
+        rights: Rights,
+        expected: ObjectId,
+    ) -> Result<(), ConfigError> {
+        let object = self
+            .authorize(capability, rights)
+            .map_err(ConfigError::Unauthorized)?;
+        (object == expected)
+            .then_some(())
+            .ok_or(ConfigError::WrongObject)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SettingId(u32);
 
@@ -409,9 +437,9 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
         self.revision
     }
 
-    pub fn read<const CAPS: usize>(
+    pub fn read<A: CapabilityAuthorizer + ?Sized>(
         &self,
-        capabilities: &CapabilitySpace<CAPS>,
+        capabilities: &A,
         capability: Capability,
         setting: SettingId,
     ) -> Result<ConfigRecord, ConfigError> {
@@ -424,9 +452,9 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
         })
     }
 
-    pub fn commit<const CAPS: usize, const UPDATES: usize>(
+    pub fn commit<A: CapabilityAuthorizer + ?Sized, const UPDATES: usize>(
         &mut self,
-        capabilities: &CapabilitySpace<CAPS>,
+        capabilities: &A,
         root_capability: Capability,
         transaction: &ConfigTransaction<UPDATES>,
     ) -> Result<u64, ConfigError> {
@@ -485,9 +513,9 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
         Ok(next_revision)
     }
 
-    pub fn audit_event<const CAPS: usize>(
+    pub fn audit_event<A: CapabilityAuthorizer + ?Sized>(
         &self,
-        capabilities: &CapabilitySpace<CAPS>,
+        capabilities: &A,
         root_capability: Capability,
         sequence: u64,
     ) -> Result<Option<AuditEvent>, ConfigError> {
@@ -503,19 +531,13 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
         Ok(self.audit[(self.audit_head + offset) % AUDIT])
     }
 
-    fn authorize<const CAPS: usize>(
-        capabilities: &CapabilitySpace<CAPS>,
+    fn authorize<A: CapabilityAuthorizer + ?Sized>(
+        capabilities: &A,
         capability: Capability,
         rights: Rights,
         expected: ObjectId,
     ) -> Result<(), ConfigError> {
-        let object = capabilities
-            .authorize(capability, rights)
-            .map_err(ConfigError::Unauthorized)?;
-        if object != expected {
-            return Err(ConfigError::WrongObject);
-        }
-        Ok(())
+        capabilities.authorize_exact(capability, rights, expected)
     }
 
     fn entry(&self, setting: SettingId) -> Result<&SettingEntry, ConfigError> {
@@ -641,16 +663,30 @@ impl ConfigurationRequest {
     /// sender cannot predict the receiver-space generations created during
     /// transfer, and payload bytes never carry authority.
     pub fn decode_message(message: &Message) -> Result<Self, ConfigError> {
-        let payload = message.payload();
+        let mut capabilities = [Capability::from_token(0); mrml_kernel::MAX_CAPABILITIES];
+        let count = message.capability_count();
+        for (slot, capability) in capabilities.iter_mut().zip(message.capabilities()) {
+            *slot = capability;
+        }
+        Self::decode_envelope(message.payload(), &capabilities[..count])
+    }
+
+    /// Decodes the exact payload and opaque receiver handles returned by the
+    /// buffered CPL3 receive ABI. The handles remain inert until an authorizer
+    /// asks the kernel to validate exact generation, rights, and object.
+    pub fn decode_envelope(
+        payload: &[u8],
+        capabilities: &[Capability],
+    ) -> Result<Self, ConfigError> {
         let mut request = Self::decode(payload)?;
         match &mut request {
             Self::Read { capability, .. } => {
-                if payload[32..40].iter().any(|byte| *byte != 0) || message.capability_count() != 1
-                {
+                if payload[32..40].iter().any(|byte| *byte != 0) || capabilities.len() != 1 {
                     return Err(ConfigError::InvalidAuthorityEnvelope);
                 }
-                *capability = message
-                    .capabilities()
+                *capability = capabilities
+                    .iter()
+                    .copied()
                     .next()
                     .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
             }
@@ -658,11 +694,11 @@ impl ConfigurationRequest {
                 root, transaction, ..
             } => {
                 if payload[32..40].iter().any(|byte| *byte != 0)
-                    || message.capability_count() != transaction.count + 1
+                    || capabilities.len() != transaction.count + 1
                 {
                     return Err(ConfigError::InvalidAuthorityEnvelope);
                 }
-                let mut authorities = message.capabilities();
+                let mut authorities = capabilities.iter().copied();
                 *root = authorities
                     .next()
                     .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
@@ -879,20 +915,45 @@ impl ConfigurationResponse {
 pub fn dispatch_configuration_message<
     const SETTINGS: usize,
     const AUDIT: usize,
-    const CAPS: usize,
+    A: CapabilityAuthorizer + ?Sized,
 >(
     service: &mut ConfigurationService<SETTINGS, AUDIT>,
-    capabilities: &CapabilitySpace<CAPS>,
+    capabilities: &A,
     message: &Message,
     output: &mut [u8; CONFIG_RESPONSE_BYTES],
 ) -> Result<(), ConfigError> {
-    let request = ConfigurationRequest::decode_message(message)?;
+    let mut capabilities_wire = [Capability::from_token(0); mrml_kernel::MAX_CAPABILITIES];
+    let count = message.capability_count();
+    for (slot, capability) in capabilities_wire.iter_mut().zip(message.capabilities()) {
+        *slot = capability;
+    }
+    dispatch_configuration_envelope(
+        service,
+        capabilities,
+        message.payload(),
+        &capabilities_wire[..count],
+        output,
+    )
+}
+
+pub fn dispatch_configuration_envelope<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    A: CapabilityAuthorizer + ?Sized,
+>(
+    service: &mut ConfigurationService<SETTINGS, AUDIT>,
+    authorizer: &A,
+    payload: &[u8],
+    capabilities: &[Capability],
+    output: &mut [u8; CONFIG_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let request = ConfigurationRequest::decode_envelope(payload, capabilities)?;
     let response = match request {
         ConfigurationRequest::Read {
             request_id,
             setting,
             capability,
-        } => match service.read(capabilities, capability, setting) {
+        } => match service.read(authorizer, capability, setting) {
             Ok(record) => ConfigurationResponse {
                 request_id,
                 status: ResponseStatus::Ok,
@@ -912,7 +973,7 @@ pub fn dispatch_configuration_message<
             request_id,
             root,
             transaction,
-        } => match service.commit(capabilities, root, &transaction) {
+        } => match service.commit(authorizer, root, &transaction) {
             Ok(revision) => ConfigurationResponse {
                 request_id,
                 status: ResponseStatus::Ok,

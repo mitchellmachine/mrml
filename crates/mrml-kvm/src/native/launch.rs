@@ -22,6 +22,7 @@ struct KernelDevices {
     local_apic: bool,
     gpu_queue: Option<GpuSharedQueueLayout>,
     cpus: u8,
+    service_shared: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -272,6 +273,7 @@ impl<const N: usize> PreparedKvmGuest<N> {
         mapping: Mapping,
         install: bool,
     ) -> Result<(), KvmError> {
+        let initial = self.service_shared.is_none();
         let instance = self.service_instance[slot].ok_or(KvmError::InvalidMapping)?;
         let root = self.service_root[slot].ok_or(KvmError::InvalidMapping)?;
         let store = KvmPageTableStore::open_existing(
@@ -280,8 +282,21 @@ impl<const N: usize> PreparedKvmGuest<N> {
             instance.table_pages,
         )?;
         let mut tables = PageTableBuilder::from_existing_root(store, root);
+        let supervisor = Mapping::new(
+            VirtAddr::new(mapping.physical_start().get()).map_err(|_| KvmError::InvalidMapping)?,
+            mapping.physical_start(),
+            1,
+            PagePermissions::KERNEL_LOW_READ_WRITE,
+        )
+        .map_err(|_| KvmError::InvalidMapping)?;
         if install {
-            tables.map(mapping)
+            tables.map(mapping).and_then(|_| {
+                if initial {
+                    tables.map(supervisor)
+                } else {
+                    Ok(())
+                }
+            })
         } else {
             tables.unmap_exact(mapping)
         }
@@ -533,6 +548,13 @@ impl<const N: usize> PreparedKvmGuest<N> {
                 .map_err(|_| KvmError::InvalidMapping)?,
             )
             .map_err(|_| KvmError::PageTable)?;
+        tables
+            .map_page(
+                VirtAddr::new(0x00f0_0000).map_err(|_| KvmError::InvalidMapping)?,
+                PhysAddr::new(0x00f0_0000).map_err(|_| KvmError::InvalidMapping)?,
+                PagePermissions::KERNEL_LOW_READ_WRITE,
+            )
+            .map_err(|_| KvmError::PageTable)?;
         let mut frame_index = 0;
         while frame_index < tables.store().allocated_pages() {
             let frame = tables
@@ -548,6 +570,17 @@ impl<const N: usize> PreparedKvmGuest<N> {
                 .map_err(|_| KvmError::PageTable)?;
             frame_index += 1;
         }
+        tables
+            .unmap_exact(
+                Mapping::new(
+                    VirtAddr::new(0x00f0_0000).map_err(|_| KvmError::InvalidMapping)?,
+                    PhysAddr::new(0x00f0_0000).map_err(|_| KvmError::InvalidMapping)?,
+                    1,
+                    PagePermissions::KERNEL_LOW_READ_WRITE,
+                )
+                .map_err(|_| KvmError::InvalidMapping)?,
+            )
+            .map_err(|_| KvmError::PageTable)?;
         let root = tables.root();
         let _ = tables.into_store();
         self.service_entry[slot] = Some(loaded_service.entry());
@@ -633,6 +666,7 @@ impl KvmSystem {
                 local_apic: false,
                 gpu_queue: None,
                 cpus: 1,
+                service_shared: false,
             },
         )
     }
@@ -656,6 +690,31 @@ impl KvmSystem {
                 local_apic: false,
                 gpu_queue: None,
                 cpus: 1,
+                service_shared: false,
+            },
+        )
+    }
+
+    /// Prepares the hosted service kernel with one supervisor-only identity
+    /// mapping for the later shared service-launch metadata page.
+    pub fn prepare_isolated_service_kernel_guest<const N: usize>(
+        &self,
+        vcpu_id: u32,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: KvmLaunchLayout,
+    ) -> Result<PreparedKvmGuest<N>, KvmError> {
+        self.prepare_guest_inner(
+            vcpu_id,
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: false,
+                gpu_queue: None,
+                cpus: 1,
+                service_shared: true,
             },
         )
     }
@@ -678,6 +737,7 @@ impl KvmSystem {
                 local_apic: true,
                 gpu_queue: None,
                 cpus: 1,
+                service_shared: false,
             },
         )
     }
@@ -700,6 +760,7 @@ impl KvmSystem {
                 local_apic: true,
                 gpu_queue: None,
                 cpus: 2,
+                service_shared: false,
             },
         )
     }
@@ -725,6 +786,7 @@ impl KvmSystem {
                 local_apic: false,
                 gpu_queue: Some(queue),
                 cpus: 1,
+                service_shared: false,
             },
         )
     }
@@ -971,6 +1033,15 @@ impl KvmSystem {
                         PagePermissions::KERNEL_MMIO_READ_WRITE,
                     )
                     .map_err(|_| KvmError::InvalidMapping)?,
+                )
+                .map_err(|_| KvmError::PageTable)?;
+        }
+        if devices.service_shared {
+            tables
+                .map_page(
+                    VirtAddr::new(0x00f0_0000).map_err(|_| KvmError::InvalidMapping)?,
+                    PhysAddr::new(0x00f0_0000).map_err(|_| KvmError::InvalidMapping)?,
+                    PagePermissions::KERNEL_LOW_READ_WRITE,
                 )
                 .map_err(|_| KvmError::PageTable)?;
         }

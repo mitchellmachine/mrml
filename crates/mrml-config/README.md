@@ -1,8 +1,8 @@
 # MRML configuration service foundation
 
 `mrml-config` is the allocation-free policy/configuration state and wire-format
-foundation for the planned userspace system service. It is not persistent
-storage, a registry clone, a secret store, or a completed CPL3 service.
+foundation for the userspace system service. It is not persistent storage, a
+registry clone, a secret store, or a completed production service.
 
 Implemented boundaries:
 
@@ -20,9 +20,10 @@ Implemented boundaries:
   authority, cleanup, backoff, restart-limit, and trusted-context gates.
 
 Setting IDs and service tokens identify records but never grant authority.
-Secrets are intentionally outside this value model. The dispatch adapters are
-simulation-tested through the kernel's real capability-transfer path. The
-kernel's bounded CPL3 buffer ABI is now exercised by a signed 48-byte service
-probe under WHP and KVM, but this configuration dispatcher is not yet linked
-into that image. That integration remains next, followed by signed schema
-admission, persistent export/import, and native-storage recovery.
+Secrets are intentionally outside this value model. The adapters are
+simulation-tested through the kernel's real capability-transfer path. A real
+read dispatcher now also runs in the signed CPL3 image under WHP and KVM: it
+receives a canonical 48-byte request and opaque derived READ handle, validates
+exact authority through a detail-free kernel syscall, and returns a canonical
+112-byte response. Signed commit execution and schema admission remain next,
+followed by persistent export/import and native-storage recovery.

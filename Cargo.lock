@@ -197,6 +197,10 @@ dependencies = [
 [[package]]
 name = "mrml-service-image"
 version = "0.4.0"
+dependencies = [
+ "mrml-config",
+ "mrml-kernel",
+]
 
 [[package]]
 name = "mrml-sign"

@@ -267,6 +267,7 @@ impl<'system> PreparedWhpGuest<'system> {
         mapping: Mapping,
         install: bool,
     ) -> Result<(), WhpError> {
+        let initial = self.service_shared.is_none();
         let instance = self.service_instance[slot].ok_or(WhpError::InvalidMapping)?;
         let root = self.service_root[slot].ok_or(WhpError::InvalidMapping)?;
         let store = WhpPageTableStore::open_existing(
@@ -275,8 +276,21 @@ impl<'system> PreparedWhpGuest<'system> {
             instance.table_pages,
         )?;
         let mut tables = PageTableBuilder::from_existing_root(store, root);
+        let supervisor = Mapping::new(
+            VirtAddr::new(mapping.physical_start().get()).map_err(|_| WhpError::InvalidMapping)?,
+            mapping.physical_start(),
+            1,
+            PagePermissions::KERNEL_LOW_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
         if install {
-            tables.map(mapping)
+            tables.map(mapping).and_then(|_| {
+                if initial {
+                    tables.map(supervisor)
+                } else {
+                    Ok(())
+                }
+            })
         } else {
             tables.unmap_exact(mapping)
         }
@@ -661,6 +675,13 @@ impl<'system> PreparedWhpGuest<'system> {
                 .map_err(|_| WhpError::InvalidMapping)?,
             )
             .map_err(|_| WhpError::InvalidRegisterState)?;
+        tables
+            .map_page(
+                VirtAddr::new(0x00f0_0000).map_err(|_| WhpError::InvalidMapping)?,
+                PhysAddr::new(0x00f0_0000).map_err(|_| WhpError::InvalidMapping)?,
+                PagePermissions::KERNEL_LOW_READ_WRITE,
+            )
+            .map_err(|_| WhpError::PageTable)?;
         let mut frame_index = 0;
         while frame_index < tables.store().allocated_pages() {
             let frame = tables
@@ -676,6 +697,17 @@ impl<'system> PreparedWhpGuest<'system> {
                 .map_err(|_| WhpError::PageTable)?;
             frame_index += 1;
         }
+        tables
+            .unmap_exact(
+                Mapping::new(
+                    VirtAddr::new(0x00f0_0000).map_err(|_| WhpError::InvalidMapping)?,
+                    PhysAddr::new(0x00f0_0000).map_err(|_| WhpError::InvalidMapping)?,
+                    1,
+                    PagePermissions::KERNEL_LOW_READ_WRITE,
+                )
+                .map_err(|_| WhpError::InvalidMapping)?,
+            )
+            .map_err(|_| WhpError::PageTable)?;
         let service_root = tables.root();
         let _ = tables.into_store();
         self.service_entry[slot] = Some(service_entry);
@@ -1098,6 +1130,7 @@ impl WhpSystem {
                 queue,
                 cpus: devices.cpus,
                 trampoline,
+                service_shared: !devices.intercept_breakpoint && !devices.framebuffer,
             },
         )?;
         partition.configure_long_mode(
@@ -1137,6 +1170,7 @@ struct PageTableLaunchContext {
     queue: Option<GpuSharedQueueLayout>,
     cpus: u8,
     trampoline: Option<u64>,
+    service_shared: bool,
 }
 
 fn build_page_tables(
@@ -1152,6 +1186,7 @@ fn build_page_tables(
         queue,
         cpus,
         trampoline,
+        service_shared,
     } = context;
     partition.write_guest(layout.table_physical, &0u64.to_le_bytes())?;
     partition.write_guest(
@@ -1206,6 +1241,15 @@ fn build_page_tables(
                 VirtAddr::new(XAPIC_BASE).map_err(|_| WhpError::InvalidMapping)?,
                 PhysAddr::new(XAPIC_BASE).map_err(|_| WhpError::InvalidMapping)?,
                 PagePermissions::KERNEL_MMIO_READ_WRITE,
+            )
+            .map_err(|_| WhpError::PageTable)?;
+    }
+    if service_shared {
+        tables
+            .map_page(
+                VirtAddr::new(0x00f0_0000).map_err(|_| WhpError::InvalidMapping)?,
+                PhysAddr::new(0x00f0_0000).map_err(|_| WhpError::InvalidMapping)?,
+                PagePermissions::KERNEL_LOW_READ_WRITE,
             )
             .map_err(|_| WhpError::PageTable)?;
     }
