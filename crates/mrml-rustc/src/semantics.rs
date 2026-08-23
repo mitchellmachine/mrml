@@ -3478,10 +3478,11 @@ fn saturating_integer_arithmetic(
     if signed {
         let left = decode_signed(left & mask, bits);
         let right = decode_signed(right & mask, bits);
-        let value = if operator == BinaryOperator::Add {
-            left.saturating_add(right)
-        } else {
-            left.saturating_sub(right)
+        let value = match operator {
+            BinaryOperator::Add => left.saturating_add(right),
+            BinaryOperator::Subtract => left.saturating_sub(right),
+            BinaryOperator::Multiply => left.saturating_mul(right),
+            _ => unreachable!(),
         };
         let minimum = if bits == 128 {
             i128::MIN
@@ -3489,10 +3490,13 @@ fn saturating_integer_arithmetic(
             -(1_i128 << (bits - 1))
         };
         value.clamp(minimum, signed_maximum(bits)) as u128 & mask
-    } else if operator == BinaryOperator::Add {
-        left.saturating_add(right).min(mask)
     } else {
-        left.saturating_sub(right)
+        match operator {
+            BinaryOperator::Add => left.saturating_add(right).min(mask),
+            BinaryOperator::Subtract => left.saturating_sub(right),
+            BinaryOperator::Multiply => left.saturating_mul(right).min(mask),
+            _ => unreachable!(),
+        }
     }
 }
 

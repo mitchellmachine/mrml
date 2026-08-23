@@ -3860,6 +3860,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_abs"
                         | "saturating_add"
                         | "saturating_sub"
+                        | "saturating_mul"
                         | "abs_diff"
                         | "count_ones"
                         | "count_zeros"
@@ -3942,6 +3943,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "wrapping_rem"
                     | "saturating_add"
                     | "saturating_sub"
+                    | "saturating_mul"
                     | "rotate_left"
                     | "rotate_right"
                     | "wrapping_shl"
@@ -4041,17 +4043,20 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         _ => unreachable!(),
                     },
                 },
-                "saturating_add" | "saturating_sub" => ExprKind::SaturatingArithmetic {
-                    base,
-                    argument: argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
-                    operator: if method.text == "saturating_add" {
-                        BinaryOperator::Add
-                    } else {
-                        BinaryOperator::Subtract
-                    },
-                },
+                "saturating_add" | "saturating_sub" | "saturating_mul" => {
+                    ExprKind::SaturatingArithmetic {
+                        base,
+                        argument: argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?,
+                        operator: match method.text {
+                            "saturating_add" => BinaryOperator::Add,
+                            "saturating_sub" => BinaryOperator::Subtract,
+                            "saturating_mul" => BinaryOperator::Multiply,
+                            _ => unreachable!(),
+                        },
+                    }
+                }
                 "rotate_left" | "rotate_right" => ExprKind::IntegerRotate {
                     base,
                     distance: argument.ok_or_else(|| {

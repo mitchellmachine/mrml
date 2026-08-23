@@ -8667,13 +8667,16 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         &mut self,
         operator: crate::BinaryOperator,
     ) -> Result<(), CodegenError> {
-        use crate::BinaryOperator::{Add, Subtract};
+        use crate::BinaryOperator::{Add, Multiply, Subtract};
+        if operator == Multiply {
+            return self.emit_saturating_multiplication();
+        }
         if operator == Add {
             self.emit(&[0x48, 0x01, 0xc8])?;
         } else {
             self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x89, 0xc8, 0x48, 0x29, 0xd0])?;
         }
-        debug_assert!(matches!(operator, Add | Subtract));
+        debug_assert!(matches!(operator, Add | Subtract | Multiply));
 
         if !self.width.signed && operator == Subtract {
             let no_borrow = self.emit_forward_branch(0x83)?;
@@ -8717,6 +8720,49 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             let in_range = self.emit_forward_branch(0x8d)?;
             self.emit(&[0x48, 0x89, 0xd0])?;
             self.patch_forward_branch(in_range)?;
+            self.patch_forward_branch(end)?;
+        }
+        self.emit_normalize()
+    }
+
+    fn emit_saturating_multiplication(&mut self) -> Result<(), CodegenError> {
+        if !self.width.signed && self.width.bits == 64 {
+            self.emit(&[0x48, 0xf7, 0xe1, 0x48, 0x85, 0xd2])?;
+            let in_range = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&u64::MAX.to_le_bytes())?;
+            self.patch_forward_branch(in_range)?;
+        } else if self.width.signed && self.width.bits == 64 {
+            self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x0f, 0xaf, 0xc1])?;
+            let in_range = self.emit_forward_branch(0x81)?;
+            self.emit(&[0x48, 0x31, 0xca, 0x48, 0x85, 0xd2])?;
+            let negative = self.emit_forward_branch(0x88)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative)?;
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+            self.patch_forward_branch(end)?;
+            self.patch_forward_branch(in_range)?;
+        } else {
+            self.emit(&[0x48, 0x0f, 0xaf, 0xc1])?;
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let not_above =
+                self.emit_forward_branch(if self.width.signed { 0x8e } else { 0x86 })?;
+            self.emit(&[0x48, 0x89, 0xd0])?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(not_above)?;
+            if self.width.signed {
+                self.emit(&[0x48, 0xba])?;
+                self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+                self.emit(&[0x48, 0x39, 0xd0])?;
+                let in_range = self.emit_forward_branch(0x8d)?;
+                self.emit(&[0x48, 0x89, 0xd0])?;
+                self.patch_forward_branch(in_range)?;
+            }
             self.patch_forward_branch(end)?;
         }
         self.emit_normalize()
@@ -12127,13 +12173,16 @@ mod tests {
     }
 
     #[test]
-    fn saturates_primitive_integer_addition_and_subtraction() {
+    fn saturates_primitive_integer_arithmetic() {
         let sources = [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u8) -> u8 { input.saturating_add(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16, rhs: i16) -> i16 { input.saturating_sub(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32, rhs: u32) -> u32 { input.saturating_sub(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.saturating_add(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize, rhs: usize) -> usize { input.saturating_add(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, rhs: u64) -> u64 { input.saturating_mul(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32, rhs: i32) -> i32 { input.saturating_mul(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, rhs: i64) -> i64 { input.saturating_mul(rhs) }",
         ];
         for source in sources {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
@@ -12150,6 +12199,7 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.saturating_add(rhs) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool, rhs: bool) -> bool { input.saturating_sub(rhs) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8, rhs: u16) -> u8 { input.saturating_mul(rhs) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

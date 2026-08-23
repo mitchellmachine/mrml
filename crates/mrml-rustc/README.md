@@ -1940,10 +1940,15 @@ Their result is independent of runtime overflow-check settings; unsigned and
 Boolean receivers fail closed.
 Four emitted System V objects matched pinned Rust across minima, zero, ordinary
 negative and positive values, and maxima at 8, 16, 32, and 64 bits.
-Primitive signed and unsigned integers support `saturating_add` and
-`saturating_sub` in constants and runtime functions. Both require an argument
-of the receiver's exact type and clamp overflow or underflow to that type's
-minimum or maximum independently of runtime overflow-check settings.
+Primitive signed and unsigned integers support `saturating_add`,
+`saturating_sub`, and `saturating_mul` in constants and runtime functions.
+They require an argument of the receiver's exact type and clamp overflow or
+underflow to that type's minimum or maximum independently of runtime
+overflow-check settings.
+Four emitted System V objects matched pinned Rust across zero, ordinary signed
+and unsigned products, narrow saturation, 64-bit high-half overflow, both
+signed saturation directions, and the signed minimum multiplied by negative
+one.
 Signed integer `unsigned_abs` returns the corresponding same-width unsigned
 type in constants and runtime functions, including `isize -> usize`. It accepts
 every signed minimum without overflow and rejects unsigned or Boolean receivers

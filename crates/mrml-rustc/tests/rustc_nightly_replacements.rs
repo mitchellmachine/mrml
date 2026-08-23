@@ -1870,10 +1870,15 @@ fn rustc_saturating_integer_binary_methods_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, rhs: i16) -> i16 { input.saturating_sub(rhs) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, rhs: u64) -> u64 { input.saturating_sub(rhs) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.saturating_add(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, rhs: u64) -> u64 { input.saturating_mul(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i32, rhs: i32) -> i32 { input.saturating_mul(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.saturating_mul(rhs) }",
         "const VALUE: u8 = 250u8.saturating_add(42); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
         "const VALUE: i16 = (-32768i16).saturating_sub(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
         "const VALUE: i32 = 2147483647i32.saturating_add(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
         "const VALUE: u64 = 0u64.saturating_sub(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { VALUE }",
+        "const VALUE: u8 = 32u8.saturating_mul(9); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i16 = (-200i16).saturating_mul(200); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i16 { VALUE }",
     ];
     for source in sources {
         assert_eq!(
