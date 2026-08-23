@@ -176,6 +176,7 @@ pub enum CheckedIntegerOptionOperation {
     UnsignedMixedArithmetic { subtract: bool },
     SignedMixedArithmetic { subtract: bool },
     SquareRoot,
+    SignedDifference,
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4464,6 +4465,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_add_unsigned"
                         | "checked_sub_unsigned"
                         | "checked_isqrt"
+                        | "checked_signed_diff"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4651,6 +4653,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_sub_signed"
                     | "checked_add_unsigned"
                     | "checked_sub_unsigned"
+                    | "checked_signed_diff"
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
@@ -5047,6 +5050,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     base,
                     argument: None,
                     operation: CheckedIntegerOptionOperation::SquareRoot,
+                },
+                "checked_signed_diff" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    operation: CheckedIntegerOptionOperation::SignedDifference,
                 },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {
                     base,

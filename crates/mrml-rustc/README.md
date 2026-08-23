@@ -2391,6 +2391,8 @@ Signed receivers support the complementary `checked_add_unsigned` and
 when a `u64` operand cannot be represented as signed.
 Signed `checked_isqrt` returns the integer floor root for nonnegative receivers
 and `None` for negatives, sharing the direct `isqrt` backend without its trap.
+Unsigned `checked_signed_diff` returns the same-width signed counterpart when
+the mathematical difference lies within its complete `MIN..=MAX` range.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while

@@ -2919,6 +2919,24 @@ fn rustc_checked_unsigned_mixed_arithmetic_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_signed_difference_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, fallback: i8) -> i8 { a.checked_signed_diff(b).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64) -> i64 { a.checked_signed_diff(b).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: usize, b: usize) -> bool { a.checked_signed_diff(b).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u16, b: u16) -> bool { a.checked_signed_diff(b).is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_signed_mixed_arithmetic_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i8, b: u8, fallback: i8) -> i8 { a.checked_add_unsigned(b).unwrap_or(fallback) }",
