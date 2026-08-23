@@ -6,6 +6,7 @@ mod ap_online;
 mod ap_trampoline;
 mod context;
 mod descriptors;
+mod ept;
 mod local_apic;
 mod page_table;
 mod pe_mapping;
@@ -30,6 +31,10 @@ pub use descriptors::{
     InterruptGate, TaskStateSegment, install_exception_tables, install_external_interrupt_gate,
     install_fail_stop_tables, install_user_call_gate, load_task_register, task_state_descriptor,
     write_task_state_descriptor,
+};
+pub use ept::{
+    DmaIsolation, EptAccess, EptAdapterError, EptGranuleBinding, EptGranuleHardware,
+    GranuleScrubber,
 };
 pub use local_apic::{
     ApStartupTiming, ApicIpi, LocalApicController, LocalApicError, LocalApicTimer, TimerDivide,

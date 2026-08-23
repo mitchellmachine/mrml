@@ -264,9 +264,14 @@ while hardware and policy ownership may disagree. An uncertain granule likewise
 blocks its owner's lifecycle and evidence operations and cannot be reclaimed,
 reassigned, or reused by normal transitions; recovery requires a platform reset
 or a future independently verified hardware-recovery path. The ticket protocol
-does not prove that an adapter truthfully reported success; the eventual native EPT and
-IOMMU adapter remains inside the trusted bare-metal monitor boundary and must
-be validated on hardware before stronger claims are enabled.
+does not prove that an adapter truthfully reported success. The x86_64 monitor
+now has a live-leaf EPT transition adapter that denies and invalidates DMA first,
+revokes old EPT access before granting new access, invalidates every affected
+EPT context, and scrubs a complete 4 KiB granule before restoring host access.
+An invalidation failure after a leaf write returns `FailStop`. Its platform
+IOMMU and scrub implementations remain inside the trusted bare-metal monitor
+boundary and must be implemented and validated on hardware before stronger
+claims are enabled.
 
 The x86_64 kernel also contains the direct instruction adapter for `VMXON`,
 `VMXOFF`, `VMCLEAR`, `VMPTRLD`, `VMLAUNCH`, `VMRESUME`, and single-context
