@@ -12351,7 +12351,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.emit(&[0x4d, 0x85, 0xc0])?;
             let alternative_none = self.emit_forward_branch(0x84)?;
             self.emit(&[0x45, 0x31, 0xc0])?;
-            let selected = self.emit_forward_branch(0x80)?;
+            let selected = self.emit_unconditional_forward_branch()?;
             self.patch_forward_branch(alternative_none)?;
             self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x08, 0x41, 0xb8, 1, 0, 0, 0])?;
             self.patch_forward_branch(selected)?;
@@ -18800,9 +18800,14 @@ mod tests {
                 panic!("expected function")
             };
             for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
-                let result =
-                    compile_x86_64_function::<_, 4096, 4, 192>(&function, &NoConstants, abi);
-                assert!(result.is_ok(), "{source}: {result:?}");
+                let code = compile_x86_64_function::<_, 4096, 4, 192>(&function, &NoConstants, abi)
+                    .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+                assert!(
+                    code.bytes()
+                        .windows(4)
+                        .any(|bytes| bytes == [0x45, 0x31, 0xc0, 0xe9]),
+                    "both-Some must clear validity and skip left-only selection: {source}"
+                );
             }
         }
 

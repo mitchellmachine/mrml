@@ -1212,7 +1212,7 @@ An eager checked-option `or` probe emitted a 244-byte COFF object and a
 640-byte ELF64 object. Independent pinned-nightly callers observed first-`Some`
 preference, recovery from an outer `None`, and propagation when both producers
 returned `None` on Windows and Arch Linux WSL.
-An eager checked-option `xor` probe emitted a 272-byte COFF object and a
+An eager checked-option `xor` probe emitted a 271-byte COFF object and a
 664-byte ELF64 object. Independent pinned-nightly callers exercised the full
 validity truth table: left-only and right-only `Some` selected their respective
 values, while both-`Some` and both-`None` produced `None` on both hosts.
