@@ -33,14 +33,14 @@ suffering was not a prerequisite for creativity.
 Davis died on August 11, 2018, after being struck by a Union Pacific train in
 The Dalles, Oregon. Contemporary local reporting confirmed the death and his
 homelessness.[^chronicle] Available reporting says investigators did not reach a
-conclusive determination between accident and suicide.[^biography] This project
+conclusive determination between accident and suicide.[^cassel] This project
 does not speculate beyond that uncertainty.
 
 ## Final video
 
 [Terry A. Davis — Final Video, August 11, 2018](https://www.youtube.com/watch?v=oH41gGBVpkE)
 
-The video was uploaded only hours before his death.[^biography] In it Davis
+The video was uploaded only hours before his death.[^cassel] In it Davis
 reflects on having removed much of his online material, speaks about
 purification, and considers his own situation and identity. This repository
 links to the video but does not reproduce or redistribute it or its transcript.
@@ -56,4 +56,4 @@ isolation, validation, capability control, and evidence-driven engineering.
 
 [^uses-this]: [Terry Davis interview, Uses This (May 20, 2014)](https://usesthis.com/interviews/terry.davis/).
 [^chronicle]: [“BBC focuses on local death,” Columbia Gorge News / The Dalles Chronicle](https://www.columbiagorgenews.com/thedalleschronicle/news/bbc-focuses-on-local-death/article_a2c84e0a-d3f3-5743-9260-bfc7ff784e08.html).
-[^biography]: [Terry A. Davis biography and cited contemporary sources](https://en.wikipedia.org/wiki/Terry_A._Davis). The underlying account cites The Dalles Chronicle and David Cassel's September 2018 reporting; the uncertainty is retained rather than resolved by inference.
+[^cassel]: [David Cassel, “The Troubled Legacy of Terry Davis, 'God's Lonely Programmer',” The New Stack (September 23, 2018)](https://thenewstack.io/the-troubled-legacy-of-terry-davis-gods-lonely-programmer/).
