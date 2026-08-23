@@ -300,7 +300,11 @@ the exact target generation to the selected root through the immutable backend.
 For create it reloads every predecessor, inserts the generation-1 child only in
 the target successor, advances every affected directory once, and rewrites each
 parent entry bottom-up through the root. Staging and publication of this create
-closure remain pending.
+closure now reuse the same whole-plan layout preflight as directory moves:
+every metadata/entry range is valid, exactly sized, and pairwise disjoint before
+the first write; all successors stage child-before-parent and enter one bounded
+directory transaction. Full child/allocator/allocation/authority publication
+remains pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

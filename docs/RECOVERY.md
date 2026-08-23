@@ -164,8 +164,9 @@ explicitly and downgrade the status rather than guessing.
   and empty subordinate images as typed generation-1 creation participants;
   a bounded exact-generation mutation path constructs the parent-to-root
   directory successor closure and propagates child generations bottom-up.
-  Closure staging, complete create publication, and recovery traversal remain
-  pending.
+  The closure's disjoint canonical images are staged child-before-parent and
+  admitted to one directory transaction. Complete create publication and
+  recovery traversal remain pending.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

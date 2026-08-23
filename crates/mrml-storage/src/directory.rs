@@ -386,6 +386,25 @@ impl<const C: usize, const E: usize> DirectoryMutationSuccessorPlan<C, E> {
             None
         }
     }
+
+    pub fn stage<const S: usize, B: DirectoryWriteBackend>(
+        &self,
+        header: VolumeHeader,
+        layouts: &[DirectorySuccessorLayout; C],
+        metadata_outputs: &mut [[u8; crate::DIRECTORY_METADATA_BYTES]; C],
+        entries_outputs: &mut [[u8; S]; C],
+        backend: &mut B,
+    ) -> Result<PreparedDirectoryMovePlan<C, E>, DirectoryMoveStageError<B::Error>> {
+        stage_directory_successors(
+            &self.successors,
+            self.count,
+            header,
+            layouts,
+            metadata_outputs,
+            entries_outputs,
+            backend,
+        )
+    }
 }
 
 pub struct DirectorySuccessorClosure<const N: usize> {
@@ -510,52 +529,15 @@ impl<const C: usize, const E: usize> DirectoryMoveSuccessorPlan<C, E> {
         entries_outputs: &mut [[u8; S]; C],
         backend: &mut B,
     ) -> Result<PreparedDirectoryMovePlan<C, E>, DirectoryMoveStageError<B::Error>> {
-        for index in 0..self.count {
-            let layout = layouts[index];
-            if !metadata_pointer_valid(header, layout.metadata)
-                || !metadata_pointer_valid(header, layout.entries)
-                || pointers_overlap(layout.metadata, layout.entries)
-                || image_bytes(header, layout.entries).ok() != Some(S)
-            {
-                return Err(DirectoryMoveStageError::InvalidLayout);
-            }
-            for prior in layouts[..index].iter().copied() {
-                if pointers_overlap(prior.metadata, layout.metadata)
-                    || pointers_overlap(prior.metadata, layout.entries)
-                    || pointers_overlap(prior.entries, layout.metadata)
-                    || pointers_overlap(prior.entries, layout.entries)
-                {
-                    return Err(DirectoryMoveStageError::InvalidLayout);
-                }
-            }
-        }
-
-        let mut updates: [Option<PreparedDirectoryUpdate<E>>; C] = core::array::from_fn(|_| None);
-        for (index, slot) in updates.iter_mut().enumerate().take(self.count) {
-            let successor = self.successors[index]
-                .as_ref()
-                .ok_or(DirectoryMoveStageError::InvalidPlan)?;
-            let layout = layouts[index];
-            *slot = Some(
-                successor
-                    .predecessor
-                    .prepare_successor(
-                        header,
-                        successor.parent,
-                        successor.state.clone(),
-                        layout.metadata,
-                        layout.entries,
-                        &mut metadata_outputs[index],
-                        &mut entries_outputs[index],
-                        backend,
-                    )
-                    .map_err(DirectoryMoveStageError::Update)?,
-            );
-        }
-        Ok(PreparedDirectoryMovePlan {
-            updates,
-            count: self.count,
-        })
+        stage_directory_successors(
+            &self.successors,
+            self.count,
+            header,
+            layouts,
+            metadata_outputs,
+            entries_outputs,
+            backend,
+        )
     }
 
     fn find_mut(&mut self, object: StorageObjectId) -> Option<&mut DirectoryMoveSuccessor<E>> {
@@ -686,6 +668,69 @@ impl DirectorySuccessorLayout {
     pub const fn entries(self) -> MetadataPointer {
         self.entries
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stage_directory_successors<
+    const C: usize,
+    const E: usize,
+    const S: usize,
+    B: DirectoryWriteBackend,
+>(
+    successors: &[Option<DirectoryMoveSuccessor<E>>; C],
+    count: usize,
+    header: VolumeHeader,
+    layouts: &[DirectorySuccessorLayout; C],
+    metadata_outputs: &mut [[u8; crate::DIRECTORY_METADATA_BYTES]; C],
+    entries_outputs: &mut [[u8; S]; C],
+    backend: &mut B,
+) -> Result<PreparedDirectoryMovePlan<C, E>, DirectoryMoveStageError<B::Error>> {
+    if count == 0 || count > C {
+        return Err(DirectoryMoveStageError::InvalidPlan);
+    }
+    for index in 0..count {
+        let layout = layouts[index];
+        if !metadata_pointer_valid(header, layout.metadata)
+            || !metadata_pointer_valid(header, layout.entries)
+            || pointers_overlap(layout.metadata, layout.entries)
+            || image_bytes(header, layout.entries).ok() != Some(S)
+        {
+            return Err(DirectoryMoveStageError::InvalidLayout);
+        }
+        for prior in layouts[..index].iter().copied() {
+            if pointers_overlap(prior.metadata, layout.metadata)
+                || pointers_overlap(prior.metadata, layout.entries)
+                || pointers_overlap(prior.entries, layout.metadata)
+                || pointers_overlap(prior.entries, layout.entries)
+            {
+                return Err(DirectoryMoveStageError::InvalidLayout);
+            }
+        }
+    }
+
+    let mut updates: [Option<PreparedDirectoryUpdate<E>>; C] = core::array::from_fn(|_| None);
+    for (index, slot) in updates.iter_mut().enumerate().take(count) {
+        let successor = successors[index]
+            .as_ref()
+            .ok_or(DirectoryMoveStageError::InvalidPlan)?;
+        let layout = layouts[index];
+        *slot = Some(
+            successor
+                .predecessor
+                .prepare_successor(
+                    header,
+                    successor.parent,
+                    successor.state.clone(),
+                    layout.metadata,
+                    layout.entries,
+                    &mut metadata_outputs[index],
+                    &mut entries_outputs[index],
+                    backend,
+                )
+                .map_err(DirectoryMoveStageError::Update)?,
+        );
+    }
+    Ok(PreparedDirectoryMovePlan { updates, count })
 }
 
 pub struct PreparedDirectoryMovePlan<const C: usize, const E: usize> {
@@ -2333,6 +2378,43 @@ mod tests {
             4
         );
         assert!(plan.successor(3).is_none());
+
+        let header = VolumeHeader::new(volume(), 4096, 100, 1, 2).unwrap();
+        let layouts = [
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(60, 1).unwrap(),
+                MetadataPointer::new(61, 1).unwrap(),
+            ),
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(62, 1).unwrap(),
+                MetadataPointer::new(63, 1).unwrap(),
+            ),
+            DirectorySuccessorLayout::new(
+                MetadataPointer::new(64, 1).unwrap(),
+                MetadataPointer::new(65, 1).unwrap(),
+            ),
+        ];
+        let mut metadata_outputs = [[0; crate::DIRECTORY_METADATA_BYTES]; 3];
+        let mut entries_outputs = [[0; 4096]; 3];
+        let mut update_backend = UpdateBackend {
+            staged: 0,
+            flushed: false,
+            verified: 0,
+        };
+        let prepared = plan
+            .stage(
+                header,
+                &layouts,
+                &mut metadata_outputs,
+                &mut entries_outputs,
+                &mut update_backend,
+            )
+            .unwrap();
+        assert_eq!((prepared.len(), update_backend.staged), (3, 6));
+        let transaction = prepared
+            .transaction::<3, 6>(StorageTransactionId::new(42).unwrap(), 6)
+            .unwrap();
+        assert_eq!(transaction.participant_count(), 3);
 
         assert!(matches!(
             proof.construct_create_successors::<2, 3, _>(created, &mut backend),

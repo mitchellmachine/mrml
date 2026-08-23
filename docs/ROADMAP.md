@@ -268,8 +268,10 @@ authority; unrelated domains continue.
    `0 -> 1` creation. A general bounded mutation proof now binds the exact
    target-to-root path. Create successor construction reloads all predecessors,
    inserts the child at the target, advances every directory once, and
-   propagates exact child generations to the root. Closure staging and full
-   create transaction assembly remain pending.
+   propagates exact child generations to the root. The complete directory
+   closure now passes the same preflight/staging path as moves and is admitted
+   child-before-parent to one bounded directory transaction. Full create
+   transaction assembly remains pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

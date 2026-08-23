@@ -912,7 +912,8 @@ The service conventionally encodes and stages empty generation-1 file/extent
 or directory/entry image pairs and labels their typed transaction participant
 as object creation. It uses a conventional bounded parent-chain walk and
 bottom-up directory-entry generation replacement to construct the affected
-ancestor successors. This adds no novel filesystem object, empty-file,
+ancestor successors, then applies the existing conventional disjoint COW
+staging and typed transaction admission. This adds no novel filesystem object, empty-file,
 transaction, persistence, or encoding technique.
 
 Patent review: `NOT_TRIGGERED` — conventional initial filesystem-object

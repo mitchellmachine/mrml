@@ -2792,7 +2792,12 @@ predecessor, inserts the new generation-1 entry only at the target, advances
 each affected directory exactly once, and rewrites parent entry generations
 bottom-up to the root. Wrong or stale states, broken links, collisions,
 generation exhaustion, and bounded-capacity failure expose no successor plan.
-Staging and publication remain later gates.
+The resulting closure reuses the move path's whole-plan preflight: exact entry
+buffer extent, volume bounds, reserved-block exclusion, and pairwise range
+disjointness are established before the first backend call. All directory
+successors then stage child-before-parent and are admitted to one bounded
+transaction. Full child/allocator/allocation/authority publication remains a
+later gate.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and
@@ -3006,7 +3011,8 @@ generation on cancellation. Initial children bind exact type, identity, parent
 where applicable, generation 1, canonical empty subordinate images, and an
 unambiguous creation participant. General mutation closure construction binds
 the exact target-to-root predecessor chain and fails closed on stale parent
-entries or incomplete propagation. This agent review is not
+entries or incomplete propagation; shared staging rejects every cross-successor
+range overlap before I/O. This agent review is not
 independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
