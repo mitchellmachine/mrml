@@ -96,6 +96,27 @@ pub struct ServiceFault {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceRecovery {
+    pub retired: ServiceId,
+    pub replacement: ServiceId,
+    pub task: TaskId,
+    pub next: ScheduleOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceRecoveryError<E> {
+    Retirement(ServiceError),
+    Cleanup {
+        service: ServiceId,
+        error: ServiceCleanupError<E>,
+    },
+    Restart {
+        service: ServiceId,
+        error: ServiceError,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceCleanupTicket {
     service: ServiceId,
     task: TaskId,
@@ -208,6 +229,13 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         Ok(self.slot(service)?.task)
     }
 
+    pub fn pending_cleanup(
+        &self,
+        service: ServiceId,
+    ) -> Result<Option<ServiceCleanupTicket>, ServiceError> {
+        Ok(self.slot(service)?.cleanup)
+    }
+
     pub fn exit_current<const TASKS: usize, const CAPS: usize>(
         &mut self,
         runtime: &mut TaskRuntime<TASKS, CAPS>,
@@ -310,6 +338,67 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             .map_err(ServiceCleanupError::Eraser)?;
         self.slots[slot].cleanup = None;
         Ok(())
+    }
+
+    /// Retires a recoverable user fault, completes all caller-supplied cleanup,
+    /// and creates one fresh service generation before returning control to the
+    /// dispatch loop. A successful call does not expose the scheduler outcome
+    /// until cleanup and restart have both succeeded; failures retain a typed
+    /// stopped-service state for explicit retry or fail-stop handling.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recover_current_fault<
+        E: ServiceAddressSpaceEraser,
+        const TASKS: usize,
+        const CAPS: usize,
+        const MANAGEMENT_CAPS: usize,
+    >(
+        &mut self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        disposition: TrapDisposition,
+        now: u64,
+        eraser: &mut E,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        control: Capability,
+        priority: Priority,
+    ) -> Result<ServiceRecovery, ServiceRecoveryError<E::Error>> {
+        let fault = self
+            .fault_current_at(runtime, disposition, now)
+            .map_err(ServiceRecoveryError::Retirement)?;
+        self.complete_cleanup(fault.cleanup, eraser)
+            .map_err(|error| ServiceRecoveryError::Cleanup {
+                service: fault.service,
+                error,
+            })?;
+        let replacement = self
+            .restart_at(
+                fault.service,
+                management,
+                control,
+                runtime,
+                priority,
+                fault.cleanup.context,
+                now,
+            )
+            .map_err(|error| ServiceRecoveryError::Restart {
+                service: fault.service,
+                error,
+            })?;
+        let task = self
+            .task(replacement)
+            .map_err(|error| ServiceRecoveryError::Restart {
+                service: fault.service,
+                error,
+            })?
+            .ok_or(ServiceRecoveryError::Restart {
+                service: fault.service,
+                error: ServiceError::TaskMismatch,
+            })?;
+        Ok(ServiceRecovery {
+            retired: fault.service,
+            replacement,
+            task,
+            next: fault.retirement.next,
+        })
     }
 
     pub fn restart<const TASKS: usize, const CAPS: usize, const MANAGEMENT_CAPS: usize>(
@@ -428,7 +517,7 @@ impl<const SERVICES: usize> Default for ServiceSupervisor<SERVICES> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PhysAddr, Rights};
+    use crate::{ControlEvent, Endpoint, PeerDeathReason, PhysAddr, Rights};
 
     fn context(root: u64, entry: u64) -> UserContext {
         UserContext::new(PhysAddr::new(root).unwrap(), entry, 0x7000_0000).unwrap()
@@ -708,6 +797,202 @@ mod tests {
             Err(ServiceCleanupError::Service(
                 ServiceError::InvalidCleanupTicket
             ))
+        );
+    }
+
+    #[test]
+    fn recovery_withholds_peer_resume_until_cleanup_and_fresh_generation() {
+        let object = ObjectId(0x75);
+        let endpoint_object = ObjectId(0x76);
+        let mut runtime = TaskRuntime::<3, 2>::new(1_000, 1).unwrap();
+        let faulted = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let faulted_endpoint = runtime
+            .capabilities_mut(faulted)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let observer_endpoint = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                faulted,
+                observer,
+                &Endpoint::new(endpoint_object),
+                faulted_endpoint,
+                observer_endpoint,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == faulted));
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let retired = supervisor.register(object, faulted).unwrap();
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let mut eraser = TestEraser::default();
+
+        let recovery = supervisor
+            .recover_current_fault(
+                &mut runtime,
+                TrapDisposition::TerminateUser {
+                    vector: 14,
+                    address: Some(0xdead),
+                },
+                0,
+                &mut eraser,
+                &management,
+                control,
+                Priority::NORMAL,
+            )
+            .unwrap();
+
+        assert_eq!(recovery.retired, retired);
+        assert_ne!(recovery.replacement, retired);
+        assert_ne!(recovery.task, faulted);
+        assert!(matches!(recovery.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert_eq!(runtime.current(), Some(observer));
+        assert_eq!(
+            eraser.erased,
+            Some((faulted, context(0x20_0000, 0x40_0000)))
+        );
+        let ControlEvent::PeerDied(death) = runtime.receive_control(observer).unwrap() else {
+            panic!("expected typed peer death");
+        };
+        assert_eq!(death.peer(), faulted);
+        assert_eq!(
+            death.reason(),
+            PeerDeathReason::Faulted {
+                vector: 14,
+                address: Some(0xdead),
+            }
+        );
+        assert_eq!(supervisor.state(retired), Err(ServiceError::InvalidService));
+        assert_eq!(
+            supervisor.state(recovery.replacement),
+            Ok(ServiceState::Running)
+        );
+    }
+
+    #[test]
+    fn recovery_failure_retains_exact_cleanup_ticket_for_retry() {
+        let object = ObjectId(0x77);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let mut eraser = TestEraser {
+            fail: true,
+            erased: None,
+        };
+
+        let error = supervisor
+            .recover_current_fault(
+                &mut runtime,
+                TrapDisposition::TerminateUser {
+                    vector: 6,
+                    address: None,
+                },
+                0,
+                &mut eraser,
+                &management,
+                control,
+                Priority::NORMAL,
+            )
+            .unwrap_err();
+        let ServiceRecoveryError::Cleanup {
+            service: failed_service,
+            error: ServiceCleanupError::Eraser(()),
+        } = error
+        else {
+            panic!("expected retained cleanup failure");
+        };
+        assert_eq!(failed_service, service);
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
+        let cleanup = supervisor.pending_cleanup(service).unwrap().unwrap();
+        assert_eq!(
+            supervisor.restart(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                cleanup.context(),
+            ),
+            Err(ServiceError::CleanupRequired)
+        );
+
+        eraser.fail = false;
+        supervisor.complete_cleanup(cleanup, &mut eraser).unwrap();
+        assert!(
+            supervisor
+                .restart(
+                    service,
+                    &management,
+                    control,
+                    &mut runtime,
+                    Priority::NORMAL,
+                    cleanup.context(),
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn recovery_restart_rejection_leaves_clean_stopped_service_retryable() {
+        let object = ObjectId(0x78);
+        let saved = context(0x20_0000, 0x40_0000);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime.create(Priority::NORMAL, saved).unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let mut management = CapabilitySpace::<2>::new();
+        let wrong = management.insert(ObjectId(0x79), Rights::CONTROL).unwrap();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let mut eraser = TestEraser::default();
+
+        assert_eq!(
+            supervisor.recover_current_fault(
+                &mut runtime,
+                TrapDisposition::TerminateUser {
+                    vector: 6,
+                    address: None,
+                },
+                0,
+                &mut eraser,
+                &management,
+                wrong,
+                Priority::NORMAL,
+            ),
+            Err(ServiceRecoveryError::Restart {
+                service,
+                error: ServiceError::Unauthorized(CapabilityError::PermissionDenied),
+            })
+        );
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
+        assert_eq!(supervisor.pending_cleanup(service), Ok(None));
+        assert!(
+            supervisor
+                .restart(
+                    service,
+                    &management,
+                    control,
+                    &mut runtime,
+                    Priority::NORMAL,
+                    saved,
+                )
+                .is_ok()
         );
     }
 

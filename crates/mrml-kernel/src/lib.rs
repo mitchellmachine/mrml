@@ -93,7 +93,8 @@ pub use scheduler::{
 };
 pub use service_lifecycle::{
     RestartPolicy, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
-    ServiceError, ServiceFault, ServiceId, ServiceRetirement, ServiceState, ServiceSupervisor,
+    ServiceError, ServiceFault, ServiceId, ServiceRecovery, ServiceRecoveryError,
+    ServiceRetirement, ServiceState, ServiceSupervisor,
 };
 pub use shared_memory::{
     HostResourceHandle, HostResourceRetirer, ServiceResourceCleanupError, ServiceResourceEraser,

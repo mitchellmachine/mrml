@@ -611,7 +611,11 @@ impl<const N: usize> Default for SharedMemoryBindings<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GuestRegion, KernelScheduler, PhysAddr, Priority, VmBackend, VmExit, VmTable};
+    use crate::arch::x86_64::{TrapDisposition, UserContext};
+    use crate::{
+        GuestRegion, KernelScheduler, PhysAddr, Priority, ScheduleOutcome, ServiceSupervisor,
+        TaskRuntime, VmBackend, VmExit, VmTable,
+    };
 
     struct CleanupBackend {
         fail: bool,
@@ -1221,6 +1225,88 @@ mod tests {
         );
         assert_eq!(eraser.erase(task, context), Ok(()));
         assert_eq!(eraser.report().len(), 1);
+    }
+
+    #[test]
+    fn supervised_recovery_completes_native_shared_cleanup_before_returning_peer() {
+        let context =
+            UserContext::new(PhysAddr::new(0x20_0000).unwrap(), 0x40_0000, 0x7000_0000).unwrap();
+        let mut runtime = TaskRuntime::<3, 0>::new(1_000, 1).unwrap();
+        let faulted = runtime.create(Priority::NORMAL, context).unwrap();
+        let observer = runtime
+            .create(
+                Priority::NORMAL,
+                UserContext::new(PhysAddr::new(0x30_0000).unwrap(), 0x50_0000, 0x7100_0000)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == faulted));
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let object = ObjectId(0xa5);
+        let service = supervisor.register(object, faulted).unwrap();
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+
+        let vm = vm();
+        let (mut memory, mapping) = mapped();
+        let mut binding_authority = CapabilitySpace::<1>::new();
+        let authority = binding_authority
+            .insert(object, Rights::MAP.union(Rights::READ))
+            .unwrap();
+        let endpoint = SharedEndpoint::for_task(vm, faulted, mapping, SharedAccess::ReadOnly);
+        let handle = HostResourceHandle::new(0xa6).unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        let binding = bindings
+            .bind(&binding_authority, authority, &memory, endpoint, handle)
+            .unwrap();
+        let mut backend = CleanupBackend {
+            fail: false,
+            calls: [(0, 0); 2],
+            count: 0,
+        };
+        // These retry fakes succeed on their second call. Starting at one
+        // makes this test exercise the successful composite path.
+        let mut address_space = RetryEraser { calls: 1 };
+        let mut resources = RetryRetirer { calls: 1 };
+        let recovery = {
+            let mut eraser = ServiceResourceEraser::new(
+                &mut address_space,
+                &mut resources,
+                &mut backend,
+                &mut memory,
+                &mut bindings,
+            );
+            supervisor
+                .recover_current_fault(
+                    &mut runtime,
+                    TrapDisposition::TerminateUser {
+                        vector: 14,
+                        address: Some(0xbeef),
+                    },
+                    0,
+                    &mut eraser,
+                    &management,
+                    control,
+                    Priority::NORMAL,
+                )
+                .unwrap()
+        };
+
+        assert_eq!(recovery.retired, service);
+        assert!(matches!(recovery.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert_eq!(runtime.current(), Some(observer));
+        assert_eq!(backend.calls[0], (0x4000, crate::PAGE_SIZE));
+        assert_eq!(memory.region(mapping), Err(crate::VmError::StaleMapping));
+        assert_eq!(
+            bindings.resolve(binding, &binding_authority, authority, &memory, endpoint),
+            Err(SharedBindingError::StaleBinding)
+        );
+        assert_eq!(resources.calls, 2);
+        assert_eq!(address_space.calls, 2);
+        assert_eq!(
+            supervisor.state(recovery.replacement),
+            Ok(crate::ServiceState::Running)
+        );
     }
 
     #[test]

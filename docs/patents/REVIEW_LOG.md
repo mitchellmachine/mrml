@@ -194,3 +194,17 @@ protocol, codec, cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded delegation tracking and
 lifecycle revocation.
+
+## 2026-08-23 — supervised fault cleanup and restart composition
+
+MRML source: `crates/mrml-kernel/src/{service_lifecycle,shared_memory}.rs`.
+
+Service recovery now sequences existing task retirement, peer notification,
+native shared-mapping revocation, resource/address-space erasure, and bounded
+fresh-generation restart through one synchronous operation with retryable
+failure states. This is ordinary lifecycle orchestration and error-state
+composition; it adds no novel algorithm, device protocol, codec, cryptographic
+construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional fail-closed service lifecycle
+composition.

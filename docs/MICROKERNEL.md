@@ -1629,11 +1629,21 @@ shared-binding retirement, final opaque host-handle destruction, and then
 address-space reprovisioning. Other tasks' endpoints remain live. Native
 failure preserves the current mapping and binding; host-handle or address-space
 failure retains completed obligations for retry and continues to block restart.
-Focused Windows gnullvm tests cover surviving peers, wrong-task substitution,
-final-reference reporting, native failure, host-resource failure, eraser
-failure, and retry without duplicated destruction. The existing signed backend
-probes exercise reprovisioning, but have not yet exercised this composite
-task-owned shared-resource path live.
+`ServiceSupervisor::recover_current_fault` now supplies the single bounded
+orchestration boundary: it retires the exact current service, allowing
+`TaskRuntime` to publish typed peer death and revoke task authority, completes
+the supplied composite eraser, then creates a fresh service/task generation
+before returning the peer scheduling outcome. Cleanup failure keeps the exact
+ticket queryable for retry; a restart authorization or policy failure occurs
+only after cleanup and leaves a clean stopped service that can be restarted
+separately. Windows gnullvm passes 298 kernel tests. Focused cases cover
+surviving peers, typed fault identity, stale service generations, wrong-task
+substitution, final-reference reporting, native failure, host-resource failure,
+eraser failure, exact-ticket retry, rejected-restart retry, and a composite
+native mapping/binding/host-resource/address-space cleanup followed by fresh
+generation creation. The existing signed backend probes exercise
+reprovisioning, but have not yet exercised this composite task-owned
+shared-resource path live.
 
 Each `TaskRuntime` domain now owns a fixed two-message inbox in addition to its
 context and capability space. `receive_or_block_current` dequeues immediately

@@ -43,6 +43,12 @@ and mapping identities. Cleanup invalidates each failed task's native mapping
 before retiring its common mapping and binding, preserves peer endpoints, and
 requires successful final host-resource retirement before restart. Completed
 obligations survive retry across host-resource or address-space erasure failure.
+The supervisor now exposes one bounded recovery operation that retires the
+faulted task, publishes typed peer death, completes the caller-supplied
+task-resource/address-space eraser, and creates a fresh service/task generation
+before returning the surviving peer's scheduling outcome. Cleanup failure
+retains the exact ticket for retry; restart rejection leaves a clean stopped
+service that can be authorized and retried separately.
 
 The next coherent milestone is an end-to-end service substrate: two isolated
 CPL3 services communicate through a multi-client blocking control channel and a
@@ -73,8 +79,9 @@ confidentiality.
    **IMPLEMENTED** in kernel mechanism and focused simulation tests: typed peer
    notification, task-domain revocation, native-first task-owned shared-resource
    cleanup, final host-handle retirement, exact erasure gating, and bounded
-   restart are coupled. A signed live composite cleanup probe remains evidence
-   work rather than a missing mechanism.
+   restart are coupled through one supervised recovery operation. Cleanup and
+   restart failures retain retryable fail-closed state. A signed live composite
+   cleanup probe remains evidence work rather than a missing mechanism.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
    **IMPLEMENTED:** release microbenchmarks cover backend-neutral
