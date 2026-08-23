@@ -285,6 +285,56 @@ pub fn compile_x86_64_constant_function<
                 span: translate_span(function.body_expression_span.start, assignment.name_span),
             });
         }
+        if assignment.binding_name() == "_" {
+            if assignment.operator != crate::AssignmentOperator::Assign {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::UnsupportedRuntimeOperator,
+                    span: translate_span(function.body_expression_span.start, assignment.name_span),
+                });
+            }
+            let tree = assignment
+                .parse_value::<MAX_EXPRESSION_NODES>()
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Expression(error.kind),
+                    span: translate_span(
+                        function.body_expression_span.start + assignment.value_span.start,
+                        error.span,
+                    ),
+                })?;
+            let local_resolver = LocalResolver {
+                outer: resolver,
+                values: &local_values,
+                count: local_count,
+            };
+            runtime_expression_type(function, &local_resolver, &tree, tree.root(), 0).map_err(
+                |kind| CodegenError {
+                    kind,
+                    span: translate_span(
+                        function.body_expression_span.start,
+                        assignment.value_span,
+                    ),
+                },
+            )?;
+            let program =
+                lower_expression::<MAX_FUNCTION_IR_INSTRUCTIONS, MAX_EXPRESSION_NODES>(&tree)
+                    .map_err(|error| CodegenError {
+                        kind: CodegenErrorKind::Lowering(error.kind),
+                        span: translate_span(
+                            function.body_expression_span.start + assignment.value_span.start,
+                            error.span,
+                        ),
+                    })?;
+            program
+                .execute::<_, MAX_FUNCTION_STACK_VALUES>(&local_resolver)
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Execution(error),
+                    span: translate_span(
+                        function.body_expression_span.start,
+                        assignment.value_span,
+                    ),
+                })?;
+            continue;
+        }
         let index = local_values[..local_count]
             .iter()
             .rposition(|value| value.is_some_and(|value| value.name == assignment.binding_name()))
@@ -10301,25 +10351,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         if local.name == "_" {
             let previous_width = self.width;
             self.width = runtime_expression_width(local_type).unwrap_or(previous_width);
-            let emission = match local_type {
-                RuntimeExpressionType::Array { count, .. } => {
-                    self.emit_array_to_stack(&tree, tree.root(), count)?;
-                    self.evaluation_depth -= count;
-                    self.emit_stack_cleanup_bytes(
-                        count
-                            .checked_mul(8)
-                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
-                    )
-                }
-                RuntimeExpressionType::Reference {
-                    target: RuntimeReferenceTarget::Slice(_) | RuntimeReferenceTarget::Str,
-                    ..
-                } => {
-                    self.emit_slice_value_to_stack(&tree, tree.root(), 0)?;
-                    self.emit_stack_cleanup_bytes(16)
-                }
-                _ => self.emit_expression(&tree, tree.root(), 0),
-            };
+            let emission = self.emit_discarded_value(&tree, tree.root(), local_type, 0);
             self.width = previous_width;
             return emission;
         }
@@ -10400,6 +10432,37 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         Ok(())
     }
 
+    fn emit_discarded_value<const MAX_EXPRESSION_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_EXPRESSION_NODES>,
+        root: crate::ExprId,
+        value_type: RuntimeExpressionType,
+        depth: usize,
+    ) -> Result<(), CodegenError> {
+        match value_type {
+            RuntimeExpressionType::Array { count, .. } => {
+                self.emit_array_to_stack(tree, root, count)?;
+                self.evaluation_depth -= count;
+                self.emit_stack_cleanup_bytes(
+                    count
+                        .checked_mul(8)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                )
+            }
+            RuntimeExpressionType::Reference {
+                target: RuntimeReferenceTarget::Slice(_) | RuntimeReferenceTarget::Str,
+                ..
+            } => {
+                self.emit_slice_value_to_stack(tree, root, depth)?;
+                self.emit_stack_cleanup_bytes(16)
+            }
+            RuntimeExpressionType::Default => {
+                Err(self.error(CodegenErrorKind::RuntimeTypeMismatch))
+            }
+            _ => self.emit_expression(tree, root, depth),
+        }
+    }
+
     fn emit_expression_statement<const MAX_EXPRESSION_NODES: usize>(
         &mut self,
         statement: &crate::ExpressionStatement<'_>,
@@ -10437,6 +10500,39 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         if assignment.dereference {
             return self
                 .emit_dereference_assignment::<MAX_EXPRESSION_NODES>(assignment, body_start);
+        }
+        if assignment.binding_name() == "_" {
+            if assignment.index().is_some()
+                || assignment.operator != crate::AssignmentOperator::Assign
+            {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::UnsupportedRuntimeOperator,
+                    span: translate_span(body_start, assignment.name_span),
+                });
+            }
+            let tree = assignment
+                .parse_value::<MAX_EXPRESSION_NODES>()
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Expression(error.kind),
+                    span: translate_span(body_start + assignment.value_span.start, error.span),
+                })?;
+            let value_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                &tree,
+                tree.root(),
+                0,
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, assignment.value_span),
+            })?;
+            let previous_width = self.width;
+            self.width = runtime_expression_width(value_type).unwrap_or(previous_width);
+            let emission = self.emit_discarded_value(&tree, tree.root(), value_type, 0);
+            self.width = previous_width;
+            return emission;
         }
         if assignment.index().is_some() {
             let target_type = self.locals[..self.saved_locals]
@@ -14107,6 +14203,45 @@ mod tests {
                     "{source}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn evaluates_underscore_assignments_without_a_target() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { _ = input + 1; input + 2 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { _ = [input, input + 1]; input + 2 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(values: &[u8]) -> usize { _ = &values[..]; values.len() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, flag: bool) -> u64 { let first: u64 = input; let second: u64 = input + 1; if flag { _ = input + 2; } first + second }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { _ += 1u64; 0 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value() -> u64 { _[0] = 1u64; 0 }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 256, 2, 32>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
         }
     }
 

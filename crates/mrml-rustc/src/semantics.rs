@@ -1312,6 +1312,37 @@ fn evaluate_const_assignment<'source, const MAX_ITEMS: usize, const MAX_PARAMETE
     if assignment.index().is_some() {
         return Err(SemanticErrorKind::UnsupportedConstCall);
     }
+    if assignment.binding_name() == "_" {
+        if assignment.operator != crate::AssignmentOperator::Assign {
+            return Err(SemanticErrorKind::UnsupportedConstCall);
+        }
+        let tree = assignment
+            .parse_value::<MAX_CONST_FUNCTION_EXPRESSION_NODES>()
+            .map_err(|error| SemanticErrorKind::Expression(error.kind))?;
+        if tree.is_boolean_expression(tree.root(), 0) {
+            evaluate_boolean_const_expression(
+                context,
+                symbol_count,
+                &tree,
+                tree.root(),
+                resolver,
+                depth,
+            )?;
+        } else {
+            let ty = integer_expression_type(context, symbol_count, &tree, tree.root(), resolver)
+                .unwrap_or(crate::IntegerType::I32);
+            evaluate_integer_const_expression(
+                context,
+                symbol_count,
+                &tree,
+                tree.root(),
+                ty,
+                resolver,
+                depth,
+            )?;
+        }
+        return Ok(());
+    }
     let binding = resolver
         .binding(assignment.binding_name())
         .ok_or(SemanticErrorKind::UnsupportedConstCall)?;

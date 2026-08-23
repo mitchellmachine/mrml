@@ -3447,6 +3447,22 @@ fn rustc_wildcard_let_initializers_reach_native_objects() {
 }
 
 #[test]
+fn rustc_underscore_assignments_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64, choose: bool) -> u64 { _ = [input, input + 1]; _ = if choose { 84 / divisor } else { input + 2 }; input + 2 }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(values: &[u8]) -> usize { _ = &values[..]; values.len() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",

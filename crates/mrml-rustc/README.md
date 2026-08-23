@@ -973,6 +973,11 @@ variants evaluates the initializer in source order but creates no name and no
 persistent local stack slot. Supported scalar, fixed-array, and fat-reference
 initializers retain their ordinary checks and traps before their temporary
 values are discarded. `let mut _` and using `_` as a value are rejected.
+The underscore assignment statement `_ = expression;` uses the same supported
+discard boundary without declaring or resolving an assignment target. Its
+right-hand scalar, fixed-array, or fat-reference expression executes normally,
+including lazy branches and traps, before the result is released. Compound and
+indexed underscore assignments are rejected.
 Parameterized functions emit independently typed integer locals and Boolean
 locals into bounded stack slots. Later initializers and the tail can reload those slots;
 parameter offsets incorporate saved locals and temporary expression depth, and
@@ -1206,7 +1211,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 551 Windows library, conformance, rustc-nightly-replacement, and driver
+The 553 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1243,6 +1248,11 @@ Independent pinned-nightly callers observed zero, ordinary, and `u64` boundary
 results after MRML evaluated and discarded scalar arithmetic, a two-element
 array, and integer division without retaining a wildcard binding on either
 host.
+An underscore-assignment probe emitted a 282-byte COFF object and a 672-byte
+ELF64 object. Independent pinned-nightly callers observed discarded array and
+conditional arithmetic, a selected quotient, and a false edge that skipped
+division by zero while preserving zero, ordinary, and `u64` boundary results
+on both hosts.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.
