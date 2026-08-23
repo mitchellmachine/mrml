@@ -33,6 +33,15 @@ secret redaction, trusted nonvisual prompts, and separate semantic inspection,
 interaction, microphone, audio-route, HID/input-route, and raw-device rights.
 Never claim Braille/hardware or early-boot support beyond exact evidence.
 
+If text-only AI receives task-essential semantic state, supported human
+accessibility interfaces must receive equivalent meaning unless a documented
+technical/security reason prevents it. Equivalent meaning is not identical
+format or authority. Treat Braille as semantic I/O, not framebuffer text; the
+40-cell baseline is a design target, not a device restriction. Preserve trusted-
+prompt Braille/speech operation, monitor-off acceptance, shared AI/accessibility
+redaction, physical-hardware evidence labels, disabled-user testing before ABI
+freeze, and provider-independent keyboard/Braille/basic speech operation.
+
 Treat the README contribution, testing, provenance, dependency, formatting,
 and claims rules as hard acceptance gates. Inspect `git status`, recent
 relevant history, source, and tests before editing. Preserve unrelated staged,

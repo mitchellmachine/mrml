@@ -19,6 +19,17 @@ and the roadmap order from semantic graph through keyboard actions, speech,
 Braille, VM/browser projection, and alternative devices. Do not claim physical
 Braille or early-boot accessibility from simulation or plans.
 
+Maintain semantic-access parity: if text-only AI receives task-essential GUI
+meaning, supported accessibility interfaces receive equivalent meaning unless a
+documented reason prevents it; formatting and capabilities may differ. Braille
+is semantic input/output, with a 40-cell device only as an initial usability
+target. Trusted prompts must work through Braille/speech, and core operation
+must progress toward the explicitly `DESIGNED`, currently unpassed monitor-off
+suite. Read `docs/accessibility/BRAILLE_INTERFACE.md` and
+`docs/accessibility/MONITOR_OFF_ACCEPTANCE.md`. Do not freeze an accessibility
+ABI before practical disabled-user feedback or claim hardware compatibility
+without physical tests.
+
 Patent research is also durable repository state. Before repeating a search,
 read `docs/patents/README.md`, its status registers, and `REVIEW_LOG.md`.
 Resume from recorded mechanisms, claims, families, jurisdictions, official

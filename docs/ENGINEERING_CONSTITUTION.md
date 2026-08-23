@@ -53,6 +53,13 @@ it adds implementation effort; control complexity through one shared semantic
 object system rather than duplicated representations. The canonical design is
 in [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
+If MRML exposes core-interface semantics to AI or automation, the interface is
+incomplete unless supported accessibility interfaces receive equivalent
+meaningful semantics or documentation records a concrete technical reason.
+Presentation and authority may differ. Intrinsically visual content may require
+descriptions, captions, transcripts, structure, metadata, or separately
+authorized multimodal inspection rather than false textual equivalence.
+
 ## Memory safety and containment
 
 Ordinary native applications are memory-safe by admission policy, with safe

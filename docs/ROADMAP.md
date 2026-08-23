@@ -323,6 +323,37 @@ accessible semantics into boot errors, rollback, login, recovery, and repair as
 early as service/hardware prerequisites permit without claiming unfinished
 early-boot support.
 
+### Accessibility dependency lane
+
+Within and across Phases 3 and 4, preserve this dependency order:
+
+1. prove Semantic Scene Graph correctness and incremental synchronization;
+2. add deterministic focus and keyboard semantic actions;
+3. define a bounded accessibility semantic API with shared redaction;
+4. add automated semantic completeness, action, and parity tests;
+5. add trusted local speech output;
+6. add the transport-neutral 40-cell-baseline Braille line presentation;
+7. add bounded interoperable physical Braille transport;
+8. add Braille routing and input through semantic actions;
+9. operate trusted prompts through Braille and speech;
+10. integrate browser structured accessibility;
+11. pass a basic monitor-off desktop workflow;
+12. add authenticated VM and compatibility accessibility bridges;
+13. add deterministic local speech control before optional AI interpretation;
+14. add Deaf/hard-of-hearing semantic system-event parity;
+15. refine cognitive, motor, and low-vision behavior;
+16. conduct practical usability testing with disabled users across multiple
+    interaction modes;
+17. pass the full supported monitor-off core suite;
+18. only then consider accessibility ABI stabilization.
+
+User testing cannot be deferred until after ABI freeze. CI grows to cover
+semantic completeness, focus, keyboard-only operation, shared redaction,
+trusted prompts, AI/accessibility parity, Braille lines/routing, speech,
+VM/browser projection, HiDPI, and rendering-backend independence. Track focus-
+to-Braille/speech, Braille/speech-input-to-action, and delta-propagation latency.
+Physical hardware and disabled-user evidence remain distinct from simulation.
+
 ## Phase 5 — Authority, consent, and observation
 
 After the core capability/service substrate and trusted compositor exist:

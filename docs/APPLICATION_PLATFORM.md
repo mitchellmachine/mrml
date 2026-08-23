@@ -251,6 +251,13 @@ consistently, and essential trusted prompts cannot depend on vision, color,
 sound, or pointer coordinates alone. The planned contract is in
 [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
+If text-only AI can inspect task-essential structured meaning, supported human
+accessibility interfaces receive equivalent meaning unless a documented
+technical or security reason prevents it. This is semantic parity, not format or
+authority parity: an AI may lack interaction rights, a Braille session may have
+them, and an application sees only its own objects. The AI path cannot become a
+privileged semantic backdoor.
+
 ## AI and multimodal access
 
 Semantic/text state is the default AI path. Screenshots, image bytes, or video

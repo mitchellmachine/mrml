@@ -6,6 +6,16 @@ device stack.
 
 > Accessibility belongs in the architecture, not on top of it.
 
+> **If MRML can expose meaningful structured interface state to a text-only AI,
+> it must be able to expose equivalent meaningful state to human accessibility
+> interfaces where technically applicable.**
+
+This requires shared underlying semantic truth, not identical formatting,
+interaction, or authority. Visual, Braille, speech, keyboard, and AI consumers
+have different presentation needs and explicit capabilities. Equivalent meaning
+where appropriate does not grant authority parity, and the AI interface must
+never become a richer semantic backdoor.
+
 ```text
 Complexity impact: MEDIUM
 TCB impact: LOW
@@ -84,6 +94,13 @@ semantic object under normal isolation and capability rules. A focused app or
 VM never receives global Braille input. Prefer interoperable protocols and a
 narrow device/interface capability over raw USB authority.
 
+The initial usability target is a common approximately 40-cell device with
+routing/navigation keys and Braille input, without binding the semantic model to
+one size, vendor, or transport. Compact lines, structured navigation, routing,
+text editing, trusted prompts, tables, browser/media semantics, capabilities,
+and evidence rules are specified in
+[accessibility/BRAILLE_INTERFACE.md](accessibility/BRAILLE_INTERFACE.md).
+
 ## Speech output, input, and privacy
 
 ```text
@@ -152,6 +169,45 @@ and service prerequisites allow. Long-term targets include boot errors, rollback
 selection, security warnings, login, recovery, and repair. This is not a claim
 of current early-boot support.
 
+Essential system information must never be communicated solely through sound.
+Alerts, errors, security events, communications, timers, and device
+notifications need semantic/visual equivalents; media uses captions/transcripts
+where available. Future design also covers reduced motion, predictable focus,
+clear language, consistent navigation, adjustable density, reduced clutter,
+time-limit accommodation where security permits, keyboard/switch/voice/adaptive
+HID operation, large text, high contrast, zoom, reduced transparency, clear
+focus, and scalable cursors without changing semantic identity.
+
+## Maturity, service recovery, and ABI evidence
+
+Accessibility claims use these cumulative levels:
+
+```text
+DESIGNED         architecture exists
+SEMANTIC         required objects/actions exist
+SIMULATED        automated backend passes
+HARDWARE-TESTED  real assistive hardware tested
+USER-TESTED      disabled users completed workflows
+CORE-ACCESSIBLE  monitor-off core acceptance passes
+```
+
+`SEMANTIC` is not production readiness. Before ABI stabilization, seek practical
+feedback across Braille, screen-reader, keyboard-only, low-vision, motor, and
+Deaf/hard-of-hearing use; no one user represents all needs. Study relevant
+standards and interoperable Braille/accessibility device protocols before
+inventing transport, while keeping MRML semantics transport-neutral.
+
+Accessibility services may observe broad semantic state and are security-
+sensitive. Separate observation, interaction, microphone, Braille HID, audio,
+and trusted-prompt rights. On presentation-service failure, restart, reconnect
+incremental state, and restore focus/context where practical without reboot or
+authority expansion.
+
+Track focus-to-Braille, focus-to-speech, Braille-input-to-action, speech-command-
+to-action, and semantic-delta latency. Braille and speech consume incremental
+`FOCUS_CHANGED`, `TEXT_CHANGED`, `VALUE_CHANGED`, `STATE_CHANGED`,
+`OBJECT_ADDED`, and `OBJECT_REMOVED` updates shared with authorized AI/automation.
+
 ## Testing
 
 Future tests cover semantic completeness, focus order, keyboard-only workflows,
@@ -160,3 +216,8 @@ projection, render-backend and HiDPI independence, and capability enforcement.
 Dogfood workflows without a pointer or framebuffer inspection, through the
 semantic tree, speech, and Braille representation. Claim physical Braille
 support only after physical-device tests; label simulation honestly.
+
+The explicit monitor-disconnected goal, AI/accessibility parity regression,
+recovery scenarios, evidence recording, and progressively supported workflow are
+defined in
+[accessibility/MONITOR_OFF_ACCEPTANCE.md](accessibility/MONITOR_OFF_ACCEPTANCE.md).

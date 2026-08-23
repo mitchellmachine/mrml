@@ -35,6 +35,10 @@ human purposes and remain modest about what it can understand or resolve.
 
 > **Access to the computer should not depend on one particular human sense, physical ability, or method of interaction.**
 
+> **A machine-readable computer should also be a human-accessible computer.**
+
+> **Accessibility is not a degraded compatibility mode.**
+
 Accessibility is not optional polish, an application-specific feature, a
 third-party add-on, or a post-release compatibility layer. Essential operations
 should have equivalent meaningful semantic access through appropriate visual,
@@ -46,6 +50,11 @@ One shared semantic object system should support accessibility, automation, UI
 testing, and AI while granting each consumer only its own inspection and
 interaction capabilities. Accessibility does not imply unrestricted observation
 or secret access. Core accessibility must retain a viable local/offline path.
+
+If structured interface meaning is available to text-only AI, equivalent
+task-relevant meaning should be available to supported human accessibility
+interfaces where technically applicable. Presentation and authority may differ;
+the underlying semantic truth and redaction policy must not privilege AI.
 
 ## Durable project commitments
 
