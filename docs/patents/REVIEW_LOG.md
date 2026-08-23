@@ -673,3 +673,18 @@ filesystem tree, caching strategy, read optimization, cryptographic
 construction, device protocol, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional checksummed extent reads.
+
+## 2026-08-23 — bounded COW native file writes
+
+MRML source: `crates/mrml-storage/src/file.rs` and the extent/COW/metadata
+modules.
+
+The service uses conventional capability-checked range writes, complete
+successor extent maps, copy-on-write physical separation, checksum verification,
+whole-file and canonical extent-list hashing, data-before-metadata flush
+ordering, and inactive-superblock publication. This adds no novel filesystem
+tree, allocation algorithm, write optimization,
+cryptographic construction, device protocol, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional checksummed copy-on-write file
+updates.

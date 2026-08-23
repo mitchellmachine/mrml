@@ -236,8 +236,16 @@ the identity allocator is not crash-safe until transactionally persisted.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.
-The buffer is erased if later verification fails. File writes, snapshots, and
-crash recovery remain unimplemented. The EFI
+The buffer is erased if later verification fails. Bounded writes require exact
+`WRITE` and, when length changes, `RESIZE`; accept only a complete successor extent map
+and canonical file metadata for the next generation; reject reuse of active
+data or protected metadata blocks; stage and durably flush the complete new
+extent images; then return an unpublished state that can commit only through a
+matching COW metadata plan containing internally derived digests for both the
+canonical file record and zero-padded extent-list image. The backend also
+verifies the complete logical-file digest before flush. The backend and allocation index remain simulated,
+and multi-object transactions, snapshots, and crash recovery remain
+unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import
 services, but FAT32, legacy formats, POSIX permissions, and a universal global

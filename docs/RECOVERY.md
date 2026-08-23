@@ -114,8 +114,12 @@ explicitly and downgrade the status rather than guessing.
   object-ID allocator is volatile and cross-directory directory moves require a
   future ancestry proof. Capability-authorized bounded file reads resolve the
   exact extent generation, synthesize holes, and require full-extent digest
-  verification before copying a physical-data subrange. File writes are not yet
-  implemented. UEFI Simple File System use is boot interoperability,
+  verification before copying a physical-data subrange. Bounded writes stage a
+  complete disjoint successor image, flush it, and remain unpublished until a
+  matching canonical file-metadata digest and zero-padded extent-list digest are
+  included in the COW root plan; the complete logical-file digest is verified
+  before data flush. Concrete block/allocation integration and transactions are
+  not yet implemented. UEFI Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are

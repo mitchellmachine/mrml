@@ -310,6 +310,10 @@ impl<const N: usize> ExtentMap<N> {
         self.block_size
     }
 
+    pub fn record(&self, index: usize) -> Option<ExtentRecord> {
+        self.records.get(index).copied().flatten()
+    }
+
     pub fn record_for(&self, logical_block: u64) -> Result<ExtentRecord, ExtentError> {
         if logical_block >= self.logical_blocks {
             return Err(ExtentError::OutOfRange);

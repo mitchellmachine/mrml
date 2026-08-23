@@ -1,9 +1,13 @@
 use crate::{
-    ExtentError, ExtentKind, ExtentMap, ExtentRecord, StorageAuthorityError, StorageAuthorityTable,
-    StorageHandle, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights,
+    CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, CowPublishError, ExtentError,
+    ExtentKind, ExtentMap, ExtentRecord, FileMetadata, MetadataPointer, StorageAuthorityError,
+    StorageAuthorityTable, StorageHandle, StorageObjectId, StorageObjectKind, StoragePrincipal,
+    StorageRights,
 };
 
 pub const MAX_FILE_READ_BYTES: usize = 1 << 20;
+pub const MAX_FILE_WRITE_BYTES: usize = 1 << 20;
+pub const MAX_PROTECTED_METADATA_RANGES: usize = 1024;
 
 pub struct FileState<const N: usize> {
     object: StorageObjectId,
@@ -118,6 +122,202 @@ impl<const N: usize> FileState<N> {
         }
         Ok(written)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_write<const M: usize, const A: usize, B: FileWriteBackend>(
+        &self,
+        authority: &StorageAuthorityTable<A>,
+        file: StorageHandle,
+        principal: StoragePrincipal,
+        offset: u64,
+        data: &[u8],
+        new_length: u64,
+        next_extents: ExtentMap<M>,
+        next_metadata: FileMetadata,
+        file_metadata_pointer: MetadataPointer,
+        protected_metadata: &[MetadataPointer],
+        backend: &mut B,
+    ) -> Result<PreparedFileWrite<M>, FileWriteError<B::Error>> {
+        let requested = if new_length == self.length {
+            StorageRights::WRITE
+        } else {
+            StorageRights::WRITE.union(StorageRights::RESIZE)
+        };
+        let authorized = authority
+            .authorize(file, principal, StorageObjectKind::File, requested)
+            .map_err(FileWriteError::Authority)?;
+        if authorized != self.object {
+            return Err(FileWriteError::WrongFile);
+        }
+        if data.is_empty() || data.len() > MAX_FILE_WRITE_BYTES {
+            return Err(FileWriteError::InvalidLength);
+        }
+        let data_length = u64::try_from(data.len()).map_err(|_| FileWriteError::Arithmetic)?;
+        let end = offset
+            .checked_add(data_length)
+            .ok_or(FileWriteError::Arithmetic)?;
+        if end > new_length {
+            return Err(FileWriteError::OutOfRange);
+        }
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(FileWriteError::GenerationExhausted)?;
+        if next_extents.file() != self.object
+            || next_extents.metadata_generation() != generation
+            || next_extents.file_length() != new_length
+            || next_extents.block_size() != self.extents.block_size()
+            || next_metadata.object() != self.object
+            || next_metadata.generation() != generation
+            || next_metadata.length() != new_length
+            || usize::try_from(next_metadata.extent_count()).ok() != Some(next_extents.len())
+        {
+            return Err(FileWriteError::InvalidSuccessor);
+        }
+        if protected_metadata.len() > MAX_PROTECTED_METADATA_RANGES {
+            return Err(FileWriteError::Capacity);
+        }
+        let mut encoded_metadata = [0; crate::FILE_METADATA_BYTES];
+        next_metadata.encode(&mut encoded_metadata);
+        let mut metadata_digest = mrml_crypto::Sha3_256::new();
+        metadata_digest.update(&encoded_metadata);
+        let file_metadata = CowMetadataWrite::new(
+            file_metadata_pointer,
+            generation,
+            metadata_digest.finalize(),
+        )
+        .map_err(|_| FileWriteError::InvalidSuccessor)?;
+        let extent_capacity = u64::from(next_metadata.extents().blocks())
+            .checked_mul(u64::from(next_extents.block_size()))
+            .ok_or(FileWriteError::Arithmetic)?;
+        let encoded_extent_bytes = u64::try_from(next_extents.len())
+            .map_err(|_| FileWriteError::Arithmetic)?
+            .checked_mul(crate::EXTENT_RECORD_BYTES as u64)
+            .ok_or(FileWriteError::Arithmetic)?;
+        if encoded_extent_bytes > extent_capacity {
+            return Err(FileWriteError::InvalidSuccessor);
+        }
+        let mut extent_digest = mrml_crypto::Sha3_256::new();
+        for index in 0..next_extents.len() {
+            let record = next_extents
+                .record(index)
+                .ok_or(FileWriteError::InvalidSuccessor)?;
+            let mut encoded = [0; crate::EXTENT_RECORD_BYTES];
+            record.encode(&mut encoded);
+            extent_digest.update(&encoded);
+        }
+        let mut padding = extent_capacity - encoded_extent_bytes;
+        const ZEROES: [u8; 256] = [0; 256];
+        while padding != 0 {
+            let count = usize::try_from(padding.min(ZEROES.len() as u64))
+                .map_err(|_| FileWriteError::Arithmetic)?;
+            extent_digest.update(&ZEROES[..count]);
+            padding -= count as u64;
+        }
+        let extent_metadata = CowMetadataWrite::new(
+            next_metadata.extents(),
+            generation,
+            extent_digest.finalize(),
+        )
+        .map_err(|_| FileWriteError::InvalidSuccessor)?;
+        for next_index in 0..next_extents.len() {
+            let next = next_extents
+                .record(next_index)
+                .ok_or(FileWriteError::InvalidSuccessor)?;
+            if next.kind() != ExtentKind::Data {
+                continue;
+            }
+            for old_index in 0..self.extents.len() {
+                let old = self
+                    .extents
+                    .record(old_index)
+                    .ok_or(FileWriteError::InvalidSuccessor)?;
+                if old.kind() == ExtentKind::Data && data_extents_overlap(old, next) {
+                    return Err(FileWriteError::OverwritesActiveData);
+                }
+            }
+            if protected_metadata
+                .iter()
+                .copied()
+                .any(|pointer| data_overlaps_metadata(next, pointer))
+            {
+                return Err(FileWriteError::OverwritesMetadata);
+            }
+        }
+
+        for index in 0..next_extents.len() {
+            let record = next_extents
+                .record(index)
+                .ok_or(FileWriteError::InvalidSuccessor)?;
+            if record.kind() == ExtentKind::Data {
+                backend
+                    .stage_new_extent(
+                        self.object,
+                        self.generation,
+                        self.length,
+                        record,
+                        new_length,
+                        offset,
+                        data,
+                    )
+                    .map_err(FileWriteError::Backend)?;
+            }
+        }
+        backend
+            .flush_new_file_data(
+                self.object,
+                generation,
+                new_length,
+                next_metadata.content_digest(),
+            )
+            .map_err(FileWriteError::Backend)?;
+        Ok(PreparedFileWrite {
+            state: FileState {
+                object: self.object,
+                generation,
+                length: new_length,
+                extents: next_extents,
+            },
+            file_metadata,
+            extent_metadata,
+        })
+    }
+}
+
+pub struct PreparedFileWrite<const N: usize> {
+    state: FileState<N>,
+    file_metadata: CowMetadataWrite,
+    extent_metadata: CowMetadataWrite,
+}
+
+impl<const N: usize> PreparedFileWrite<N> {
+    pub const fn generation(&self) -> u64 {
+        self.state.generation
+    }
+
+    pub const fn metadata_write(&self) -> CowMetadataWrite {
+        self.file_metadata
+    }
+
+    pub const fn extent_metadata_write(&self) -> CowMetadataWrite {
+        self.extent_metadata
+    }
+
+    pub fn publish<const M: usize, B: CowPublicationBackend>(
+        self,
+        plan: &CowPublicationPlan<M>,
+        backend: &mut B,
+    ) -> Result<FileState<N>, FileWritePublishError<B::Error>> {
+        if plan.generation() != self.state.generation
+            || !plan.contains_write(self.file_metadata)
+            || !plan.contains_write(self.extent_metadata)
+        {
+            return Err(FileWritePublishError::WrongMetadataPlan);
+        }
+        plan.publish(backend)
+            .map_err(FileWritePublishError::Publication)?;
+        Ok(self.state)
+    }
 }
 
 /// Verified data boundary used by the storage service read path.
@@ -140,6 +340,43 @@ pub unsafe trait FileReadBackend {
     ) -> Result<(), Self::Error>;
 }
 
+/// COW data-staging boundary used before metadata publication.
+///
+/// # Safety
+///
+/// For every supplied next-generation data extent, an implementation must
+/// construct the complete logical extent from verified old-generation content,
+/// zero-filled holes, and exactly the caller patch; write it only to the exact
+/// new physical range; and verify its SHA3-256 digest against the record. It
+/// must bind all old reads to the named object/generation/length and reject
+/// stale, short, aliased, redirected, or mismatched data. Before a successful
+/// flush it must also verify SHA3-256 over the exact logical file length against
+/// the supplied canonical `FileMetadata` content digest. A successful flush
+/// makes every staged extent durable before metadata publication begins.
+pub unsafe trait FileWriteBackend {
+    type Error;
+
+    #[allow(clippy::too_many_arguments)]
+    fn stage_new_extent(
+        &mut self,
+        file: StorageObjectId,
+        old_generation: u64,
+        old_length: u64,
+        next: ExtentRecord,
+        new_length: u64,
+        patch_offset: u64,
+        patch: &[u8],
+    ) -> Result<(), Self::Error>;
+
+    fn flush_new_file_data(
+        &mut self,
+        file: StorageObjectId,
+        generation: u64,
+        length: u64,
+        content_digest: [u8; 32],
+    ) -> Result<(), Self::Error>;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileReadError<E> {
     Authority(StorageAuthorityError),
@@ -156,10 +393,44 @@ pub enum FileStateError {
     InvalidState,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileWriteError<E> {
+    Authority(StorageAuthorityError),
+    WrongFile,
+    InvalidLength,
+    OutOfRange,
+    Arithmetic,
+    GenerationExhausted,
+    InvalidSuccessor,
+    Capacity,
+    OverwritesActiveData,
+    OverwritesMetadata,
+    Backend(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileWritePublishError<E> {
+    WrongMetadataPlan,
+    Publication(CowPublishError<E>),
+}
+
+fn data_extents_overlap(left: ExtentRecord, right: ExtentRecord) -> bool {
+    let left_start = left.physical_block().unwrap_or(0);
+    let right_start = right.physical_block().unwrap_or(0);
+    left_start < right_start + u64::from(right.block_count())
+        && right_start < left_start + u64::from(left.block_count())
+}
+
+fn data_overlaps_metadata(data: ExtentRecord, metadata: MetadataPointer) -> bool {
+    let data_start = data.physical_block().unwrap_or(0);
+    data_start < metadata.block() + u64::from(metadata.blocks())
+        && metadata.block() < data_start + u64::from(data.block_count())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{VolumeHeader, VolumeId};
+    use crate::{Superblock, VolumeHeader, VolumeId};
     use mrml_crypto::Sha3_256;
 
     const BLOCK_SIZE: usize = 4096;
@@ -183,8 +454,11 @@ mod tests {
     }
 
     struct Backend {
-        bytes: [u8; 24 * BLOCK_SIZE],
+        bytes: [u8; 40 * BLOCK_SIZE],
         calls: usize,
+        staged: usize,
+        flushed: bool,
+        fail_stage: bool,
     }
 
     unsafe impl FileReadBackend for Backend {
@@ -214,10 +488,143 @@ mod tests {
         }
     }
 
+    unsafe impl FileWriteBackend for Backend {
+        type Error = ();
+
+        fn stage_new_extent(
+            &mut self,
+            file: StorageObjectId,
+            old_generation: u64,
+            old_length: u64,
+            next: ExtentRecord,
+            new_length: u64,
+            patch_offset: u64,
+            patch: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            if self.fail_stage
+                || file != object(7)
+                || old_generation != 3
+                || old_length != 2 * BLOCK_SIZE as u64 + 100
+                || new_length != old_length
+            {
+                return Err(());
+            }
+            let mut image = [0; 3 * BLOCK_SIZE];
+            image[..BLOCK_SIZE].copy_from_slice(&self.bytes[10 * BLOCK_SIZE..11 * BLOCK_SIZE]);
+            image[2 * BLOCK_SIZE..2 * BLOCK_SIZE + 100]
+                .copy_from_slice(&self.bytes[20 * BLOCK_SIZE..20 * BLOCK_SIZE + 100]);
+            let patch_start = usize::try_from(patch_offset).map_err(|_| ())?;
+            image
+                .get_mut(patch_start..patch_start + patch.len())
+                .ok_or(())?
+                .copy_from_slice(patch);
+            let logical_start = usize::try_from(next.logical_block()).map_err(|_| ())? * BLOCK_SIZE;
+            let extent_length = usize::try_from(next.block_count()).map_err(|_| ())? * BLOCK_SIZE;
+            let source = image
+                .get(logical_start..logical_start + extent_length)
+                .ok_or(())?;
+            if digest(source) != next.content_digest() {
+                return Err(());
+            }
+            let physical = usize::try_from(next.physical_block().ok_or(())?).map_err(|_| ())?;
+            self.bytes[physical * BLOCK_SIZE..physical * BLOCK_SIZE + extent_length]
+                .copy_from_slice(source);
+            Ok(())
+        }
+
+        fn flush_new_file_data(
+            &mut self,
+            file: StorageObjectId,
+            generation: u64,
+            length: u64,
+            content_digest: [u8; 32],
+        ) -> Result<(), Self::Error> {
+            if file != object(7) || generation != 4 {
+                return Err(());
+            }
+            let length = usize::try_from(length).map_err(|_| ())?;
+            if digest(&self.bytes[30 * BLOCK_SIZE..30 * BLOCK_SIZE + length]) != content_digest {
+                return Err(());
+            }
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    struct PublishBackend {
+        verified: usize,
+        replaced: usize,
+    }
+
+    struct WriteRecorder {
+        stages: usize,
+        flushed: bool,
+    }
+
+    unsafe impl FileWriteBackend for WriteRecorder {
+        type Error = ();
+
+        fn stage_new_extent(
+            &mut self,
+            _file: StorageObjectId,
+            _old_generation: u64,
+            _old_length: u64,
+            _next: ExtentRecord,
+            _new_length: u64,
+            _patch_offset: u64,
+            _patch: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.stages += 1;
+            Ok(())
+        }
+
+        fn flush_new_file_data(
+            &mut self,
+            _file: StorageObjectId,
+            _generation: u64,
+            _length: u64,
+            _content_digest: [u8; 32],
+        ) -> Result<(), Self::Error> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    unsafe impl CowPublicationBackend for PublishBackend {
+        type Error = ();
+
+        fn verify_new_metadata(&mut self, _write: CowMetadataWrite) -> Result<(), Self::Error> {
+            self.verified += 1;
+            Ok(())
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            _encoded: &[u8; crate::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            assert_eq!(block, 2);
+            self.replaced += 1;
+            Ok(())
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
     fn state() -> (FileState<3>, Backend) {
         let mut backend = Backend {
-            bytes: [0; 24 * BLOCK_SIZE],
+            bytes: [0; 40 * BLOCK_SIZE],
             calls: 0,
+            staged: 0,
+            flushed: false,
+            fail_stage: false,
         };
         backend.bytes[10 * BLOCK_SIZE..11 * BLOCK_SIZE].fill(b'A');
         backend.bytes[20 * BLOCK_SIZE..21 * BLOCK_SIZE].fill(b'B');
@@ -403,5 +810,417 @@ mod tests {
             Err(FileReadError::TooLarge)
         );
         assert_eq!(backend.calls, 0);
+    }
+
+    fn successor_map(patch: &[u8]) -> (ExtentMap<1>, FileMetadata, MetadataPointer) {
+        let mut image = [0; 3 * BLOCK_SIZE];
+        image[..BLOCK_SIZE].fill(b'A');
+        image[2 * BLOCK_SIZE..2 * BLOCK_SIZE + 100].fill(b'B');
+        image[4090..4090 + patch.len()].copy_from_slice(patch);
+        let record = ExtentRecord::data(object(7), 4, 0, 3, 30, digest(&image)).unwrap();
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let length = 2 * BLOCK_SIZE as u64 + 100;
+        let metadata = FileMetadata::new(
+            header,
+            object(7),
+            4,
+            length,
+            1,
+            MetadataPointer::new(90, 1).unwrap(),
+            digest(&image[..usize::try_from(length).unwrap()]),
+        )
+        .unwrap();
+        (
+            ExtentMap::build(header, object(7), 4, length, &[record]).unwrap(),
+            metadata,
+            MetadataPointer::new(70, 1).unwrap(),
+        )
+    }
+
+    #[test]
+    fn write_stages_complete_disjoint_successor_before_returning_prepared_state() {
+        let (state, mut backend) = state();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(),
+            )
+            .unwrap();
+        let patch = [b'C'; 4200];
+        let (next, metadata, metadata_pointer) = successor_map(&patch);
+        let prepared = state
+            .prepare_write(
+                &authority,
+                write,
+                principal(),
+                4090,
+                &patch,
+                state.length(),
+                next,
+                metadata,
+                metadata_pointer,
+                &[MetadataPointer::new(50, 1).unwrap()],
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(prepared.generation(), 4);
+        assert_eq!(backend.staged, 1);
+        assert!(backend.flushed);
+        assert_eq!(
+            &backend.bytes[30 * BLOCK_SIZE + 4090..30 * BLOCK_SIZE + 8290],
+            &patch
+        );
+    }
+
+    #[test]
+    fn write_requires_resize_and_rejects_active_or_metadata_overlap_before_backend() {
+        let (state, mut backend) = state();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(),
+            )
+            .unwrap();
+        let patch = [1; 1];
+        let (next, metadata, metadata_pointer) = successor_map(&patch);
+        assert!(matches!(
+            state.prepare_write(
+                &authority,
+                write,
+                principal(),
+                0,
+                &patch,
+                state.length() + 1,
+                next,
+                metadata,
+                metadata_pointer,
+                &[],
+                &mut backend
+            ),
+            Err(FileWriteError::Authority(_))
+        ));
+        let old_overlap = ExtentRecord::data(object(7), 4, 0, 3, 10, [1; 32]).unwrap();
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let map =
+            ExtentMap::<1>::build(header, object(7), 4, state.length(), &[old_overlap]).unwrap();
+        assert_eq!(
+            state
+                .prepare_write(
+                    &authority,
+                    write,
+                    principal(),
+                    0,
+                    &patch,
+                    state.length(),
+                    map,
+                    metadata,
+                    metadata_pointer,
+                    &[],
+                    &mut backend
+                )
+                .map(|_| ()),
+            Err(FileWriteError::OverwritesActiveData)
+        );
+        let (next, metadata, metadata_pointer) = successor_map(&patch);
+        assert_eq!(
+            state
+                .prepare_write(
+                    &authority,
+                    write,
+                    principal(),
+                    0,
+                    &patch,
+                    state.length(),
+                    next,
+                    metadata,
+                    metadata_pointer,
+                    &[MetadataPointer::new(30, 1).unwrap()],
+                    &mut backend
+                )
+                .map(|_| ()),
+            Err(FileWriteError::OverwritesMetadata)
+        );
+        assert_eq!(backend.staged, 0);
+    }
+
+    #[test]
+    fn prepared_write_publishes_only_through_matching_metadata_plan() {
+        let (state, mut data_backend) = state();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(),
+            )
+            .unwrap();
+        let patch = [b'D'; 16];
+        let (next, next_metadata, metadata_pointer) = successor_map(&patch);
+        let prepared = state
+            .prepare_write(
+                &authority,
+                write,
+                principal(),
+                4090,
+                &patch,
+                state.length(),
+                next,
+                next_metadata,
+                metadata_pointer,
+                &[MetadataPointer::new(50, 1).unwrap()],
+                &mut data_backend,
+            )
+            .unwrap();
+        let file_metadata = prepared.metadata_write();
+        let extent_metadata = prepared.extent_metadata_write();
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let active = Superblock::new(
+            header,
+            3,
+            2,
+            object(1),
+            MetadataPointer::new(50, 1).unwrap(),
+            MetadataPointer::new(60, 1).unwrap(),
+        )
+        .unwrap();
+        let root = CowMetadataWrite::new(MetadataPointer::new(71, 1).unwrap(), 4, [8; 32]).unwrap();
+        let allocation =
+            CowMetadataWrite::new(MetadataPointer::new(80, 1).unwrap(), 4, [9; 32]).unwrap();
+        let plan = CowPublicationPlan::<4>::build(
+            header,
+            1,
+            active,
+            object(1),
+            root.pointer(),
+            allocation.pointer(),
+            &[file_metadata, extent_metadata, root, allocation],
+            &[
+                MetadataPointer::new(50, 1).unwrap(),
+                MetadataPointer::new(60, 1).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut publication = PublishBackend {
+            verified: 0,
+            replaced: 0,
+        };
+        let committed = prepared.publish(&plan, &mut publication).unwrap();
+        assert_eq!(
+            (committed.generation(), committed.length()),
+            (4, state.length())
+        );
+        assert_eq!((publication.verified, publication.replaced), (4, 1));
+
+        let (next, next_metadata, metadata_pointer) = successor_map(&patch);
+        let prepared = state
+            .prepare_write(
+                &authority,
+                write,
+                principal(),
+                4090,
+                &patch,
+                state.length(),
+                next,
+                next_metadata,
+                metadata_pointer,
+                &[MetadataPointer::new(50, 1).unwrap()],
+                &mut data_backend,
+            )
+            .unwrap();
+        let second_file_metadata = prepared.metadata_write();
+        let incomplete = CowPublicationPlan::<3>::build(
+            header,
+            1,
+            active,
+            object(1),
+            root.pointer(),
+            allocation.pointer(),
+            &[second_file_metadata, root, allocation],
+            &[
+                MetadataPointer::new(50, 1).unwrap(),
+                MetadataPointer::new(60, 1).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut rejected = PublishBackend {
+            verified: 0,
+            replaced: 0,
+        };
+        assert!(matches!(
+            prepared.publish(&incomplete, &mut rejected),
+            Err(FileWritePublishError::WrongMetadataPlan)
+        ));
+        assert_eq!((rejected.verified, rejected.replaced), (0, 0));
+    }
+
+    #[test]
+    fn resize_succeeds_with_both_rights_and_metadata_mismatch_prevents_staging() {
+        let (state, _) = state();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE.union(StorageRights::RESIZE),
+                principal(),
+            )
+            .unwrap();
+        let new_length = state.length() + 1;
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let record = ExtentRecord::data(object(7), 4, 0, 3, 30, [3; 32]).unwrap();
+        let next = ExtentMap::<1>::build(header, object(7), 4, new_length, &[record]).unwrap();
+        let metadata = FileMetadata::new(
+            header,
+            object(7),
+            4,
+            new_length,
+            1,
+            MetadataPointer::new(90, 1).unwrap(),
+            [4; 32],
+        )
+        .unwrap();
+        let mut recorder = WriteRecorder {
+            stages: 0,
+            flushed: false,
+        };
+        let prepared = state
+            .prepare_write(
+                &authority,
+                write,
+                principal(),
+                state.length(),
+                &[5],
+                new_length,
+                next,
+                metadata,
+                MetadataPointer::new(70, 1).unwrap(),
+                &[],
+                &mut recorder,
+            )
+            .unwrap();
+        assert_eq!(prepared.generation(), 4);
+        assert_eq!((recorder.stages, recorder.flushed), (1, true));
+
+        let next = ExtentMap::<1>::build(header, object(7), 4, new_length, &[record]).unwrap();
+        let mismatched = FileMetadata::new(
+            header,
+            object(7),
+            4,
+            new_length,
+            2,
+            MetadataPointer::new(90, 1).unwrap(),
+            [4; 32],
+        )
+        .unwrap();
+        let mut untouched = WriteRecorder {
+            stages: 0,
+            flushed: false,
+        };
+        assert!(matches!(
+            state.prepare_write(
+                &authority,
+                write,
+                principal(),
+                state.length(),
+                &[5],
+                new_length,
+                next,
+                mismatched,
+                MetadataPointer::new(70, 1).unwrap(),
+                &[],
+                &mut untouched,
+            ),
+            Err(FileWriteError::InvalidSuccessor)
+        ));
+        assert_eq!((untouched.stages, untouched.flushed), (0, false));
+    }
+
+    #[test]
+    fn staging_failure_never_produces_a_prepared_write() {
+        let (state, mut backend) = state();
+        backend.fail_stage = true;
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(),
+            )
+            .unwrap();
+        let patch = [1; 1];
+        let (next, metadata, metadata_pointer) = successor_map(&patch);
+        assert!(matches!(
+            state.prepare_write(
+                &authority,
+                write,
+                principal(),
+                0,
+                &patch,
+                state.length(),
+                next,
+                metadata,
+                metadata_pointer,
+                &[],
+                &mut backend,
+            ),
+            Err(FileWriteError::Backend(()))
+        ));
+        assert_eq!(backend.staged, 1);
+        assert!(!backend.flushed);
+        assert_eq!(state.generation(), 3);
+    }
+
+    #[test]
+    fn whole_file_digest_failure_rejects_after_staging_but_before_publication() {
+        let (state, mut backend) = state();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(),
+            )
+            .unwrap();
+        let patch = [1; 1];
+        let (next, metadata, metadata_pointer) = successor_map(&patch);
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let wrong_digest = FileMetadata::new(
+            header,
+            metadata.object(),
+            metadata.generation(),
+            metadata.length(),
+            metadata.extent_count(),
+            metadata.extents(),
+            [0; 32],
+        )
+        .unwrap();
+        assert!(matches!(
+            state.prepare_write(
+                &authority,
+                write,
+                principal(),
+                0,
+                &patch,
+                state.length(),
+                next,
+                wrong_digest,
+                metadata_pointer,
+                &[],
+                &mut backend,
+            ),
+            Err(FileWriteError::Backend(()))
+        ));
+        assert_eq!(backend.staged, 1);
+        assert!(!backend.flushed);
+        assert_eq!(state.generation(), 3);
     }
 }

@@ -231,8 +231,18 @@ authority; unrelated domains continue.
    object/generation/length, sparse holes return zeroes, and every physical data
    extent is completely SHA3-256-verified by the backend before its requested
    subrange is copied. Reads are capped at 1 MiB and erase partial output after
-   any backend verification failure. File writes remain the next dependency and
-   must stage new extents through the COW publication path.
+   any backend verification failure. Bounded file writes are now implemented as
+   COW preparation plus publication. Exact `WRITE` and conditional `RESIZE`
+   authority precede all state disclosure; the patch is capped at 1 MiB; the
+   complete successor map and canonical `FileMetadata` must bind the same object,
+   exact next generation, length, and extent count; and new data ranges cannot
+   overlap active data or protected metadata. The backend stages and flushes
+   complete digest-verified new extents before returning an unpublished state.
+   That state commits only through a COW plan containing the internally derived
+   exact file-metadata and canonical zero-padded extent-list digests, while the
+   backend verifies the complete logical-file content digest before flush.
+   Concrete block/allocation integration and
+   multi-object transactions remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

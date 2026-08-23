@@ -474,6 +474,26 @@ impl FileMetadata {
         self.object
     }
 
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    pub const fn length(self) -> u64 {
+        self.length
+    }
+
+    pub const fn extent_count(self) -> u32 {
+        self.extent_count
+    }
+
+    pub const fn extents(self) -> MetadataPointer {
+        self.extents
+    }
+
+    pub const fn content_digest(self) -> [u8; DIGEST_BYTES] {
+        self.content_digest
+    }
+
     pub fn encode(self, output: &mut [u8; FILE_METADATA_BYTES]) {
         *output = [0; FILE_METADATA_BYTES];
         output[..8].copy_from_slice(&FILE_MAGIC);

@@ -2726,9 +2726,35 @@ segments succeeded, the entire caller output is erased before failure returns.
 This is an in-memory state and emulated-block read proof, not a native block
 driver or physical-device result.
 
-Thirty-one focused unit tests and strict crate-local clippy pass on Windows
-gnullvm and Arch Linux under WSL2. Concrete COW backend integration, complete
-directory hierarchy/lifetime handling, file writes, transactions, crash recovery,
+The matching write path never mutates live file state in place. It first
+requires exact file `WRITE` authority and additionally `RESIZE` whenever the
+length changes. Nonempty patches are capped at 1 MiB and checked against the
+proposed length. The caller must supply a complete `ExtentMap` and canonical
+`FileMetadata` for the exact successor generation; object, generation, length,
+block size, and extent count must agree. Every new physical data range must be
+disjoint from every active data extent and every bounded protected metadata
+range. The unsafe data backend contract reconstructs each complete successor
+extent from digest-verified old content, holes, and exactly the patch, writes it
+only to its new physical range, verifies its SHA3-256 digest, and durably flushes
+all new data. Any staging/flush failure returns no prepared state and leaves the
+old generation selected.
+
+The service derives both the canonical file-metadata SHA3-256 digest and the
+digest of the complete canonical extent-record sequence plus zero padding to its
+metadata allocation; callers cannot substitute either digest. The data backend
+also verifies SHA3-256 over the exact logical file length against the content
+digest in `FileMetadata` before durable flush. The returned `PreparedFileWrite`
+is still unpublished and commits only through a COW publication plan with the
+same generation and both exact metadata writes. A plan that omits or changes
+either record is rejected before metadata I/O. Successful
+COW publication returns the new immutable `FileState`; publication uncertainty
+retains the existing COW `FailStop` result. Tests use emulated data and metadata
+backends. This is not a physical block, allocator, power-loss, or crash-recovery
+result, and writes are not yet grouped into multi-object transactions.
+
+Thirty-seven focused unit tests and strict crate-local clippy pass on Windows
+gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
+complete directory hierarchy/lifetime handling, transactions, crash recovery,
 snapshots, a block-device service, and configuration-checkpoint persistence
 remain unimplemented.
 
@@ -2739,7 +2765,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 31 tests, and both strict crate-local clippy
+Both current unit-test runs pass 37 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

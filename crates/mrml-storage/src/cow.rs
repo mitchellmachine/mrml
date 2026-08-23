@@ -132,6 +132,13 @@ impl<const N: usize> CowPublicationPlan<N> {
         self.target_superblock_block
     }
 
+    pub fn contains_write(&self, expected: CowMetadataWrite) -> bool {
+        self.writes[..self.write_count]
+            .iter()
+            .flatten()
+            .any(|write| *write == expected)
+    }
+
     pub fn publish<B: CowPublicationBackend>(
         &self,
         backend: &mut B,
