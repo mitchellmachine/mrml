@@ -101,3 +101,10 @@ unit tests, simulation, hosted controlled probes, nested virtualization, and
 physical-hardware evidence. Never claim Linux, Windows, VTL1, TPM, IOMMU,
 Secure Boot, bare metal, or physical hardware was verified unless that exact
 environment was exercised.
+
+Work scheduling is deliberately bounded: keep at most one foundational OS task
+and one independently scoped compiler task active at a time. Never combine two
+large cross-cutting OS subsystems in one task, branch, or functional commit.
+Finish and verify the current OS dependency gate before starting another. The
+compiler task may proceed alongside it only when changes, tests, and review
+remain separable and shared-file edits do not couple the milestones.

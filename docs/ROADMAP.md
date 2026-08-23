@@ -5,6 +5,15 @@ claims. Status is determined from source, tests, and the evidence ledger in
 [MICROKERNEL.md](MICROKERNEL.md), using the vocabulary in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Work-in-progress limit
+
+Maintain one foundational OS task plus, optionally, one independently scoped
+compiler task. Never run two giant cross-cutting OS milestones simultaneously.
+Each OS task advances one current dependency gate to a coherent tested endpoint
+before the next OS subsystem begins. Compiler work may run alongside it only
+when implementation, tests, review, commits, and performance/security evidence
+remain independently attributable.
+
 ## Current priority
 
 **PARTIALLY IMPLEMENTED:** the kernel has bounded IPC, blocking receive/wakeup,

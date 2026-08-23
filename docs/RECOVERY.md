@@ -110,6 +110,13 @@ gate and can be tested in the available environments. Preserve backend-neutral
 policy and both WHP/KVM adapters. Do not skip service-foundation dependencies to
 implement attractive high-level policy prematurely.
 
+Restore the project work-in-progress limit after context loss: select exactly
+one foundational OS milestone. At most one separately scoped compiler milestone
+may accompany it. If two OS-wide efforts appear active, preserve both worktrees
+but choose one dependency gate to finish; do not merge them into a giant task or
+commit. Shared-file coupling means the purported compiler task is not independent
+and must wait or be split.
+
 ## 5. Verify and report
 
 Use the README's exact Windows gnullvm requirements. Run focused tests first,
