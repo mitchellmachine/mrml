@@ -71,8 +71,8 @@ pub use vtd::{
     VtdRegisterLayout, VtdRequesterRoute,
 };
 pub use vtd_tables::{
-    DirectVtdTables, VtdIdentityLeaf, VtdTableError, VtdTableMemory, bind_legacy_identity_leaf,
-    bind_routed_legacy_identity_leaf,
+    DirectVtdTables, VtdBindingError, VtdIdentityLeaf, VtdTableError, VtdTableMemory,
+    bind_legacy_identity_leaf, bind_routed_dma_isolation, bind_routed_legacy_identity_leaf,
 };
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;

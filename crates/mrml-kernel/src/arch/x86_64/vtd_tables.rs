@@ -1,6 +1,9 @@
 use crate::{DeviceAddress, PhysAddr};
 
-use super::VtdRequesterRoute;
+use super::{
+    PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation, VtdError, VtdInvalidator,
+    VtdRegisterIo, VtdRequesterRoute,
+};
 
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
 const ENTRY_FLAGS: u64 = 0x7 | (1 << 8) | (1 << 9) | (1 << 11);
@@ -22,6 +25,14 @@ pub enum VtdTableError {
     MissingLeaf,
     AliasedLeaf,
     Storage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VtdBindingError {
+    UnitSubstitution,
+    InsufficientRegisterMapping,
+    Unit(VtdError),
+    Table(VtdTableError),
 }
 
 /// Exclusive access to live legacy VT-d translation tables.
@@ -226,6 +237,54 @@ pub unsafe fn bind_routed_legacy_identity_leaf<'a, M: VtdTableMemory>(
     )
 }
 
+/// Constructs one coherent requester leaf plus invalidation adapter.
+///
+/// # Safety
+///
+/// `invalidator` must have been constructed from the exact verified MMIO token
+/// supplied here, and `memory` must meet its unsafe table-access contract. The
+/// caller must retain exclusive ownership until the resulting adapter is
+/// destroyed.
+pub unsafe fn bind_routed_dma_isolation<'a, M, R>(
+    memory: &'a mut M,
+    route: VtdRequesterRoute,
+    verified_unit: VerifiedPlatformMmio,
+    mut invalidator: VtdInvalidator<R>,
+    physical: PhysAddr,
+    expected_domain: u16,
+) -> Result<VtdDmaIsolation<'a, R>, VtdBindingError>
+where
+    M: VtdTableMemory,
+    R: VtdRegisterIo,
+{
+    let requirement = verified_unit.requirement();
+    if requirement.physical() != route.register_base()
+        || !matches!(
+            requirement.purpose(),
+            PlatformMmioPurpose::VtdBootstrap { segment }
+                if segment == route.requester().segment()
+        )
+    {
+        return Err(VtdBindingError::UnitSubstitution);
+    }
+    if requirement.pages() < invalidator.register_pages() {
+        return Err(VtdBindingError::InsufficientRegisterMapping);
+    }
+    let root = invalidator
+        .active_legacy_root()
+        .map_err(VtdBindingError::Unit)?;
+    // SAFETY: this function's contract binds RTADDR provenance to the exact
+    // verified unit represented by both the route and invalidator.
+    let leaf =
+        unsafe { bind_routed_legacy_identity_leaf(memory, route, root, physical, expected_domain) }
+            .map_err(VtdBindingError::Table)?;
+    // SAFETY: the returned leaf is unique; invalidation is controlled by the
+    // same unit under this function's contract.
+    let entry = unsafe { leaf.into_live_entry() };
+    // SAFETY: identity and unique-leaf requirements were checked above.
+    unsafe { VtdDmaIsolation::new(physical, entry, invalidator) }.map_err(VtdBindingError::Unit)
+}
+
 fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
     if address == 0 || address & !ADDRESS_MASK != 0 {
         return Err(VtdTableError::Storage);
@@ -235,7 +294,10 @@ fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::DmaIsolation;
+    use super::super::platform_mmio::verified_vtd_for_test;
     use super::*;
+    use crate::GranuleHardwareOutcome;
 
     const ROOT: u64 = 0x10_0000;
     const CONTEXT: u64 = 0x11_0000;
@@ -320,6 +382,55 @@ mod tests {
         DeviceAddress::new(0, 2, 3, 0).unwrap()
     }
 
+    struct UnitRegisters {
+        root: u64,
+        status: u32,
+        context: u64,
+        iotlb: u64,
+    }
+
+    impl UnitRegisters {
+        fn active(root: u64) -> Self {
+            Self {
+                root,
+                status: (1 << 31) | (1 << 30),
+                context: 0,
+                iotlb: 0,
+            }
+        }
+    }
+
+    impl VtdRegisterIo for UnitRegisters {
+        fn read32(&mut self, offset: usize) -> u32 {
+            match offset {
+                0x1c => self.status,
+                0x34 => 0,
+                _ => 0,
+            }
+        }
+
+        fn write32(&mut self, _offset: usize, _value: u32) {}
+
+        fn read64(&mut self, offset: usize) -> u64 {
+            match offset {
+                0x08 => 0x40 << 24,
+                0x10 => 0x20 << 8,
+                0x20 => self.root,
+                0x28 => self.context,
+                0x208 => self.iotlb,
+                _ => 0,
+            }
+        }
+
+        fn write64(&mut self, offset: usize, value: u64) {
+            match offset {
+                0x28 => self.context = (value & !(1 << 63)) | (1 << 59),
+                0x208 => self.iotlb = (value & !(1 << 63)) | (1 << 57),
+                _ => {}
+            }
+        }
+    }
+
     #[test]
     fn binds_exact_requester_domain_and_identity_leaf() {
         let physical = PhysAddr::new(0x20_0000).unwrap();
@@ -365,6 +476,71 @@ mod tests {
         assert!(matches!(
             bind_legacy_identity_leaf(&mut tables, ROOT, requester(), physical, 9),
             Err(VtdTableError::LargePage)
+        ));
+    }
+
+    #[test]
+    fn coherent_unit_binding_revokes_the_routed_identity_leaf() {
+        let physical = PhysAddr::new(0x20_0000).unwrap();
+        let register_base = PhysAddr::new(0xfed9_0000).unwrap();
+        let route = VtdRequesterRoute::for_test(requester(), register_base);
+        let verified = verified_vtd_for_test(register_base, 1, requester().segment());
+        let invalidator = VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap();
+        let mut tables = Tables::identity(physical, 9);
+
+        {
+            let mut isolation = unsafe {
+                bind_routed_dma_isolation(&mut tables, route, verified, invalidator, physical, 9)
+            }
+            .unwrap();
+            assert_eq!(
+                isolation.deny_and_invalidate(physical),
+                GranuleHardwareOutcome::Applied
+            );
+        }
+        assert_eq!(tables.level1[0] & 0x3, 0);
+    }
+
+    #[test]
+    fn coherent_unit_binding_rejects_substitution_and_inactive_root() {
+        let physical = PhysAddr::new(0x20_0000).unwrap();
+        let register_base = PhysAddr::new(0xfed9_0000).unwrap();
+        let route = VtdRequesterRoute::for_test(requester(), register_base);
+        let substituted = verified_vtd_for_test(
+            PhysAddr::new(0xfeda_0000).unwrap(),
+            1,
+            requester().segment(),
+        );
+        let mut tables = Tables::identity(physical, 9);
+        assert!(matches!(
+            unsafe {
+                bind_routed_dma_isolation(
+                    &mut tables,
+                    route,
+                    substituted,
+                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                    physical,
+                    9,
+                )
+            },
+            Err(VtdBindingError::UnitSubstitution)
+        ));
+
+        let verified = verified_vtd_for_test(register_base, 1, requester().segment());
+        let mut inactive = UnitRegisters::active(ROOT);
+        inactive.status &= !(1 << 30);
+        assert!(matches!(
+            unsafe {
+                bind_routed_dma_isolation(
+                    &mut tables,
+                    route,
+                    verified,
+                    VtdInvalidator::new(inactive, 4).unwrap(),
+                    physical,
+                    9,
+                )
+            },
+            Err(VtdBindingError::Unit(VtdError::RootPointerInactive))
         ));
     }
 }

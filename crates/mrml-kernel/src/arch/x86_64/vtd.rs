@@ -8,6 +8,10 @@ const ECAP_OFFSET: usize = 0x10;
 const CAP_OFFSET: usize = 0x08;
 const CCMD_OFFSET: usize = 0x28;
 const FSTS_OFFSET: usize = 0x34;
+const GSTS_OFFSET: usize = 0x1c;
+const RTADDR_OFFSET: usize = 0x20;
+const GSTS_TRANSLATION_ENABLED: u32 = 1 << 31;
+const GSTS_ROOT_POINTER_ACTIVE: u32 = 1 << 30;
 const COMMAND_PENDING: u64 = 1 << 63;
 const GLOBAL_GRANULARITY: u64 = 1 << 60;
 const CCMD_ACTUAL_SHIFT: u32 = 59;
@@ -40,6 +44,10 @@ pub enum VtdError {
     FaultChanged,
     UnitTableFull,
     WrongGranule,
+    TranslationDisabled,
+    RootPointerInactive,
+    UnsupportedRootMode,
+    InvalidRootAddress,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -438,6 +446,14 @@ impl VtdRequesterRoute {
     pub const fn register_base(self) -> PhysAddr {
         self.register_base
     }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(requester: DeviceAddress, register_base: PhysAddr) -> Self {
+        Self {
+            requester,
+            register_base,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -802,6 +818,7 @@ pub struct VtdInvalidator<R> {
     iotlb_offset: usize,
     fault_offset: usize,
     fault_records: u16,
+    register_pages: u64,
     poll_limit: u32,
 }
 
@@ -818,6 +835,7 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
             iotlb_offset: layout.iotlb_offset,
             fault_offset: layout.fault_offset,
             fault_records: layout.fault_records,
+            register_pages: layout.pages,
             poll_limit,
         })
     }
@@ -936,6 +954,31 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
 
     pub fn into_registers(self) -> R {
         self.registers
+    }
+
+    pub const fn register_pages(&self) -> u64 {
+        self.register_pages
+    }
+
+    pub fn active_legacy_root(&mut self) -> Result<u64, VtdError> {
+        let status = self.registers.read32(GSTS_OFFSET);
+        if status & GSTS_TRANSLATION_ENABLED == 0 {
+            return Err(VtdError::TranslationDisabled);
+        }
+        if status & GSTS_ROOT_POINTER_ACTIVE == 0 {
+            return Err(VtdError::RootPointerInactive);
+        }
+        let root = self.registers.read64(RTADDR_OFFSET);
+        if root & 0xc00 != 0 {
+            return Err(VtdError::UnsupportedRootMode);
+        }
+        if root & !(VTD_ADDRESS_MASK | 0xc00) != 0
+            || root & 0x3ff != 0
+            || root & VTD_ADDRESS_MASK == 0
+        {
+            return Err(VtdError::InvalidRootAddress);
+        }
+        Ok(root)
     }
 }
 
@@ -1267,6 +1310,30 @@ mod tests {
             VtdRegisterLayout::from_capabilities((0x3ff << 24) | (0xff << 40), 0x3ff << 8).unwrap();
         assert_eq!(maximum.pages(), 5);
         assert_eq!(maximum.bytes(), 5 * PAGE_SIZE);
+    }
+
+    #[test]
+    fn active_root_requires_translation_and_completed_pointer() {
+        let mut disabled = VtdInvalidator::new(Registers::new(false), 4).unwrap();
+        assert_eq!(
+            disabled.active_legacy_root(),
+            Err(VtdError::TranslationDisabled)
+        );
+
+        let mut registers = Registers::new(false);
+        registers.values[GSTS_OFFSET / 8] = u64::from(GSTS_TRANSLATION_ENABLED);
+        let mut inactive = VtdInvalidator::new(registers, 4).unwrap();
+        assert_eq!(
+            inactive.active_legacy_root(),
+            Err(VtdError::RootPointerInactive)
+        );
+
+        let mut registers = Registers::new(false);
+        registers.values[GSTS_OFFSET / 8] =
+            u64::from(GSTS_TRANSLATION_ENABLED | GSTS_ROOT_POINTER_ACTIVE);
+        registers.values[RTADDR_OFFSET / 8] = 0x10_0000;
+        let mut active = VtdInvalidator::new(registers, 4).unwrap();
+        assert_eq!(active.active_legacy_root(), Ok(0x10_0000));
     }
 
     #[test]

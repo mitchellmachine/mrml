@@ -166,6 +166,22 @@ impl VerifiedPlatformMmio {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn verified_vtd_for_test(
+    physical: PhysAddr,
+    pages: u64,
+    segment: u16,
+) -> VerifiedPlatformMmio {
+    VerifiedPlatformMmio {
+        requirement: PlatformMmioRequirement {
+            physical,
+            pages,
+            purpose: PlatformMmioPurpose::VtdBootstrap { segment },
+        },
+        virtual_start: VirtAddr::new(0xffff_9000_0000_0000).unwrap(),
+    }
+}
+
 /// Verifies an already installed active mapping page by page before issuing a
 /// token usable by native MMIO adapters.
 pub fn verify_active_platform_mmio(

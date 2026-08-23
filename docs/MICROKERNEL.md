@@ -334,9 +334,10 @@ context-cache and IOTLB flush on every unit even if an earlier unit fails, and
 aggregates any failure into `FailStop`. Thus a clean preflight rejection leaves
 all leaves untouched, while partial post-revocation completion never masquerades
 as rollback. Tests cover both cases and verify that later-unit flushes are still
-attempted after an earlier timeout. Binding discovered units to their actual
-page-table leaves and mapped MMIO ranges remains a platform boot integration
-task, not an inferred protection claim.
+attempted after an earlier timeout. The coherent single-unit builder now binds
+the routed requester, verified MMIO identity, active hardware root, exact
+page-table leaf, and invalidator into one adapter. Complete multi-unit assembly
+remains a platform boot integration task, not an inferred protection claim.
 
 Boot binding now starts from a fixed-capacity platform-MMIO manifest derived
 only from the validated DMAR and MCFG copies. It requests one bootstrap page
@@ -378,6 +379,16 @@ requiring pinned, supervisor-only, exclusively owned tables and serialized
 writers. The routed wrapper additionally requires RTADDR provenance from the
 same verified DRHD. Tests reject forged domains, pass-through contexts, aliases,
 and huge pages and prove mutation reaches only the resolved leaf.
+The coherent builder rejects a verified MMIO token whose physical DRHD base or
+segment differs from the checked requester route, and rejects a mapping shorter
+than the capability-derived register extent. It reads GSTS and proceeds only
+when translation is enabled and hardware reports completion of the active root
+pointer, then accepts only a nonzero, aligned legacy-mode RTADDR. That root is
+walked for the routed requester and coupled to the invalidator that controls the
+same unit. Tests exercise successful revoke-and-flush, MMIO-unit substitution,
+and an inactive root pointer. The unsafe boundary still requires boot code to
+construct the register interface from that exact verified token; full boot-time
+multi-unit construction and execution on physical hardware remain unverified.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 
