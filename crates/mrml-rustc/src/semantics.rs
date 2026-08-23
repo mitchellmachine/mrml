@@ -2103,6 +2103,15 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
                 || recurse(default, inside_inline_const)
                 || recurse(closure, inside_inline_const)
         }
+        ExprKind::IntegerOptionMapOrElse {
+            option,
+            default_closure,
+            map_closure,
+        } => {
+            recurse(option, inside_inline_const)
+                || recurse(default_closure, inside_inline_const)
+                || recurse(map_closure, inside_inline_const)
+        }
         ExprKind::Closure { body, .. } => recurse(body, inside_inline_const),
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
@@ -2279,6 +2288,11 @@ fn expression_contains_call<const MAX_NODES: usize>(
             default,
             closure,
         } => recurse(option) || recurse(default) || recurse(closure),
+        ExprKind::IntegerOptionMapOrElse {
+            option,
+            default_closure,
+            map_closure,
+        } => recurse(option) || recurse(default_closure) || recurse(map_closure),
         ExprKind::Closure { body, .. } => recurse(body),
         ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),

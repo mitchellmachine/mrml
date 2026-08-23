@@ -553,6 +553,11 @@ pub enum ExprKind<'source> {
         default: ExprId,
         closure: ExprId,
     },
+    IntegerOptionMapOrElse {
+        option: ExprId,
+        default_closure: ExprId,
+        map_closure: ExprId,
+    },
     IntegerClampMagnitude {
         base: ExprId,
         limit: ExprId,
@@ -952,6 +957,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerOptionUnwrapOr { .. }
             | ExprKind::IntegerOptionPredicate { .. }
             | ExprKind::IntegerOptionMapOr { .. }
+            | ExprKind::IntegerOptionMapOrElse { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1240,6 +1246,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerOptionUnwrapOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionPredicate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerOptionMapOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerOptionMapOrElse { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2840,6 +2847,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
                 self.substitute_identifier(default, name, replacement, depth + 1)?;
                 self.substitute_identifier(closure, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerOptionMapOrElse {
+                option,
+                default_closure,
+                map_closure,
+            } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
+                self.substitute_identifier(default_closure, name, replacement, depth + 1)?;
+                self.substitute_identifier(map_closure, name, replacement, depth + 1)?;
             }
             ExprKind::Closure { body, .. } => {
                 self.substitute_identifier(body, name, replacement, depth + 1)?;
@@ -4637,6 +4653,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "is_some_and"
                         | "is_none_or"
                         | "map_or"
+                        | "map_or_else"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4825,6 +4842,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "is_some_and"
                     | "is_none_or"
                     | "map_or"
+                    | "map_or_else"
                     | "unwrap_or"
                     | "unwrap_or_else"
                     | "strict_add"
@@ -4923,6 +4941,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "copy_from"
                     | "copy_from_nonoverlapping"
                     | "map_or"
+                    | "map_or_else"
                     | "clamp"
             ) {
                 let comma = self.take()?;
@@ -5312,6 +5331,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                     closure: second_argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                },
+                "map_or_else" => ExprKind::IntegerOptionMapOrElse {
+                    option: base,
+                    default_closure: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    map_closure: second_argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },

@@ -360,6 +360,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerOptionUnwrapOr { .. }
             | ExprKind::IntegerOptionPredicate { .. }
             | ExprKind::IntegerOptionMapOr { .. }
+            | ExprKind::IntegerOptionMapOrElse { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
