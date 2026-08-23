@@ -414,9 +414,14 @@ volatile service state, without claiming persistence across cleanup. Two
 simultaneous blocked buffered receives retain independent bounded state. Service page-table
 frames and a host-published signed-image entry page are supervisor-only mapped
 so active-root validation and recovery remain available without granting CPL3
-access. Persistent export/import and storage-backed recovery remain planned. It
-is not a clone of the Windows
-Registry, and secrets remain separate.
+access. A canonical bounded checkpoint now preserves schemas, values, global
+and per-setting revisions, and the retained chronological audit window. Export
+requires exact root READ; recovery into fresh state requires exact root CONTROL,
+canonical invariants, and a caller-supplied expected SHA3-256 digest matching
+the embedded digest. That expected digest is not yet committed by authenticated
+native storage, so this is corruption-detecting storage-neutral recovery rather
+than completed persistence. It is not a clone of the Windows Registry, and
+secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

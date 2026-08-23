@@ -535,3 +535,17 @@ construction.
 
 Patent review: `NOT_TRIGGERED` — conventional schema validation and capability
 RPC integration.
+
+## 2026-08-23 — bounded configuration checkpoint codec
+
+MRML source: `crates/mrml-config`.
+
+Configuration state is serialized into conventional fixed headers and records,
+hashed with SHA3-256, and decoded into fresh fixed-capacity state only after
+ordinary capability, length, uniqueness, constraint, revision, and sequence
+checks. A separately supplied expected digest distinguishes the recovery input
+from a self-checksummed record. This introduces no novel algorithm, storage
+layout optimization, cryptographic construction, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional canonical serialization, hashing,
+and defensive recovery validation.

@@ -182,8 +182,14 @@ authority; unrelated domains continue.
    setting WRITE before atomically committing revision 1. The supervised
    replacement repeats admission and commit from fresh volatile state. The same
    proof retains bounded lifecycle cleanup and covers two simultaneously blocked
-   buffered receivers. The next gate is storage-backed export/recovery before
-   this item is complete.
+   buffered receivers. A canonical bounded checkpoint codec now preserves all
+   admitted schemas, values, per-setting/global revisions, and the retained
+   chronological audit window. Export requires root READ; recovery requires
+   root CONTROL and a caller-supplied expected SHA3-256 digest, and rejects
+   corruption, hidden data, stale digests, capacity mismatch, and inconsistent
+   revision/audit state. The digest is not self-authentication. The next gate is
+   binding this codec to capability-native stable storage objects and an
+   authenticated atomic commit/recovery protocol before this item is complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
 3. Implement extent mapping, checksummed COW metadata, directory operations,

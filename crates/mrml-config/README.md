@@ -11,6 +11,8 @@ Implemented boundaries:
 - exact capability-object authorization for reads and every transaction write;
 - atomic bounded commits tied to an expected monotonic revision;
 - bounded audit retention with explicit sequence-gap reporting;
+- canonical capability-controlled checkpoints preserving schemas, values,
+  revisions, and the retained audit window with an expected SHA3-256 digest;
 - canonical version-1 configuration request/response encoding; and
 - canonical version-1 service-supervision request/response encoding carrying
   opaque generational handles;
@@ -30,5 +32,8 @@ setting. A separate commit request has zero authority fields and independently
 delegates fresh root CONTROL and setting WRITE. The service validates both
 opaque handles, commits revision 1 atomically, and returns a canonical 112-byte
 response. The supervised replacement repeats admission and commit from fresh
-volatile state; persistence is not implied. Persistent export/import and
-native-storage recovery remain next.
+volatile state; persistence is not implied. Native-storage persistence and
+recovery remain next. The storage-neutral checkpoint codec is
+implemented and adversarially tested, but its expected digest still requires a
+future authenticated native-storage commit; the embedded digest is not treated
+as self-authentication.

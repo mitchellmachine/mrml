@@ -9,6 +9,7 @@
 
 use core::array;
 
+use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, Rights, ServiceId,
@@ -26,11 +27,17 @@ pub const CONFIG_RESPONSE_BYTES: usize = 112;
 pub const SUPERVISION_REQUEST_BYTES: usize = 48;
 pub const SUPERVISION_RESPONSE_BYTES: usize = 48;
 pub const SYSTEM_PROTOCOL_VERSION: u16 = 1;
+pub const CONFIG_CHECKPOINT_HEADER_BYTES: usize = 96;
+pub const CONFIG_CHECKPOINT_SETTING_BYTES: usize = 112;
+pub const CONFIG_CHECKPOINT_AUDIT_BYTES: usize = 24;
 
 const CONFIG_REQUEST_MAGIC: [u8; 4] = *b"MRCQ";
 const CONFIG_RESPONSE_MAGIC: [u8; 4] = *b"MRCP";
 const SUPERVISION_REQUEST_MAGIC: [u8; 4] = *b"MRSQ";
 const SUPERVISION_RESPONSE_MAGIC: [u8; 4] = *b"MRSP";
+const CONFIG_CHECKPOINT_MAGIC: [u8; 4] = *b"MRCK";
+const CONFIG_CHECKPOINT_DIGEST_OFFSET: usize = 64;
+const CONFIG_CHECKPOINT_DIGEST_BYTES: usize = 32;
 
 /// The service asks the kernel to validate opaque handles; it never owns or
 /// enumerates the kernel capability space. Rejection deliberately carries no
@@ -301,6 +308,13 @@ pub enum ConfigError {
     Truncated,
     NonCanonical,
     InvalidAuthorityEnvelope,
+    InvalidCheckpoint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigurationCheckpoint {
+    pub length: usize,
+    pub digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES],
 }
 
 #[derive(Clone, Copy)]
@@ -443,6 +457,228 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
             return Err(ConfigError::SchemaFrozen);
         }
         self.insert_schema(schema)
+    }
+
+    pub fn export_checkpoint<A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        root_capability: Capability,
+        output: &mut [u8],
+    ) -> Result<ConfigurationCheckpoint, ConfigError> {
+        Self::authorize(capabilities, root_capability, Rights::READ, self.root)?;
+        let length = CONFIG_CHECKPOINT_HEADER_BYTES
+            .checked_add(
+                self.setting_count
+                    .checked_mul(CONFIG_CHECKPOINT_SETTING_BYTES)
+                    .ok_or(ConfigError::InvalidCheckpoint)?,
+            )
+            .and_then(|length| {
+                length.checked_add(
+                    self.audit_count
+                        .checked_mul(CONFIG_CHECKPOINT_AUDIT_BYTES)?,
+                )
+            })
+            .ok_or(ConfigError::InvalidCheckpoint)?;
+        if output.len() < length || length > u32::MAX as usize {
+            return Err(ConfigError::Truncated);
+        }
+        output[..length].fill(0);
+        output[..4].copy_from_slice(&CONFIG_CHECKPOINT_MAGIC);
+        write_u16(output, 4, SYSTEM_PROTOCOL_VERSION)?;
+        write_u16(output, 6, CONFIG_CHECKPOINT_HEADER_BYTES as u16)?;
+        write_u32(output, 8, length as u32)?;
+        write_u16(
+            output,
+            12,
+            u16::try_from(self.setting_count).map_err(|_| ConfigError::InvalidCheckpoint)?,
+        )?;
+        write_u16(
+            output,
+            14,
+            u16::try_from(self.audit_count).map_err(|_| ConfigError::InvalidCheckpoint)?,
+        )?;
+        write_u64(output, 16, self.root.0)?;
+        write_u64(output, 24, self.revision)?;
+        write_u64(output, 32, self.next_audit_sequence)?;
+
+        for (index, entry) in self.settings[..self.setting_count]
+            .iter()
+            .flatten()
+            .copied()
+            .enumerate()
+        {
+            let start = CONFIG_CHECKPOINT_HEADER_BYTES + index * CONFIG_CHECKPOINT_SETTING_BYTES;
+            write_u32(output, start, entry.schema.setting.get())?;
+            write_u64(output, start + 8, entry.schema.object.0)?;
+            write_u64(output, start + 16, entry.revision)?;
+            match entry.schema.constraint {
+                Constraint::Bool => output[start + 4] = 1,
+                Constraint::U64 { minimum, maximum } => {
+                    output[start + 4] = 2;
+                    write_u64(output, start + 24, minimum)?;
+                    write_u64(output, start + 32, maximum)?;
+                }
+                Constraint::Bytes { maximum_length } => {
+                    output[start + 4] = 3;
+                    output[start + 5] = maximum_length;
+                }
+            }
+            if let Some(value) = entry.value {
+                output[start + 6] = 1;
+                output[start + 7] = value.kind as u8;
+                output[start + 40] = value.length;
+                output[start + 48..start + 112].copy_from_slice(&value.bytes);
+            }
+        }
+        let audit_start =
+            CONFIG_CHECKPOINT_HEADER_BYTES + self.setting_count * CONFIG_CHECKPOINT_SETTING_BYTES;
+        for index in 0..self.audit_count {
+            let event = self.audit[(self.audit_head + index) % AUDIT]
+                .ok_or(ConfigError::InvalidCheckpoint)?;
+            let start = audit_start + index * CONFIG_CHECKPOINT_AUDIT_BYTES;
+            write_u64(output, start, event.sequence)?;
+            write_u64(output, start + 8, event.revision)?;
+            write_u32(output, start + 16, event.setting.get())?;
+        }
+        let digest = checkpoint_digest(&output[..length]);
+        output[CONFIG_CHECKPOINT_DIGEST_OFFSET
+            ..CONFIG_CHECKPOINT_DIGEST_OFFSET + CONFIG_CHECKPOINT_DIGEST_BYTES]
+            .copy_from_slice(&digest);
+        Ok(ConfigurationCheckpoint { length, digest })
+    }
+
+    pub fn recover_checkpoint<A: CapabilityAuthorizer + ?Sized>(
+        capabilities: &A,
+        root_capability: Capability,
+        input: &[u8],
+        expected_digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES],
+    ) -> Result<Self, ConfigError> {
+        if input.len() < CONFIG_CHECKPOINT_HEADER_BYTES
+            || input[..4] != CONFIG_CHECKPOINT_MAGIC
+            || read_u16(input, 4)? != SYSTEM_PROTOCOL_VERSION
+            || usize::from(read_u16(input, 6)?) != CONFIG_CHECKPOINT_HEADER_BYTES
+            || usize::try_from(read_u32(input, 8)?).ok() != Some(input.len())
+            || input[40..CONFIG_CHECKPOINT_DIGEST_OFFSET]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(ConfigError::InvalidCheckpoint);
+        }
+        let embedded_digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES] = input
+            [CONFIG_CHECKPOINT_DIGEST_OFFSET
+                ..CONFIG_CHECKPOINT_DIGEST_OFFSET + CONFIG_CHECKPOINT_DIGEST_BYTES]
+            .try_into()
+            .map_err(|_| ConfigError::InvalidCheckpoint)?;
+        if embedded_digest != expected_digest || checkpoint_digest(input) != expected_digest {
+            return Err(ConfigError::InvalidCheckpoint);
+        }
+        let setting_count = usize::from(read_u16(input, 12)?);
+        let audit_count = usize::from(read_u16(input, 14)?);
+        if setting_count > SETTINGS || audit_count > AUDIT {
+            return Err(ConfigError::Capacity);
+        }
+        let wanted = CONFIG_CHECKPOINT_HEADER_BYTES
+            .checked_add(
+                setting_count
+                    .checked_mul(CONFIG_CHECKPOINT_SETTING_BYTES)
+                    .ok_or(ConfigError::InvalidCheckpoint)?,
+            )
+            .and_then(|length| {
+                length.checked_add(audit_count.checked_mul(CONFIG_CHECKPOINT_AUDIT_BYTES)?)
+            })
+            .ok_or(ConfigError::InvalidCheckpoint)?;
+        if wanted != input.len() {
+            return Err(ConfigError::InvalidCheckpoint);
+        }
+        let root = ObjectId(read_u64(input, 16)?);
+        Self::authorize(capabilities, root_capability, Rights::CONTROL, root)?;
+        let revision = read_u64(input, 24)?;
+        let next_audit_sequence = read_u64(input, 32)?;
+        let mut service = Self::empty(root)?;
+        for index in 0..setting_count {
+            let start = CONFIG_CHECKPOINT_HEADER_BYTES + index * CONFIG_CHECKPOINT_SETTING_BYTES;
+            if input[start + 41..start + 48].iter().any(|byte| *byte != 0) {
+                return Err(ConfigError::InvalidCheckpoint);
+            }
+            let setting = SettingId::new(read_u32(input, start)?)?;
+            let object = ObjectId(read_u64(input, start + 8)?);
+            let minimum = read_u64(input, start + 24)?;
+            let maximum = read_u64(input, start + 32)?;
+            let schema = match input[start + 4] {
+                1 if input[start + 5] == 0 && minimum == 0 && maximum == 0 => {
+                    SettingSchema::boolean(setting, object)?
+                }
+                2 if input[start + 5] == 0 => {
+                    SettingSchema::unsigned(setting, object, minimum, maximum)?
+                }
+                3 if minimum == 0 && maximum == 0 => {
+                    SettingSchema::bytes(setting, object, input[start + 5])?
+                }
+                _ => return Err(ConfigError::InvalidCheckpoint),
+            };
+            service.insert_schema(schema)?;
+            let entry_revision = read_u64(input, start + 16)?;
+            let value = match input[start + 6] {
+                0 if input[start + 7] == 0
+                    && input[start + 40] == 0
+                    && input[start + 48..start + 112].iter().all(|byte| *byte == 0)
+                    && entry_revision == 0 =>
+                {
+                    None
+                }
+                1 if entry_revision != 0 && entry_revision <= revision => {
+                    let mut bytes = [0; MAX_CONFIG_VALUE_BYTES];
+                    bytes.copy_from_slice(&input[start + 48..start + 112]);
+                    let value = ConfigValue::decode(input[start + 7], input[start + 40], &bytes)?;
+                    schema.validate(value)?;
+                    Some(value)
+                }
+                _ => return Err(ConfigError::InvalidCheckpoint),
+            };
+            let entry = service.entry_mut(setting)?;
+            entry.value = value;
+            entry.revision = entry_revision;
+        }
+        if next_audit_sequence == 0
+            || next_audit_sequence <= audit_count as u64
+            || (revision == 0 && (audit_count != 0 || next_audit_sequence != 1))
+            || (revision != 0 && audit_count == 0)
+        {
+            return Err(ConfigError::InvalidCheckpoint);
+        }
+        let first_sequence = next_audit_sequence - audit_count as u64;
+        let audit_start =
+            CONFIG_CHECKPOINT_HEADER_BYTES + setting_count * CONFIG_CHECKPOINT_SETTING_BYTES;
+        let mut prior_audit_revision = 0;
+        for index in 0..audit_count {
+            let start = audit_start + index * CONFIG_CHECKPOINT_AUDIT_BYTES;
+            if input[start + 20..start + 24].iter().any(|byte| *byte != 0) {
+                return Err(ConfigError::InvalidCheckpoint);
+            }
+            let event = AuditEvent {
+                sequence: read_u64(input, start)?,
+                revision: read_u64(input, start + 8)?,
+                setting: SettingId::new(read_u32(input, start + 16)?)?,
+            };
+            if event.sequence != first_sequence + index as u64
+                || event.revision == 0
+                || event.revision > revision
+                || event.revision < prior_audit_revision
+                || service
+                    .entry(event.setting)
+                    .map(|entry| entry.revision < event.revision)
+                    .unwrap_or(true)
+            {
+                return Err(ConfigError::InvalidCheckpoint);
+            }
+            prior_audit_revision = event.revision;
+            service.audit[index] = Some(event);
+        }
+        service.revision = revision;
+        service.audit_head = 0;
+        service.audit_count = audit_count;
+        service.next_audit_sequence = next_audit_sequence;
+        Ok(service)
     }
 
     pub fn read<A: CapabilityAuthorizer + ?Sized>(
@@ -1377,6 +1613,14 @@ fn read_u16(input: &[u8], offset: usize) -> Result<u16, ConfigError> {
         .ok_or(ConfigError::Truncated)
 }
 
+fn checkpoint_digest(input: &[u8]) -> [u8; CONFIG_CHECKPOINT_DIGEST_BYTES] {
+    let mut digest = Sha3_256::new();
+    digest.update(&input[..CONFIG_CHECKPOINT_DIGEST_OFFSET]);
+    digest.update(&[0; CONFIG_CHECKPOINT_DIGEST_BYTES]);
+    digest.update(&input[CONFIG_CHECKPOINT_DIGEST_OFFSET + CONFIG_CHECKPOINT_DIGEST_BYTES..]);
+    digest.finalize()
+}
+
 fn read_u32(input: &[u8], offset: usize) -> Result<u32, ConfigError> {
     input
         .get(offset..offset + 4)
@@ -2022,5 +2266,130 @@ mod tests {
             ),
             Err(ConfigError::SchemaFrozen)
         );
+    }
+
+    #[test]
+    fn checkpoint_round_trip_preserves_schema_values_revisions_and_audit_window() {
+        let (mut service, capabilities, root, enabled, limit) = fixture();
+        let mut first = ConfigTransaction::<2>::new(0);
+        first
+            .push(ConfigUpdate::new(
+                SettingId::new(1).unwrap(),
+                enabled,
+                ConfigValue::boolean(true),
+            ))
+            .unwrap();
+        first
+            .push(ConfigUpdate::new(
+                SettingId::new(2).unwrap(),
+                limit,
+                ConfigValue::unsigned(42),
+            ))
+            .unwrap();
+        service.commit(&capabilities, root, &first).unwrap();
+        let mut second = ConfigTransaction::<1>::new(1);
+        second
+            .push(ConfigUpdate::new(
+                SettingId::new(1).unwrap(),
+                enabled,
+                ConfigValue::boolean(false),
+            ))
+            .unwrap();
+        service.commit(&capabilities, root, &second).unwrap();
+
+        let mut bytes = [0; 512];
+        let checkpoint = service
+            .export_checkpoint(&capabilities, root, &mut bytes)
+            .unwrap();
+        assert_eq!(checkpoint.length, 368);
+        let recovered = ConfigurationService::<3, 2>::recover_checkpoint(
+            &capabilities,
+            root,
+            &bytes[..checkpoint.length],
+            checkpoint.digest,
+        )
+        .unwrap();
+        assert_eq!(recovered.revision(), 2);
+        assert_eq!(recovered.setting_count(), 2);
+        assert_eq!(
+            recovered
+                .read(&capabilities, enabled, SettingId::new(1).unwrap())
+                .unwrap()
+                .value
+                .and_then(ConfigValue::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            recovered
+                .read(&capabilities, limit, SettingId::new(2).unwrap())
+                .unwrap()
+                .value
+                .and_then(ConfigValue::as_u64),
+            Some(42)
+        );
+        assert_eq!(
+            recovered.audit_event(&capabilities, root, 1),
+            Err(ConfigError::AuditUnavailable { oldest: 2 })
+        );
+        assert_eq!(
+            recovered.audit_event(&capabilities, root, 2).unwrap(),
+            Some(AuditEvent {
+                sequence: 2,
+                revision: 1,
+                setting: SettingId::new(2).unwrap(),
+            })
+        );
+        assert_eq!(
+            recovered.audit_event(&capabilities, root, 3).unwrap(),
+            Some(AuditEvent {
+                sequence: 3,
+                revision: 2,
+                setting: SettingId::new(1).unwrap(),
+            })
+        );
+    }
+
+    #[test]
+    fn checkpoint_recovery_rejects_corruption_stale_digest_capacity_and_hidden_data() {
+        let (service, capabilities, root, enabled, _) = fixture();
+        let mut bytes = [0; 512];
+        let checkpoint = service
+            .export_checkpoint(&capabilities, root, &mut bytes)
+            .unwrap();
+        let input = &mut bytes[..checkpoint.length];
+        input[CONFIG_CHECKPOINT_HEADER_BYTES + 48] ^= 1;
+        assert!(matches!(
+            ConfigurationService::<3, 2>::recover_checkpoint(
+                &capabilities,
+                root,
+                input,
+                checkpoint.digest,
+            ),
+            Err(ConfigError::InvalidCheckpoint)
+        ));
+
+        input[CONFIG_CHECKPOINT_HEADER_BYTES + 48] ^= 1;
+        input[CONFIG_CHECKPOINT_HEADER_BYTES + 41] = 1;
+        let digest = checkpoint_digest(input);
+        input[CONFIG_CHECKPOINT_DIGEST_OFFSET
+            ..CONFIG_CHECKPOINT_DIGEST_OFFSET + CONFIG_CHECKPOINT_DIGEST_BYTES]
+            .copy_from_slice(&digest);
+        assert!(matches!(
+            ConfigurationService::<3, 2>::recover_checkpoint(&capabilities, root, input, digest,),
+            Err(ConfigError::InvalidCheckpoint)
+        ));
+        input[CONFIG_CHECKPOINT_HEADER_BYTES + 41] = 0;
+        let digest = checkpoint_digest(input);
+        input[CONFIG_CHECKPOINT_DIGEST_OFFSET
+            ..CONFIG_CHECKPOINT_DIGEST_OFFSET + CONFIG_CHECKPOINT_DIGEST_BYTES]
+            .copy_from_slice(&digest);
+        assert!(matches!(
+            ConfigurationService::<1, 2>::recover_checkpoint(&capabilities, root, input, digest,),
+            Err(ConfigError::Capacity)
+        ));
+        assert!(matches!(
+            ConfigurationService::<3, 2>::recover_checkpoint(&capabilities, enabled, input, digest,),
+            Err(ConfigError::Unauthorized(_))
+        ));
     }
 }

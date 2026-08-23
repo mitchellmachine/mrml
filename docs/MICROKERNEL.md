@@ -2615,11 +2615,27 @@ only from the kernel message. `ServiceSupervisor::state_authorized` requires
 exact READ authority. The adapter supplies priority and fresh launch context
 from trusted state rather than request bytes, and successful restart still
 passes exact CONTROL, completed cleanup, backoff, restart-limit, and fresh-task
-gates. Windows gnullvm tests cover thirteen configuration/protocol/dispatch cases
+gates. Windows gnullvm tests cover fifteen configuration/protocol/dispatch cases
 and the kernel suite covers authorized introspection. This is **PARTIALLY
 IMPLEMENTED** Phase 2 foundation: schema admission and atomic commit dispatch
 now run through the signed CPL3 service image, while native-storage persistence,
 export, and recovery remain incomplete.
+
+The storage-neutral configuration checkpoint prerequisite is now implemented.
+Its 96-byte canonical header binds version, exact total length, setting/audit
+counts, nonzero root object, global revision, next audit sequence, reserved
+zeros, and a SHA3-256 digest. Fixed 112-byte setting records preserve identity,
+object, typed constraint, optional canonical value, and per-setting revision;
+fixed 24-byte audit records are exported in chronological retained order.
+Export requires exact root READ. Recovery into a fresh fixed-capacity service
+requires exact root CONTROL and a caller-supplied expected digest that must match
+both the embedded digest and recomputation. It revalidates schema uniqueness,
+root non-aliasing, value constraints, capacity, revision relationships,
+contiguous audit sequence, known settings, and every reserved byte before
+publishing recovered state. The embedded digest is only corruption detection;
+without a separately authenticated expected digest it is not evidence of
+authenticity or rollback resistance. Native stable-object storage, atomic
+commit, and crash recovery remain the next dependency gate.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
@@ -2710,8 +2726,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 13 configuration, 309 kernel, and 19 WHP tests with one ignored;
-Linux passed 13 configuration, 309 kernel, and 16 KVM tests with one ignored.
+Windows passed 15 configuration, 309 kernel, and 19 WHP tests with one ignored;
+Linux passed 15 configuration, 309 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,
