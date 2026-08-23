@@ -2127,6 +2127,13 @@ integers across an exact `u32` distance in constants and runtime functions.
 Distances must be smaller than the receiver width; zero selects the left input
 for `funnel_shl` and the right input for `funnel_shr`, while out-of-range
 runtime distances trap.
+Stable same-width `cast_signed` and `cast_unsigned` preserve the receiver's bit
+pattern while changing signedness in constants and runtime functions. The
+pinned-nightly `saturating_cast_signed`/`saturating_cast_unsigned` variants
+clamp unsigned values above the signed maximum or negative signed values to
+zero; `strict_cast_signed` and `strict_cast_unsigned` trap for those same
+out-of-range inputs. All variants require the exact opposite-signed integer of
+the same width as their result.
 Unsigned primitives support stable `next_power_of_two` and pinned-nightly
 `wrapping_next_power_of_two`. Zero maps to one; checked runtime objects trap
 when the rounded power exceeds the receiver width, while unchecked and explicit

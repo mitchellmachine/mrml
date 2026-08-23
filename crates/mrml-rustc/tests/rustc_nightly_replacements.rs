@@ -2623,6 +2623,30 @@ fn rustc_unsigned_funnel_shifts_reach_native_objects() {
 }
 
 #[test]
+fn rustc_same_width_integer_sign_casts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> i8 { input.cast_signed() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> u8 { input.cast_unsigned() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64) -> i64 { input.saturating_cast_signed() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> u64 { input.saturating_cast_unsigned() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> i16 { input.strict_cast_signed() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> u16 { input.strict_cast_unsigned() }",
+        "const VALUE: i8 = 255u8.cast_signed(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: u8 = (-1i8).cast_unsigned(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i8 = 255u8.saturating_cast_signed(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: u8 = (-1i8).saturating_cast_unsigned(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",

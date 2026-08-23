@@ -212,6 +212,7 @@ pub fn analyze_constants<
                         | ExprKind::SaturatingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
                         | ExprKind::IntegerFunnelShift { .. }
+                        | ExprKind::IntegerSignCast { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
@@ -1916,6 +1917,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::SaturatingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerFunnelShift { .. }
+                | ExprKind::IntegerSignCast { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
@@ -2070,6 +2072,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
                 || recurse(other, inside_inline_const)
                 || recurse(distance, inside_inline_const)
         }
+        ExprKind::IntegerSignCast { base, .. } => recurse(base, inside_inline_const),
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
@@ -2196,6 +2199,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
             distance,
             ..
         } => recurse(base) || recurse(other) || recurse(distance),
+        ExprKind::IntegerSignCast { base, .. } => recurse(base),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
@@ -2566,6 +2570,37 @@ fn evaluate_call_aware_integer<
                 return Err(arithmetic_error(ConstEvalError::InvalidShift));
             }
             funnel_shift_bits(first, second, distance, bits, left)
+        }
+        ExprKind::IntegerSignCast {
+            base,
+            signed,
+            saturating,
+            strict,
+        } => {
+            if ty.is_signed() != signed {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let source_type = if signed {
+                ty.unsigned_counterpart()
+            } else {
+                ty.signed_counterpart()
+            }
+            .ok_or_else(|| arithmetic_error(ConstEvalError::InvalidCast))?;
+            if integer_expression_type(context, symbol_count, tree, base, constants)
+                .is_some_and(|actual| actual != source_type)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                base,
+                source_type,
+                constants,
+                depth,
+            )? & signed_mask(bits);
+            sign_cast_bits(value, bits, signed, saturating, strict).map_err(arithmetic_error)?
         }
         ExprKind::IntegerWrappingShift {
             base,
@@ -3570,6 +3605,30 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             }
             funnel_shift_bits(first, second, distance, bits, left)
         }
+        ExprKind::IntegerSignCast {
+            base,
+            signed,
+            saturating,
+            strict,
+        } => {
+            if ty.is_signed() != signed {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let source_type = if signed {
+                ty.unsigned_counterpart()
+            } else {
+                ty.signed_counterpart()
+            }
+            .ok_or(ExecutionError::Arithmetic(ConstEvalError::InvalidCast))?;
+            if expression_integer_type(tree, base, constants)
+                .is_some_and(|actual| actual != source_type)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(base)? & signed_mask(bits);
+            sign_cast_bits(value, bits, signed, saturating, strict)
+                .map_err(ExecutionError::Arithmetic)?
+        }
         ExprKind::IntegerWrappingShift {
             base,
             distance,
@@ -3778,6 +3837,15 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         }
         ExprKind::IntegerRotate { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::IntegerFunnelShift { base, .. } => expression_integer_type(tree, base, constants),
+        ExprKind::IntegerSignCast { base, signed, .. } => {
+            let source =
+                expression_integer_type(tree, base, constants).unwrap_or(crate::IntegerType::I32);
+            if signed {
+                source.signed_counterpart()
+            } else {
+                source.unsigned_counterpart()
+            }
+        }
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
@@ -3852,6 +3920,24 @@ fn funnel_shift_bits(first: u128, second: u128, distance: u128, bits: u8, left: 
     } else {
         ((first << complement) | (second >> distance)) & mask
     }
+}
+
+fn sign_cast_bits(
+    value: u128,
+    bits: u8,
+    signed: bool,
+    saturating: bool,
+    strict: bool,
+) -> Result<u128, ConstEvalError> {
+    let sign_bit = 1u128 << (bits - 1);
+    let out_of_range = value & sign_bit != 0;
+    if strict && out_of_range {
+        return Err(ConstEvalError::Overflow);
+    }
+    if saturating && out_of_range {
+        return Ok(if signed { sign_bit - 1 } else { 0 });
+    }
+    Ok(value & signed_mask(bits))
 }
 
 fn saturating_integer_arithmetic(

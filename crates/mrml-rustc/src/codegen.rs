@@ -2314,6 +2314,7 @@ fn validate_runtime_inline_const<
             recurse(other)?;
             recurse(distance)?;
         }
+        ExprKind::IntegerSignCast { base, .. } => recurse(base)?,
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
             recurse(distance)?;
@@ -3273,6 +3274,30 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::IntegerSignCast { base, signed, .. } => {
+            let RuntimeExpressionType::Integer(Some(source_type)) =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if source_type.is_signed() == signed {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            let target_type = if signed {
+                source_type.signed_counterpart()
+            } else {
+                source_type.unsigned_counterpart()
+            }
+            .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+            Ok(RuntimeExpressionType::Integer(Some(target_type)))
         }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             let base_type = runtime_expression_type_with_locals(
@@ -5406,6 +5431,57 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 }
                 self.emit(&[0x4d, 0x09, 0xc8, 0x4c, 0x89, 0xc0])?;
                 self.patch_forward_branch(done)?;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerSignCast {
+                base,
+                signed,
+                saturating,
+                strict,
+            } => {
+                let RuntimeExpressionType::Integer(Some(source_type)) =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let source_width = runtime_width(source_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let target_type = if signed {
+                    source_type.signed_counterpart()
+                } else {
+                    source_type.unsigned_counterpart()
+                }
+                .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let target_width = runtime_width(target_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = source_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                if saturating || strict {
+                    let sign_bit = 1u64 << (source_width.bits - 1);
+                    self.emit(&[0x48, 0xba])?;
+                    self.emit(&sign_bit.to_le_bytes())?;
+                    self.emit(&[0x48, 0x85, 0xd0])?;
+                    if strict {
+                        self.emit_trap_branch(0x85)?;
+                    } else {
+                        let in_range = self.emit_forward_branch(0x84)?;
+                        let saturated = if signed { sign_bit - 1 } else { 0 };
+                        self.emit(&[0x48, 0xb8])?;
+                        self.emit(&saturated.to_le_bytes())?;
+                        self.patch_forward_branch(in_range)?;
+                    }
+                }
+                self.width = target_width;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -14012,6 +14088,48 @@ mod tests {
             };
             assert!(
                 compile_x86_64_function::<_, 1024, 8, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn converts_integer_signedness_at_the_same_width() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> i8 { input.cast_signed() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> u16 { input.cast_unsigned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> i32 { input.saturating_cast_signed() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> u64 { input.saturating_cast_unsigned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> isize { input.strict_cast_signed() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize) -> usize { input.strict_cast_unsigned() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi).is_ok()
+                );
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> i8 { input.cast_unsigned() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u8 { input.cast_signed() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> u8 { input.cast_unsigned() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows
