@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 385 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 387 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -1903,6 +1903,12 @@ and runtime functions: ASCII, alphabetic, uppercase, lowercase, alphanumeric,
 digit, hexadecimal digit, punctuation, graphic, whitespace, and control-byte
 predicates. Eleven independently emitted System V objects were linked into a
 pinned-nightly caller and matched Rust for every byte from zero through 255.
+Primitive signed and unsigned integers now support width-normalized
+`wrapping_add`, `wrapping_sub`, and `wrapping_mul` in module constants and
+runtime functions. The same syntax remains type-directed for raw pointers, so
+their existing `wrapping_add` and `wrapping_sub` element offsets are preserved.
+Four emitted System V integer objects matched pinned Rust across ordinary and
+overflowing narrow, 32-bit, and 64-bit boundary cases.
 The cast/conditional slice emitted 552-byte signed and 520-byte Boolean ELF
 objects. A separate nightly-built caller linked and executed both successfully.
 The compound-comparison replacement emitted a 552-byte ELF object and passed

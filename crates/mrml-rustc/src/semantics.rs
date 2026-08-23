@@ -204,7 +204,12 @@ pub fn analyze_constants<
                     end: constant.initializer_span.start + error.span.end,
                 },
             })?;
-        let call_value = if expression_contains_call(&tree, tree.root(), 0) {
+        let requires_typed_evaluation =
+            expression_contains_call(&tree, tree.root(), 0)
+                || tree.nodes().iter().flatten().any(|expression| {
+                    matches!(expression.kind, ExprKind::WrappingArithmetic { .. })
+                });
+        let call_value = if requires_typed_evaluation {
             let resolver =
                 ConstCallResolver::from_constants(&table).map_err(|kind| SemanticError {
                     kind,
@@ -1892,6 +1897,14 @@ fn evaluate_integer_const_expression<
     if expression_contains_call(tree, id, 0) {
         return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
     }
+    if tree
+        .nodes()
+        .iter()
+        .flatten()
+        .any(|expression| matches!(expression.kind, ExprKind::WrappingArithmetic { .. }))
+    {
+        return evaluate_call_aware_integer(context, symbol_count, tree, id, ty, constants, depth);
+    }
     if ty.is_signed() {
         evaluate_signed_integer(tree, id, ty, context.target, constants, 0)
             .map_err(SemanticErrorKind::Execution)
@@ -2015,6 +2028,9 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
                 || argument.is_some_and(|argument| recurse(argument, inside_inline_const))
         }
         ExprKind::AsciiPredicate { base, .. } => recurse(base, inside_inline_const),
+        ExprKind::WrappingArithmetic { base, argument, .. } => {
+            recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
+        }
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2115,6 +2131,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
             recurse(base) || argument.is_some_and(recurse)
         }
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
+        ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::StrIsCharBoundary { base, index } => recurse(base) || recurse(index),
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -2282,6 +2299,28 @@ fn evaluate_call_aware_integer<
             } else {
                 evaluate_call_aware_unsigned_binary(operator, left_bits, right_bits, bits)
                     .map_err(arithmetic_error)?
+            }
+        }
+        ExprKind::WrappingArithmetic {
+            base,
+            argument,
+            operator,
+        } => {
+            let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || integer_expression_type(context, symbol_count, tree, argument, constants)
+                    .is_some_and(|argument_type| argument_type != ty)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let left = recurse(base)?;
+            let right = recurse(argument)?;
+            match operator {
+                BinaryOperator::Add => left.overflowing_add(right).0 & mask,
+                BinaryOperator::Subtract => left.overflowing_sub(right).0 & mask,
+                BinaryOperator::Multiply => left.overflowing_mul(right).0 & mask,
+                _ => return Err(arithmetic_error(ConstEvalError::InvalidExpressionTree)),
             }
         }
         _ => return Err(arithmetic_error(ConstEvalError::InvalidCast)),
@@ -2945,6 +2984,32 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 }
             }
         }
+        ExprKind::WrappingArithmetic {
+            base,
+            argument,
+            operator,
+        } => {
+            let base_type = expression_integer_type(tree, base, constants);
+            if base_type.is_some_and(|base_type| base_type != ty)
+                || (base_type.is_none() && ty != crate::IntegerType::I32)
+                || expression_integer_type(tree, argument, constants)
+                    .is_some_and(|argument_type| argument_type != ty)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let left = recurse(base)?;
+            let right = recurse(argument)?;
+            match operator {
+                BinaryOperator::Add => left.overflowing_add(right).0,
+                BinaryOperator::Subtract => left.overflowing_sub(right).0,
+                BinaryOperator::Multiply => left.overflowing_mul(right).0,
+                _ => {
+                    return Err(ExecutionError::Arithmetic(
+                        ConstEvalError::InvalidExpressionTree,
+                    ));
+                }
+            }
+        }
         _ => return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast)),
     };
     Ok(value & signed_mask(bits))
@@ -2970,6 +3035,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::Unary { operand, .. } => expression_integer_type(tree, operand, constants),
         ExprKind::Binary { left, right, .. } => expression_integer_type(tree, left, constants)
             .or_else(|| expression_integer_type(tree, right, constants)),
+        ExprKind::WrappingArithmetic { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::If {
             then_branch,
             else_branch,

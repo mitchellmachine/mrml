@@ -1812,6 +1812,27 @@ fn rustc_unsigned_integer_predicates_reach_native_objects() {
 }
 
 #[test]
+fn rustc_wrapping_integer_methods_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, rhs: u8) -> u8 { input.wrapping_add(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16, rhs: i16) -> i16 { input.wrapping_sub(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, rhs: u32) -> u32 { input.wrapping_mul(rhs) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64, rhs: i64) -> i64 { input.wrapping_mul(rhs) }",
+        "const VALUE: u8 = 255u8.wrapping_add(43); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: i8 = (-128i8).wrapping_sub(1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: u16 = 40000u16.wrapping_mul(3); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",

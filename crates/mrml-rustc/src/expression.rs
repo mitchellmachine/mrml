@@ -372,6 +372,11 @@ pub enum ExprKind<'source> {
         base: ExprId,
         predicate: AsciiPredicate,
     },
+    WrappingArithmetic {
+        base: ExprId,
+        argument: ExprId,
+        operator: BinaryOperator,
+    },
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
@@ -578,6 +583,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RawPointerMask { .. }
             | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. }
+            | ExprKind::WrappingArithmetic { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::Identifier(_)
@@ -837,6 +843,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 let value = u8::try_from(value).map_err(|_| ConstEvalError::Overflow)?;
                 Ok(u128::from(predicate.matches(value)))
             }
+            ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
@@ -2120,6 +2127,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::AsciiPredicate { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
+            }
+            ExprKind::WrappingArithmetic { base, argument, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(argument, name, replacement, depth + 1)?;
             }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3700,6 +3711,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "sub"
                         | "wrapping_add"
                         | "wrapping_sub"
+                        | "wrapping_mul"
                         | "offset"
                         | "wrapping_offset"
                         | "offset_from"
@@ -3770,6 +3782,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "sub"
                     | "wrapping_add"
                     | "wrapping_sub"
+                    | "wrapping_mul"
                     | "offset"
                     | "wrapping_offset"
                     | "offset_from"
@@ -3843,6 +3856,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     base,
                     argument,
                     power_of_two: false,
+                },
+                "wrapping_add" | "wrapping_sub" | "wrapping_mul" => ExprKind::WrappingArithmetic {
+                    base,
+                    argument: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    operator: match method.text {
+                        "wrapping_add" => BinaryOperator::Add,
+                        "wrapping_sub" => BinaryOperator::Subtract,
+                        "wrapping_mul" => BinaryOperator::Multiply,
+                        _ => unreachable!(),
+                    },
                 },
                 "is_ascii"
                 | "is_ascii_alphabetic"
@@ -3994,15 +4019,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     offset: argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
-                    subtract: matches!(
-                        method,
-                        "sub" | "wrapping_sub" | "byte_sub" | "wrapping_byte_sub"
-                    ),
+                    subtract: matches!(method, "sub" | "byte_sub" | "wrapping_byte_sub"),
                     wrapping: matches!(
                         method,
-                        "wrapping_add"
-                            | "wrapping_sub"
-                            | "wrapping_offset"
+                        "wrapping_offset"
                             | "wrapping_byte_add"
                             | "wrapping_byte_sub"
                             | "wrapping_byte_offset"
