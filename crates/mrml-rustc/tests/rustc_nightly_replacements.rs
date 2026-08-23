@@ -1307,6 +1307,24 @@ fn rustc_conditional_mutation_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_conditional_branch_local_identities_reach_native_objects() {
+    // Original branch-local shadowing probe paired with the pinned nightly's
+    // conditional binding and mutation observations.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, mode: u16) -> u16 { let mut result: u16 = input; if mode == 0 { let branch: u16 = result + 1; result = branch; } else if mode == 1 { let branch: u16 = result + 2; result = branch; } else { let branch: u16 = result + 3; result = branch; } result }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<2048, 1024, 4, 4, 4, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_guarded_mutation_reaches_native_objects() {
     // Original scalar replacement for the guard-before-mutation ordering in
     // tests/ui/consts/control-flow/basics.rs at the pinned nightly commit.

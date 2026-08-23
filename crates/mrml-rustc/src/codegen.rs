@@ -2299,6 +2299,95 @@ fn resolve_runtime_local_type<
     Ok(local_type)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn preanalyze_runtime_local_binding<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    local: crate::LocalBinding<'source>,
+    operand_type: &str,
+    body_start: usize,
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &mut [Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
+    local_count: &mut usize,
+) -> Result<(), CodegenError> {
+    let ty = resolve_runtime_local_type::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+        function,
+        resolver,
+        &locals[..*local_count],
+        &local,
+        operand_type,
+        body_start,
+    )?;
+    if local.name == "_" {
+        return Ok(());
+    }
+    let stack_slots = runtime_local_stack_slots(ty);
+    let id = facts
+        .push_local(
+            local.name,
+            ty,
+            local.mutable,
+            Some(translate_span(body_start, local.name_span)),
+        )
+        .map_err(|kind| CodegenError {
+            kind,
+            span: translate_span(body_start, local.name_span),
+        })?;
+    let slot = locals.get_mut(*local_count).ok_or(CodegenError {
+        kind: CodegenErrorKind::TooManyRuntimeLocals,
+        span: translate_span(body_start, local.name_span),
+    })?;
+    *slot = Some(RuntimeLocal {
+        id,
+        name: local.name,
+        ty,
+        mutable: local.mutable,
+        stack_slots,
+    });
+    *local_count += 1;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn preanalyze_runtime_conditional_actions<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    actions: &[Option<crate::ConditionalAssignmentAction<'source>>],
+    operand_type: &str,
+    body_start: usize,
+    facts: &mut RuntimeBodyFacts<'source>,
+    outer_locals: &[Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
+    outer_local_count: usize,
+) -> Result<(), CodegenError> {
+    let mut locals = *outer_locals;
+    let mut local_count = outer_local_count;
+    for action in actions.iter().flatten() {
+        if let crate::ConditionalAssignmentAction::Local(local) = *action {
+            preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                function,
+                resolver,
+                local,
+                operand_type,
+                body_start,
+                facts,
+                &mut locals,
+                &mut local_count,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn preanalyze_runtime_local_prefix<
     'source,
     R: ConstantResolver,
@@ -2315,48 +2404,58 @@ fn preanalyze_runtime_local_prefix<
     let mut locals: [Option<RuntimeLocal<'source>>; MAX_PARAMETERS] = [None; MAX_PARAMETERS];
     let mut local_count = 0usize;
     for statement in body.statements().iter().flatten() {
-        let crate::BodyStatement::Local(index) = *statement else {
-            break;
-        };
-        let local = body.locals()[index].ok_or(CodegenError {
-            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-            span: translate_span(body_start, function.body),
-        })?;
-        let ty = resolve_runtime_local_type::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-            function,
-            resolver,
-            &locals[..local_count],
-            &local,
-            operand_type,
-            body_start,
-        )?;
-        if local.name == "_" {
-            continue;
+        match *statement {
+            crate::BodyStatement::Local(index) => {
+                let local = body.locals()[index].ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: function.name_span,
+                })?;
+                preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                    function,
+                    resolver,
+                    local,
+                    operand_type,
+                    body_start,
+                    facts,
+                    &mut locals,
+                    &mut local_count,
+                )?;
+            }
+            crate::BodyStatement::ConditionalAssignment(index) => {
+                let conditional = body.conditional_assignments()[index].ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: function.name_span,
+                })?;
+                for branch in conditional.branches().iter().flatten() {
+                    preanalyze_runtime_conditional_actions::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        function,
+                        resolver,
+                        branch.actions(),
+                        operand_type,
+                        body_start,
+                        facts,
+                        &locals,
+                        local_count,
+                    )?;
+                }
+                preanalyze_runtime_conditional_actions::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                    function,
+                    resolver,
+                    conditional.else_actions(),
+                    operand_type,
+                    body_start,
+                    facts,
+                    &locals,
+                    local_count,
+                )?;
+                break;
+            }
+            _ => break,
         }
-        let stack_slots = runtime_local_stack_slots(ty);
-        let id = facts
-            .push_local(
-                local.name,
-                ty,
-                local.mutable,
-                Some(translate_span(body_start, local.name_span)),
-            )
-            .map_err(|kind| CodegenError {
-                kind,
-                span: translate_span(body_start, local.name_span),
-            })?;
-        let slot = locals.get_mut(local_count).ok_or(CodegenError {
-            kind: CodegenErrorKind::TooManyRuntimeLocals,
-            span: translate_span(body_start, local.name_span),
-        })?;
-        *slot = Some(RuntimeLocal {
-            id,
-            name: local.name,
-            ty,
-            mutable: local.mutable,
-            stack_slots,
-        });
-        local_count += 1;
     }
     Ok(facts.local_count)
 }
@@ -16646,6 +16745,47 @@ mod tests {
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
+    }
+
+    #[test]
+    fn runtime_body_facts_assign_distinct_conditional_branch_local_ids() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16, mode: u16) -> u16 { let mut result: u16 = input; if mode == 0 { let branch: u16 = result + 1; result = branch; } else if mode == 1 { let branch: u16 = result + 2; result = branch; } else { let branch: u16 = result + 3; result = branch; } result }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_local_prefix::<_, 4, 32>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 4);
+        assert_eq!(facts.locals[0].unwrap().name, "result");
+        for (index, fact) in facts.locals[1..4].iter().enumerate() {
+            let fact = fact.unwrap();
+            assert_eq!(fact.id, RuntimeLocalId(index + 1));
+            assert_eq!(fact.name, "branch");
+            assert_eq!(
+                fact.ty,
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U16))
+            );
+            assert_ne!(
+                fact.declaration_span,
+                facts.locals[(index + 1) % 3 + 1].unwrap().declaration_span
+            );
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 1024, 4, 32>(&function, &resolver, abi).unwrap();
+        }
     }
 
     #[test]
