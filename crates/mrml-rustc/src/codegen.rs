@@ -11001,6 +11001,13 @@ impl<
             Some(ExprKind::Ascribe { operand, .. }) => {
                 return self.emit_tuple_field(tree, operand, field, depth + 1);
             }
+            Some(ExprKind::InlineConst { operand }) => {
+                return self.emit_tuple_field(tree, operand, field, depth + 1);
+            }
+            Some(ExprKind::Sequence { first, then }) => {
+                self.emit_expression(tree, first, depth + 1)?;
+                return self.emit_tuple_field(tree, then, field, depth + 1);
+            }
             _ => {}
         }
         if let Some(ExprKind::Identifier(name)) = tree.expression(base).map(|expr| expr.kind)
@@ -11073,6 +11080,16 @@ impl<
             Some(ExprKind::Call { .. })
         ) {
             return self.emit_expression(tree, root, 0);
+        }
+        if let Some(ExprKind::InlineConst { operand }) = tree.expression(root).map(|expr| expr.kind)
+        {
+            return self.emit_tuple_to_stack(tree, operand, expected);
+        }
+        if let Some(ExprKind::Sequence { first, then }) =
+            tree.expression(root).map(|expr| expr.kind)
+        {
+            self.emit_expression(tree, first, 0)?;
+            return self.emit_tuple_to_stack(tree, then, expected);
         }
         if let Some(
             ExprKind::If {

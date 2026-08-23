@@ -2773,6 +2773,14 @@ state prove the condition ran exactly once, the unselected aggregate remained
 lazy, and normal versus loop-break tuple materialization agreed at zero and
 `u16::MAX` boundaries. General tuple sequencing and nested tuple control-flow
 graphs remain outside this bounded slice.
+A tuple-sequencing probe produced a 657-byte COFF object and a 1048-byte ELF64
+object. Independent callers matched four paths on Windows and Arch Linux,
+including zero and `u16::MAX` inputs. Three caller-observable increments around
+tuple argument materialization, helper return, and direct field projection prove
+that each ordered statement ran exactly once before its tuple consumer. This
+slice covers scalar statement prefixes and inline-constant wrappers; tuple
+destructuring, field mutation, nesting, and general aggregate statement values
+remain outside it.
 A diverging `-> !` helper produced a 172-byte COFF object and a 568-byte ELF64
 object. Independent pinned-nightly callers matched six reachable non-diverging
 branch cases on Windows and Arch Linux, including zero and integer-width

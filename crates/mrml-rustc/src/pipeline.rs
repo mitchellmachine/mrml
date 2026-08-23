@@ -638,6 +638,10 @@ mod tests {
         let result = compile_wide(tuple_value_loop, "answer", ObjectFormat::Elf64);
         assert!(result.is_ok(), "{result:?}");
 
+        let tuple_sequence = "fn bump(value: &mut u16) { *value += 1; } fn choose(value: (u16, bool), count: &mut u16) -> (u16, bool) { bump(count); value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16, flag: bool) -> u64 { let mut count: u16 = 0; let selected: (u16, bool) = choose({ bump(&mut count); (value, flag) }, &mut count); selected.0 as u64 + count as u64 + if selected.1 { 100 } else { 0 } }";
+        let result = compile_wide(tuple_sequence, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
         let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

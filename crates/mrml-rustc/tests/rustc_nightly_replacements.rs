@@ -1004,6 +1004,24 @@ fn rustc_tuple_control_flow_is_lazy_and_single_evaluation() {
 }
 
 #[test]
+fn rustc_tuple_sequences_preserve_single_evaluation() {
+    // Original aggregate-sequencing replacement. Observable mutations before
+    // tuple materialization and direct projection must each execute once.
+    let source = "fn bump(value: &mut u16) { *value += 1; } fn sequenced(value: (u16, bool, char), count: &mut u16) -> (u16, bool, char) { bump(count); value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: u16, second: u16, flag: bool) -> u64 { let mut count: u16 = 0; let selected: (u16, bool, char) = sequenced({ bump(&mut count); (first, flag, 'x') }, &mut count); let projected: u16 = { bump(&mut count); (second, !flag) }.0; selected.0 as u64 + projected as u64 + count as u64 * 100 + if selected.1 { 10 } else { 0 } + if selected.2 == 'x' { 1 } else { 0 } }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<4096, 3072, 8, 8, 8, 128>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.

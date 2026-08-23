@@ -309,3 +309,14 @@ it introduces no novel algorithm, ABI, protocol, cryptographic construction,
 or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary aggregate control-flow lowering.
+
+## 2026-08-23 — ordered tuple expression sequencing
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Tuple materialization and field projection now evaluate an existing scalar
+statement prefix once before consuming the tuple tail. This reuses conventional
+expression sequencing and aggregate projection; it introduces no novel
+algorithm, ABI, protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary expression sequencing.
