@@ -112,7 +112,10 @@ explicitly and downgrade the status rather than guessing.
   yet. Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves, but its
   object-ID allocator is volatile and cross-directory directory moves require a
-  future ancestry proof. UEFI Simple File System use is boot interoperability,
+  future ancestry proof. Capability-authorized bounded file reads resolve the
+  exact extent generation, synthesize holes, and require full-extent digest
+  verification before copying a physical-data subrange. File writes are not yet
+  implemented. UEFI Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are

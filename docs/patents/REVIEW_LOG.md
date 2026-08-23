@@ -661,3 +661,15 @@ optimization, cryptographic construction, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional capability-checked directory
 bookkeeping.
+
+## 2026-08-23 — bounded verified native file reads
+
+MRML source: `crates/mrml-storage/src/file.rs` and the extent/authority modules.
+
+The service uses conventional capability-checked range reads, linear extent
+resolution, sparse-hole zero filling, SHA3-256 data verification, bounded
+buffers, and partial-output erasure on verification failure. This adds no novel
+filesystem tree, caching strategy, read optimization, cryptographic
+construction, device protocol, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional checksummed extent reads.

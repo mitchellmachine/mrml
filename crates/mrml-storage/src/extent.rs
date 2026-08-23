@@ -106,6 +106,25 @@ impl ExtentRecord {
         self.block_count
     }
 
+    pub const fn file(self) -> StorageObjectId {
+        self.file
+    }
+
+    pub const fn metadata_generation(self) -> u64 {
+        self.metadata_generation
+    }
+
+    pub const fn physical_block(self) -> Option<u64> {
+        match self.kind {
+            ExtentKind::Data => Some(self.physical_block),
+            ExtentKind::Hole => None,
+        }
+    }
+
+    pub const fn content_digest(self) -> [u8; 32] {
+        self.content_digest
+    }
+
     pub fn encode(self, output: &mut [u8; EXTENT_RECORD_BYTES]) {
         *output = [0; EXTENT_RECORD_BYTES];
         output[..8].copy_from_slice(&EXTENT_MAGIC);
@@ -180,6 +199,10 @@ pub enum ExtentLocation {
 pub struct ExtentMap<const N: usize> {
     records: [Option<ExtentRecord>; N],
     count: usize,
+    file: StorageObjectId,
+    metadata_generation: u64,
+    file_length: u64,
+    block_size: u32,
     logical_blocks: u64,
 }
 
@@ -251,6 +274,10 @@ impl<const N: usize> ExtentMap<N> {
         Ok(Self {
             records: stored,
             count: records.len(),
+            file,
+            metadata_generation,
+            file_length,
+            block_size: header.block_size(),
             logical_blocks,
         })
     }
@@ -267,29 +294,52 @@ impl<const N: usize> ExtentMap<N> {
         self.logical_blocks
     }
 
-    pub fn locate(&self, logical_block: u64) -> Result<ExtentLocation, ExtentError> {
+    pub const fn file(&self) -> StorageObjectId {
+        self.file
+    }
+
+    pub const fn metadata_generation(&self) -> u64 {
+        self.metadata_generation
+    }
+
+    pub const fn file_length(&self) -> u64 {
+        self.file_length
+    }
+
+    pub const fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    pub fn record_for(&self, logical_block: u64) -> Result<ExtentRecord, ExtentError> {
         if logical_block >= self.logical_blocks {
             return Err(ExtentError::OutOfRange);
         }
-        for record in self.records[..self.count].iter().flatten().copied() {
-            let end = record.logical_block + u64::from(record.block_count);
-            if logical_block < end {
-                let offset = logical_block - record.logical_block;
-                let available =
-                    u32::try_from(end - logical_block).map_err(|_| ExtentError::Arithmetic)?;
-                return Ok(match record.kind {
-                    ExtentKind::Data => ExtentLocation::Data {
-                        physical_block: record.physical_block + offset,
-                        available_blocks: available,
-                        content_digest: record.content_digest,
-                    },
-                    ExtentKind::Hole => ExtentLocation::Hole {
-                        available_blocks: available,
-                    },
-                });
-            }
-        }
-        Err(ExtentError::IncompleteCoverage)
+        self.records[..self.count]
+            .iter()
+            .flatten()
+            .copied()
+            .find(|record| {
+                logical_block >= record.logical_block
+                    && logical_block < record.logical_block + u64::from(record.block_count)
+            })
+            .ok_or(ExtentError::IncompleteCoverage)
+    }
+
+    pub fn locate(&self, logical_block: u64) -> Result<ExtentLocation, ExtentError> {
+        let record = self.record_for(logical_block)?;
+        let end = record.logical_block + u64::from(record.block_count);
+        let offset = logical_block - record.logical_block;
+        let available = u32::try_from(end - logical_block).map_err(|_| ExtentError::Arithmetic)?;
+        Ok(match record.kind {
+            ExtentKind::Data => ExtentLocation::Data {
+                physical_block: record.physical_block + offset,
+                available_blocks: available,
+                content_digest: record.content_digest,
+            },
+            ExtentKind::Hole => ExtentLocation::Hole {
+                available_blocks: available,
+            },
+        })
     }
 }
 

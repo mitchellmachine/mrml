@@ -226,6 +226,13 @@ authority; unrelated domains continue.
    precede mutation. Cross-directory directory moves remain rejected pending a
    bounded ancestry proof, and allocator persistence awaits transactions, so
    directory operations are not yet complete or crash-safe.
+   Bounded file reads are now implemented. Exact file `READ` authority is
+   checked before range details, immutable file state must match its extent-map
+   object/generation/length, sparse holes return zeroes, and every physical data
+   extent is completely SHA3-256-verified by the backend before its requested
+   subrange is copied. Reads are capped at 1 MiB and erase partial output after
+   any backend verification failure. File writes remain the next dependency and
+   must stage new extents through the COW publication path.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

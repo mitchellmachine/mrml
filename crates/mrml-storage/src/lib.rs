@@ -10,6 +10,7 @@ mod authority;
 mod cow;
 mod directory;
 mod extent;
+mod file;
 mod format;
 mod identity;
 
@@ -25,6 +26,7 @@ pub use extent::{
     EXTENT_RECORD_BYTES, ExtentError, ExtentKind, ExtentLocation, ExtentMap, ExtentRecord,
     MAX_EXTENT_BLOCKS,
 };
+pub use file::{FileReadBackend, FileReadError, FileState, FileStateError, MAX_FILE_READ_BYTES};
 pub use format::{
     DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, DirectoryEntry, DirectoryMetadata,
     FILE_METADATA_BYTES, FileMetadata, MAX_METADATA_BLOCKS, MAX_STORAGE_NAME_BYTES, MetadataError,

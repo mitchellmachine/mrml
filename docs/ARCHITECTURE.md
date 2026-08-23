@@ -233,7 +233,11 @@ a service-allocated stable object identity; namespace removal does not revoke
 existing object capabilities, and rename preserves identity. Cross-directory
 directory moves fail closed until bounded ancestry proof prevents cycles, and
 the identity allocator is not crash-safe until transactionally persisted.
-Snapshots and crash recovery also remain unimplemented. The EFI
+Capability-authorized file reads split an arbitrary bounded range across exact
+extent records, synthesize sparse holes as zeroes, and require a backend to
+verify the complete physical extent digest before copying any data subrange.
+The buffer is erased if later verification fails. File writes, snapshots, and
+crash recovery remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import
 services, but FAT32, legacy formats, POSIX permissions, and a universal global

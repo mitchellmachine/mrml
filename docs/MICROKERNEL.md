@@ -2712,9 +2712,23 @@ bounded authoritative ancestry proof can prevent cycles. The object-ID
 allocator is volatile simulation state and must be persisted in the same future
 transaction before create becomes crash-safe.
 
-Twenty-seven focused unit tests and strict crate-local clippy pass on Windows
+The first file-I/O dependency is a bounded verified read path. Immutable
+`FileState` construction requires its stable object, metadata generation, and
+length to exactly match the validated extent map. Each read first requires exact
+file `READ` authority and rejects a handle for any other object before exposing
+range state. Requests are capped at 1 MiB, use checked offset/length arithmetic,
+and may cross any number of data and explicit-hole extents within that bound.
+Holes remain zero. For data, the unsafe backend contract must read the exact
+complete physical extent from the same immutable device generation, verify its
+SHA3-256 digest, and only then copy the requested subrange. Short, stale,
+redirected, or mismatched data fails. If a later extent fails after earlier
+segments succeeded, the entire caller output is erased before failure returns.
+This is an in-memory state and emulated-block read proof, not a native block
+driver or physical-device result.
+
+Thirty-one focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete COW backend integration, complete
-directory hierarchy/lifetime handling, file I/O, transactions, crash recovery,
+directory hierarchy/lifetime handling, file writes, transactions, crash recovery,
 snapshots, a block-device service, and configuration-checkpoint persistence
 remain unimplemented.
 
@@ -2725,7 +2739,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 27 tests, and both strict crate-local clippy
+Both current unit-test runs pass 31 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
