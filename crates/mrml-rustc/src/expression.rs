@@ -436,6 +436,11 @@ pub enum ExprKind<'source> {
         base: ExprId,
         limit: ExprId,
     },
+    IntegerEndianFrom {
+        value: ExprId,
+        integer_type: IntegerType,
+        little: bool,
+    },
     IntegerWrappingShift {
         base: ExprId,
         distance: ExprId,
@@ -733,6 +738,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerFunnelShift { .. }
             | ExprKind::IntegerSignCast { .. }
             | ExprKind::IntegerClampMagnitude { .. }
+            | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
@@ -1007,6 +1013,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerFunnelShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerSignCast { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -1604,6 +1611,40 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             Some(token) if token.text == "const" => self.const_block_expression(token, depth + 1),
             Some(token) if token.kind == TokenKind::Identifier => {
+                if let Some(integer_type) = IntegerType::from_name(token.text)
+                    && self
+                        .peek()?
+                        .is_some_and(|next| next.kind == TokenKind::PathSeparator)
+                {
+                    self.take()?;
+                    let method = self.take()?;
+                    let Some(method) =
+                        method.filter(|method| matches!(method.text, "from_be" | "from_le"))
+                    else {
+                        return Err(self.error(ExpressionErrorKind::ExpectedExpression, method));
+                    };
+                    let open = self.take()?;
+                    if !open.is_some_and(|open| open.kind == TokenKind::OpenParen) {
+                        return Err(self.error(ExpressionErrorKind::ExpectedExpression, open));
+                    }
+                    let value = self.expression(0, depth + 1)?;
+                    let close = self.take()?;
+                    let Some(close) = close.filter(|close| close.kind == TokenKind::CloseParen)
+                    else {
+                        return Err(self.error(ExpressionErrorKind::ExpectedCloseParen, close));
+                    };
+                    return self.push(Expr {
+                        kind: ExprKind::IntegerEndianFrom {
+                            value,
+                            integer_type,
+                            little: method.text == "from_le",
+                        },
+                        span: Span {
+                            start: token.span.start,
+                            end: close.span.end,
+                        },
+                    });
+                }
                 if token.text == "Default"
                     && self
                         .peek()?
@@ -2329,6 +2370,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::IntegerClampMagnitude { base, limit } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
                 self.substitute_identifier(limit, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerEndianFrom { value, .. } => {
+                self.substitute_identifier(value, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerWrappingShift { base, distance, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;

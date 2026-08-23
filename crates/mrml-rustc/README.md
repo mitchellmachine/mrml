@@ -2116,6 +2116,10 @@ values retain exactly their highest or lowest set bit or report the highest
 set-bit index plus one. Signed isolation operates on the primitive's raw
 two's-complement representation, so a negative value's highest isolated bit is
 its sign bit.
+Signed and unsigned primitive `from_be` and `from_le` associated functions
+accept one exact-type integer in constants and runtime functions. On the
+supported little-endian targets, `from_be` reverses the primitive's bytes while
+`from_le` preserves them; both retain the declared signed representation.
 Six 504- to 568-byte System V objects matched pinned Rust across zero, adjacent
 low bits, sparse patterns, both width boundaries, and unsigned maxima.
 Pinned-nightly unsigned `carryless_mul`, `extract_bits`, and `deposit_bits`

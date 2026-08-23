@@ -2319,6 +2319,7 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(limit)?;
         }
+        ExprKind::IntegerEndianFrom { value, .. } => recurse(value)?,
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
             recurse(distance)?;
@@ -3332,6 +3333,26 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::IntegerEndianFrom {
+            value,
+            integer_type,
+            ..
+        } => {
+            let value_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                value,
+                depth + 1,
+            )?;
+            if value_type != RuntimeExpressionType::Integer(None)
+                && value_type != RuntimeExpressionType::Integer(Some(integer_type))
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Integer(Some(integer_type)))
         }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             let base_type = runtime_expression_type_with_locals(
@@ -5563,6 +5584,27 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.patch_forward_branch(done_large_limit)?;
                 self.patch_forward_branch(done_upper)?;
                 self.patch_forward_branch(done_lower)?;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerEndianFrom {
+                value,
+                integer_type,
+                little,
+            } => {
+                let previous_width = self.width;
+                self.width = runtime_width(integer_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, value, depth + 1)?;
+                if !little {
+                    match self.width.bits {
+                        8 => {}
+                        16 => self.emit(&[0x66, 0xc1, 0xc8, 8])?,
+                        32 => self.emit(&[0x0f, 0xc8])?,
+                        64 => self.emit(&[0x48, 0x0f, 0xc8])?,
+                        _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
+                    }
+                }
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -14513,6 +14555,37 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn converts_integers_from_explicit_endianness() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { u8::from_be(input) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> i16 { i16::from_le(input) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { u32::from_be(input) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { i64::from_le(input) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> usize { usize::from_be(input) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> u32 { u32::from_be(input) }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows)
+                .is_err()
+        );
     }
 
     #[test]

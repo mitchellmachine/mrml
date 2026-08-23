@@ -2470,6 +2470,26 @@ fn rustc_integer_bit_and_byte_reordering_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_integer_endian_constructors_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { u8::from_be(input) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> i16 { i16::from_le(input) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> u32 { u32::from_be(input) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { i64::from_le(input) }",
+        "const VALUE: u16 = u16::from_be(0x1234u16); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+        "const VALUE: i32 = i32::from_le(-305419896i32); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_next_power_of_two_methods_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { input.next_power_of_two() }",

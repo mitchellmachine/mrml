@@ -214,6 +214,7 @@ pub fn analyze_constants<
                         | ExprKind::IntegerFunnelShift { .. }
                         | ExprKind::IntegerSignCast { .. }
                         | ExprKind::IntegerClampMagnitude { .. }
+                        | ExprKind::IntegerEndianFrom { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
@@ -1920,6 +1921,7 @@ fn evaluate_integer_const_expression<
                 | ExprKind::IntegerFunnelShift { .. }
                 | ExprKind::IntegerSignCast { .. }
                 | ExprKind::IntegerClampMagnitude { .. }
+                | ExprKind::IntegerEndianFrom { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
@@ -2078,6 +2080,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerClampMagnitude { base, limit } => {
             recurse(base, inside_inline_const) || recurse(limit, inside_inline_const)
         }
+        ExprKind::IntegerEndianFrom { value, .. } => recurse(value, inside_inline_const),
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
@@ -2206,6 +2209,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         } => recurse(base) || recurse(other) || recurse(distance),
         ExprKind::IntegerSignCast { base, .. } => recurse(base),
         ExprKind::IntegerClampMagnitude { base, limit } => recurse(base) || recurse(limit),
+        ExprKind::IntegerEndianFrom { value, .. } => recurse(value),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
@@ -2666,6 +2670,36 @@ fn evaluate_call_aware_integer<
         }
         ExprKind::IntegerClampMagnitude { .. } => {
             return Err(SemanticErrorKind::UnsupportedConstCall);
+        }
+        ExprKind::IntegerEndianFrom {
+            value,
+            integer_type,
+            little,
+        } => {
+            if ty != integer_type
+                || integer_expression_type(context, symbol_count, tree, value, constants)
+                    .is_some_and(|actual| actual != integer_type)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let value = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                value,
+                integer_type,
+                constants,
+                depth,
+            )?;
+            transform_integer_bits(
+                value,
+                bits,
+                if little {
+                    crate::expression::IntegerBitTransform::ToLittleEndian
+                } else {
+                    crate::expression::IntegerBitTransform::ToBigEndian
+                },
+            )
         }
         ExprKind::IntegerBitTransform { base, transform } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
@@ -3639,6 +3673,28 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::IntegerClampMagnitude { .. } => {
             return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
         }
+        ExprKind::IntegerEndianFrom {
+            value,
+            integer_type,
+            little,
+        } => {
+            if ty != integer_type
+                || expression_integer_type(tree, value, constants)
+                    .is_some_and(|actual| actual != integer_type)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let value = recurse(value)?;
+            transform_integer_bits(
+                value,
+                bits,
+                if little {
+                    crate::expression::IntegerBitTransform::ToLittleEndian
+                } else {
+                    crate::expression::IntegerBitTransform::ToBigEndian
+                },
+            )
+        }
         ExprKind::IntegerWrappingShift {
             base,
             distance,
@@ -3859,6 +3915,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
         ExprKind::IntegerClampMagnitude { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
+        ExprKind::IntegerEndianFrom { integer_type, .. } => Some(integer_type),
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
