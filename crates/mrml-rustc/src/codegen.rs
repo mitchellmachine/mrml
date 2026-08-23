@@ -10977,6 +10977,32 @@ impl<
             return Err(self.error(CodegenErrorKind::ValueOutOfRange));
         }
         let element = elements[field].ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+        match tree.expression(base).map(|expr| expr.kind) {
+            Some(ExprKind::Tuple {
+                elements,
+                element_count,
+            }) => {
+                if field >= element_count {
+                    return Err(self.error(CodegenErrorKind::ValueOutOfRange));
+                }
+                let value = elements[field]
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                let previous_width = self.width;
+                self.width = runtime_expression_width(runtime_type_from_array_element(element))
+                    .unwrap_or(previous_width);
+                let emission = self.emit_expression(tree, value, depth + 1);
+                self.width = previous_width;
+                emission?;
+                return self.emit_normalize_array_element(element);
+            }
+            Some(ExprKind::Return { operand } | ExprKind::LoopBreak { operand }) => {
+                return self.emit_tuple_field(tree, operand, field, depth + 1);
+            }
+            Some(ExprKind::Ascribe { operand, .. }) => {
+                return self.emit_tuple_field(tree, operand, field, depth + 1);
+            }
+            _ => {}
+        }
         if let Some(ExprKind::Identifier(name)) = tree.expression(base).map(|expr| expr.kind)
             && let Some(index) = self.locals[..self.saved_locals]
                 .iter()
@@ -11047,6 +11073,31 @@ impl<
             Some(ExprKind::Call { .. })
         ) {
             return self.emit_expression(tree, root, 0);
+        }
+        if let Some(
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            }
+            | ExprKind::LoopBreakIf {
+                condition,
+                then_branch,
+                else_branch,
+            },
+        ) = tree.expression(root).map(|expr| expr.kind)
+        {
+            self.emit_expression(tree, condition, 0)?;
+            self.emit(&[0x48, 0x85, 0xc0])?;
+            let else_patch = self.emit_forward_branch(0x84)?;
+            let branch_depth = self.evaluation_depth;
+            self.emit_tuple_to_stack(tree, then_branch, expected)?;
+            let end_patch = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(else_patch)?;
+            self.evaluation_depth = branch_depth;
+            self.emit_tuple_to_stack(tree, else_branch, expected)?;
+            self.patch_forward_branch(end_patch)?;
+            return Ok(());
         }
         if let Some(ExprKind::Tuple {
             elements,

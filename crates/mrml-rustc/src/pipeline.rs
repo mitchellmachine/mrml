@@ -630,6 +630,14 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedReturnType)
         );
 
+        let tuple_conditional = "fn choose(value: (u16, bool), alternate: (u16, bool), first: bool) -> (u16, bool) { if first { value } else { alternate } } #[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, flag: bool, choose_first: bool) -> u64 { let selected: (u16, bool) = choose((first, flag), (second, !flag), choose_first); selected.0 as u64 + if selected.1 { 100 } else { 0 } }";
+        let result = compile_wide(tuple_conditional, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
+        let tuple_value_loop = "fn choose(value: (u16, bool), alternate: (u16, bool), first: bool) -> (u16, bool) { loop { if first { break value; } break alternate; } } #[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, flag: bool, choose_first: bool) -> u64 { let selected: (u16, bool) = choose((first, flag), (second, !flag), choose_first); selected.0 as u64 + if selected.1 { 100 } else { 0 } }";
+        let result = compile_wide(tuple_value_loop, "answer", ObjectFormat::Elf64);
+        assert!(result.is_ok(), "{result:?}");
+
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
         let error = compile(capture, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(

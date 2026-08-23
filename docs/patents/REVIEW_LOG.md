@@ -281,3 +281,15 @@ cryptographic construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional shared-memory mapping and
 lifecycle revocation.
+
+## 2026-08-23 — lazy tuple-valued compiler control flow
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Tuple-valued conditionals and bounded value-producing loops now select one
+existing branch and materialize its fixed stack slots once. This reuses
+conventional branch lowering, aggregate copying, and loop-break representation;
+it introduces no novel algorithm, ABI, protocol, cryptographic construction,
+or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary aggregate control-flow lowering.

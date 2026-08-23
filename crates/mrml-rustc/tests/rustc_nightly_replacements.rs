@@ -986,6 +986,24 @@ fn rustc_bounded_scalar_tuples_have_an_executable_replacement() {
 }
 
 #[test]
+fn rustc_tuple_control_flow_is_lazy_and_single_evaluation() {
+    // Original tuple-control replacement with an observably mutating condition;
+    // each selected conditional or value-loop tuple evaluates it exactly once.
+    let source = "fn toggle(flag: &mut bool) -> bool { *flag = !*flag; *flag } fn choose(value: (u16, bool, char), alternate: (u16, bool, char), flag: &mut bool, via_loop: bool) -> (u16, bool, char) { if via_loop { return loop { if toggle(flag) { break value; } break alternate; }; } if toggle(flag) { value } else { alternate } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: u16, second: u16, initial: bool, via_loop: bool) -> u64 { let mut state: bool = initial; let selected: (u16, bool, char) = choose((first, false, 'x'), (second, true, 'y'), &mut state, via_loop); selected.0 as u64 + if selected.1 { 100 } else { 0 } + if selected.2 == 'x' { 10 } else { 20 } + if state { 1000 } else { 0 } }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<4096, 3072, 8, 8, 8, 128>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.

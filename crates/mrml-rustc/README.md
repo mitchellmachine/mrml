@@ -2765,6 +2765,14 @@ return ABI boundaries. Tuple elements are limited to built-in
 integers, Boolean, character, and unit; tuple nesting, destructuring, field
 mutation, references in tuples, ownership, and public tuple ABI transport are
 not claimed.
+A tuple-control probe produced an 854-byte COFF object and a 1248-byte ELF64
+object. Independent pinned-nightly callers matched four conditional and
+value-loop paths on Windows and Arch Linux. Its helper condition toggled a
+caller-visible Boolean reference: both the selected tuple fields and final
+state prove the condition ran exactly once, the unselected aggregate remained
+lazy, and normal versus loop-break tuple materialization agreed at zero and
+`u16::MAX` boundaries. General tuple sequencing and nested tuple control-flow
+graphs remain outside this bounded slice.
 A diverging `-> !` helper produced a 172-byte COFF object and a 568-byte ELF64
 object. Independent pinned-nightly callers matched six reachable non-diverging
 branch cases on Windows and Arch Linux, including zero and integer-width
