@@ -2931,8 +2931,11 @@ Supported scalar expression statements now use that visitor at top level,
 inside conditional arms, in direct and nested loop actions, and after loops.
 Their reads are reserved in exact scoped emission order without introducing a
 second name-resolution or access-classification path. Conditions, control
-values, scalar tails, method/call families, and aggregate materialization remain
-outside this preanalysis slice.
+values, and scalar tails now use the same path for supported top-level branches
+and returns, while heads, direct conditional loop controls, conditional loop
+blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
+Method/call families, aggregate/fat materialization and returns, aggregate tails,
+and interleaved nested-loop controls remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
 steal a reserved source identity. The prepass now enumerates all declaration
@@ -2969,6 +2972,14 @@ plus warnings-denied Clippy on both hosts. Its adversarial unit test proves 12
 exact parameter and stable-local identities across initializer, conditional-arm,
 loop, nested-scope, and post-loop statement order. Its original replacement
 emits both COFF and ELF64 objects through the same scoped statement shapes.
+
+The condition/return/scalar-tail read milestone passed all 582 compiler and
+driver tests on Windows gnullvm and all 582 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+14 exact parameter and stable-local identities across a top-level condition and
+return, while head, in-loop condition, branch-local initializer and return, and
+the final scalar tail. Its original replacement emits both COFF and ELF64
+objects through those same control and scope shapes.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

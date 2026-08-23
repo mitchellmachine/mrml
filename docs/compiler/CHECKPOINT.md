@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e0651b64dc3b02f9fe58bd3df3cb723dfc07b06a`
-  (`Preanalyze expression statement reads`)
+- Compiler checkpoint commit: `b221085e01aabe336b4028aca73f4685f0dfb3c1`
+  (`Preanalyze condition and scalar tail reads`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -80,16 +80,19 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   previous-binding identity across sequential and scoped shadowing; and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
-  statements in the emitter's exact scoped order.
+  statements in the emitter's exact scoped order; and
+- scalar read planning for top-level branch conditions and returns, while-loop
+  heads, direct conditional loop controls, conditional loop blocks/arms and
+  branch-local returns, explicit scalar returns, and final scalar tails.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Aggregate/fat-reference initializers, compound array bases,
-method/call families, conditions/control values, tails, and other body reads
-remain emission-time facts. Names are still resolved during
+borrow checker. Aggregate/fat-reference initializers and returns, compound array
+bases, method/call families, interleaved nested-loop controls, aggregate tails,
+and other body reads remain emission-time facts. Names are still resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Initialization/move paths, body basic blocks and edges, borrows, loans, regions,
@@ -100,8 +103,8 @@ Polonius-style analysis, and a general trait solver are unimplemented.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. expand bounded read-place preanalysis across supported conditions/control
-   values and scalar tails in exact emission order;
+1. complete bounded read-place preanalysis for interleaved nested-loop controls
+   and supported aggregate/materialization families in exact emission order;
 2. add explicit basic blocks and control-flow edges;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
@@ -128,8 +131,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 580 tests on each host: 320
-library tests, 10 conformance tests, 248 replacement tests, and 2 driver tests.
+The checkpoint source passed 582 tests on each host: 321
+library tests, 10 conformance tests, 249 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
