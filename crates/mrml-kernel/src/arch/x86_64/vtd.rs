@@ -5,7 +5,9 @@ use crate::{DeviceAddress, GranuleHardwareOutcome, PhysAddr};
 use super::DmaIsolation;
 
 const ECAP_OFFSET: usize = 0x10;
+const CAP_OFFSET: usize = 0x08;
 const CCMD_OFFSET: usize = 0x28;
+const FSTS_OFFSET: usize = 0x34;
 const COMMAND_PENDING: u64 = 1 << 63;
 const GLOBAL_GRANULARITY: u64 = 1 << 60;
 const CCMD_ACTUAL_SHIFT: u32 = 59;
@@ -17,6 +19,8 @@ const IOTLB_OFFSET_DELTA: usize = 8;
 const VTD_PERMISSION_MASK: u64 = 0b11;
 const VTD_LARGE_PAGE: u64 = 1 << 7;
 const VTD_ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
+const FAULT_STATUS_MASK: u32 = 0xff;
+const FAULT_VALID: u64 = 1 << 63;
 const DMAR_HEADER_BYTES: usize = 48;
 const DRHD_HEADER_BYTES: usize = 16;
 const DEVICE_SCOPE_HEADER_BYTES: usize = 6;
@@ -31,6 +35,20 @@ pub enum VtdError {
     InvalidLeaf,
     Busy,
     InvalidCompletion,
+    InvalidFaultLayout,
+    FaultPending,
+    FaultChanged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VtdFaultSnapshot {
+    pub status: u32,
+    pub record_index: u8,
+    pub requester_id: u16,
+    pub reason: u8,
+    pub read: bool,
+    pub address: u64,
+    record_high: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -640,6 +658,8 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, DmarError> {
 
 /// Narrow register boundary for one VT-d remapping hardware unit.
 pub trait VtdRegisterIo {
+    fn read32(&mut self, offset: usize) -> u32;
+    fn write32(&mut self, offset: usize, value: u32);
     fn read64(&mut self, offset: usize) -> u64;
     fn write64(&mut self, offset: usize, value: u64);
 }
@@ -664,6 +684,22 @@ impl NativeVtdMmio {
 }
 
 impl VtdRegisterIo for NativeVtdMmio {
+    fn read32(&mut self, offset: usize) -> u32 {
+        if offset > self.bytes.saturating_sub(4) || !offset.is_multiple_of(4) {
+            return u32::MAX;
+        }
+        // SAFETY: construction establishes the mapped MMIO range.
+        unsafe { self.base.add(offset).cast::<u32>().read_volatile() }
+    }
+
+    fn write32(&mut self, offset: usize, value: u32) {
+        if offset > self.bytes.saturating_sub(4) || !offset.is_multiple_of(4) {
+            return;
+        }
+        // SAFETY: construction establishes the mapped MMIO range.
+        unsafe { self.base.add(offset).cast::<u32>().write_volatile(value) };
+    }
+
     fn read64(&mut self, offset: usize) -> u64 {
         if offset > self.bytes.saturating_sub(8) || !offset.is_multiple_of(8) {
             return u64::MAX;
@@ -686,11 +722,14 @@ impl VtdRegisterIo for NativeVtdMmio {
 pub struct VtdInvalidator<R> {
     registers: R,
     iotlb_offset: usize,
+    fault_offset: usize,
+    fault_records: u16,
     poll_limit: u32,
 }
 
 impl<R: VtdRegisterIo> VtdInvalidator<R> {
     pub fn new(mut registers: R, poll_limit: u32) -> Result<Self, VtdError> {
+        let capability = registers.read64(CAP_OFFSET);
         let ecap = registers.read64(ECAP_OFFSET);
         let invalidation_base = ((ecap >> 8) & 0x3ff) as usize * 16;
         let iotlb_offset = invalidation_base
@@ -699,9 +738,21 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
         if poll_limit == 0 || invalidation_base == 0 || !iotlb_offset.is_multiple_of(8) {
             return Err(VtdError::InvalidRegisterLayout);
         }
+        let fault_offset = (((capability >> 24) & 0x3ff) as usize)
+            .checked_mul(16)
+            .ok_or(VtdError::InvalidFaultLayout)?;
+        let fault_records = (((capability >> 40) & 0xff) as u16) + 1;
+        let fault_end = fault_offset
+            .checked_add(usize::from(fault_records) * 16)
+            .ok_or(VtdError::InvalidFaultLayout)?;
+        if fault_offset == 0 || fault_end <= fault_offset {
+            return Err(VtdError::InvalidFaultLayout);
+        }
         Ok(Self {
             registers,
             iotlb_offset,
+            fault_offset,
+            fault_records,
             poll_limit,
         })
     }
@@ -720,6 +771,7 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
     }
 
     pub fn ready(&mut self) -> Result<(), VtdError> {
+        self.require_healthy()?;
         self.wait_clear(CCMD_OFFSET)?;
         self.wait_clear(self.iotlb_offset)?;
         Ok(())
@@ -741,7 +793,80 @@ impl<R: VtdRegisterIo> VtdInvalidator<R> {
         if (iotlb >> IOTLB_ACTUAL_SHIFT) & ACTUAL_MASK == 0 {
             return Err(VtdError::InvalidCompletion);
         }
+        self.require_healthy()
+    }
+
+    pub fn snapshot_fault(&mut self) -> Option<VtdFaultSnapshot> {
+        let status = self.registers.read32(FSTS_OFFSET);
+        if status & FAULT_STATUS_MASK == 0 {
+            return None;
+        }
+        let index = ((status >> 8) & 0xff) as u8;
+        if status & (1 << 1) == 0 || u16::from(index) >= self.fault_records {
+            return Some(VtdFaultSnapshot {
+                status,
+                record_index: index,
+                requester_id: 0,
+                reason: 0,
+                read: false,
+                address: 0,
+                record_high: 0,
+            });
+        }
+        let offset = self.fault_offset + usize::from(index) * 16;
+        let high = self.registers.read64(offset + 8);
+        if high & FAULT_VALID == 0 {
+            return Some(VtdFaultSnapshot {
+                status,
+                record_index: index,
+                requester_id: 0,
+                reason: 0,
+                read: false,
+                address: 0,
+                record_high: 0,
+            });
+        }
+        let low = self.registers.read64(offset);
+        if self.registers.read64(offset + 8) != high {
+            return Some(VtdFaultSnapshot {
+                status,
+                record_index: index,
+                requester_id: 0,
+                reason: 0,
+                read: false,
+                address: 0,
+                record_high: 0,
+            });
+        }
+        Some(VtdFaultSnapshot {
+            status,
+            record_index: index,
+            requester_id: high as u16,
+            reason: (high >> 32) as u8,
+            read: high & (1 << 62) != 0,
+            address: low & VTD_ADDRESS_MASK,
+            record_high: high,
+        })
+    }
+
+    pub fn acknowledge_fault(&mut self, snapshot: VtdFaultSnapshot) -> Result<(), VtdError> {
+        if snapshot.record_high != 0 {
+            let offset = self.fault_offset + usize::from(snapshot.record_index) * 16 + 8;
+            if self.registers.read64(offset) != snapshot.record_high {
+                return Err(VtdError::FaultChanged);
+            }
+            self.registers.write64(offset, FAULT_VALID);
+        }
+        self.registers.write32(FSTS_OFFSET, snapshot.status & 0xfd);
         Ok(())
+    }
+
+    fn require_healthy(&mut self) -> Result<(), VtdError> {
+        if self.registers.read32(FSTS_OFFSET) & FAULT_STATUS_MASK == 0 {
+            Ok(())
+        } else {
+            Err(VtdError::FaultPending)
+        }
     }
 
     pub fn into_registers(self) -> R {
@@ -810,20 +935,42 @@ mod tests {
     struct Registers {
         values: [u64; 130],
         fail_iotlb: bool,
+        fault_on_iotlb: bool,
+        fault_status: u32,
     }
 
     impl Registers {
         fn new(fail_iotlb: bool) -> Self {
             let mut values = [0; 130];
+            values[CAP_OFFSET / 8] = 0x40 << 24;
             values[ECAP_OFFSET / 8] = 0x20 << 8;
-            Self { values, fail_iotlb }
+            Self {
+                values,
+                fail_iotlb,
+                fault_on_iotlb: false,
+                fault_status: 0,
+            }
         }
     }
 
     impl VtdRegisterIo for Registers {
+        fn read32(&mut self, offset: usize) -> u32 {
+            if offset == FSTS_OFFSET {
+                self.fault_status
+            } else {
+                self.values[offset / 8] as u32
+            }
+        }
+
+        fn write32(&mut self, offset: usize, value: u32) {
+            if offset == FSTS_OFFSET {
+                self.fault_status &= !value;
+            }
+        }
+
         fn read64(&mut self, offset: usize) -> u64 {
             let value = self.values[offset / 8];
-            if value & COMMAND_PENDING == 0 {
+            if !matches!(offset, CCMD_OFFSET | 0x208) || value & COMMAND_PENDING == 0 {
                 return value;
             }
             if self.fail_iotlb && offset == 0x208 {
@@ -832,6 +979,9 @@ mod tests {
             let completed = if offset == CCMD_OFFSET {
                 (value & !COMMAND_PENDING) | (1 << CCMD_ACTUAL_SHIFT)
             } else {
+                if self.fault_on_iotlb {
+                    self.fault_status |= 1 << 6;
+                }
                 (value & !COMMAND_PENDING) | (1 << IOTLB_ACTUAL_SHIFT)
             };
             self.values[offset / 8] = completed;
@@ -839,7 +989,12 @@ mod tests {
         }
 
         fn write64(&mut self, offset: usize, value: u64) {
-            self.values[offset / 8] = value;
+            if offset >= 0x400 && offset % 16 == 8 && value & FAULT_VALID != 0 {
+                self.values[offset / 8] &= !FAULT_VALID;
+                self.fault_status &= !(1 << 1);
+            } else {
+                self.values[offset / 8] = value;
+            }
         }
     }
 
@@ -1052,6 +1207,38 @@ mod tests {
         let physical = PhysAddr::new(0x80_0000).unwrap();
         let mut leaf = physical.get() | VTD_PERMISSION_MASK;
         let invalidator = VtdInvalidator::new(Registers::new(true), 2).unwrap();
+        let mut dma = unsafe { VtdDmaIsolation::new(physical, &mut leaf, invalidator).unwrap() };
+        assert_eq!(
+            dma.deny_and_invalidate(physical),
+            GranuleHardwareOutcome::FailStop
+        );
+    }
+
+    #[test]
+    fn snapshots_and_explicitly_acknowledges_primary_fault() {
+        let mut registers = Registers::new(false);
+        registers.fault_status = 1 << 1;
+        registers.values[0x400 / 8] = 0x1234_5000;
+        registers.values[0x408 / 8] = FAULT_VALID | (1 << 62) | (0x25 << 32) | 0x031a;
+        let mut invalidator = VtdInvalidator::new(registers, 4).unwrap();
+        assert_eq!(invalidator.ready(), Err(VtdError::FaultPending));
+        let snapshot = invalidator.snapshot_fault().unwrap();
+        assert_eq!(snapshot.requester_id, 0x031a);
+        assert_eq!(snapshot.reason, 0x25);
+        assert!(snapshot.read);
+        assert_eq!(snapshot.address, 0x1234_5000);
+        invalidator.acknowledge_fault(snapshot).unwrap();
+        assert_eq!(invalidator.snapshot_fault(), None);
+        assert_eq!(invalidator.ready(), Ok(()));
+    }
+
+    #[test]
+    fn fault_raised_after_dma_leaf_write_is_fail_stop() {
+        let physical = PhysAddr::new(0x90_0000).unwrap();
+        let mut leaf = physical.get() | VTD_PERMISSION_MASK;
+        let mut registers = Registers::new(false);
+        registers.fault_on_iotlb = true;
+        let invalidator = VtdInvalidator::new(registers, 4).unwrap();
         let mut dma = unsafe { VtdDmaIsolation::new(physical, &mut leaf, invalidator).unwrap() };
         assert_eq!(
             dma.deny_and_invalidate(physical),

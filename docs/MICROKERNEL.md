@@ -307,8 +307,22 @@ the firmware base as bus-zero-relative, validates the full end-bus physical
 extent, and maps only the declared start-through-end range. A fixed-capacity
 dispatcher rejects overlapping windows and routes each configuration read to
 exactly one segment window. ACPI `_CBA` hot-plug discovery, multi-unit VT-d MMIO
-assembly, fault-record handling, and real-hardware validation remain required
-before stronger claims are enabled.
+assembly, and real-hardware validation remain required before stronger claims
+are enabled.
+
+VT-d invalidation setup now derives the primary fault-record offset and count
+from each unit's capability register rather than assuming chipset addresses.
+Before any DMA leaf write, the adapter requires a clear fault status as well as
+idle invalidation commands. After context-cache and IOTLB completion it checks
+fault status again; a fault appearing after the leaf write becomes `FailStop`,
+while a pre-existing fault is rejected before mutation. Fault snapshots read
+the hardware-selected record only within the reported count, require the
+hardware validity bit, read details before re-reading the high word for
+stability, and expose requester ID, reason, direction, and page address.
+Acknowledgement is explicit, rejects a changed record, clears the record's
+write-one-to-clear validity bit first, and then acknowledges only status bits
+present in the captured snapshot. Fault evidence must be logged by monitor
+policy before acknowledgement; merely clearing it does not authorize resume.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 
