@@ -2890,6 +2890,25 @@ projection failure, and the absence of a duplicate empty read fact for direct
 dereferences. Existing pinned-nightly native scalar-reference and raw-pointer
 replacement cases preserve differential executable coverage.
 
+Runtime local and access facts now reside in a standalone fixed-capacity body
+table outside the x86 emitter's machine-code buffers. A pre-emission pass types
+the supported leading straight-line named-local prefix and assigns stable IDs,
+mutability, types, and translated declaration spans before the prologue exists.
+The emitter consumes those declarations exactly once. Inlined-helper parameters
+and later scoped locals append to the table's dynamic tail, so expansion cannot
+steal a reserved source identity. The prepass does not yet enumerate
+conditional/loop declarations or all body accesses and is not a complete typed
+body IR.
+
+The typed body-fact ownership milestone passed all 566 compiler and driver tests
+on Windows gnullvm and all 566 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Its adversarial test independently builds
+the table before emission, proves explicit and inferred local types and source-
+ordered IDs, and corrupts the consumption order to require
+`InvalidRuntimePlaceFacts`. Existing pinned-nightly typed-local, shadowing,
+scoped-local, and inlined-helper native replacements preserve differential
+executable coverage.
+
 The bounded runtime-read-fact milestone passed all 563 compiler and driver
 tests on Windows gnullvm and all 563 in release mode on native Arch Linux WSL,
 plus warnings-denied Clippy on both hosts. The source remained `no_std`,

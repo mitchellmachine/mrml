@@ -488,6 +488,20 @@ no novel algorithm, ABI, protocol, cryptographic construction, or optimization.
 Patent review: `NOT_TRIGGERED` — ordinary bounded compiler place/use discovery
 within the existing Rust-subset compiler category.
 
+## 2026-08-23 — standalone typed runtime body facts
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Local and place-access facts now occupy a conventional fixed-capacity object
+separate from machine-code buffers. A bounded pre-emission pass assigns types,
+source spans, and monotonic identities to a supported straight-line declaration
+prefix, while later expansion facts use a checked tail. This adds no novel
+algorithm, ABI, protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler symbol-table ownership,
+preanalysis, and invariant checking within the existing Rust-subset compiler
+category.
+
 ## 2026-08-23 — signed CPL3 configuration read dispatch
 
 MRML source: `crates/mrml-config`, `crates/mrml-kernel`, the signed kernel and

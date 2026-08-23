@@ -169,8 +169,18 @@ local identities, referenced local/parameter types, projection/type shape,
 binding mutability, and the absence of holes in the ordered access facts.
 Capacity exhaustion and inconsistent internal facts fail explicitly.
 
-These tables cover the current runtime emission, including expanded inlined
-helper bodies; they are ephemeral compiler state rather than serialized IR.
+Local and access facts now live in a standalone fixed-capacity
+`RuntimeBodyFacts` object borrowed by the x86 emitter rather than in its machine-
+code state. Before the prologue is emitted, a bounded analysis pass types the
+supported leading straight-line local-declaration prefix and assigns each named
+binding its stable ID, mutability, type, and translated declaration span.
+Emission must consume every preassigned declaration exactly once. Inlined helper
+parameters and later scoped locals append to a checked dynamic tail and cannot
+steal a preassigned source identity; mismatches fail as
+`InvalidRuntimePlaceFacts`.
+
+The table still covers current runtime emission, including expanded inlined
+helper bodies; it is ephemeral compiler state rather than serialized IR.
 Expression identifiers still resolve by name before their stable fact is
 recorded. A bounded source-independent discovery pass can now peel identifier,
 dereference, index, tuple-field, subslice, transparent wrapper, and sequence-tail
@@ -178,11 +188,12 @@ syntax into an ordered read-place projection chain. A fifth projection and a
 64-level discovery nesting overflow fail explicitly. Direct scalar dereference
 emission consumes that discovery and records one projected read instead of an
 empty base read. Specialized direct aggregate paths reuse the same recorder.
-The discovery is not yet a body-wide table or universally consumed by nested
-emission paths. Parser/semantic locals also still resolve by name, and there is
-not yet a complete typed body table, move path, borrow, loan, or CFG. This
-runtime place foundation is therefore an incremental prerequisite, not a claim
-of ownership checking.
+The discovery is not yet universally consumed by nested emission paths. The
+prepass does not yet enumerate declarations in conditional/loop scopes, analyze
+all reads and writes, or replace name lookup across the whole body. There is not
+yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
+place foundation is therefore an incremental prerequisite, not a claim of
+ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 

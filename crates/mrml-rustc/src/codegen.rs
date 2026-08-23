@@ -835,6 +835,16 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
+    let mut body_facts = RuntimeBodyFacts::EMPTY;
+    let preanalyzed_local_count =
+        preanalyze_runtime_local_prefix::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            function,
+            resolver,
+            &body,
+            operand_type,
+            function.body_expression_span.start,
+            &mut body_facts,
+        )?;
     let mut emitter = RuntimeEmitter::<_, MAX_BYTES, MAX_PARAMETERS> {
         bytes: [0; MAX_BYTES],
         length: 0,
@@ -849,10 +859,9 @@ pub fn compile_x86_64_function_with_options<
         saved_parameter_slots,
         locals: [None; MAX_PARAMETERS],
         saved_locals: 0,
-        local_facts: [None; MAX_RUNTIME_LOCAL_FACTS],
-        local_fact_count: 0,
-        place_access_facts: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
-        place_access_fact_count: 0,
+        body_facts: &mut body_facts,
+        preanalyzed_local_count,
+        preanalyzed_local_cursor: 0,
         evaluation_depth: 0,
         runtime_call_depth: 0,
         runtime_call_names: [None; 8],
@@ -2103,6 +2112,7 @@ struct RuntimeLocalFact<'source> {
     name: &'source str,
     ty: RuntimeExpressionType,
     mutable: bool,
+    declaration_span: Option<Span>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2112,6 +2122,45 @@ struct RuntimePlaceAccessFact {
     ty: RuntimeExpressionType,
     access: RuntimePlaceAccess,
     span: Span,
+}
+
+struct RuntimeBodyFacts<'source> {
+    locals: [Option<RuntimeLocalFact<'source>>; MAX_RUNTIME_LOCAL_FACTS],
+    local_count: usize,
+    accesses: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
+    access_count: usize,
+}
+
+impl<'source> RuntimeBodyFacts<'source> {
+    const EMPTY: Self = Self {
+        locals: [None; MAX_RUNTIME_LOCAL_FACTS],
+        local_count: 0,
+        accesses: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
+        access_count: 0,
+    };
+
+    fn push_local(
+        &mut self,
+        name: &'source str,
+        ty: RuntimeExpressionType,
+        mutable: bool,
+        declaration_span: Option<Span>,
+    ) -> Result<RuntimeLocalId, CodegenErrorKind> {
+        let slot = self
+            .locals
+            .get_mut(self.local_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeLocalFacts)?;
+        let id = RuntimeLocalId(self.local_count);
+        *slot = Some(RuntimeLocalFact {
+            id,
+            name,
+            ty,
+            mutable,
+            declaration_span,
+        });
+        self.local_count += 1;
+        Ok(id)
+    }
 }
 
 fn runtime_array_type(text: &str) -> Option<RuntimeExpressionType> {
@@ -2195,6 +2244,121 @@ fn runtime_type_from_text(text: &str) -> Option<RuntimeExpressionType> {
                 crate::IntegerType::from_name(name)?,
             ))),
         })
+}
+
+fn resolve_runtime_local_type<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'source>>],
+    local: &crate::LocalBinding<'source>,
+    operand_type: &str,
+    body_start: usize,
+) -> Result<RuntimeExpressionType, CodegenError> {
+    let tree = local
+        .parse_initializer::<MAX_EXPRESSION_NODES>()
+        .map_err(|error| CodegenError {
+            kind: CodegenErrorKind::Expression(error.kind),
+            span: translate_span(body_start + local.initializer_span.start, error.span),
+        })?;
+    let initializer_type =
+        runtime_expression_type_with_locals(function, resolver, locals, &tree, tree.root(), 0)
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, local.initializer_span),
+            })?;
+    let local_type = if let Some(ty) = local.ty {
+        runtime_type_from_text(ty.text).ok_or(CodegenError {
+            kind: CodegenErrorKind::UnsupportedRuntimeType,
+            span: translate_span(body_start, ty.span),
+        })?
+    } else {
+        match initializer_type {
+            RuntimeExpressionType::Never | RuntimeExpressionType::Default => {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::RuntimeTypeMismatch,
+                    span: translate_span(body_start, local.initializer_span),
+                });
+            }
+            RuntimeExpressionType::Integer(None) => {
+                RuntimeExpressionType::Integer(crate::IntegerType::from_name(operand_type))
+            }
+            inferred => inferred,
+        }
+    };
+    if !runtime_types_compatible(initializer_type, local_type) {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeTypeMismatch,
+            span: translate_span(body_start, local.initializer_span),
+        });
+    }
+    Ok(local_type)
+}
+
+fn preanalyze_runtime_local_prefix<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    body: &crate::FunctionBody<'source, MAX_PARAMETERS>,
+    operand_type: &str,
+    body_start: usize,
+    facts: &mut RuntimeBodyFacts<'source>,
+) -> Result<usize, CodegenError> {
+    let mut locals: [Option<RuntimeLocal<'source>>; MAX_PARAMETERS] = [None; MAX_PARAMETERS];
+    let mut local_count = 0usize;
+    for statement in body.statements().iter().flatten() {
+        let crate::BodyStatement::Local(index) = *statement else {
+            break;
+        };
+        let local = body.locals()[index].ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+            span: translate_span(body_start, function.body),
+        })?;
+        let ty = resolve_runtime_local_type::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            function,
+            resolver,
+            &locals[..local_count],
+            &local,
+            operand_type,
+            body_start,
+        )?;
+        if local.name == "_" {
+            continue;
+        }
+        let stack_slots = runtime_local_stack_slots(ty);
+        let id = facts
+            .push_local(
+                local.name,
+                ty,
+                local.mutable,
+                Some(translate_span(body_start, local.name_span)),
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, local.name_span),
+            })?;
+        let slot = locals.get_mut(local_count).ok_or(CodegenError {
+            kind: CodegenErrorKind::TooManyRuntimeLocals,
+            span: translate_span(body_start, local.name_span),
+        })?;
+        *slot = Some(RuntimeLocal {
+            id,
+            name: local.name,
+            ty,
+            mutable: local.mutable,
+            stack_slots,
+        });
+        local_count += 1;
+    }
+    Ok(facts.local_count)
 }
 
 fn runtime_place_projections_valid(
@@ -6574,10 +6738,9 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     saved_parameter_slots: usize,
     locals: [Option<RuntimeLocal<'tree>>; MAX_PARAMETERS],
     saved_locals: usize,
-    local_facts: [Option<RuntimeLocalFact<'tree>>; MAX_RUNTIME_LOCAL_FACTS],
-    local_fact_count: usize,
-    place_access_facts: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
-    place_access_fact_count: usize,
+    body_facts: &'tree mut RuntimeBodyFacts<'tree>,
+    preanalyzed_local_count: usize,
+    preanalyzed_local_cursor: usize,
     evaluation_depth: usize,
     runtime_call_depth: usize,
     runtime_call_names: [Option<&'tree str>; 8],
@@ -6609,23 +6772,31 @@ impl<
         ty: RuntimeExpressionType,
         mutable: bool,
         stack_slots: usize,
+        declaration_span: Option<Span>,
     ) -> Result<(), CodegenError> {
         if self.saved_locals == MAX_PARAMETERS {
             return Err(self.error(CodegenErrorKind::TooManyRuntimeLocals));
         }
-        let capacity_error = self.error(CodegenErrorKind::TooManyRuntimeLocalFacts);
-        let fact_slot = self
-            .local_facts
-            .get_mut(self.local_fact_count)
-            .ok_or(capacity_error)?;
-        let id = RuntimeLocalId(self.local_fact_count);
-        *fact_slot = Some(RuntimeLocalFact {
-            id,
-            name,
-            ty,
-            mutable,
-        });
-        self.local_fact_count += 1;
+        let preanalyzed = self.preanalyzed_local_cursor < self.preanalyzed_local_count
+            && self.body_facts.locals[self.preanalyzed_local_cursor].is_some_and(|fact| {
+                fact.name == name
+                    && fact.ty == ty
+                    && fact.mutable == mutable
+                    && fact.declaration_span == declaration_span
+            });
+        let id = if preanalyzed {
+            let fact = self.body_facts.locals[self.preanalyzed_local_cursor]
+                .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+            if fact.id != RuntimeLocalId(self.preanalyzed_local_cursor) {
+                return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+            self.preanalyzed_local_cursor += 1;
+            fact.id
+        } else {
+            self.body_facts
+                .push_local(name, ty, mutable, declaration_span)
+                .map_err(|kind| self.error(kind))?
+        };
         self.locals[self.saved_locals] = Some(RuntimeLocal {
             id,
             name,
@@ -6722,8 +6893,9 @@ impl<
     ) -> Result<(), CodegenError> {
         let capacity_error = self.error(CodegenErrorKind::TooManyRuntimePlaceAccessFacts);
         let slot = self
-            .place_access_facts
-            .get_mut(self.place_access_fact_count)
+            .body_facts
+            .accesses
+            .get_mut(self.body_facts.access_count)
             .ok_or(capacity_error)?;
         *slot = Some(RuntimePlaceAccessFact {
             base,
@@ -6732,7 +6904,7 @@ impl<
             access,
             span,
         });
-        self.place_access_fact_count += 1;
+        self.body_facts.access_count += 1;
         Ok(())
     }
 
@@ -7219,13 +7391,26 @@ impl<
     }
 
     fn validate_runtime_place_facts(&self) -> Result<(), CodegenError> {
-        for (index, fact) in self.local_facts[..self.local_fact_count].iter().enumerate() {
+        if self.preanalyzed_local_cursor != self.preanalyzed_local_count
+            || self.preanalyzed_local_count > self.body_facts.local_count
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        for (index, fact) in self.body_facts.locals[..self.body_facts.local_count]
+            .iter()
+            .enumerate()
+        {
             let fact = fact.ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
-            if fact.id != RuntimeLocalId(index) || fact.name.is_empty() {
+            if fact.id != RuntimeLocalId(index)
+                || fact.name.is_empty()
+                || fact
+                    .declaration_span
+                    .is_some_and(|span| span.end < span.start)
+            {
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
             }
         }
-        for fact in self.place_access_facts[..self.place_access_fact_count]
+        for fact in self.body_facts.accesses[..self.body_facts.access_count]
             .iter()
             .flatten()
         {
@@ -7242,7 +7427,8 @@ impl<
             match fact.base {
                 RuntimePlaceIdentity::Local(id) => {
                     let local = self
-                        .local_facts
+                        .body_facts
+                        .locals
                         .get(id.0)
                         .and_then(|fact| *fact)
                         .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
@@ -7278,7 +7464,7 @@ impl<
                 }
             }
         }
-        if self.place_access_facts[..self.place_access_fact_count]
+        if self.body_facts.accesses[..self.body_facts.access_count]
             .iter()
             .any(Option::is_none)
         {
@@ -7422,7 +7608,13 @@ impl<
         }
         for parameter in target.parameters[..target.parameter_count].iter().flatten() {
             let ty = runtime_type_from_scalar(parameter.ty);
-            self.push_runtime_local(parameter.name, ty, false, runtime_local_stack_slots(ty))?;
+            self.push_runtime_local(
+                parameter.name,
+                ty,
+                false,
+                runtime_local_stack_slots(ty),
+                None,
+            )?;
         }
         self.evaluation_depth -= argument_slots;
         let body =
@@ -12703,75 +12895,14 @@ impl<
                 kind: CodegenErrorKind::Expression(error.kind),
                 span: translate_span(body_start + local.initializer_span.start, error.span),
             })?;
-        let initializer_type = runtime_expression_type_with_locals(
+        let local_type = resolve_runtime_local_type::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             self.function,
             self.resolver,
             &self.locals[..self.saved_locals],
-            &tree,
-            tree.root(),
-            0,
-        )
-        .map_err(|kind| CodegenError {
-            kind,
-            span: translate_span(body_start, local.initializer_span),
-        })?;
-        let local_type = if let Some(ty) = local.ty {
-            if let Some(array) = runtime_array_type(ty.text) {
-                array
-            } else if let Some(tuple) = runtime_tuple_type(ty.text) {
-                tuple
-            } else if let Some(reference) = runtime_reference_type(ty.text) {
-                reference
-            } else if let Some(pointer) = runtime_raw_pointer_type(ty.text) {
-                pointer
-            } else if ty.text == "()" {
-                RuntimeExpressionType::Unit
-            } else if ty.text == "bool" {
-                RuntimeExpressionType::Bool
-            } else if ty.text == "char" {
-                RuntimeExpressionType::Char
-            } else {
-                let integer_type = crate::IntegerType::from_name(ty.text).ok_or(CodegenError {
-                    kind: CodegenErrorKind::UnsupportedRuntimeType,
-                    span: translate_span(body_start, ty.span),
-                })?;
-                RuntimeExpressionType::Integer(Some(integer_type))
-            }
-        } else {
-            match initializer_type {
-                RuntimeExpressionType::Never => {
-                    return Err(CodegenError {
-                        kind: CodegenErrorKind::RuntimeTypeMismatch,
-                        span: translate_span(body_start, local.initializer_span),
-                    });
-                }
-                RuntimeExpressionType::Unit => RuntimeExpressionType::Unit,
-                RuntimeExpressionType::Default => {
-                    return Err(CodegenError {
-                        kind: CodegenErrorKind::RuntimeTypeMismatch,
-                        span: translate_span(body_start, local.initializer_span),
-                    });
-                }
-                RuntimeExpressionType::Bool => RuntimeExpressionType::Bool,
-                RuntimeExpressionType::Char => RuntimeExpressionType::Char,
-                RuntimeExpressionType::Integer(Some(ty)) => {
-                    RuntimeExpressionType::Integer(Some(ty))
-                }
-                RuntimeExpressionType::Integer(None) => {
-                    RuntimeExpressionType::Integer(crate::IntegerType::from_name(operand_type))
-                }
-                RuntimeExpressionType::Array { .. }
-                | RuntimeExpressionType::Tuple { .. }
-                | RuntimeExpressionType::Reference { .. }
-                | RuntimeExpressionType::RawPointer { .. } => initializer_type,
-            }
-        };
-        if !runtime_types_compatible(initializer_type, local_type) {
-            return Err(CodegenError {
-                kind: CodegenErrorKind::RuntimeTypeMismatch,
-                span: translate_span(body_start, local.initializer_span),
-            });
-        }
+            local,
+            operand_type,
+            body_start,
+        )?;
         if local.name == "_" {
             let previous_width = self.width;
             self.width = runtime_expression_width(local_type).unwrap_or(previous_width);
@@ -12812,7 +12943,13 @@ impl<
         })();
         self.width = previous_width;
         emission?;
-        self.push_runtime_local(local.name, local_type, local.mutable, stack_slots)
+        self.push_runtime_local(
+            local.name,
+            local_type,
+            local.mutable,
+            stack_slots,
+            Some(translate_span(body_start, local.name_span)),
+        )
     }
 
     fn emit_scoped_local_cleanup(&mut self, checkpoint: usize) -> Result<(), CodegenError> {
@@ -16190,6 +16327,7 @@ mod tests {
             panic!("expected function")
         };
         let resolver = NoConstants;
+        let mut body_facts = RuntimeBodyFacts::EMPTY;
         let mut emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
@@ -16204,10 +16342,9 @@ mod tests {
             saved_parameter_slots: 0,
             locals: [None; 4],
             saved_locals: 0,
-            local_facts: [None; MAX_RUNTIME_LOCAL_FACTS],
-            local_fact_count: 0,
-            place_access_facts: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
-            place_access_fact_count: 0,
+            body_facts: &mut body_facts,
+            preanalyzed_local_count: 0,
+            preanalyzed_local_cursor: 0,
             evaluation_depth: 0,
             runtime_call_depth: 0,
             runtime_call_names: [None; 8],
@@ -16219,6 +16356,7 @@ mod tests {
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                 true,
                 1,
+                None,
             )
             .unwrap();
         emitter
@@ -16227,6 +16365,7 @@ mod tests {
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                 true,
                 1,
+                None,
             )
             .unwrap();
         let assignment = crate::Assignment {
@@ -16263,6 +16402,7 @@ mod tests {
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                 true,
                 1,
+                None,
             )
             .unwrap();
         let compound = crate::Assignment {
@@ -16296,33 +16436,33 @@ mod tests {
                 index: 1,
             }
         );
-        assert_eq!(emitter.local_fact_count, 3);
-        assert_eq!(emitter.local_facts[0].unwrap().id, RuntimeLocalId(0));
-        assert_eq!(emitter.local_facts[1].unwrap().id, RuntimeLocalId(1));
-        assert_eq!(emitter.local_facts[2].unwrap().id, RuntimeLocalId(2));
-        assert_eq!(emitter.place_access_fact_count, 5);
+        assert_eq!(emitter.body_facts.local_count, 3);
+        assert_eq!(emitter.body_facts.locals[0].unwrap().id, RuntimeLocalId(0));
+        assert_eq!(emitter.body_facts.locals[1].unwrap().id, RuntimeLocalId(1));
+        assert_eq!(emitter.body_facts.locals[2].unwrap().id, RuntimeLocalId(2));
+        assert_eq!(emitter.body_facts.access_count, 5);
         assert_eq!(
-            emitter.place_access_facts[0].unwrap().base,
+            emitter.body_facts.accesses[0].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(1))
         );
         assert_eq!(
-            emitter.place_access_facts[1].unwrap().base,
+            emitter.body_facts.accesses[1].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(1))
         );
         assert_eq!(
-            emitter.place_access_facts[1].unwrap().access,
+            emitter.body_facts.accesses[1].unwrap().access,
             RuntimePlaceAccess::Read
         );
         assert_eq!(
-            emitter.place_access_facts[2].unwrap().base,
+            emitter.body_facts.accesses[2].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(2))
         );
         assert_eq!(
-            emitter.place_access_facts[3].unwrap().base,
+            emitter.body_facts.accesses[3].unwrap().base,
             RuntimePlaceIdentity::Local(RuntimeLocalId(2))
         );
         assert_eq!(
-            emitter.place_access_facts[4].unwrap().base,
+            emitter.body_facts.accesses[4].unwrap().base,
             RuntimePlaceIdentity::Parameter(0)
         );
         let tuple_type = RuntimeExpressionType::Tuple {
@@ -16367,8 +16507,8 @@ mod tests {
         );
         emitter.validate_runtime_place_facts().unwrap();
 
-        let valid_fact = emitter.place_access_facts[2].unwrap();
-        emitter.place_access_facts[2] = Some(RuntimePlaceAccessFact {
+        let valid_fact = emitter.body_facts.accesses[2].unwrap();
+        emitter.body_facts.accesses[2] = Some(RuntimePlaceAccessFact {
             base: RuntimePlaceIdentity::Local(RuntimeLocalId(3)),
             ..valid_fact
         });
@@ -16376,8 +16516,8 @@ mod tests {
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
-        emitter.place_access_facts[2] = Some(valid_fact);
-        for _ in emitter.place_access_fact_count..MAX_RUNTIME_PLACE_ACCESS_FACTS {
+        emitter.body_facts.accesses[2] = Some(valid_fact);
+        for _ in emitter.body_facts.access_count..MAX_RUNTIME_PLACE_ACCESS_FACTS {
             emitter
                 .record_place_access(final_place, assignment.name_span)
                 .unwrap();
@@ -16391,13 +16531,14 @@ mod tests {
         );
 
         emitter.truncate_scoped_locals(0).unwrap();
-        for _ in emitter.local_fact_count..MAX_RUNTIME_LOCAL_FACTS {
+        for _ in emitter.body_facts.local_count..MAX_RUNTIME_LOCAL_FACTS {
             emitter
                 .push_runtime_local(
                     "bounded",
                     RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                     true,
                     1,
+                    None,
                 )
                 .unwrap();
             emitter.truncate_scoped_locals(0).unwrap();
@@ -16409,10 +16550,101 @@ mod tests {
                     RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                     true,
                     1,
+                    None,
                 )
                 .unwrap_err()
                 .kind,
             CodegenErrorKind::TooManyRuntimeLocalFacts
+        );
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_typed_straight_line_local_prefixes() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> u16 { let first: u16 = input; let second = first + 1; second }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_local_prefix::<_, 4, 16>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.local_count, 2);
+        assert_eq!(
+            facts.locals[0],
+            Some(RuntimeLocalFact {
+                id: RuntimeLocalId(0),
+                name: "first",
+                ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                mutable: false,
+                declaration_span: Some(translate_span(
+                    function.body_expression_span.start,
+                    body.locals()[0].unwrap().name_span,
+                )),
+            })
+        );
+        assert_eq!(
+            facts.locals[1],
+            Some(RuntimeLocalFact {
+                id: RuntimeLocalId(1),
+                name: "second",
+                ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                mutable: false,
+                declaration_span: Some(translate_span(
+                    function.body_expression_span.start,
+                    body.locals()[1].unwrap().name_span,
+                )),
+            })
+        );
+        assert_eq!(facts.access_count, 0);
+
+        let mut emitter = RuntimeEmitter::<_, 64, 4> {
+            bytes: [0; 64],
+            length: 0,
+            trap_patches: [0; 64],
+            trap_count: 0,
+            function: &function,
+            resolver: &resolver,
+            abi: X86_64Abi::Windows,
+            width: runtime_width("u16").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 0,
+            locals: [None; 4],
+            saved_locals: 0,
+            body_facts: &mut facts,
+            preanalyzed_local_count: count,
+            preanalyzed_local_cursor: 0,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        emitter
+            .push_runtime_local(
+                "second",
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                false,
+                1,
+                Some(translate_span(
+                    function.body_expression_span.start,
+                    body.locals()[0].unwrap().name_span,
+                )),
+            )
+            .unwrap();
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
         );
     }
 
@@ -16425,6 +16657,7 @@ mod tests {
             panic!("expected function")
         };
         let resolver = NoConstants;
+        let mut body_facts = RuntimeBodyFacts::EMPTY;
         let mut emitter = RuntimeEmitter::<_, 64, 2> {
             bytes: [0; 64],
             length: 0,
@@ -16439,10 +16672,9 @@ mod tests {
             saved_parameter_slots: 0,
             locals: [None; 2],
             saved_locals: 0,
-            local_facts: [None; MAX_RUNTIME_LOCAL_FACTS],
-            local_fact_count: 0,
-            place_access_facts: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
-            place_access_fact_count: 0,
+            body_facts: &mut body_facts,
+            preanalyzed_local_count: 0,
+            preanalyzed_local_cursor: 0,
             evaluation_depth: 0,
             runtime_call_depth: 0,
             runtime_call_names: [None; 8],
@@ -16451,8 +16683,8 @@ mod tests {
         let tree = function.parse_body_expression::<4>().unwrap();
         emitter.emit_expression(&tree, tree.root(), 0).unwrap();
 
-        assert_eq!(emitter.place_access_fact_count, 1);
-        let fact = emitter.place_access_facts[0].unwrap();
+        assert_eq!(emitter.body_facts.access_count, 1);
+        let fact = emitter.body_facts.accesses[0].unwrap();
         assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(0));
         assert_eq!(fact.access, RuntimePlaceAccess::Read);
         assert_eq!(

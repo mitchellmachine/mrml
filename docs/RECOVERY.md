@@ -164,9 +164,11 @@ operator. Resolution validates the ID again before a local store. Do not
 confuse the storage index with identity or reintroduce separate name/access
 inference in assignment families.
 
-The runtime emitter retains up to 256 local facts and 256 ordered runtime place-
-access facts. Local facts preserve ID, name, type, and mutability after scope
-cleanup releases the active stack entry; assignment facts preserve stable
+The standalone `RuntimeBodyFacts` object retains up to 256 local facts and 256
+ordered runtime place-access facts and is borrowed by the x86 emitter. Local
+facts preserve ID, name, type, mutability, and an optional translated declaration
+span after scope cleanup releases the active stack entry; assignment facts
+preserve stable
 local/parameter identity, parsed projection, type, access intent, and source
 span. Direct runtime identifier loads and the specialized tuple, array, range,
 and address paths append `Read` facts with the same stable base identities;
@@ -180,8 +182,12 @@ and local-array range reads retain their corresponding projection. Validation
 walks the list through the base type and rejects holes, invalid transitions,
 out-of-range fields, and overflow. The exact projection-capacity error is
 `TooManyRuntimePlaceProjections`.
-The tables are bounded ephemeral compiler state and include expanded inlined
-helper bodies; they are not serialized IR or a claim of whole-program analysis.
+Before prologue emission, a bounded pass types and preassigns identities to the
+supported leading straight-line named-local prefix. The emitter must consume
+each preassigned declaration once. Helper parameters and later scoped locals
+append to the dynamic fact tail and cannot inherit those reserved IDs. The table
+is bounded ephemeral compiler state and includes expanded inlined helper bodies;
+it is not serialized IR or a claim of whole-program analysis.
 The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
@@ -193,10 +199,11 @@ projection and 64-level nesting. Direct scalar dereference emission records one
 projected read rather than an empty duplicate base read; specialized direct
 aggregate paths use the same recorder. Discovery is not yet run body-wide or
 consumed by every nested emission family, and address-taking is not yet
-classified as a borrow. Parser-level IDs, initialization and move paths, CFG
+classified as a borrow. Conditional/loop declarations and general accesses are
+not yet preanalyzed, and parser-level IDs, initialization and move paths, CFG
 analysis, borrows, loans, and regions are still absent. The next compiler
-milestone is to move this emission-side foundation into the bounded typed
-body-wide local/place/access table, then add CFG and initialization/move facts.
+milestone is to expand the standalone table across scoped declarations and
+supported body accesses, then add CFG and initialization/move facts.
 
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains
