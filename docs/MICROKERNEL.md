@@ -657,7 +657,7 @@ failure EPT violation with a hardware-valid guest-physical address inside the
 exact expected 4 KiB monitor-private page. VMREAD failure, malformed access
 qualification, another exit reason, or an adjacent-page access leaves the
 controller outside `GuestRunning` and cannot resume uncertain state.
-Minimal launch programming is now one fixed 85-field VMCS specification. It
+Minimal launch programming is now one fixed 84-field VMCS specification. It
 preflights field widths, exact EPT identity, all five hardware control masks,
 long-mode entry/exit state, segment selectors and access rights, canonical
 entry/stack pointers, and the invalid guest-link sentinel before the first
@@ -674,11 +674,13 @@ decoder. The canonical guest state is now a fully specified unrestricted
 real-mode context, including all segment selectors, limits, bases, access
 rights, and descriptor-table state, so the isolation probe needs no guest page
 tables before touching the denied GPA. Guest debug, PAT, performance,
-interruptibility, activity, SMBASE, and SYSENTER state and host PAT,
+interruptibility, activity, and SYSENTER state and host PAT,
 performance, FS/GS bases, and SYSENTER state are also written explicitly;
 launch no longer relies on unspecified post-`VMCLEAR` contents. Host-loaded
 addresses must be canonical, host CS/TR must be nonzero ring-zero selectors,
-and every PAT entry is validated before the first `VMWRITE`.
+and every PAT entry is validated before the first `VMWRITE`. SMM-only SMBASE is
+deliberately omitted because it is not an ordinary guest-state component and
+may not exist in a non-SMM VMCS.
 The opt-in `vmx-root-probe` kernel image now provides eight statically owned,
 page-aligned pages and resolves their exact supervisor-writable physical
 backing through the active CR3. It rejects aliases and misalignment, builds a
@@ -701,8 +703,10 @@ accepts the requested CPU option, but that does not override the WHP guest's
 missing VMX capability. These are controlled negative probes, not evidence of
 `VMXON`, guest launch, bare-metal execution, physical hardware, or remote
 attestation. The image and state machine are now wired for a platform that
-actually exposes nested VMX or for a physical boot; neither successful path has
-yet been performed.
+actually exposes nested VMX or for a physical boot. The Windows paths did not
+provide a successful VMX execution.
+The final signed version-12 image repeated the same Windows result: the runner
+expected `d1` after `d0` and instead received `e0`, exiting nonzero.
 
 The same version-2 kernel and an independently signed version-1 service were
 then booted through the repository-owned UEFI loader under QEMU 11.1 TCG with
@@ -719,6 +723,53 @@ raw drive, `virtio-rng-pci`, and `isa-debugcon.iobase=0xe9`. A repeat with
 `Ignoring request for interrupt vector 0` warning and no loader trace before it
 was terminated after 30 seconds. Neither controlled result is positive VMX or
 physical-hardware evidence.
+
+On the same date, Arch Linux under WSL2 kernel
+`6.18.33.2-microsoft-standard-WSL2` exposed `vmx`, writable `/dev/kvm`, loaded
+`kvm_intel`, and reported `nested=Y`, `ept=Y`, and
+`unrestricted_guest=Y`. QEMU 11.1 and `edk2-ovmf` were installed from the Arch
+repositories. The repository then built and Lamport-signed exact kernel
+version 12 and service version 1 artifacts, embedded their public-key digests
+and minimum versions in a freshly built loader, and booted them with:
+
+```text
+qemu-system-x86_64 -machine q35,accel=kvm -m 512M -cpu host \
+  -drive if=pflash,format=raw,readonly=on,file=OVMF_CODE.4m.fd \
+  -drive if=pflash,format=raw,file=DISPOSABLE_OVMF_VARS.4m.fd \
+  -drive format=raw,file=fat:rw:SIGNED_BOOT_DIRECTORY \
+  -device virtio-rng-pci -debugcon file:TRACE \
+  -global isa-debugcon.iobase=0xe9 -display none -serial none \
+  -monitor none -no-reboot
+```
+
+Two independent boots of the exact version-12 files produced
+`a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3 d0 d1 d2 d3 d4 df`. The loader prefix
+proves signed kernel/service admission, materialization, handoff construction,
+`ExitBootServices`, protected page-table installation, and kernel transfer.
+For the VMX suffix, `d0` is probe entry, `d1` follows successful `VMXON`, `d2`
+follows `VMCLEAR`, `VMPTRLD`, `INVEPT`, and all 84 `VMWRITE`s, `d3` is reached
+only through the VM-exit host RIP after `VMLAUNCH`, `d4` follows strict typed
+validation, and `df` follows successful `VMXOFF` and restoration of the original
+CR4. An instrumented preceding build recorded raw exit reason `0x30`, low
+qualification `0x81` (read plus hardware-valid GPA), and GPA page `0x2000`
+before the same typed validator accepted it.
+
+Live execution exposed and corrected four defects that emulated instruction
+tests could not prove: VMX control MSR low halves are required-one masks rather
+than allowed-zero masks; LLVM's Intel-syntax `VMWRITE`/`VMREAD` operand order
+had been reversed, including the host-return trampoline; SMM-only SMBASE is not
+a portable ordinary VMCS component; and unrestricted guest mode relaxes only
+CR0.PE/PG, so remaining guest CR0/CR4 fixed-one bits must still be derived from
+the hardware MSRs. The controller now also retains only a bounded failed
+`VMWRITE` index while poisoned and clears it after successful teardown. A raw
+one-use exit snapshot is explicitly diagnostic input, not authenticated
+protection evidence.
+
+This is controlled nested-KVM execution under a Windows/Hyper-V-owned WSL2
+host. It proves that the native MRML instruction/state path executes through
+the requested VMX/EPT lifecycle in that environment. It is not a security
+boundary against the host, physical bare-metal validation, TPM/IOMMU evidence,
+remote attestation, or a production-readiness claim.
 
 VMX capability decisions are derived from raw `IA32_VMX_BASIC`, secondary
 processor-control, and EPT/VPID capability MSRs rather than host-supplied

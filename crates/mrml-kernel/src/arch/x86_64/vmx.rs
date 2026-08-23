@@ -60,6 +60,52 @@ pub struct EptViolation {
     guest_linear_address: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VmExitSnapshot {
+    reason: u32,
+    qualification: u64,
+    guest_physical_address: u64,
+    guest_linear_address: u64,
+}
+
+impl VmExitSnapshot {
+    pub const fn reason(self) -> u32 {
+        self.reason
+    }
+
+    pub const fn qualification(self) -> u64 {
+        self.qualification
+    }
+
+    pub const fn guest_physical_address(self) -> u64 {
+        self.guest_physical_address
+    }
+
+    pub const fn guest_linear_address(self) -> u64 {
+        self.guest_linear_address
+    }
+
+    pub fn private_page_violation(self, private_page: PhysAddr) -> Result<EptViolation, VmxError> {
+        if private_page.get() & 0xfff != 0 {
+            return Err(VmxError::InvalidVmExit);
+        }
+        let violation = EptViolation::decode(
+            self.reason,
+            self.qualification,
+            self.guest_physical_address,
+            self.guest_linear_address,
+        )?;
+        if self
+            .guest_physical_address
+            .checked_sub(private_page.get())
+            .is_none_or(|offset| offset >= 4096)
+        {
+            return Err(VmxError::InvalidVmExit);
+        }
+        Ok(violation)
+    }
+}
+
 impl EptViolation {
     pub const fn decode(
         raw_reason: u32,
@@ -113,30 +159,32 @@ impl EptViolation {
     }
 }
 
-/// Intel VMX control MSRs encode bits that may be zero in the low half and
-/// bits that may be one in the high half. Adjustment therefore forces required
-/// ones and clears forbidden ones without trusting a caller-provided control.
+/// Intel VMX control MSRs encode required-one bits in the low half and
+/// allowed-one bits in the high half. A set low-half bit requires one,
+/// while a clear high-half bit forbids one. Adjustment therefore forces
+/// required ones and clears forbidden ones without trusting a caller-provided
+/// control.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VmxControlMask {
-    allowed_zero: u32,
+    required_one: u32,
     allowed_one: u32,
 }
 
 impl VmxControlMask {
     pub const fn new(msr: u64) -> Result<Self, VmxError> {
-        let allowed_zero = msr as u32;
+        let required_one = msr as u32;
         let allowed_one = (msr >> 32) as u32;
-        if (!allowed_zero) & (!allowed_one) != 0 {
+        if required_one & !allowed_one != 0 {
             return Err(VmxError::InvalidControl);
         }
         Ok(Self {
-            allowed_zero,
+            required_one,
             allowed_one,
         })
     }
 
     pub const fn adjust(self, requested: u32) -> u32 {
-        (requested | !self.allowed_zero) & self.allowed_one
+        (requested | self.required_one) & self.allowed_one
     }
 
     pub const fn accepts(self, value: u32) -> bool {
@@ -329,6 +377,18 @@ impl VmxPrerequisites {
         }
         Ok(())
     }
+
+    pub fn unrestricted_guest_controls(self) -> Result<(u64, u64), VmxError> {
+        self.validate()?;
+        const CR0_PE: u64 = 1;
+        const CR0_PG: u64 = 1 << 31;
+        let cr0 = self.cr0_fixed_zero & !(CR0_PE | CR0_PG);
+        let cr4 = self.cr4_fixed_zero;
+        if cr0 & !self.cr0_fixed_one != 0 || cr4 & !self.cr4_fixed_one != 0 {
+            return Err(VmxError::InvalidControl);
+        }
+        Ok((cr0, cr4))
+    }
 }
 
 /// Canonical four-level EPT pointer using write-back page-table memory.
@@ -392,7 +452,7 @@ impl VmcsWrite {
     }
 }
 
-pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 85;
+pub const VMCS_MINIMAL_LAUNCH_FIELDS: usize = 84;
 
 /// Complete fixed field set for MRML's minimal unrestricted real-mode guest.
 /// Optional bitmap, MSR-list, CR3-target, and posted-interrupt fields remain
@@ -408,7 +468,7 @@ const MINIMAL_LAUNCH_FIELD_ENCODINGS: [u32; VMCS_MINIMAL_LAUNCH_FIELDS] = [
     0x4800, 0x4802, 0x4804, 0x4806, 0x4808, 0x480a, 0x480c, 0x480e, // segment limits
     0x4810, 0x4812, // GDTR/IDTR limits
     0x4814, 0x4816, 0x4818, 0x481a, 0x481c, 0x481e, 0x4820, 0x4822, // guest access rights
-    0x4824, 0x4826, 0x4828, 0x482a, // interrupt/activity/SMBASE/SYSENTER CS
+    0x4824, 0x4826, 0x482a, // interrupt/activity/SYSENTER CS
     0x4c00, // host SYSENTER CS
     0x6800, 0x6802, 0x6804, // guest CR0/CR3/CR4
     0x6806, 0x6808, 0x680a, 0x680c, 0x680e, 0x6810, 0x6812, 0x6814, // segment bases
@@ -452,6 +512,8 @@ impl MinimalVmcsLaunch {
         ept: EptPointer,
         controls: VmxControlPolicy,
         host: VmxHostState,
+        guest_cr0: u64,
+        guest_cr4: u64,
         guest_rip: u16,
         guest_rsp: u16,
     ) -> Result<Self, VmxError> {
@@ -485,9 +547,11 @@ impl MinimalVmcsLaunch {
             1 << 16,
             0x008b,
         ]);
-        values[48..53].fill(0);
-        values[53..66].fill(0);
-        values[66..73].copy_from_slice(&[
+        values[48..52].fill(0);
+        values[52..65].fill(0);
+        values[52] = guest_cr0;
+        values[54] = guest_cr4;
+        values[65..72].copy_from_slice(&[
             0x400,
             u64::from(guest_rsp),
             u64::from(guest_rip),
@@ -496,8 +560,8 @@ impl MinimalVmcsLaunch {
             0,
             0,
         ]);
-        values[73..76].copy_from_slice(&[host.cr0, host.cr3, host.cr4]);
-        values[76..85].copy_from_slice(&[
+        values[72..75].copy_from_slice(&[host.cr0, host.cr3, host.cr4]);
+        values[75..84].copy_from_slice(&[
             host.fs_base,
             host.gs_base,
             host.tr_base,
@@ -508,7 +572,7 @@ impl MinimalVmcsLaunch {
             host.stack_pointer,
             host.instruction_pointer,
         ]);
-        values[52] = u64::from(host.sysenter_cs);
+        values[51] = u64::from(host.sysenter_cs);
         Self::new(values, controls)
     }
 
@@ -725,13 +789,13 @@ mrml_native_vmlaunch:
     push r14
     push r15
     mov rax, 0x6c14
-    vmwrite rsp, rax
+    vmwrite rax, rsp
     setna cl
     test cl, cl
     jnz 3f
     lea rdx, [rip + 2f]
     mov rax, 0x6c16
-    vmwrite rdx, rax
+    vmwrite rax, rdx
     setna cl
     test cl, cl
     jnz 3f
@@ -761,13 +825,13 @@ mrml_native_vmresume:
     push r14
     push r15
     mov rax, 0x6c14
-    vmwrite rsp, rax
+    vmwrite rax, rsp
     setna cl
     test cl, cl
     jnz 7f
     lea rdx, [rip + 6f]
     mov rax, 0x6c16
-    vmwrite rdx, rax
+    vmwrite rax, rdx
     setna cl
     test cl, cl
     jnz 7f
@@ -850,7 +914,7 @@ impl VmxInstructions for NativeVmx {
         let failed: u8;
         unsafe {
             core::arch::asm!(
-                "vmwrite {value}, {field}",
+                "vmwrite {field}, {value}",
                 "setna {failed}",
                 value = in(reg) value,
                 field = in(reg) u64::from(field.encoding()),
@@ -870,7 +934,7 @@ impl VmxInstructions for NativeVmx {
         let failed: u8;
         unsafe {
             core::arch::asm!(
-                "vmread {field}, {value}",
+                "vmread {value}, {field}",
                 "setna {failed}",
                 field = in(reg) u64::from(field.encoding()),
                 value = lateout(reg) value,
@@ -920,6 +984,7 @@ pub struct VmxController<I: VmxInstructions> {
     state: VmxState,
     active_vmcs: Option<PhysAddr>,
     active_ept: Option<EptPointer>,
+    failed_vmwrite_index: Option<u8>,
 }
 
 impl<I: VmxInstructions> VmxController<I> {
@@ -930,6 +995,7 @@ impl<I: VmxInstructions> VmxController<I> {
             state: VmxState::Disabled,
             active_vmcs: None,
             active_ept: None,
+            failed_vmwrite_index: None,
         }
     }
 
@@ -939,6 +1005,10 @@ impl<I: VmxInstructions> VmxController<I> {
 
     pub const fn capabilities(&self) -> VmxCapabilities {
         self.capabilities
+    }
+
+    pub const fn failed_vmwrite_index(&self) -> Option<u8> {
+        self.failed_vmwrite_index
     }
 
     pub fn enter_root(&mut self, region: PhysAddr) -> Result<(), VmxError> {
@@ -1000,8 +1070,10 @@ impl<I: VmxInstructions> VmxController<I> {
         if self.state != VmxState::VmcsLoaded || self.active_ept != Some(launch.ept_pointer()) {
             return Err(VmxError::InvalidState);
         }
-        for write in launch.writes() {
+        self.failed_vmwrite_index = None;
+        for (index, write) in launch.writes().iter().enumerate() {
             if self.instructions.vmwrite(write.field, write.value).is_err() {
+                self.failed_vmwrite_index = u8::try_from(index).ok();
                 self.state = VmxState::Poisoned;
                 return Err(VmxError::InstructionFailed);
             }
@@ -1026,9 +1098,14 @@ impl<I: VmxInstructions> VmxController<I> {
         &mut self,
         private_page: PhysAddr,
     ) -> Result<EptViolation, VmxError> {
-        if private_page.get() & 0xfff != 0 {
-            return Err(VmxError::InvalidVmExit);
-        }
+        self.record_vm_exit_snapshot()?
+            .private_page_violation(private_page)
+    }
+
+    /// Captures the fixed architectural fields for one exit after first
+    /// transitioning the controller out of a resumable guest state. This raw
+    /// snapshot is diagnostic input, not authenticated protection evidence.
+    pub fn record_vm_exit_snapshot(&mut self) -> Result<VmExitSnapshot, VmxError> {
         self.record_vm_exit()?;
         let reason = self
             .instructions
@@ -1046,15 +1123,12 @@ impl<I: VmxInstructions> VmxController<I> {
             .instructions
             .vmread(VmcsField::GUEST_LINEAR_ADDRESS)
             .map_err(|_| VmxError::InstructionFailed)?;
-        let reason = u32::try_from(reason).map_err(|_| VmxError::InvalidVmExit)?;
-        let violation = EptViolation::decode(reason, qualification, guest_physical, guest_linear)?;
-        if guest_physical
-            .checked_sub(private_page.get())
-            .is_none_or(|offset| offset >= 4096)
-        {
-            return Err(VmxError::InvalidVmExit);
-        }
-        Ok(violation)
+        Ok(VmExitSnapshot {
+            reason: u32::try_from(reason).map_err(|_| VmxError::InvalidVmExit)?,
+            qualification,
+            guest_physical_address: guest_physical,
+            guest_linear_address: guest_linear,
+        })
     }
 
     pub fn resume(&mut self) -> Result<(), VmxError> {
@@ -1082,6 +1156,7 @@ impl<I: VmxInstructions> VmxController<I> {
         }
         self.active_vmcs = None;
         self.active_ept = None;
+        self.failed_vmwrite_index = None;
         self.state = VmxState::Disabled;
         Ok(())
     }
@@ -1168,7 +1243,9 @@ mod tests {
     }
 
     fn permissive_control_policy() -> VmxControlPolicy {
-        VmxControlPolicy::from_msrs(u64::MAX, u64::MAX, u64::MAX, u64::MAX, u64::MAX).unwrap()
+        const PERMISSIVE: u64 = (u32::MAX as u64) << 32;
+        VmxControlPolicy::from_msrs(PERMISSIVE, PERMISSIVE, PERMISSIVE, PERMISSIVE, PERMISSIVE)
+            .unwrap()
     }
 
     fn minimal_launch(ept: EptPointer) -> MinimalVmcsLaunch {
@@ -1194,6 +1271,8 @@ mod tests {
                 stack_pointer: 0xffff_8000_0000_6000,
                 instruction_pointer: 0xffff_8000_0000_7000,
             },
+            0x20,
+            0x2000,
             0x1000,
             0x3000,
         )
@@ -1202,10 +1281,15 @@ mod tests {
 
     #[test]
     fn controls_force_required_bits_and_clear_forbidden_bits() {
-        let mask = VmxControlMask::new(0xffff_fff5_ffff_fffe).unwrap();
+        let mask = VmxControlMask::new(0xffff_fff5_ffff_fff0).unwrap();
         let control = VmxControl::constrained(u32::MAX, mask);
         assert_eq!(control.bits(), 0xffff_fff5);
         assert!(mask.accepts(control.bits()));
+        assert_eq!(VmxControl::constrained(0, mask).bits(), 0xffff_fff0);
+        assert_eq!(
+            VmxControlMask::new(0x0000_0000_0000_0001),
+            Err(VmxError::InvalidControl)
+        );
         assert!(!mask.accepts(u32::MAX));
     }
 
@@ -1243,6 +1327,21 @@ mod tests {
     fn prerequisites_require_locked_policy_vmxe_and_fixed_bits() {
         let valid = VmxPrerequisites::new(5, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX);
         assert_eq!(valid.validate(), Ok(()));
+        let guest = VmxPrerequisites::new(
+            5,
+            0x8000_0021,
+            1 << 13,
+            0x8000_0021,
+            u64::MAX,
+            1 << 13,
+            u64::MAX,
+        );
+        assert_eq!(guest.unrestricted_guest_controls(), Ok((0x20, 1 << 13)));
+        assert_eq!(
+            VmxPrerequisites::new(4, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX)
+                .unrestricted_guest_controls(),
+            Err(VmxError::Unsupported)
+        );
         assert_eq!(
             VmxPrerequisites::new(4, 0x21, 1 << 13, 0x21, u64::MAX, 0, u64::MAX).validate(),
             Err(VmxError::Unsupported)
@@ -1420,8 +1519,10 @@ mod tests {
             Err(VmxError::InstructionFailed)
         );
         assert_eq!(controller.state(), VmxState::Poisoned);
+        assert_eq!(controller.failed_vmwrite_index(), Some(0));
         assert_eq!(controller.resume(), Err(VmxError::InvalidState));
         controller.leave_root().unwrap();
         assert_eq!(controller.state(), VmxState::Disabled);
+        assert_eq!(controller.failed_vmwrite_index(), None);
     }
 }

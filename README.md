@@ -200,6 +200,8 @@ The current x86_64 kernel has demonstrated:
 - user-fault retirement with domain and capability revocation;
 - resumption of a surviving CPL3 task after another task faults;
 - multiprocessor startup, per-CPU state, IPIs, migration, and load balancing;
+- controlled signed nested-KVM execution of VMX-root entry, a minimal non-root
+  guest, an exact EPT-denied monitor-private-page read exit, and VMXOFF teardown;
 - signed execution probes under QEMU/UEFI, nested Linux KVM, and Windows WHP.
 
 The kernel remains experimental. Storage, network, tool, inference, and GPU

@@ -183,7 +183,7 @@ pub unsafe fn run() -> Result<(), ()> {
     let ept = EptPointer::new(pages[EPT_PML4_PAGE], true).map_err(|_| ())?;
     let (cr0, cr3, original_cr4) = unsafe { control_registers() };
     let vmx_cr4 = original_cr4 | (1 << 13);
-    VmxPrerequisites::new(
+    let prerequisites = VmxPrerequisites::new(
         unsafe { rdmsr(0x3a) },
         cr0,
         vmx_cr4,
@@ -191,9 +191,11 @@ pub unsafe fn run() -> Result<(), ()> {
         unsafe { rdmsr(0x487) },
         unsafe { rdmsr(0x488) },
         unsafe { rdmsr(0x489) },
-    )
-    .validate()
-    .map_err(|_| ())?;
+    );
+    prerequisites.validate().map_err(|_| ())?;
+    let (guest_cr0, guest_cr4) = prerequisites
+        .unrestricted_guest_controls()
+        .map_err(|_| ())?;
     let selectors = unsafe { selectors() };
     let (gdtr, idtr) = unsafe { descriptor_tables() };
     let tr_base = unsafe { task_register_base(gdtr, selectors[6]) }?;
@@ -224,6 +226,8 @@ pub unsafe fn run() -> Result<(), ()> {
         ept,
         controls,
         host,
+        guest_cr0,
+        guest_cr4,
         GUEST_CODE_GPA as u16,
         0x3000,
     )
@@ -236,11 +240,16 @@ pub unsafe fn run() -> Result<(), ()> {
         trace(0xd1);
         controller.clear_vmcs(pages[VMCS_PAGE])?;
         controller.load_vmcs(pages[VMCS_PAGE], ept)?;
-        controller.program_minimal_vmcs(&launch)?;
+        if let Err(error) = controller.program_minimal_vmcs(&launch) {
+            trace(0xed);
+            trace(controller.failed_vmwrite_index().unwrap_or(u8::MAX));
+            return Err(error);
+        }
         trace(0xd2);
         controller.launch()?;
         trace(0xd3);
-        let violation = controller.record_private_page_violation(
+        let snapshot = controller.record_vm_exit_snapshot()?;
+        let violation = snapshot.private_page_violation(
             PhysAddr::new(PRIVATE_GPA)
                 .map_err(|_| mrml_kernel::arch::x86_64::VmxError::InvalidVmExit)?,
         )?;
