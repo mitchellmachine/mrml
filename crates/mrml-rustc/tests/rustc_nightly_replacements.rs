@@ -1876,6 +1876,27 @@ fn rustc_signed_integer_classification_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_unsigned_absolute_values_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> u8 { input.unsigned_abs() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> u16 { input.unsigned_abs() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i32) -> u32 { input.unsigned_abs() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> u64 { input.unsigned_abs() }",
+        "const VALUE: u8 = (-128i8).unsigned_abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u16 = (-32768i16).unsigned_abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u16 { VALUE }",
+        "const VALUE: u32 = (-42i32).unsigned_abs(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u32 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_rotations_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.rotate_left(distance) }",

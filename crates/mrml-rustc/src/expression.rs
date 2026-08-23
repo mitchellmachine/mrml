@@ -227,6 +227,18 @@ impl IntegerType {
         )
     }
 
+    pub const fn unsigned_counterpart(self) -> Option<Self> {
+        Some(match self {
+            Self::I8 => Self::U8,
+            Self::I16 => Self::U16,
+            Self::I32 => Self::U32,
+            Self::I64 => Self::U64,
+            Self::I128 => Self::U128,
+            Self::Isize => Self::Usize,
+            _ => return None,
+        })
+    }
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::U8 => "u8",
@@ -398,6 +410,9 @@ pub enum ExprKind<'source> {
     IntegerBitTransform {
         base: ExprId,
         transform: IntegerBitTransform,
+    },
+    IntegerUnsignedAbsolute {
+        base: ExprId,
     },
     IntegerBitCount {
         base: ExprId,
@@ -636,6 +651,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
+            | ExprKind::IntegerUnsignedAbsolute { .. }
             | ExprKind::IntegerBitCount { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
@@ -903,6 +919,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::IntegerWrappingShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerUnsignedAbsolute { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitCount { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
@@ -2208,6 +2225,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.substitute_identifier(exponent, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerBitTransform { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerUnsignedAbsolute { base } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerBitCount { base, .. } => {
@@ -3810,6 +3830,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_neg"
                         | "wrapping_abs"
                         | "abs"
+                        | "unsigned_abs"
                         | "count_ones"
                         | "count_zeros"
                         | "leading_zeros"
@@ -4007,6 +4028,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                 },
+                "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
                 "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
                 | "wrapping_abs" | "abs" | "signum" => ExprKind::IntegerBitTransform {
                     base,

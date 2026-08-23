@@ -2309,6 +2309,7 @@ fn validate_runtime_inline_const<
             recurse(exponent)?;
         }
         ExprKind::IntegerBitTransform { base, .. } => recurse(base)?,
+        ExprKind::IntegerUnsignedAbsolute { base } => recurse(base)?,
         ExprKind::IntegerBitCount { base, .. } => recurse(base)?,
         ExprKind::Cast { operand, .. }
         | ExprKind::Ascribe { operand, .. }
@@ -3223,6 +3224,24 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::IntegerUnsignedAbsolute { base } => {
+            let RuntimeExpressionType::Integer(Some(base_type)) =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let result_type = base_type
+                .unsigned_counterpart()
+                .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+            Ok(RuntimeExpressionType::Integer(Some(result_type)))
         }
         ExprKind::IntegerBitCount { base, .. } => {
             if !matches!(
@@ -5162,6 +5181,37 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     }
                 }
                 self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerUnsignedAbsolute { base } => {
+                let RuntimeExpressionType::Integer(Some(base_integer_type)) =
+                    runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        base,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?
+                else {
+                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                };
+                let result_type = base_integer_type
+                    .unsigned_counterpart()
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let operand_width = runtime_width(base_integer_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let result_width = runtime_width(result_type.name())
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x48, 0x85, 0xc0])?;
+                let nonnegative = self.emit_forward_branch(0x89)?;
+                self.emit(&[0x48, 0xf7, 0xd8])?;
+                self.patch_forward_branch(nonnegative)?;
+                self.emit_normalize_width(result_width)?;
                 self.width = previous_width;
             }
             ExprKind::IntegerBitCount { base, count } => {
@@ -11974,6 +12024,49 @@ mod tests {
             };
             assert_eq!(
                 compile_x86_64_function::<_, 768, 2, 64>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn computes_unsigned_absolute_values() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u8 { input.unsigned_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> u16 { input.unsigned_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> u32 { input.unsigned_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> u64 { input.unsigned_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize) -> usize { input.unsigned_abs() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.unsigned_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> u32 { input.unsigned_abs() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.unsigned_abs() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
                     &function,
                     &NoConstants,
                     X86_64Abi::Windows,
