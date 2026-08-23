@@ -590,11 +590,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        self.publish_peer_death(&domain, PeerDeathReason::Faulted { vector, address })?;
         let next = self
             .scheduler
             .terminate_current()
             .map_err(TaskRuntimeError::Scheduler)?;
-        self.publish_peer_death(&domain, PeerDeathReason::Faulted { vector, address })?;
         Ok(FaultRetirement {
             task: current,
             context: domain.context,
@@ -628,11 +628,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let domain = self.domains[slot]
             .take()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        self.publish_peer_death(&domain, PeerDeathReason::Exited)?;
         let next = self
             .scheduler
             .terminate_current()
             .map_err(TaskRuntimeError::Scheduler)?;
-        self.publish_peer_death(&domain, PeerDeathReason::Exited)?;
         Ok((
             TaskTermination {
                 task: current,
@@ -1689,12 +1689,13 @@ mod tests {
             Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == faulted
         ));
 
-        runtime
+        let retirement = runtime
             .terminate_current_fault(TrapDisposition::TerminateUser {
                 vector: 14,
                 address: Some(0x1234),
             })
             .unwrap();
+        assert!(matches!(retirement.next, ScheduleOutcome::Switch { .. }));
         let ControlEvent::PeerDied(death) = runtime.receive_control(observer).unwrap() else {
             panic!("expected peer death");
         };
@@ -1708,6 +1709,49 @@ mod tests {
         );
         assert_eq!(runtime.context(faulted), Err(TaskRuntimeError::MissingTask));
         assert!(runtime.context(unrelated).is_ok());
+    }
+
+    #[test]
+    fn fault_death_wakeup_precedes_replacement_selection() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let faulted = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x74);
+        let observer_capability = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let faulted_capability = runtime
+            .capabilities_mut(faulted)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                observer,
+                faulted,
+                &Endpoint::new(object),
+                observer_capability,
+                faulted_capability,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert!(matches!(
+            runtime.receive_control_or_block_current(),
+            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == faulted
+        ));
+        let retirement = runtime
+            .terminate_current_fault(TrapDisposition::TerminateUser {
+                vector: 3,
+                address: None,
+            })
+            .unwrap();
+        assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == observer));
     }
 
     #[test]

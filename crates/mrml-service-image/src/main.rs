@@ -33,6 +33,7 @@ global_asm!(
             jne 3f
             cmp r10d, 0x676e6970
             jne 3f
+            mov r11, 0x6fe000
             cmp qword ptr [r11], r12
             jne 3f
             int3
@@ -54,6 +55,18 @@ global_asm!(
             xor r8d, r8d
             xor r9d, r9d
             int 0x80
+            cmp r12, 2
+            jne 4f
+            mov eax, 2
+            xor edi, edi
+            xor esi, esi
+            xor edx, edx
+            xor r10d, r10d
+            xor r8d, r8d
+            xor r9d, r9d
+            int 0x80
+            ud2
+        4:
             mov eax, 3
             xor edi, edi
             xor esi, esi

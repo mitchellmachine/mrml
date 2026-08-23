@@ -1659,13 +1659,32 @@ duplicate removal/re-arm rejection, signed service checks, and terminal CPL3
 breakpoint stages fail closed. Fresh 2026-08-23 artifacts completed both
 generations under Arch Linux/WSL2 `/dev/kvm` (`verify=21162us`,
 `prepare=2604us`, `execute=934us`, `total=46438us`) and Windows WHP
-(`verify=17639us`, `prepare=3951us`, `execute=636us`, `total=25948us`). A
-surviving peer observing typed fault death remains the next separate evidence
-gate.
+(`verify=17639us`, `prepare=3951us`, `execute=636us`, `total=25948us`). At that
+revision, surviving-peer typed fault death remained a separate evidence gate.
 
 Patent review: `NOT_TRIGGERED` — this is conventional shared-memory mapping,
 exact-match page-table removal, lifecycle ordering, and controlled-probe
 verification.
+
+The final signed service-substrate revision keeps the generation-2 sender live
+and blocked after delivery, then deliberately faults the receiver. The live
+probe exposed that `TaskRuntime` previously selected a replacement before
+publishing peer death, so a peer woken only by that event could be omitted from
+the returned scheduling outcome. Fault and clean-exit retirement now publish
+and wake exact-generation peers before terminating the current scheduler slot.
+A focused two-task regression requires the awakened observer to be the returned
+continuation. The signed kernel then validates the retired receiver identity,
+`PeerDeathReason::Faulted { vector: 3, address: None }`, and the surviving
+sender context after cleanup but before emitting stage `0x23`; restart-budget
+exhaustion remains terminal. Fresh 2026-08-23 artifacts completed under Arch
+Linux/WSL2 `/dev/kvm` (`verify=20578us`, `prepare=2391us`, `execute=976us`,
+`total=46782us`) and Windows WHP (`verify=17568us`, `prepare=3969us`,
+`execute=645us`, `total=25976us`). This completes the hosted signed
+two-service Phase 1 control, bulk-page, cleanup, peer-survival, and bounded
+restart evidence; it is not attestation or host-resistant isolation.
+
+Patent review: `NOT_TRIGGERED` — conventional wake-before-selection scheduler
+ordering, typed lifecycle notification, and controlled-probe verification.
 
 Every registration now binds a validated restart policy containing a nonzero
 maximum restart count, base delay, and maximum delay. Retirement computes the

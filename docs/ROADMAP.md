@@ -72,8 +72,11 @@ confidentiality.
 The signed two-service path now covers the blocking control channel, exact
 sender/sequence envelopes, typed clean peer death, a revocable task-owned
 shared page, cleanup-gated fault retirement, and bounded restart on both hosted
-backends. The next Phase 1 integration gate is typed fault-death observation by
-a peer that remains live through the crash.
+backends. The replacement generation now leaves its sender blocked and live
+while the receiver faults; retirement publishes and validates the exact typed
+fault result before returning any peer continuation. This closes the signed
+two-service Phase 1 substrate gate. The next dependency-ordered OS milestone is
+the Phase 2 policy/configuration service and its supervision protocol.
 
 ## Phase 1 — Kernel and service foundation
 

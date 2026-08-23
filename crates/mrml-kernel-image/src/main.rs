@@ -698,6 +698,14 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         in("eax") 1u32,
                         options(nomem, nostack)
                     );
+                    if core::ptr::addr_of!(SERVICE_RESTARTED).read() && root.get() == SERVICE_B_ROOT
+                    {
+                        let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
+                        runtime
+                            .context_mut(to)
+                            .unwrap_or_else(|_| halt())
+                            .complete_message(message.payload());
+                    }
                     enter_service_task(runtime, to)
                 }
                 _ => halt(),
@@ -1331,13 +1339,35 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                 let fault = supervisor
                     .fault_current(runtime, _disposition)
                     .unwrap_or_else(|_| halt());
-                if !matches!(fault.retirement.next, ScheduleOutcome::Idle) {
-                    halt();
-                }
+                let peer = match fault.retirement.next {
+                    ScheduleOutcome::Switch { to, .. } => to,
+                    _ => halt(),
+                };
                 supervisor
                     .complete_cleanup(fault.cleanup, &mut HostedServiceEraser)
                     .unwrap_or_else(|_| halt());
+                let ControlEvent::PeerDied(death) =
+                    runtime.receive_control(peer).unwrap_or_else(|_| halt())
+                else {
+                    halt()
+                };
+                if death.peer() != fault.retirement.task
+                    || death.reason()
+                        != (PeerDeathReason::Faulted {
+                            vector: 3,
+                            address: None,
+                        })
+                    || runtime.context(peer).is_err()
+                {
+                    halt();
+                }
                 verify_restart_budget_exhausted(runtime, supervisor);
+                asm!(
+                    "out dx, eax",
+                    in("dx") SERVICE_PROBE_PORT,
+                    in("eax") 0x23u32,
+                    options(nomem, nostack)
+                );
                 asm!(
                     "out dx, eax",
                     in("dx") SERVICE_PROBE_PORT,

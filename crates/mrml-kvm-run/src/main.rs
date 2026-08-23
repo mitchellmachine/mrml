@@ -801,64 +801,19 @@ fn application_main() -> Result<()> {
         }
         if exit
             != (VmExit::Io {
-                port: SERVICE_PROBE_PORT,
-                size: 4,
-                write: true,
-                value: 0x21,
-            })
-        {
-            return Err(anyhow!(
-                "restarted KVM sender cleanup request mismatch: {:?}",
-                exit
-            ));
-        }
-        complete_kvm_service_cleanup(
-            &mut guest,
-            1,
-            SERVICE_B_STACK_PHYSICAL,
-            SERVICE_B_TABLE_PHYSICAL,
-            &executable,
-            service_executable
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing verified service executable"))?,
-        )?;
-        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
-            anyhow!(
-                "KVM execution after restarted sender cleanup failed: {:?}",
-                error
-            )
-        })?;
-        if exit
-            != (VmExit::Io {
-                port: SERVICE_PROBE_PORT,
-                size: 4,
-                write: true,
-                value: 0x22,
-            })
-        {
-            return Err(anyhow!(
-                "restarted KVM typed peer-death proof mismatch: {:?}",
-                exit
-            ));
-        }
-        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
-            anyhow!(
-                "KVM execution after restarted typed peer death failed: {:?}",
-                error
-            )
-        })?;
-        if exit
-            != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
                 size: 4,
                 write: true,
-                value: 3,
+                value: 1,
             })
         {
-            return Err(anyhow!("restarted KVM receive mismatch: {:?}", exit));
+            return Err(anyhow!("restarted KVM live peer did not block: {:?}", exit));
         }
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
-            anyhow!("KVM execution after restarted receive failed: {:?}", error)
+            anyhow!(
+                "KVM execution entering restarted receiver fault failed: {:?}",
+                error
+            )
         })?;
         if exit
             != (VmExit::Io {
@@ -904,6 +859,19 @@ fn application_main() -> Result<()> {
                 "KVM execution after final receiver cleanup failed: {:?}",
                 error
             )
+        })?;
+        if exit
+            != (VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0x23,
+            })
+        {
+            return Err(anyhow!("KVM typed fault-death proof mismatch: {:?}", exit));
+        }
+        exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+            anyhow!("KVM execution after typed fault death failed: {:?}", error)
         })?;
         if exit
             != (VmExit::Io {

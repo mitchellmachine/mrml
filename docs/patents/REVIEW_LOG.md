@@ -282,6 +282,22 @@ cryptographic construction, or optimization.
 Patent review: `NOT_TRIGGERED` — conventional shared-memory mapping and
 lifecycle revocation.
 
+## 2026-08-23 — signed surviving-peer fault notification
+
+MRML source: `crates/mrml-kernel/src/task_runtime.rs`,
+`crates/mrml-kernel-image/src/main.rs`, `crates/mrml-service-image/src/main.rs`,
+and `crates/mrml-{kvm,whp}-run/src/main.rs`.
+
+Retirement now publishes an existing typed death event and wakes blocked peers
+before the scheduler chooses a continuation. The signed probe keeps one peer
+blocked through the other peer's deliberate fault and checks the exact reason
+and identity after cleanup. This is ordinary scheduler ordering, lifecycle
+notification, and controlled test staging; it introduces no novel algorithm,
+protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional scheduler wakeup and typed
+lifecycle verification.
+
 ## 2026-08-23 — lazy tuple-valued compiler control flow
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.
