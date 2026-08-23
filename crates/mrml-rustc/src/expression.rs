@@ -174,6 +174,7 @@ pub enum CheckedIntegerOptionOperation {
     Logarithm { binary: bool },
     NextMultiple,
     UnsignedMixedArithmetic { subtract: bool },
+    SignedMixedArithmetic { subtract: bool },
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4459,6 +4460,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_next_multiple_of"
                         | "checked_add_signed"
                         | "checked_sub_signed"
+                        | "checked_add_unsigned"
+                        | "checked_sub_unsigned"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4644,6 +4647,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_next_multiple_of"
                     | "checked_add_signed"
                     | "checked_sub_signed"
+                    | "checked_add_unsigned"
+                    | "checked_sub_unsigned"
                     | "checked_add"
                     | "checked_sub"
                     | "checked_mul"
@@ -5025,6 +5030,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?),
                     operation: CheckedIntegerOptionOperation::UnsignedMixedArithmetic {
                         subtract: method.text == "checked_sub_signed",
+                    },
+                },
+                "checked_add_unsigned" | "checked_sub_unsigned" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: Some(argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?),
+                    operation: CheckedIntegerOptionOperation::SignedMixedArithmetic {
+                        subtract: method.text == "checked_sub_unsigned",
                     },
                 },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {

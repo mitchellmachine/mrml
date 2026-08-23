@@ -3407,6 +3407,27 @@ fn runtime_expression_type_with_locals<
                 {
                     base_type
                 }
+                crate::expression::CheckedIntegerOptionOperation::SignedMixedArithmetic {
+                    ..
+                } if argument.is_some_and(|argument| {
+                    let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                        return false;
+                    };
+                    source.is_signed()
+                        && source.unsigned_counterpart().is_some_and(|unsigned| {
+                            runtime_expression_type_with_locals(
+                                function,
+                                resolver,
+                                locals,
+                                tree,
+                                argument,
+                                depth + 1,
+                            ) == Ok(RuntimeExpressionType::Integer(Some(unsigned)))
+                        })
+                }) =>
+                {
+                    base_type
+                }
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
                 | crate::expression::CheckedIntegerOptionOperation::Power
                     if argument.is_some_and(|argument| {
@@ -3568,6 +3589,24 @@ fn runtime_expression_type_with_locals<
                                 argument,
                                 depth + 1,
                             ) == Ok(RuntimeExpressionType::Integer(Some(signed)))
+                        })
+                }),
+                crate::expression::CheckedIntegerOptionOperation::SignedMixedArithmetic {
+                    ..
+                } => argument.is_some_and(|argument| {
+                    let RuntimeExpressionType::Integer(Some(source)) = base_type else {
+                        return false;
+                    };
+                    source.is_signed()
+                        && source.unsigned_counterpart().is_some_and(|unsigned| {
+                            runtime_expression_type_with_locals(
+                                function,
+                                resolver,
+                                locals,
+                                tree,
+                                argument,
+                                depth + 1,
+                            ) == Ok(RuntimeExpressionType::Integer(Some(unsigned)))
                         })
                 }),
                 crate::expression::CheckedIntegerOptionOperation::Shift { .. }
@@ -10900,6 +10939,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             crate::expression::CheckedIntegerOptionOperation::UnsignedMixedArithmetic {
                 ..
             } => None,
+            crate::expression::CheckedIntegerOptionOperation::SignedMixedArithmetic { .. } => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -11052,6 +11092,41 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 }
                 self.patch_forward_branch(end)?;
             }
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
+        }
+        if let crate::expression::CheckedIntegerOptionOperation::SignedMixedArithmetic {
+            subtract,
+        } = operation
+        {
+            if !source_width.signed {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            let argument =
+                argument.ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+            self.emit_expression(tree, argument, depth + 1)?;
+            self.emit(&[0x59, 0x45, 0x31, 0xc0])?;
+            self.evaluation_depth -= 1;
+            if subtract {
+                self.emit(&[0x48, 0x89, 0xca, 0x49, 0xba])?;
+                self.emit(&(source_width.minimum as u64).to_le_bytes())?;
+                self.emit(&[0x4c, 0x29, 0xd2])?;
+            } else {
+                self.emit(&[0x48, 0xba])?;
+                self.emit(&source_width.maximum.to_le_bytes())?;
+                self.emit(&[0x48, 0x29, 0xca])?;
+            }
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let invalid = self.emit_forward_branch(0x87)?;
+            if subtract {
+                self.emit(&[0x48, 0x29, 0xc1, 0x48, 0x89, 0xc8])?;
+            } else {
+                self.emit(&[0x48, 0x01, 0xc8])?;
+            }
+            self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
+            self.patch_forward_branch(invalid)?;
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
         }
@@ -16094,6 +16169,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: i16) -> u8 { a.checked_add_signed(b).unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: u32) -> bool { a.checked_sub_signed(b).is_some() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: i64) -> u64 { a.checked_add_signed(b) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_signed_mixed_arithmetic_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8, b: u8, fallback: i8) -> i8 { a.checked_add_unsigned(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: u64) -> i64 { a.checked_sub_unsigned(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: isize, b: usize) -> bool { a.checked_add_unsigned(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16, b: u16) -> bool { a.checked_sub_unsigned(b).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8, b: u16) -> i8 { a.checked_add_unsigned(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, b: i32) -> bool { a.checked_sub_unsigned(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: u64) -> i64 { a.checked_add_unsigned(b) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

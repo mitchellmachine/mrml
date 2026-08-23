@@ -2384,6 +2384,9 @@ Checked next-multiple preserves Rust's signed rounding semantics and returns
 Unsigned receivers additionally support `checked_add_signed` and
 `checked_sub_signed` with their exact same-width signed counterparts, including
 signed `MIN`, unsigned underflow, and unsigned overflow boundaries.
+Signed receivers support the complementary `checked_add_unsigned` and
+`checked_sub_unsigned` methods, using exact distance-to-`MIN`/`MAX` checks even
+when a `u64` operand cannot be represented as signed.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while
