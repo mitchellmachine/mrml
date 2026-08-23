@@ -863,6 +863,19 @@ cryptographic construction, or storage optimization.
 Patent review: `NOT_TRIGGERED` — conventional transactional directory metadata
 staging.
 
+## 2026-08-23 — bounded directory ancestry proof
+
+MRML source: `crates/mrml-storage/src/directory.rs`.
+
+The service performs a conventional fixed-capacity parent-chain walk over one
+immutable filesystem generation, rejecting cycles, repeated objects, stale
+state, broken links, backend uncertainty, and capacity exhaustion before a
+directory move. This adds no novel namespace structure, graph algorithm,
+transaction protocol, cryptographic construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded filesystem ancestry
+validation.
+
 ## 2026-08-23 — scalar initializer and expression-statement read planning
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.

@@ -252,8 +252,12 @@ per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke
 existing object capabilities, and rename preserves identity. Cross-directory
-directory moves fail closed until bounded ancestry proof prevents cycles, and
-the identity allocator is not crash-safe until transactionally persisted.
+directory moves now require a bounded proof that walks canonical directory
+metadata from the exact destination generation to the selected root, rejecting
+the moved object, repeated ancestors, stale destination state, broken parent
+links, backend uncertainty, and capacity exhaustion. This authorizes only the
+in-memory namespace transition; transactional child-parent metadata update and
+crash-safe identity allocation remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

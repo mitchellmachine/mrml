@@ -13,6 +13,92 @@ const DIRECTORY_IMAGE_MAGIC: [u8; 8] = *b"MRDEI001";
 const DIRECTORY_IMAGE_VERSION: u16 = 1;
 const DIRECTORY_IMAGE_DIGEST_OFFSET: usize = 64;
 
+pub struct DirectoryAncestryProof {
+    moved: StorageObjectId,
+    destination: StorageObjectId,
+    destination_generation: u64,
+}
+
+impl DirectoryAncestryProof {
+    fn matches<const N: usize>(
+        &self,
+        moved: StorageObjectId,
+        destination: &DirectoryState<N>,
+    ) -> bool {
+        self.moved == moved
+            && self.destination == destination.object
+            && self.destination_generation == destination.generation
+    }
+}
+
+/// Immutable selected-generation directory metadata used for ancestry proof.
+///
+/// # Safety
+///
+/// Every returned record must be the unique canonical metadata for `object` in
+/// one immutable, completely validated selected filesystem generation. The
+/// backend must not redirect an object, mix generations, or return mutable or
+/// uncommitted metadata.
+pub unsafe trait DirectoryAncestryBackend {
+    type Error;
+
+    fn load_directory_metadata(
+        &mut self,
+        object: StorageObjectId,
+    ) -> Result<DirectoryMetadata, Self::Error>;
+}
+
+pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend>(
+    root: StorageObjectId,
+    moved: StorageObjectId,
+    destination: StorageObjectId,
+    destination_generation: u64,
+    backend: &mut B,
+) -> Result<DirectoryAncestryProof, DirectoryAncestryError<B::Error>> {
+    if N == 0
+        || root.volume() != moved.volume()
+        || root.volume() != destination.volume()
+        || destination_generation == 0
+    {
+        return Err(DirectoryAncestryError::InvalidProof);
+    }
+    let mut visited = [None; N];
+    let mut count = 0;
+    let mut current = destination;
+    loop {
+        if current == moved {
+            return Err(DirectoryAncestryError::Cycle);
+        }
+        if visited[..count].contains(&Some(current)) {
+            return Err(DirectoryAncestryError::Cycle);
+        }
+        if count == N {
+            return Err(DirectoryAncestryError::Capacity);
+        }
+        visited[count] = Some(current);
+        count += 1;
+        let metadata = backend
+            .load_directory_metadata(current)
+            .map_err(DirectoryAncestryError::Backend)?;
+        if metadata.object() != current
+            || metadata.object().volume() != root.volume()
+            || (current == destination && metadata.generation() != destination_generation)
+        {
+            return Err(DirectoryAncestryError::InvalidProof);
+        }
+        match metadata.parent() {
+            Some(parent) if current != root => current = parent,
+            None if current == root => break,
+            _ => return Err(DirectoryAncestryError::InvalidProof),
+        }
+    }
+    Ok(DirectoryAncestryProof {
+        moved,
+        destination,
+        destination_generation,
+    })
+}
+
 pub struct StorageObjectAllocator {
     volume: VolumeId,
     next_local: Option<u64>,
@@ -308,6 +394,54 @@ impl<const N: usize> DirectoryState<N> {
         old_name: StorageName,
         new_name: StorageName,
     ) -> Result<DirectoryEntry, DirectoryError> {
+        self.move_to_inner(
+            source_authority,
+            destination,
+            destination_authority,
+            authority,
+            principal,
+            old_name,
+            new_name,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn move_to_with_ancestry<const M: usize, const A: usize>(
+        &mut self,
+        source_authority: StorageHandle,
+        destination: &mut DirectoryState<M>,
+        destination_authority: StorageHandle,
+        authority: &StorageAuthorityTable<A>,
+        principal: StoragePrincipal,
+        old_name: StorageName,
+        new_name: StorageName,
+        ancestry: &DirectoryAncestryProof,
+    ) -> Result<DirectoryEntry, DirectoryError> {
+        self.move_to_inner(
+            source_authority,
+            destination,
+            destination_authority,
+            authority,
+            principal,
+            old_name,
+            new_name,
+            Some(ancestry),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn move_to_inner<const M: usize, const A: usize>(
+        &mut self,
+        source_authority: StorageHandle,
+        destination: &mut DirectoryState<M>,
+        destination_authority: StorageHandle,
+        authority: &StorageAuthorityTable<A>,
+        principal: StoragePrincipal,
+        old_name: StorageName,
+        new_name: StorageName,
+        ancestry: Option<&DirectoryAncestryProof>,
+    ) -> Result<DirectoryEntry, DirectoryError> {
         if self.object == destination.object {
             return Err(DirectoryError::SameDirectory);
         }
@@ -325,7 +459,9 @@ impl<const N: usize> DirectoryState<N> {
         )?;
         let source_index = self.find_name(old_name).ok_or(DirectoryError::NotFound)?;
         let old = self.entries[source_index].ok_or(DirectoryError::InvalidState)?;
-        if old.kind() == StorageObjectKind::Directory {
+        if old.kind() == StorageObjectKind::Directory
+            && !ancestry.is_some_and(|proof| proof.matches(old.object(), destination))
+        {
             return Err(DirectoryError::AncestryRequired);
         }
         let destination_slot = destination.preflight_insert(new_name, old.object())?;
@@ -625,6 +761,14 @@ pub enum DirectoryImageError {
     Arithmetic,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryAncestryError<E> {
+    InvalidProof,
+    Cycle,
+    Capacity,
+    Backend(E),
+}
+
 /// Persistence boundary for an unreachable directory metadata successor.
 ///
 /// # Safety
@@ -804,6 +948,42 @@ mod tests {
         staged: usize,
         flushed: bool,
         verified: usize,
+    }
+
+    struct AncestryBackend {
+        records: [Option<DirectoryMetadata>; 4],
+    }
+
+    unsafe impl DirectoryAncestryBackend for AncestryBackend {
+        type Error = ();
+
+        fn load_directory_metadata(
+            &mut self,
+            object: StorageObjectId,
+        ) -> Result<DirectoryMetadata, Self::Error> {
+            self.records
+                .iter()
+                .flatten()
+                .copied()
+                .find(|metadata| metadata.object() == object)
+                .ok_or(())
+        }
+    }
+
+    fn directory_metadata(
+        object: StorageObjectId,
+        generation: u64,
+        parent: Option<StorageObjectId>,
+    ) -> DirectoryMetadata {
+        DirectoryMetadata::new(
+            VolumeHeader::new(volume(), 4096, 100, 1, 2).unwrap(),
+            object,
+            generation,
+            parent,
+            0,
+            MetadataPointer::new(30 + object.local(), 1).unwrap(),
+        )
+        .unwrap()
     }
 
     unsafe impl DirectoryWriteBackend for UpdateBackend {
@@ -1231,15 +1411,15 @@ mod tests {
     }
 
     #[test]
-    fn cross_directory_directory_move_requires_future_ancestry_proof() {
+    fn directory_move_requires_exact_bounded_ancestry_proof() {
         let child =
             DirectoryEntry::new(name("child"), object(9), StorageObjectKind::Directory, 1).unwrap();
-        let mut source = DirectoryState::<1>::new(object(1), 1, &[child]).unwrap();
+        let mut source = DirectoryState::<1>::new(object(3), 1, &[child]).unwrap();
         let mut destination = DirectoryState::<1>::new(object(2), 1, &[]).unwrap();
         let mut authority = StorageAuthorityTable::<2>::new();
         let source_handle = authority
             .insert(
-                object(1),
+                object(3),
                 StorageObjectKind::Directory,
                 StorageRights::RENAME_CHILD,
                 principal(),
@@ -1267,6 +1447,81 @@ mod tests {
         );
         assert_eq!((source.len(), source.generation()), (1, 1));
         assert_eq!((destination.len(), destination.generation()), (0, 1));
+
+        let mut backend = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+                None,
+            ],
+        };
+        let proof =
+            prove_directory_move_ancestry::<2, _>(object(1), object(9), object(2), 1, &mut backend)
+                .unwrap();
+        let moved = source
+            .move_to_with_ancestry(
+                source_handle,
+                &mut destination,
+                destination_handle,
+                &authority,
+                principal(),
+                name("child"),
+                name("moved"),
+                &proof,
+            )
+            .unwrap();
+        assert_eq!(moved.object(), object(9));
+        assert_eq!((source.len(), source.generation()), (0, 2));
+        assert_eq!((destination.len(), destination.generation()), (1, 2));
+    }
+
+    #[test]
+    fn ancestry_proof_rejects_descendants_stale_state_and_capacity() {
+        let mut descendant = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(2), 1, Some(object(9)))),
+                Some(directory_metadata(object(9), 4, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+            ],
+        };
+        assert!(matches!(
+            prove_directory_move_ancestry::<4, _>(
+                object(1),
+                object(9),
+                object(2),
+                1,
+                &mut descendant
+            ),
+            Err(DirectoryAncestryError::Cycle)
+        ));
+
+        let mut stale = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(2), 2, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+                None,
+            ],
+        };
+        assert!(matches!(
+            prove_directory_move_ancestry::<2, _>(object(1), object(9), object(2), 1, &mut stale),
+            Err(DirectoryAncestryError::InvalidProof)
+        ));
+
+        let mut deep = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(2), 1, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+                None,
+            ],
+        };
+        assert!(matches!(
+            prove_directory_move_ancestry::<1, _>(object(1), object(9), object(2), 1, &mut deep),
+            Err(DirectoryAncestryError::Capacity)
+        ));
     }
 
     #[test]

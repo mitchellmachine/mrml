@@ -125,8 +125,10 @@ explicitly and downgrade the status rather than guessing.
   concrete native block I/O, snapshot, or crash recovery exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves, but its
-  object-ID allocator is volatile and cross-directory directory moves require a
-  future ancestry proof. Capability-authorized bounded file reads resolve the
+  object-ID allocator is volatile. Cross-directory directory moves require a
+  bounded immutable-generation ancestry proof that reaches the selected root
+  without encountering the moved object; transactional child-parent metadata
+  publication remains pending. Capability-authorized bounded file reads resolve the
   exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
   complete disjoint successor image, flush it, and remain unpublished until a

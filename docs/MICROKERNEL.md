@@ -2716,10 +2716,18 @@ preflights both generations, source identity, destination name/object collision,
 and destination capacity before changing either directory. Removal requires
 `REMOVE_CHILD`; it unlinks the namespace entry without silently revoking open
 object capabilities, leaving lifetime reclamation to a later object-lifecycle
-layer. Cross-directory movement of directory objects is rejected until a
-bounded authoritative ancestry proof can prevent cycles. The object-ID
-allocator is volatile simulation state and must be persisted in the same future
-transaction before create becomes crash-safe.
+layer. Cross-directory directory movement now accepts only an opaque bounded
+ancestry proof. An unsafe backend contract supplies the unique canonical
+directory metadata from one immutable completely validated selected generation.
+Proof construction starts at the destination's exact generation, follows parent
+links to the selected root, and rejects the moved directory anywhere in the
+chain, repeated objects, wrong or broken links, stale destination state, backend
+failure, and capacity exhaustion. Reusing a proof after the destination advances
+fails its generation binding. This makes only the bounded in-memory namespace
+transition cycle-safe; publishing the moved child's new parent metadata in the
+same transaction remains pending. The object-ID allocator is volatile simulation
+state and must be persisted in the same future transaction before create becomes
+crash-safe.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and
@@ -2885,7 +2893,7 @@ stale, missing, duplicate, or substituted state. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Fifty-nine focused unit tests and strict crate-local clippy pass on Windows
+Sixty focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, allocator transaction
 participation, complete crash recovery, snapshots, a block-device service, and
@@ -2898,7 +2906,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 59 tests, and both strict crate-local clippy
+Both current unit-test runs pass 60 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -2906,6 +2914,14 @@ block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 Patent review: `NOT_TRIGGERED` — conventional canonical directory metadata
 staging and transactional COW publication; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
+The ancestry increment also passed the two repository reviews. The
+`DIGITAL-RIGHTS REVIEW` found no new data collection, retention, disclosure,
+publisher veto, DRM, accessibility exclusion, or first-party bypass; object IDs
+remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
+metadata record and parent link as hostile and requires exact immutable-
+generation binding, bounded traversal, duplicate/cycle rejection, and fail-
+closed backend uncertainty. This agent review is not independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte

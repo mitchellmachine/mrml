@@ -223,9 +223,14 @@ authority; unrelated domains continue.
    requires the exact directory object and operation-specific right; create
    allocates a service-owned stable ID and returns object-bound authority, while
    rename/move preserve identity and open capabilities. All failure-prone checks
-   precede mutation. Cross-directory directory moves remain rejected pending a
-   bounded ancestry proof, and allocator persistence awaits transactions, so
-   directory operations are not yet complete or crash-safe.
+   precede mutation. Cross-directory directory moves now require a bounded
+   ancestry proof loaded through one immutable selected-generation backend. The
+   proof binds the exact destination generation, reaches the selected root, and
+   rejects the moved directory anywhere in that chain, repeated ancestors,
+   broken links, stale state, backend failure, and capacity exhaustion.
+   Transactional publication of the moved child's new parent metadata and
+   allocator persistence remain pending, so directory operations are not yet
+   complete or crash-safe.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
