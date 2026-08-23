@@ -1,15 +1,19 @@
 #![no_std]
 
+#[cfg(target_os = "windows")]
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
 #[cfg(any(target_os = "windows", test))]
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
     ProtectionBackend, ProtectionClaims, ProtectionPolicy, ProtectionReport,
+    VBS_ATTESTATION_CHALLENGE_BYTES,
 };
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    VBS_ATTESTATION_ENVELOPE_BYTES, VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
-    VbsAttestationData, VbsAuthorityContext, VbsAuthorityOperation,
+    UnverifiedVbsAttestationReport, VBS_ATTESTATION_DATA_BYTES, VBS_ATTESTATION_ENVELOPE_BYTES,
+    VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES, VbsAttestationData,
+    VbsAttestationEnvelope, VbsAttestationExpectation, VbsAuthorityContext, VbsAuthorityOperation,
 };
 
 #[cfg(any(target_os = "windows", test))]
@@ -54,6 +58,17 @@ unsafe extern "system" {
         information_size: u32,
         enclave_information: *mut EnclaveInformation,
     ) -> i32;
+    fn EnclaveVerifyAttestationReport(
+        enclave_type: u32,
+        report: *const c_void,
+        report_size: u32,
+    ) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "bcrypt", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn BCryptGenRandom(algorithm: *mut c_void, buffer: *mut u8, bytes: u32, flags: u32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -125,6 +140,56 @@ const _: () = assert!(core::mem::size_of::<EnclaveInformation>() == 176);
 const _: () = assert!(core::mem::offset_of!(EnclaveInformation, identity) == 24);
 #[cfg(target_os = "windows")]
 const ENCLAVE_TYPE_VBS: u32 = 0x10;
+#[cfg(target_os = "windows")]
+const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 2;
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy)]
+struct ChallengeState {
+    nonce: [u8; VBS_ATTESTATION_CHALLENGE_BYTES],
+    pending: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl ChallengeState {
+    const fn new() -> Self {
+        Self {
+            nonce: [0; VBS_ATTESTATION_CHALLENGE_BYTES],
+            pending: false,
+        }
+    }
+
+    fn store(&mut self, nonce: [u8; VBS_ATTESTATION_CHALLENGE_BYTES]) -> Result<(), ()> {
+        if self.pending || nonce == [0; VBS_ATTESTATION_CHALLENGE_BYTES] {
+            return Err(());
+        }
+        self.nonce = nonce;
+        self.pending = true;
+        Ok(())
+    }
+
+    fn take(&mut self) -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], ()> {
+        if !self.pending {
+            return Err(());
+        }
+        let nonce = self.nonce;
+        self.nonce.fill(0);
+        self.pending = false;
+        Ok(nonce)
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct ChallengeCell(UnsafeCell<ChallengeState>);
+
+// SAFETY: the enclave configuration creates exactly one execution thread, so
+// exported calls cannot concurrently access this cell. The state is never
+// exposed outside VTL1 and every successful verification consumes it once.
+#[cfg(target_os = "windows")]
+unsafe impl Sync for ChallengeCell {}
+
+#[cfg(target_os = "windows")]
+static CHALLENGE_STATE: ChallengeCell = ChallengeCell(UnsafeCell::new(ChallengeState::new()));
 
 #[unsafe(no_mangle)]
 pub static __enclave_config: ImageEnclaveConfig64 = ImageEnclaveConfig64 {
@@ -289,6 +354,11 @@ enum AuthorityStatus {
     AttestationCopyFailed = 8,
     EnclaveInformationFailed = 9,
     PointerAliasesEnclave = 10,
+    ChallengeGenerationFailed = 11,
+    ChallengePending = 12,
+    ChallengeMissing = 13,
+    AttestationVerificationFailed = 14,
+    AttestationIdentityRejected = 15,
 }
 
 #[cfg(target_os = "windows")]
@@ -320,6 +390,90 @@ fn current_enclave_range() -> Result<(usize, usize), AuthorityStatus> {
         .checked_add(information.size)
         .ok_or(AuthorityStatus::EnclaveInformationFailed)?;
     Ok((start, end))
+}
+
+#[cfg(target_os = "windows")]
+fn current_identity_expectation() -> Result<VbsAttestationExpectation, AuthorityStatus> {
+    let mut information = EnclaveInformation {
+        enclave_type: 0,
+        reserved: 0,
+        base_address: core::ptr::null_mut(),
+        size: 0,
+        identity: [0; 152],
+    };
+    // SAFETY: the destination is enclave-local and has the exact documented ABI.
+    if unsafe {
+        EnclaveGetEnclaveInformation(
+            core::mem::size_of::<EnclaveInformation>() as u32,
+            &mut information,
+        )
+    } != 0
+        || information.enclave_type != ENCLAVE_TYPE_VBS
+        || information.reserved != 0
+    {
+        return Err(AuthorityStatus::EnclaveInformationFailed);
+    }
+    let identity = &information.identity;
+    let owner_id = identity[..32]
+        .try_into()
+        .map_err(|_| AuthorityStatus::EnclaveInformationFailed)?;
+    let unique_id = identity[32..64]
+        .try_into()
+        .map_err(|_| AuthorityStatus::EnclaveInformationFailed)?;
+    let author_id = identity[64..96]
+        .try_into()
+        .map_err(|_| AuthorityStatus::EnclaveInformationFailed)?;
+    let family_id = identity[96..112]
+        .try_into()
+        .map_err(|_| AuthorityStatus::EnclaveInformationFailed)?;
+    let image_id = identity[112..128]
+        .try_into()
+        .map_err(|_| AuthorityStatus::EnclaveInformationFailed)?;
+    let read_version = |offset: usize| {
+        u32::from_le_bytes(identity[offset..offset + 4].try_into().unwrap_or([0; 4]))
+    };
+    VbsAttestationExpectation::new(
+        owner_id,
+        unique_id,
+        author_id,
+        family_id,
+        image_id,
+        read_version(128),
+        read_version(132),
+        read_version(136),
+    )
+    .map_err(|_| AuthorityStatus::EnclaveInformationFailed)
+}
+
+#[cfg(target_os = "windows")]
+fn generate_challenge() -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], AuthorityStatus> {
+    let mut nonce = [0; VBS_ATTESTATION_CHALLENGE_BYTES];
+    // SAFETY: the buffer is enclave-local, exact-sized, and exclusively borrowed.
+    if unsafe {
+        BCryptGenRandom(
+            core::ptr::null_mut(),
+            nonce.as_mut_ptr(),
+            nonce.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    } != 0
+        || nonce == [0; VBS_ATTESTATION_CHALLENGE_BYTES]
+    {
+        return Err(AuthorityStatus::ChallengeGenerationFailed);
+    }
+    // SAFETY: the image declares one enclave thread, preventing concurrent access.
+    unsafe { &mut *CHALLENGE_STATE.0.get() }
+        .store(nonce)
+        .map_err(|_| AuthorityStatus::ChallengePending)?;
+    Ok(nonce)
+}
+
+#[cfg(target_os = "windows")]
+fn take_challenge() -> Result<[u8; VBS_ATTESTATION_CHALLENGE_BYTES], AuthorityStatus> {
+    // SAFETY: the image declares one enclave thread, preventing concurrent access.
+    unsafe { &mut *CHALLENGE_STATE.0.get() }
+        .take()
+        .map_err(|_| AuthorityStatus::ChallengeMissing)
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -403,14 +557,19 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     let Ok(call) = VbsAuthorityContext::decode(&encoded_context) else {
         return AuthorityStatus::InvalidContext as usize as *mut c_void;
     };
-    if call.input_bytes() != LAUNCH_REQUEST_BYTES as u64 {
-        return AuthorityStatus::InvalidContext as usize as *mut c_void;
-    }
     match call.operation() {
         VbsAuthorityOperation::IssueReceipt
-            if call.output_bytes() == AUTHORITY_RECEIPT_BYTES as u64 => {}
+            if call.input_bytes() == LAUNCH_REQUEST_BYTES as u64
+                && call.output_bytes() == AUTHORITY_RECEIPT_BYTES as u64 => {}
         VbsAuthorityOperation::IssueAttestationReport
-            if call.output_bytes() == VBS_ATTESTATION_ENVELOPE_BYTES as u64 => {}
+            if call.input_bytes() == LAUNCH_REQUEST_BYTES as u64
+                && call.output_bytes() == VBS_ATTESTATION_ENVELOPE_BYTES as u64 => {}
+        VbsAuthorityOperation::GenerateAttestationChallenge
+            if call.input_bytes() == LAUNCH_REQUEST_BYTES as u64
+                && call.output_bytes() == VBS_ATTESTATION_CHALLENGE_BYTES as u64 => {}
+        VbsAuthorityOperation::VerifyAttestationReport
+            if call.input_bytes() == VBS_ATTESTATION_ENVELOPE_BYTES as u64
+                && call.output_bytes() == VBS_ATTESTATION_DATA_BYTES as u64 => {}
         _ => return AuthorityStatus::InvalidContext as usize as *mut c_void,
     }
     let (Ok(request_address), Ok(receipt_address)) = (
@@ -432,6 +591,81 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     ) {
         return AuthorityStatus::PointerAliasesEnclave as usize as *mut c_void;
     }
+    // SAFETY: this zero-argument Vertdll query is available only inside a VBS
+    // enclave and returns a Windows BOOLEAN. False means all protected operations
+    // fail closed because debugger or TPM key-provisioning guarantees are absent.
+    if unsafe { EnclaveUsesAttestedKeys() } == 0 {
+        return AuthorityStatus::UnsafeKeyPlatform as usize as *mut c_void;
+    }
+    if call.operation() == VbsAuthorityOperation::VerifyAttestationReport {
+        let mut encoded_envelope = [0; VBS_ATTESTATION_ENVELOPE_BYTES];
+        // SAFETY: destination is enclave-local and exact-sized; source was proven
+        // wholly outside this enclave and is copied only through Vertdll.
+        if unsafe {
+            EnclaveCopyIntoEnclave(
+                encoded_envelope.as_mut_ptr().cast(),
+                (request_address as *const u8).cast(),
+                encoded_envelope.len(),
+            )
+        } != 0
+        {
+            return AuthorityStatus::RequestCopyFailed as usize as *mut c_void;
+        }
+        let envelope = match VbsAttestationEnvelope::decode(&encoded_envelope) {
+            Ok(envelope) => envelope,
+            Err(_) => {
+                return AuthorityStatus::AttestationVerificationFailed as usize as *mut c_void;
+            }
+        };
+        let challenge = match take_challenge() {
+            Ok(challenge) => challenge,
+            Err(status) => return status as usize as *mut c_void,
+        };
+        // SAFETY: the report is an immutable enclave-local copy with a bounded u32
+        // length. Windows verifies that it was generated on this VBS system.
+        if unsafe {
+            EnclaveVerifyAttestationReport(
+                ENCLAVE_TYPE_VBS,
+                envelope.report().as_ptr().cast(),
+                envelope.report().len() as u32,
+            )
+        } != 0
+        {
+            return AuthorityStatus::AttestationVerificationFailed as usize as *mut c_void;
+        }
+        let expected_binding = match VbsAttestationData::for_policy(challenge, authority_policy()) {
+            Ok(binding) => binding,
+            Err(_) => return AuthorityStatus::AttestationIdentityRejected as usize as *mut c_void,
+        };
+        let expected_identity = match current_identity_expectation() {
+            Ok(identity) => identity,
+            Err(status) => return status as usize as *mut c_void,
+        };
+        let parsed = match UnverifiedVbsAttestationReport::parse(envelope.report()) {
+            Ok(parsed) => parsed,
+            Err(_) => return AuthorityStatus::AttestationIdentityRejected as usize as *mut c_void,
+        };
+        if parsed
+            .matches_expectation(expected_binding, expected_identity)
+            .is_err()
+        {
+            return AuthorityStatus::AttestationIdentityRejected as usize as *mut c_void;
+        }
+        let verified_binding = expected_binding.encode();
+        // SAFETY: source is enclave-local and destination was proven entirely outside.
+        if unsafe {
+            EnclaveCopyOutOfEnclave(
+                (receipt_address as *mut u8).cast(),
+                verified_binding.as_ptr().cast(),
+                verified_binding.len(),
+            )
+        } != 0
+        {
+            return AuthorityStatus::AttestationCopyFailed as usize as *mut c_void;
+        }
+        return AuthorityStatus::Success as usize as *mut c_void;
+    }
+
     let mut request = [0; LAUNCH_REQUEST_BYTES];
     // SAFETY: destination is enclave-local and exact-sized; source remains an
     // untrusted address handled exclusively by the Vertdll copy primitive.
@@ -444,12 +678,6 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     } != 0
     {
         return AuthorityStatus::RequestCopyFailed as usize as *mut c_void;
-    }
-    // SAFETY: this zero-argument Vertdll query is available only inside a VBS
-    // enclave and returns a Windows BOOLEAN. False means receipt issuance must
-    // fail closed because debugger or TPM key-provisioning guarantees are absent.
-    if unsafe { EnclaveUsesAttestedKeys() } == 0 {
-        return AuthorityStatus::UnsafeKeyPlatform as usize as *mut c_void;
     }
     match call.operation() {
         VbsAuthorityOperation::IssueReceipt => {
@@ -522,6 +750,26 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
                         report_bytes as usize,
                     )
                 } != 0
+            {
+                return AuthorityStatus::AttestationCopyFailed as usize as *mut c_void;
+            }
+        }
+        VbsAuthorityOperation::GenerateAttestationChallenge => {
+            if approved_request(&request).is_err() {
+                return AuthorityStatus::RequestRejected as usize as *mut c_void;
+            }
+            let challenge = match generate_challenge() {
+                Ok(challenge) => challenge,
+                Err(status) => return status as usize as *mut c_void,
+            };
+            // SAFETY: source is enclave-local and destination was proven outside VTL1.
+            if unsafe {
+                EnclaveCopyOutOfEnclave(
+                    (receipt_address as *mut u8).cast(),
+                    challenge.as_ptr().cast(),
+                    challenge.len(),
+                )
+            } != 0
             {
                 return AuthorityStatus::AttestationCopyFailed as usize as *mut c_void;
             }
@@ -652,5 +900,20 @@ mod tests {
                 enclave_end
             ));
         }
+    }
+
+    #[test]
+    fn verifier_challenge_is_single_pending_and_single_use() {
+        let mut state = ChallengeState::new();
+        assert_eq!(state.take(), Err(()));
+        assert_eq!(state.store([0; VBS_ATTESTATION_CHALLENGE_BYTES]), Err(()));
+        assert_eq!(state.store([0x91; VBS_ATTESTATION_CHALLENGE_BYTES]), Ok(()));
+        assert_eq!(
+            state.store([0x92; VBS_ATTESTATION_CHALLENGE_BYTES]),
+            Err(())
+        );
+        assert_eq!(state.take(), Ok([0x91; VBS_ATTESTATION_CHALLENGE_BYTES]));
+        assert_eq!(state.take(), Err(()));
+        assert_eq!(state.nonce, [0; VBS_ATTESTATION_CHALLENGE_BYTES]);
     }
 }

@@ -5,9 +5,9 @@ use mrml_error::{Result, anyhow};
 #[cfg(windows)]
 use mrml_kernel::{
     AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest,
-    ProtectionBackend, ProtectionPolicy, ProtectionSession, VBS_ATTESTATION_ENVELOPE_BYTES,
-    VBS_AUTHORITY_CONTEXT_BYTES, VbsAttestationEnvelope, VbsAuthorityContext,
-    VbsAuthorityOperation,
+    ProtectionBackend, ProtectionPolicy, ProtectionSession, VBS_ATTESTATION_CHALLENGE_BYTES,
+    VBS_ATTESTATION_DATA_BYTES, VBS_ATTESTATION_ENVELOPE_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
+    VbsAttestationData, VbsAttestationEnvelope, VbsAuthorityContext, VbsAuthorityOperation,
 };
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
@@ -58,8 +58,21 @@ fn application_main() -> Result<()> {
         .map_err(|error| anyhow!("InitializeEnclave failed: {:?}", error))?;
     mrml_println!("initialized VBS enclave with {} thread(s)", threads);
 
-    let mut nonce = [0; 32];
-    mrml_runtime::fill_random(&mut nonce)
+    let mut verifier = mrml_windows::VbsEnclaveReservation::reserve([0; 32])
+        .map_err(|error| anyhow!("verifier CreateEnclave failed: {:?}", error))?;
+    verifier
+        .load_image_wide(&wide)
+        .map_err(|error| anyhow!("verifier LoadEnclaveImageW failed: {:?}", error))?;
+    let verifier_threads = verifier
+        .initialize(1)
+        .map_err(|error| anyhow!("verifier InitializeEnclave failed: {:?}", error))?;
+    mrml_println!(
+        "initialized independent verifier VBS enclave with {} thread(s)",
+        verifier_threads
+    );
+
+    let mut host_nonce = [0; 32];
+    mrml_runtime::fill_random(&mut host_nonce)
         .map_err(|_| anyhow!("cryptographic nonce generation failed"))?;
     let policy = ProtectionPolicy::new(
         ProtectionBackend::VbsEnclave,
@@ -69,6 +82,28 @@ fn application_main() -> Result<()> {
         AUTHORITY_MEASUREMENT,
     );
     let policy_measurement = policy.commitment();
+    let seed_request = LaunchRequest::new(1, host_nonce, AUTHORITY_MEASUREMENT, policy_measurement)
+        .map_err(|error| anyhow!("challenge seed request rejected: {:?}", error))?;
+    let encoded_seed = seed_request.encode();
+    let mut nonce = [0; VBS_ATTESTATION_CHALLENGE_BYTES];
+    let challenge_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::GenerateAttestationChallenge,
+        encoded_seed.as_ptr() as usize as u64,
+        encoded_seed.len() as u64,
+        nonce.as_mut_ptr() as usize as u64,
+        nonce.len() as u64,
+    )
+    .map_err(|error| anyhow!("challenge context rejected: {:?}", error))?;
+    let mut challenge_call = challenge_context.encode();
+    let challenge_status = verifier
+        .call_authority(authority, &mut challenge_call)
+        .map_err(|error| anyhow!("verifier challenge CallEnclave failed: {:?}", error))?;
+    if challenge_status != 0 || nonce == [0; VBS_ATTESTATION_CHALLENGE_BYTES] {
+        return Err(anyhow!(
+            "VTL1 verifier rejected challenge generation with status {}",
+            challenge_status
+        ));
+    }
     let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, policy_measurement)
         .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
@@ -137,6 +172,35 @@ fn application_main() -> Result<()> {
     mrml_println!(
         "transported {} byte local VBS attestation report for independent enclave verification",
         report.report().len()
+    );
+    let mut verified_binding = [0; VBS_ATTESTATION_DATA_BYTES];
+    let verify_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::VerifyAttestationReport,
+        attestation.as_ptr() as usize as u64,
+        attestation.len() as u64,
+        verified_binding.as_mut_ptr() as usize as u64,
+        verified_binding.len() as u64,
+    )
+    .map_err(|error| anyhow!("verifier context rejected: {:?}", error))?;
+    let mut verify_call = verify_context.encode();
+    let verify_status = verifier
+        .call_authority(authority, &mut verify_call)
+        .map_err(|error| anyhow!("verifier CallEnclave failed: {:?}", error))?;
+    if verify_status != 0 {
+        return Err(anyhow!(
+            "independent VTL1 verifier rejected authority report with status {}",
+            verify_status
+        ));
+    }
+    let verified_binding = VbsAttestationData::decode(&verified_binding)
+        .map_err(|error| anyhow!("verifier returned malformed binding: {:?}", error))?;
+    let expected_binding = VbsAttestationData::for_policy(nonce, policy)
+        .map_err(|error| anyhow!("expected binding rejected: {:?}", error))?;
+    if verified_binding != expected_binding {
+        return Err(anyhow!("verifier returned an unexpected authority binding"));
+    }
+    mrml_println!(
+        "independent VTL1 enclave verified authority code identity, policy, and fresh challenge"
     );
     Ok(())
 }

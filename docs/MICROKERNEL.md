@@ -128,9 +128,10 @@ configuration. The configuration is non-debug, uses strict containing-process
 memory isolation, declares one thread, a 2 MiB private range, explicit
 family/image identities, security version one, and primary-image status. A
 custom Rust target omits MinGW CRT startup and ordinary Windows imports; the
-release PE import audit contains only Microsoft's enclave platform DLL,
-`vertdll.dll`. Its boundary-copy and memory primitives are imported from that
-DLL. Its Windows and Linux source tests pass and the resulting DLL passes
+release PE imports only Microsoft's enclave-supported platform DLLs,
+`vertdll.dll` and `bcrypt.dll`. Boundary-copy, identity, attestation, and safe-key
+queries come from Vertdll, while verifier challenges use BCrypt's enclave-safe
+system RNG. Its Windows and Linux source tests pass and the resulting DLL passes
 MRML's Authenticode PE parser.
 
 The bundled LLVM GNU linker does not implement Microsoft's `/ENCLAVE` linker
@@ -215,8 +216,24 @@ image identifiers plus minimum enclave, secure-kernel, and platform security
 versions; every debug flag is rejected. The result type is deliberately named
 `UnverifiedVbsAttestationReport`: these comparisons become meaningful only after
 another VBS enclave successfully calls `EnclaveVerifyAttestationReport` over the
-same original bytes. That verifier enclave and its build-time authority identity
-pin remain incomplete.
+same original bytes.
+
+The host probe now loads two independent VBS reservations from the same signed
+image. The verifier instance checks the compiled image/policy request, generates
+and retains a nonzero 256-bit challenge with enclave-safe `BCryptGenRandom`, and
+rejects a second challenge while one is pending. VTL0 relays that nonce to the
+authority instance and returns the resulting bounded report. Verification first
+copies the entire envelope into VTL1, consumes and erases the challenge, calls
+`EnclaveVerifyAttestationReport`, parses the exact verified bytes, and requires
+the signed owner, unique-code, author, family, and image identities to equal the
+verifier instance's own `EnclaveGetEnclaveInformation` identity. Enclave,
+secure-kernel, and platform security versions may not be lower than the
+verifier's current values. The returned binding is diagnostic only: compromised
+VTL0 can suppress or forge presentation of success, so secrets must be released
+inside VTL1 or over a separately authenticated enclave channel. The installed
+development certificate still blocks real execution at Windows error 577 on the
+current machine, so this two-enclave call sequence is build- and source-tested,
+not yet hardware-run evidence.
 
 The enclave now implements that authority entry rather than only a boundary
 probe. It copies the fixed-size call context and request into strict enclave

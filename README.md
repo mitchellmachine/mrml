@@ -141,6 +141,11 @@ authenticates the same report bytes through Windows.
 Every enclave entry obtains its own runtime address interval and rejects context,
 input, or output ranges that overlap or wrap into VTL1 before invoking explicit
 boundary-copy APIs.
+The Windows probe loads separate authority and verifier VBS instances. The
+verifier creates a one-use enclave-random challenge, validates Windows' report
+signature, binds the challenge and policy, and requires the authority identity
+and security versions to match its own signed image. A VTL0-visible success value
+is diagnostic only and cannot authorize host-side secret release.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.

@@ -8,6 +8,7 @@ pub const LAUNCH_REQUEST_BYTES: usize = 184;
 pub const AUTHORITY_RECEIPT_BYTES: usize = 272;
 pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 48;
 pub const VBS_ATTESTATION_DATA_BYTES: usize = 64;
+pub const VBS_ATTESTATION_CHALLENGE_BYTES: usize = 32;
 pub const VBS_ATTESTATION_REPORT_MAX_BYTES: usize = 64 * 1024;
 pub const VBS_ATTESTATION_ENVELOPE_BYTES: usize = 8 + VBS_ATTESTATION_REPORT_MAX_BYTES;
 pub const VBS_REPORT_PACKAGE_HEADER_BYTES: usize = 24;
@@ -25,6 +26,8 @@ pub enum VbsAuthorityOperation {
     GenerateSealedKey = 2,
     LoadSealedKey = 3,
     IssueAttestationReport = 4,
+    GenerateAttestationChallenge = 5,
+    VerifyAttestationReport = 6,
 }
 
 impl VbsAuthorityOperation {
@@ -34,6 +37,8 @@ impl VbsAuthorityOperation {
             2 => Ok(Self::GenerateSealedKey),
             3 => Ok(Self::LoadSealedKey),
             4 => Ok(Self::IssueAttestationReport),
+            5 => Ok(Self::GenerateAttestationChallenge),
+            6 => Ok(Self::VerifyAttestationReport),
             _ => Err(ProtectedChannelError::Malformed),
         }
     }

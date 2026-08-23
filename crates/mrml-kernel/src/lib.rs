@@ -67,10 +67,10 @@ pub use policy::{
 pub use protected_channel::{
     AUTHORITY_RECEIPT_BYTES, AuthenticatedProtectionAdmission, AuthorityReceipt,
     LAUNCH_REQUEST_BYTES, LaunchRequest, ProtectedChannelError, UnverifiedVbsAttestationReport,
-    VBS_ATTESTATION_DATA_BYTES, VBS_ATTESTATION_ENVELOPE_BYTES, VBS_ATTESTATION_REPORT_MAX_BYTES,
-    VBS_AUTHORITY_CONTEXT_BYTES, VBS_ENCLAVE_IDENTITY_BYTES, VBS_REPORT_PACKAGE_HEADER_BYTES,
-    VBS_REPORT_SIGNED_STATEMENT_BYTES, VbsAttestationData, VbsAttestationEnvelope,
-    VbsAttestationExpectation, VbsAuthorityContext, VbsAuthorityOperation,
+    VBS_ATTESTATION_CHALLENGE_BYTES, VBS_ATTESTATION_DATA_BYTES, VBS_ATTESTATION_ENVELOPE_BYTES,
+    VBS_ATTESTATION_REPORT_MAX_BYTES, VBS_AUTHORITY_CONTEXT_BYTES, VBS_ENCLAVE_IDENTITY_BYTES,
+    VBS_REPORT_PACKAGE_HEADER_BYTES, VBS_REPORT_SIGNED_STATEMENT_BYTES, VbsAttestationData,
+    VbsAttestationEnvelope, VbsAttestationExpectation, VbsAuthorityContext, VbsAuthorityOperation,
 };
 pub use protected_execution::{
     PROTECTION_POLICY_BYTES, PROTECTION_REPORT_BYTES, ProtectionAdmission, ProtectionBackend,
