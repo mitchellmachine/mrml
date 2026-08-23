@@ -109,14 +109,7 @@ impl NvidiaBackend {
         if !self.capabilities.nvdec {
             return Err(Error::NvDecoderUnavailable);
         }
-        if config.width == 0
-            || config.height == 0
-            || !matches!(config.bit_depth, 8 | 10 | 12)
-            || !matches!(
-                config.color_format,
-                NvPixelFormat::I420 | NvPixelFormat::I422 | NvPixelFormat::I444
-            )
-        {
+        if !validate_video_config(&config) {
             return Err(Error::InvalidSequence);
         }
         Ok(NvdecSession {
@@ -134,14 +127,7 @@ impl NvidiaBackend {
         if !self.capabilities.nvenc {
             return Err(Error::NvEncoderUnavailable);
         }
-        if config.width == 0
-            || config.height == 0
-            || !matches!(config.bit_depth, 8 | 10 | 12)
-            || !matches!(
-                config.color_format,
-                NvPixelFormat::I420 | NvPixelFormat::I422 | NvPixelFormat::I444
-            )
-        {
+        if !validate_video_config(&config) {
             return Err(Error::InvalidSequence);
         }
         Ok(NvencSession {
@@ -246,6 +232,16 @@ fn has_all(library: &Option<DynamicLibrary>, symbols: &[&CStr]) -> bool {
     symbols.iter().all(|symbol| has(library, symbol))
 }
 
+fn validate_video_config(config: &NvidiaVideoConfig) -> bool {
+    config.width != 0
+        && config.height != 0
+        && matches!(config.bit_depth, 8 | 10 | 12)
+        && matches!(
+            config.color_format,
+            NvPixelFormat::I420 | NvPixelFormat::I422 | NvPixelFormat::I444
+        )
+}
+
 fn open_first(names: &[&CStr]) -> Option<DynamicLibrary> {
     names.iter().find_map(|name| DynamicLibrary::open(name))
 }
@@ -306,5 +302,27 @@ mod tests {
                 Err(Error::NvEncoderUnavailable)
             );
         }
+    }
+
+    #[test]
+    fn invalid_video_configs_are_rejected() {
+        let config = NvidiaVideoConfig {
+            width: 0,
+            height: 0,
+            bit_depth: 99,
+            color_format: NvPixelFormat::I420,
+        };
+        assert!(!validate_video_config(&config));
+    }
+
+    #[test]
+    fn valid_video_configs_are_accepted() {
+        let config = NvidiaVideoConfig {
+            width: 1920,
+            height: 1080,
+            bit_depth: 10,
+            color_format: NvPixelFormat::I420,
+        };
+        assert!(validate_video_config(&config));
     }
 }
