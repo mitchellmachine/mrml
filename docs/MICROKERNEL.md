@@ -360,6 +360,24 @@ requirement rather than reusing the bootstrap token. The extended mapping must
 pass the same page-by-page active-PTE verification before any out-of-page
 register is accessed. Tests cover hostile maximum fields and a fault array that
 crosses the bootstrap-page boundary.
+
+Live VT-d leaf binding no longer accepts an arbitrary leaf pointer. Checked
+DMAR plus live PCI resolution produces a requester route containing the exact
+BDF and DRHD register base. After boot code reads legacy-mode RTADDR from that
+verified unit, an exclusive table walker validates the 128-bit root entry for
+the requester's bus and the 128-bit context entry for its device/function.
+Reserved fields, missing entries, disabled fault reporting, pass-through or
+Device-TLB translation, unsupported address widths, zero or unexpected domain
+IDs, and invalid table pointers are rejected. MRML currently requires AW
+`010b`, a four-level second-stage walk. Every intermediate entry is bounded and
+validated; large-page termination is rejected so a 4 KiB ownership transition
+cannot silently affect neighboring memory. The final leaf must map the exact
+physical granule rather than an alias before the walker returns a lifetime-bound
+unique reference. A direct-map implementation exists behind an unsafe contract
+requiring pinned, supervisor-only, exclusively owned tables and serialized
+writers. The routed wrapper additionally requires RTADDR provenance from the
+same verified DRHD. Tests reject forged domains, pass-through contexts, aliases,
+and huge pages and prove mutation reaches only the resolved leaf.
 Register fields and ordering follow the Intel VT-d Architecture Specification
 rather than third-party implementation code.
 

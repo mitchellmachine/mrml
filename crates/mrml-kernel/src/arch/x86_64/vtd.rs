@@ -425,6 +425,22 @@ pub struct DmarUnit {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VtdRequesterRoute {
+    requester: DeviceAddress,
+    register_base: PhysAddr,
+}
+
+impl VtdRequesterRoute {
+    pub const fn requester(self) -> DeviceAddress {
+        self.requester
+    }
+
+    pub const fn register_base(self) -> PhysAddr {
+        self.register_base
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DmarTopology<const UNITS: usize, const SCOPES: usize> {
     pub host_address_width: u8,
     pub flags: u8,
@@ -571,6 +587,18 @@ impl<const UNITS: usize, const SCOPES: usize> DmarTopology<UNITS, SCOPES> {
             }
         }
         explicit.or(fallback).ok_or(DmarError::NoRemappingUnit)
+    }
+
+    pub fn route_for_requester<C: PciConfigSpace>(
+        &self,
+        requester: DeviceAddress,
+        config: &mut C,
+    ) -> Result<VtdRequesterRoute, DmarError> {
+        let unit = self.unit_for_requester(requester, config)?;
+        Ok(VtdRequesterRoute {
+            requester,
+            register_base: unit.register_base,
+        })
     }
 
     fn parse_drhd(&mut self, bytes: &[u8]) -> Result<(), DmarError> {
@@ -1308,6 +1336,9 @@ mod tests {
                 .get(),
             0xfed9_0000
         );
+        let route = topology.route_for_requester(endpoint, &mut config).unwrap();
+        assert_eq!(route.requester(), endpoint);
+        assert_eq!(route.register_base().get(), 0xfed9_0000);
         let fallback = DeviceAddress::new(0, 7, 2, 0).unwrap();
         assert_eq!(
             topology

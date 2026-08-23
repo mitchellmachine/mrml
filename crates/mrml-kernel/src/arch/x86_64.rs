@@ -17,6 +17,7 @@ mod topology;
 mod trap;
 mod vmx;
 mod vtd;
+mod vtd_tables;
 pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt, copy_mcfg};
 pub use address_space::{AddressSpace, AddressSpaceError, Mapping, MappingId};
 pub use ap_online::{ApOnlineError, ApOnlineTable};
@@ -67,7 +68,11 @@ pub use vtd::{
     DmarDeviceScope, DmarError, DmarTopology, DmarUnit, EcamSegments, McfgAllocation, McfgError,
     McfgTopology, NativeEcamSegment, NativeVtdMmio, PciConfigSpace, PciPathElement,
     VtdDmaIsolation, VtdDmaSet, VtdError, VtdFaultSnapshot, VtdInvalidator, VtdRegisterIo,
-    VtdRegisterLayout,
+    VtdRegisterLayout, VtdRequesterRoute,
+};
+pub use vtd_tables::{
+    DirectVtdTables, VtdIdentityLeaf, VtdTableError, VtdTableMemory, bind_legacy_identity_leaf,
+    bind_routed_legacy_identity_leaf,
 };
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;
