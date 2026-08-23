@@ -25,8 +25,24 @@ pub struct DirectoryAncestryProof<const N: usize> {
 }
 
 struct DirectoryAncestryPath<const N: usize> {
-    objects: [Option<StorageObjectId>; N],
+    nodes: [Option<DirectoryAncestryNode>; N],
     count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectoryAncestryNode {
+    object: StorageObjectId,
+    generation: u64,
+}
+
+impl DirectoryAncestryNode {
+    const fn object(self) -> StorageObjectId {
+        self.object
+    }
+
+    const fn generation(self) -> u64 {
+        self.generation
+    }
 }
 
 impl<const N: usize> DirectoryAncestryProof<N> {
@@ -56,7 +72,10 @@ impl<const N: usize> DirectoryAncestryProof<N> {
 
     pub const fn source_ancestor(&self, index: usize) -> Option<StorageObjectId> {
         if index < self.source_path.count {
-            self.source_path.objects[index]
+            match self.source_path.nodes[index] {
+                Some(node) => Some(node.object()),
+                None => None,
+            }
         } else {
             None
         }
@@ -64,7 +83,32 @@ impl<const N: usize> DirectoryAncestryProof<N> {
 
     pub const fn destination_ancestor(&self, index: usize) -> Option<StorageObjectId> {
         if index < self.destination_path.count {
-            self.destination_path.objects[index]
+            match self.destination_path.nodes[index] {
+                Some(node) => Some(node.object()),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub const fn source_ancestor_generation(&self, index: usize) -> Option<u64> {
+        if index < self.source_path.count {
+            match self.source_path.nodes[index] {
+                Some(node) => Some(node.generation()),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub const fn destination_ancestor_generation(&self, index: usize) -> Option<u64> {
+        if index < self.destination_path.count {
+            match self.destination_path.nodes[index] {
+                Some(node) => Some(node.generation()),
+                None => None,
+            }
         } else {
             None
         }
@@ -75,19 +119,23 @@ impl<const N: usize> DirectoryAncestryProof<N> {
     ) -> Result<DirectorySuccessorClosure<M>, DirectoryClosureError> {
         let mut closure = DirectorySuccessorClosure {
             objects: [None; M],
+            generations: [0; M],
             depths: [0; M],
             count: 0,
         };
-        closure.insert(self.moved, usize::MAX)?;
+        closure.insert(self.moved, self.moved_generation, usize::MAX)?;
         for index in 0..self.source_path.count {
-            let object =
-                self.source_path.objects[index].ok_or(DirectoryClosureError::InvalidProof)?;
-            closure.insert(object, self.source_path.count - index)?;
+            let node = self.source_path.nodes[index].ok_or(DirectoryClosureError::InvalidProof)?;
+            closure.insert(node.object, node.generation, self.source_path.count - index)?;
         }
         for index in 0..self.destination_path.count {
-            let object =
-                self.destination_path.objects[index].ok_or(DirectoryClosureError::InvalidProof)?;
-            closure.insert(object, self.destination_path.count - index)?;
+            let node =
+                self.destination_path.nodes[index].ok_or(DirectoryClosureError::InvalidProof)?;
+            closure.insert(
+                node.object,
+                node.generation,
+                self.destination_path.count - index,
+            )?;
         }
         Ok(closure)
     }
@@ -95,6 +143,7 @@ impl<const N: usize> DirectoryAncestryProof<N> {
 
 pub struct DirectorySuccessorClosure<const N: usize> {
     objects: [Option<StorageObjectId>; N],
+    generations: [u64; N],
     depths: [usize; N],
     count: usize,
 }
@@ -116,16 +165,25 @@ impl<const N: usize> DirectorySuccessorClosure<N> {
         }
     }
 
+    pub const fn generation(&self, index: usize) -> Option<u64> {
+        if index < self.count {
+            Some(self.generations[index])
+        } else {
+            None
+        }
+    }
+
     fn insert(
         &mut self,
         object: StorageObjectId,
+        generation: u64,
         depth: usize,
     ) -> Result<(), DirectoryClosureError> {
         if let Some(index) = self.objects[..self.count]
             .iter()
             .position(|entry| *entry == Some(object))
         {
-            if depth != self.depths[index] {
+            if generation != self.generations[index] || depth != self.depths[index] {
                 return Err(DirectoryClosureError::InvalidProof);
             }
             return Ok(());
@@ -139,9 +197,11 @@ impl<const N: usize> DirectorySuccessorClosure<N> {
             .unwrap_or(self.count);
         for slot in (index..self.count).rev() {
             self.objects[slot + 1] = self.objects[slot];
+            self.generations[slot + 1] = self.generations[slot];
             self.depths[slot + 1] = self.depths[slot];
         }
         self.objects[index] = Some(object);
+        self.generations[index] = generation;
         self.depths[index] = depth;
         self.count += 1;
         Ok(())
@@ -217,18 +277,21 @@ fn load_ancestry_path<const N: usize, B: DirectoryAncestryBackend>(
     forbidden: StorageObjectId,
     backend: &mut B,
 ) -> Result<DirectoryAncestryPath<N>, DirectoryAncestryError<B::Error>> {
-    let mut visited = [None; N];
+    let mut visited: [Option<DirectoryAncestryNode>; N] = [None; N];
     let mut count = 0;
     let mut current = start;
     loop {
-        if current == forbidden || visited[..count].contains(&Some(current)) {
+        if current == forbidden
+            || visited[..count]
+                .iter()
+                .flatten()
+                .any(|node| node.object == current)
+        {
             return Err(DirectoryAncestryError::Cycle);
         }
         if count == N {
             return Err(DirectoryAncestryError::Capacity);
         }
-        visited[count] = Some(current);
-        count += 1;
         let metadata = backend
             .load_directory_metadata(current)
             .map_err(DirectoryAncestryError::Backend)?;
@@ -238,6 +301,11 @@ fn load_ancestry_path<const N: usize, B: DirectoryAncestryBackend>(
         {
             return Err(DirectoryAncestryError::InvalidProof);
         }
+        visited[count] = Some(DirectoryAncestryNode {
+            object: current,
+            generation: metadata.generation(),
+        });
+        count += 1;
         match metadata.parent() {
             Some(parent) if current != root => current = parent,
             None if current == root => break,
@@ -245,7 +313,7 @@ fn load_ancestry_path<const N: usize, B: DirectoryAncestryBackend>(
         }
     }
     Ok(DirectoryAncestryPath {
-        objects: visited,
+        nodes: visited,
         count,
     })
 }
@@ -1637,9 +1705,14 @@ mod tests {
         assert_eq!(proof.source_ancestor(0), Some(object(3)));
         assert_eq!(proof.source_ancestor(1), Some(object(1)));
         assert_eq!(proof.source_ancestor(2), None);
+        assert_eq!(proof.source_ancestor_generation(0), Some(1));
+        assert_eq!(proof.source_ancestor_generation(1), Some(5));
+        assert_eq!(proof.source_ancestor_generation(2), None);
         assert_eq!(proof.destination_path_len(), 2);
         assert_eq!(proof.destination_ancestor(0), Some(object(2)));
         assert_eq!(proof.destination_ancestor(1), Some(object(1)));
+        assert_eq!(proof.destination_ancestor_generation(0), Some(1));
+        assert_eq!(proof.destination_ancestor_generation(1), Some(5));
         let closure = proof.successor_closure::<4>().unwrap();
         assert_eq!(closure.len(), 4);
         assert_eq!(closure.object(0), Some(object(9)));
@@ -1647,18 +1720,28 @@ mod tests {
         assert_eq!(closure.object(2), Some(object(2)));
         assert_eq!(closure.object(3), Some(object(1)));
         assert_eq!(closure.object(4), None);
+        assert_eq!(closure.generation(0), Some(1));
+        assert_eq!(closure.generation(1), Some(1));
+        assert_eq!(closure.generation(2), Some(1));
+        assert_eq!(closure.generation(3), Some(5));
+        assert_eq!(closure.generation(4), None);
         assert_eq!(
             proof.successor_closure::<3>().err(),
             Some(DirectoryClosureError::Capacity)
         );
         let mut inconsistent = DirectorySuccessorClosure::<2> {
             objects: [None; 2],
+            generations: [0; 2],
             depths: [0; 2],
             count: 0,
         };
-        inconsistent.insert(object(1), 1).unwrap();
+        inconsistent.insert(object(1), 5, 1).unwrap();
         assert_eq!(
-            inconsistent.insert(object(1), 2),
+            inconsistent.insert(object(1), 6, 1),
+            Err(DirectoryClosureError::InvalidProof)
+        );
+        assert_eq!(
+            inconsistent.insert(object(1), 5, 2),
             Err(DirectoryClosureError::InvalidProof)
         );
         assert!(matches!(

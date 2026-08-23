@@ -2726,15 +2726,16 @@ failure, and capacity exhaustion. It separately loads the moved directory's
 canonical metadata, binds its exact generation, and requires its current parent
 to equal the source directory. Reusing a proof after either bound generation
 advances fails. The proof retains fixed-capacity source-to-root and destination-
-to-root object paths, and exposes only bounded indexed access to them. Both path
-starts bind their independently loaded exact generations. This makes only the
+to-root object/generation paths, and exposes only bounded indexed access to
+their identities and generations. Every retained node binds the exact canonical
+generation loaded by the proof. This makes only the
 bounded in-memory namespace transition cycle-safe. A separate fixed-capacity
 closure planner inserts the moved directory first, merges both ancestor paths,
 deduplicates their shared suffix, orders deeper objects before shallower
 parents, leaves the root last, and rejects insufficient output capacity or a
-shared ancestor presented at inconsistent depths. It
-produces identities and order only; canonical successor construction and
-publication remain pending. Transactional publication must propagate every
+shared ancestor presented at inconsistent depths or generations. It produces
+generation-bound identities and order only; canonical successor construction
+and publication remain pending. Transactional publication must propagate every
 changed directory generation through its parent entry and continue through the
 complete affected ancestor closure to the root; publishing only source,
 destination, and child
@@ -2933,7 +2934,8 @@ The ancestry increment also passed the two repository reviews. The
 publisher veto, DRM, accessibility exclusion, or first-party bypass; object IDs
 remain non-authorizing. The `HOSTILE SECURITY REVIEW` treats every loaded
 metadata record and parent link as hostile and requires exact immutable-
-generation binding, bounded source/destination traversal, duplicate/cycle rejection, and fail-
+generation binding for every closure entry, bounded source/destination
+traversal, duplicate/cycle rejection, and fail-
 closed backend uncertainty. This agent review is not independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without

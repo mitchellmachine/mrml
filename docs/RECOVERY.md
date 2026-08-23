@@ -129,8 +129,10 @@ explicitly and downgrade the status rather than guessing.
   bounded immutable-generation ancestry proof that reaches the selected root
   without encountering the moved object and binds the moved generation's current
   source parent. It retains both bounded source-to-root and destination-to-root
-  paths; a bounded planner merges and deduplicates their affected objects in
-  child-before-parent order. Transactional publication must still propagate exact generation
+  paths with each ancestor's exact canonical generation; a bounded planner
+  merges and deduplicates their affected object/generation pairs in
+  child-before-parent order and rejects inconsistent shared ancestors.
+  Transactional publication must still propagate exact generation
   changes through every affected ancestor to the root. Capability-authorized
   bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a

@@ -234,8 +234,10 @@ authority; unrelated domains continue.
    A fixed-capacity closure planner now merges both paths with the moved object,
    deduplicates shared ancestors, rejects insufficient output capacity, and
    orders children before parents with the root last. A duplicate ancestor at
-   inconsistent depths fails closed. Transactional publication
-   must propagate each changed child generation
+   inconsistent depths or generations fails closed. Every closure entry binds
+   the exact canonical generation loaded by the proof, preventing stale
+   ancestor substitution. Transactional publication must propagate each
+   changed child generation
    through the complete affected ancestor closure to the root; a three-object
    source/destination/child shortcut would fail recovery validation. That
    propagation and allocator persistence remain pending, so directory operations
