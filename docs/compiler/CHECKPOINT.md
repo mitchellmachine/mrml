@@ -9,12 +9,13 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `4879955d3813a37764a89a5cdd3956564adc0030`
-  (`Preanalyze runtime assignment accesses`)
+- Compiler checkpoint commit: `8b14591ea7c8457d6020e037078dc5c23a9ff9e7`
+  (`Preanalyze assignment root reads`)
 - Remote state when recorded: the named compiler checkpoint was pushed in the
   `origin/main` history; this recovery-document commit follows it.
-- Preceding compiler commits: `996ac72` (`Preanalyze runtime loop declarations`),
-  `e393097` (`Preanalyze sequential runtime declarations`), `8b4a529`
+- Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
+  accesses`), `996ac72` (`Preanalyze runtime loop declarations`), `e393097`
+  (`Preanalyze sequential runtime declarations`), `8b4a529`
   (`Preanalyze conditional branch local identities`),
   `acd1d64` (`Preanalyze bounded runtime body facts`), `486fc87`
   (`Discover bounded runtime read places`), `aac7798`
@@ -63,14 +64,19 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   scoped-environment restoration and consumption validation; and
 - a separate fixed 256-entry expectation table that pre-resolves every supported
   non-wildcard assignment target to stable identity, projections, type, access
-  class, and span without disturbing the emitted read/write ledger's true order.
+  class, and span without disturbing the emitted read/write ledger's true order;
+  and
+- a separate fixed 256-entry expectation table for assignment RHS expressions
+  whose root is a discoverable place, resolved against the exact active scope
+  and consumed through the ordinary identifier-read path.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Expression reads are not yet preanalyzed. Names are still
+borrow checker. Reads nested inside non-place expression roots are not yet
+preanalyzed. Names are still
 resolved during emission, expanded inlined-helper declarations append
 dynamically, and read-place discovery
 is not yet run body-wide or consumed by every nested emission family. Parser
@@ -83,8 +89,8 @@ solver are unimplemented.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. make the standalone table preanalyze bounded read-place discovery across
-   supported body expressions rather than rediscovering names during emission;
+1. expand bounded read-place preanalysis from assignment roots across nested and
+   non-assignment body expressions rather than rediscovering names during emission;
 2. add explicit basic blocks and control-flow edges;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
