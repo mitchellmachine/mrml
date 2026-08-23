@@ -390,8 +390,18 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
-        let loop_body = "fn count(value: u64) -> u64 { let mut current: u64 = value; while current < 10 { current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
-        let error = compile(loop_body, "answer", ObjectFormat::Elf64).unwrap_err();
+        let loop_body = "fn count(value: u16) -> u64 { let mut current: u16 = 0; while current < value { current += 1; } current as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> u64 { count(value) }";
+        assert!(compile(loop_body, "answer", ObjectFormat::Elf64).is_ok());
+
+        let loop_control = "fn count(value: u64) -> u64 { let mut current: u64 = 0; while current < value { if current == 3 { break; } current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
+        let error = compile(loop_control, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+        );
+
+        let unconditional_loop = "fn spin(value: u64) -> u64 { loop {} } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
+        let error = compile(unconditional_loop, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)

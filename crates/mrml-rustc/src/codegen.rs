@@ -6676,8 +6676,14 @@ impl<
                             tail_unreachable = true;
                         }
                     }
-                    crate::BodyStatement::Loop(_) => {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    crate::BodyStatement::Loop(index) => {
+                        let loop_statement = body.while_loops()[*index]
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        self.emit_inline_while_loop::<MAX_NODES>(
+                            &loop_statement,
+                            return_type_name,
+                            body_start,
+                        )?;
                     }
                 }
             }
@@ -6906,6 +6912,66 @@ impl<
         }
         self.emit_scoped_local_cleanup(branch_checkpoint)?;
         Ok(false)
+    }
+
+    fn emit_inline_while_loop<const MAX_NODES: usize>(
+        &mut self,
+        loop_statement: &crate::WhileLoop<'tree>,
+        operand_type: &str,
+        body_start: usize,
+    ) -> Result<(), CodegenError> {
+        let condition = loop_statement
+            .parse_condition::<MAX_NODES>()
+            .map_err(|error| CodegenError {
+                kind: CodegenErrorKind::Expression(error.kind),
+                span: translate_span(body_start + loop_statement.condition_span.start, error.span),
+            })?
+            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        let condition_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            &condition,
+            condition.root(),
+            0,
+        )
+        .map_err(|kind| self.error(kind))?;
+        if condition_type != RuntimeExpressionType::Bool {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        }
+        let loop_start = self.length;
+        self.emit_expression(&condition, condition.root(), 0)?;
+        self.emit(&[0x48, 0x85, 0xc0])?;
+        let exit = self.emit_forward_branch(0x84)?;
+        let local_checkpoint = self.saved_locals;
+        for operation in loop_statement.operations().iter().flatten() {
+            match operation {
+                crate::LoopOperation::Local(local) => {
+                    self.emit_local::<MAX_NODES>(local, operand_type, body_start)?;
+                }
+                crate::LoopOperation::Assignment(assignment) => {
+                    self.emit_assignment::<MAX_NODES>(assignment, body_start)?;
+                }
+                crate::LoopOperation::Expression(statement) => {
+                    self.emit_expression_statement::<MAX_NODES>(statement, body_start)?;
+                }
+                crate::LoopOperation::Break
+                | crate::LoopOperation::Continue
+                | crate::LoopOperation::ConditionalBreak(_)
+                | crate::LoopOperation::ConditionalContinue(_)
+                | crate::LoopOperation::ConditionalReturn(_)
+                | crate::LoopOperation::ConditionalBlock(_)
+                | crate::LoopOperation::Return(_)
+                | crate::LoopOperation::NestedUnitLoop
+                | crate::LoopOperation::NestedBlock(_) => {
+                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                }
+            }
+        }
+        self.emit_scoped_local_cleanup(local_checkpoint)?;
+        self.emit_backward_branch(loop_start)?;
+        self.truncate_scoped_locals(local_checkpoint)?;
+        self.patch_forward_branch(exit)
     }
 
     fn emit_expression_with_width<const MAX_NODES: usize>(
