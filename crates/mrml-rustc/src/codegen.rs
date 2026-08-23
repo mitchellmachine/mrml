@@ -1994,6 +1994,7 @@ fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
         crate::ScalarType::Integer(ty) => RuntimeExpressionType::Integer(Some(ty)),
         crate::ScalarType::Bool => RuntimeExpressionType::Bool,
         crate::ScalarType::Char => RuntimeExpressionType::Char,
+        crate::ScalarType::Unit => RuntimeExpressionType::Unit,
     }
 }
 
@@ -5515,11 +5516,21 @@ fn runtime_expression_type_with_locals<
             callee,
             argument_count,
             ..
+        } if resolver
+            .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+            .is_some_and(|target| target.return_type == crate::ScalarType::Unit) =>
+        {
+            Ok(RuntimeExpressionType::Unit)
+        }
+        ExprKind::Call {
+            callee,
+            argument_count,
+            ..
         } => resolver
             .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
             .and_then(|target| match target.return_type {
                 crate::ScalarType::Integer(ty) => Some(ty),
-                crate::ScalarType::Bool | crate::ScalarType::Char => None,
+                crate::ScalarType::Bool | crate::ScalarType::Char | crate::ScalarType::Unit => None,
             })
             .or_else(|| resolver.resolve_call_type(callee, argument_count))
             .map(|ty| RuntimeExpressionType::Integer(Some(ty)))
@@ -5589,6 +5600,9 @@ fn runtime_expression_type_with_locals<
                 }
                 crate::ScalarType::Char if operand_type == RuntimeExpressionType::Char => {
                     Ok(RuntimeExpressionType::Char)
+                }
+                crate::ScalarType::Unit if operand_type == RuntimeExpressionType::Unit => {
+                    Ok(RuntimeExpressionType::Unit)
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
@@ -6597,6 +6611,7 @@ impl<
             crate::ScalarType::Integer(ty) => ty.name(),
             crate::ScalarType::Bool => "bool",
             crate::ScalarType::Char => "char",
+            crate::ScalarType::Unit => "()",
         };
         let previous_width = self.width;
         if let Some(width) = runtime_expression_width(return_type) {
@@ -10083,7 +10098,7 @@ impl<
                     crate::ScalarType::Bool => {
                         self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
                     }
-                    crate::ScalarType::Char => {}
+                    crate::ScalarType::Char | crate::ScalarType::Unit => {}
                 }
             }
             ExprKind::Unary {

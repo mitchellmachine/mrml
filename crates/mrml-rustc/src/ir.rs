@@ -462,7 +462,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
                     crate::ScalarType::Bool => {
                         self.push(Instruction::NormalizeBool, expression.span)?;
                     }
-                    crate::ScalarType::Char => {}
+                    crate::ScalarType::Char | crate::ScalarType::Unit => {}
                 }
             }
             ExprKind::Unary { operator, operand } => {

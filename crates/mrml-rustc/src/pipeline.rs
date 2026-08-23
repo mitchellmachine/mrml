@@ -92,7 +92,9 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
                 }
                 _ => None,
             })?;
-        let return_type = scalar_type(function.return_type?.text)?;
+        let return_type = function
+            .return_type
+            .map_or(Some(crate::ScalarType::Unit), |ty| scalar_type(ty.text))?;
         let mut parameters = [None; CALL_PARAMETERS];
         for (index, parameter) in function.parameters().iter().flatten().enumerate() {
             parameters[index] = Some(crate::RuntimeCallParameter {
@@ -114,6 +116,7 @@ fn scalar_type(name: &str) -> Option<crate::ScalarType> {
     match name {
         "bool" => Some(crate::ScalarType::Bool),
         "char" => Some(crate::ScalarType::Char),
+        "()" => Some(crate::ScalarType::Unit),
         _ => crate::IntegerType::from_name(name).map(crate::ScalarType::Integer),
     }
 }
@@ -369,6 +372,16 @@ mod tests {
 
         let wrong_character = "fn identity(value: char) -> char { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> char { identity(value) }";
         let error = compile(wrong_character, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let unit = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { forward(value); consume(()); 7 } fn forward(value: u64) { check(value); } fn check(value: u64) { if value == 0 { return; } value; } fn consume(unit: ()) { unit; }";
+        assert!(compile(unit, "answer", ObjectFormat::Elf64).is_ok());
+
+        let wrong_unit = "fn check(value: u64) { value; } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { check(value) + 1 }";
+        let error = compile(wrong_unit, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)

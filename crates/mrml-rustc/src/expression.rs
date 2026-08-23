@@ -187,6 +187,7 @@ pub enum ScalarType {
     Integer(IntegerType),
     Bool,
     Char,
+    Unit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -225,6 +226,7 @@ impl ScalarType {
         match name {
             "bool" => Some(Self::Bool),
             "char" => Some(Self::Char),
+            "()" => Some(Self::Unit),
             _ => IntegerType::from_name(name).map(Self::Integer),
         }
     }
@@ -1081,7 +1083,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 target: ScalarType::Bool,
             } => self.is_boolean_expression(operand, depth + 1),
             ExprKind::Ascribe {
-                target: ScalarType::Integer(_) | ScalarType::Char,
+                target: ScalarType::Integer(_) | ScalarType::Char | ScalarType::Unit,
                 ..
             } => false,
             ExprKind::Sequence { then, .. } => self.is_boolean_expression(then, depth + 1),
@@ -1417,6 +1419,14 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                         Ok(value)
                     }
                     ScalarType::Char => Err(ConstEvalError::InvalidCast),
+                    ScalarType::Unit
+                        if self.expression(operand).is_some_and(|expression| {
+                            matches!(expression.kind, ExprKind::Unit)
+                        }) =>
+                    {
+                        Ok(0)
+                    }
+                    ScalarType::Unit => Err(ConstEvalError::InvalidCast),
                 }
             }
             ExprKind::Unary { operator, operand } => {

@@ -2572,7 +2572,8 @@ available to the mapping closure.
 
 Runtime expressions can call a safe, non-const Rust-ABI function declared
 before or after the selected export, with up to four built-in integer, Boolean,
-or character parameters and a scalar result from the same families.
+character, or unit parameters and a result from the same scalar or unit
+families.
 Arguments execute eagerly in source order, are normalized to their declared
 types, and become immutable lexical bindings while the body is emitted. A
 callee body may additionally sequence bounded scalar local declarations,
@@ -2677,6 +2678,12 @@ ELF64 object. Pinned-nightly callers matched an independent Rust reference for
 emoji, both valid sides of the surrogate gap, and `U+10FFFF`. Integer arguments
 to character parameters fail type checking rather than being reinterpreted as
 Unicode scalar values.
+A forward unit-helper chain produced a 211-byte COFF object and a 608-byte
+ELF64 object. Pinned-nightly callers returned the same composed result for
+eight integer boundary inputs on both hosts, covering statement-position unit
+calls, implicit unit tails, an explicit valueless early return, forward unit
+composition, and a bound `()` parameter. Using a unit call as an integer
+operand fails type checking.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
