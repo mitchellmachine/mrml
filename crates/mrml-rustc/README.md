@@ -2443,6 +2443,14 @@ existing `None` skips the predicate, while a false result changes `Some` to
 same unwrap, expect, unsafe unchecked extraction, fallback, closure-predicate,
 and mapping consumers as direct checked producers.
 
+Checked integer options support lazy `Option::map` as a composable producer.
+Its one-argument closure runs only for `Some`, may capture parameters and
+locals, and may change the candidate to another built-in integer type. Mapped
+options preserve `None` without evaluating the closure and can be mapped or
+filtered again before reaching any existing checked-option terminal consumer.
+Non-integer mapped option payloads remain outside the current scalar option
+representation.
+
 Checked-option `map_or` evaluates its default eagerly, then executes its
 bounded one-argument mapping closure only for `Some`. The closure may capture
 parameters and locals, and its mapped result has an independent compatible

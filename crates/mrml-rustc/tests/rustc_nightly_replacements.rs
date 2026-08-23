@@ -3279,6 +3279,23 @@ fn rustc_filtered_checked_options_reach_all_terminal_families() {
 }
 
 #[test]
+fn rustc_mapped_checked_options_compose_before_terminal_consumers() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map(|value| value as u32 + offset).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, low: u32) -> u64 { a.checked_add(b).map(|value| value as u32 * 2).filter(|value| *value > low).map(|value| value as u64 + 1).map_or_default(|value| value) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> bool { a.checked_add(b).map(|value| value as u64 + 1).is_some_and(|value| value < 200) }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_checked_integer_option_map_or_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map_or(99u32, |value| value as u32 + offset) }",

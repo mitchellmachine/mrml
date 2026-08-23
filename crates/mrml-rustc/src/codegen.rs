@@ -2368,6 +2368,10 @@ fn validate_runtime_inline_const<
             recurse(option)?;
             recurse(map_closure)?;
         }
+        ExprKind::IntegerOptionMap { option, closure } => {
+            recurse(option)?;
+            recurse(closure)?;
+        }
         ExprKind::IntegerOptionFilter { option, closure } => {
             recurse(option)?;
             recurse(closure)?;
@@ -2502,6 +2506,37 @@ fn checked_option_integer_type<
         .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
     if let ExprKind::IntegerOptionFilter { option, .. } = expression.kind {
         return checked_option_integer_type(function, resolver, locals, tree, option, depth + 1);
+    }
+    if let ExprKind::IntegerOptionMap { option, closure } = expression.kind {
+        let input_type =
+            checked_option_integer_type(function, resolver, locals, tree, option, depth + 1)?;
+        let closure_expression = tree
+            .expression(closure)
+            .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+        let ExprKind::Closure {
+            parameter: Some(parameter),
+            body,
+        } = closure_expression.kind
+        else {
+            return Err(CodegenErrorKind::RuntimeTypeMismatch);
+        };
+        let mut closure_tree = *tree;
+        closure_tree
+            .bind_closure_parameter(parameter, input_type)
+            .map_err(CodegenErrorKind::Expression)?;
+        let RuntimeExpressionType::Integer(Some(output_type)) =
+            runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                &closure_tree,
+                body,
+                depth + 1,
+            )?
+        else {
+            return Err(CodegenErrorKind::RuntimeTypeMismatch);
+        };
+        return Ok(output_type);
     }
     let ExprKind::CheckedIntegerOption {
         base, operation, ..
@@ -3477,6 +3512,92 @@ fn runtime_expression_type_with_locals<
             if unchecked && !function.unsafe_function {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
+            if matches!(
+                tree.expression(option).map(|expression| expression.kind),
+                Some(ExprKind::IntegerOptionMap { .. })
+            ) {
+                let result_type =
+                    RuntimeExpressionType::Integer(Some(checked_option_integer_type(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        option,
+                        depth + 1,
+                    )?));
+                let ExprKind::IntegerOptionMap {
+                    option: producer, ..
+                } = tree
+                    .expression(option)
+                    .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?
+                    .kind
+                else {
+                    unreachable!()
+                };
+                let mut producer_tree = *tree;
+                producer_tree
+                    .replace_kind(
+                        id,
+                        ExprKind::IntegerOptionUnwrapOr {
+                            option: producer,
+                            fallback: None,
+                            trap: true,
+                            message: false,
+                            unchecked: false,
+                            lazy: false,
+                        },
+                    )
+                    .map_err(CodegenErrorKind::Expression)?;
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    &producer_tree,
+                    id,
+                    depth + 1,
+                )?;
+                let fallback_matches = if let Some(fallback) = fallback {
+                    let fallback_expression = tree
+                        .expression(fallback)
+                        .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+                    let fallback_value = if lazy {
+                        let ExprKind::Closure {
+                            parameter: None,
+                            body,
+                        } = fallback_expression.kind
+                        else {
+                            return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                        };
+                        body
+                    } else {
+                        fallback
+                    };
+                    let fallback_type = runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        fallback_value,
+                        depth + 1,
+                    )?;
+                    if message {
+                        matches!(
+                            fallback_type,
+                            RuntimeExpressionType::Reference {
+                                target: RuntimeReferenceTarget::Str,
+                                ..
+                            }
+                        )
+                    } else {
+                        runtime_types_compatible(fallback_type, result_type)
+                    }
+                } else {
+                    !message && !lazy
+                };
+                return fallback_matches
+                    .then_some(result_type)
+                    .ok_or(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             if let Some(producer) =
                 validate_option_filter(function, resolver, locals, tree, option, depth + 1)?
             {
@@ -3741,6 +3862,66 @@ fn runtime_expression_type_with_locals<
             let option_expression = tree
                 .expression(option)
                 .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+            if let ExprKind::IntegerOptionMap {
+                option: producer, ..
+            } = option_expression.kind
+            {
+                let input_type = checked_option_integer_type(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    option,
+                    depth + 1,
+                )?;
+                let mut producer_tree = *tree;
+                producer_tree
+                    .replace_kind(
+                        id,
+                        ExprKind::IntegerOptionPredicate {
+                            option: producer,
+                            some,
+                            closure: None,
+                        },
+                    )
+                    .map_err(CodegenErrorKind::Expression)?;
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    &producer_tree,
+                    id,
+                    depth + 1,
+                )?;
+                if let Some(closure) = closure {
+                    let closure_expression = tree
+                        .expression(closure)
+                        .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+                    let ExprKind::Closure {
+                        parameter: Some(parameter),
+                        body,
+                    } = closure_expression.kind
+                    else {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    };
+                    let mut closure_tree = *tree;
+                    closure_tree
+                        .bind_closure_parameter(parameter, input_type)
+                        .map_err(CodegenErrorKind::Expression)?;
+                    if runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        &closure_tree,
+                        body,
+                        depth + 1,
+                    )? != RuntimeExpressionType::Bool
+                    {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    }
+                }
+                return Ok(RuntimeExpressionType::Bool);
+            }
             if let ExprKind::IntegerOptionFilter {
                 option: producer,
                 closure: filter_closure,
@@ -4180,6 +4361,10 @@ fn runtime_expression_type_with_locals<
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(output)
+        }
+        ExprKind::IntegerOptionMap { .. } => {
+            checked_option_integer_type(function, resolver, locals, tree, id, depth + 1)?;
+            Err(CodegenErrorKind::RuntimeExpressionUnsupported)
         }
         ExprKind::IntegerOptionFilter { .. } => Err(CodegenErrorKind::RuntimeExpressionUnsupported),
         ExprKind::SaturatingArithmetic {
@@ -6859,6 +7044,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit(&[0x31, 0xc0])?;
                 self.patch_forward_branch(done)?;
                 self.width = previous_width;
+            }
+            ExprKind::IntegerOptionMap { .. } => {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::IntegerOptionFilter { .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
@@ -11709,9 +11897,62 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         option: crate::ExprId,
         depth: usize,
     ) -> Result<(RuntimeWidth, RuntimeWidth), CodegenError> {
+        let option_id = option;
         let option = tree
             .expression(option)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if let ExprKind::IntegerOptionMap {
+            option: producer,
+            closure,
+        } = option.kind
+        {
+            let input_type = checked_option_integer_type(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                producer,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let output_type = checked_option_integer_type(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                option_id,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let closure_expression = tree
+                .expression(closure)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            let ExprKind::Closure {
+                parameter: Some(parameter),
+                body,
+            } = closure_expression.kind
+            else {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            };
+            let mut closure_tree = *tree;
+            closure_tree
+                .bind_closure_parameter(parameter, input_type)
+                .map_err(|kind| self.error(CodegenErrorKind::Expression(kind)))?;
+            let (_, previous_width) =
+                self.emit_checked_integer_option(tree, producer, depth + 1)?;
+            self.emit(&[0x4d, 0x85, 0xc0])?;
+            let none = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+            self.width = runtime_width(output_type.name())
+                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            self.emit_expression(&closure_tree, body, depth + 1)?;
+            self.emit(&[0x48, 0x83, 0xc4, 0x08, 0x41, 0xb8, 1, 0, 0, 0])?;
+            self.evaluation_depth -= 1;
+            self.patch_forward_branch(none)?;
+            let output_width = self.width;
+            return Ok((output_width, previous_width));
+        }
         if let ExprKind::IntegerOptionFilter {
             option: producer,
             closure,
@@ -17896,6 +18137,49 @@ mod tests {
                     compile_x86_64_function::<_, 4096, 4, 224>(&function, &NoConstants, abi);
                 assert!(result.is_ok(), "{source}: {result:?}");
             }
+        }
+    }
+
+    #[test]
+    fn composes_mapped_checked_integer_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, offset: u32) -> u32 { a.checked_add(b).map(|value| value as u32 + offset).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64, fallback: u16) -> u16 { input.checked_truncate::<i16>().map(|value| value as u16).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, low: u32) -> u64 { a.checked_add(b).map(|value| value as u32 * 2).filter(|value| *value > low).map(|value| value as u64 + 1).map_or_default(|value| value) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).map(|value| value as u64 + 1).is_some_and(|value| value < 200) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, fallback: i64) -> i64 { a.checked_add(b).map(|value| value as i64 - 20).map_or_else(|| fallback, |value| value * 2) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 4096, 4, 224>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).map(|value| value > 0).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map(|| 1u32).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u32 { a.checked_add(b).map(|value| value as u32).unwrap_or(1u8) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 4096, 4, 224>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+                "{source}"
+            );
         }
     }
 
