@@ -368,6 +368,10 @@ pub enum ExprKind<'source> {
         argument: Option<ExprId>,
         power_of_two: bool,
     },
+    SignedIntegerPredicate {
+        base: ExprId,
+        positive: bool,
+    },
     AsciiPredicate {
         base: ExprId,
         predicate: AsciiPredicate,
@@ -473,6 +477,7 @@ pub enum IntegerBitTransform {
     ToLittleEndian,
     WrappingNegate,
     WrappingAbsolute,
+    Signum,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -638,6 +643,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::Cast { .. } => false,
             ExprKind::SliceIsEmpty { .. }
             | ExprKind::UnsignedIntegerPredicate { .. }
+            | ExprKind::SignedIntegerPredicate { .. }
             | ExprKind::AsciiPredicate { .. } => true,
             ExprKind::Ascribe {
                 operand,
@@ -885,6 +891,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 };
                 Ok(u128::from(result))
             }
+            ExprKind::SignedIntegerPredicate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::AsciiPredicate { base, predicate } => {
                 let value = self.evaluate_node(base, resolver, depth + 1)?;
                 let value = u8::try_from(value).map_err(|_| ConstEvalError::Overflow)?;
@@ -2176,6 +2183,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 if let Some(argument) = argument {
                     self.substitute_identifier(argument, name, replacement, depth + 1)?;
                 }
+            }
+            ExprKind::SignedIntegerPredicate { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::AsciiPredicate { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -3789,6 +3799,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_shl"
                         | "wrapping_shr"
                         | "wrapping_pow"
+                        | "signum"
+                        | "is_positive"
+                        | "is_negative"
                         | "swap_bytes"
                         | "reverse_bits"
                         | "to_be"
@@ -3953,6 +3966,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     argument,
                     power_of_two: false,
                 },
+                "is_positive" | "is_negative" => ExprKind::SignedIntegerPredicate {
+                    base,
+                    positive: method.text == "is_positive",
+                },
                 "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "wrapping_div"
                 | "wrapping_rem" => ExprKind::WrappingArithmetic {
                     base,
@@ -3989,7 +4006,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?,
                 },
                 "swap_bytes" | "reverse_bits" | "to_be" | "to_le" | "wrapping_neg"
-                | "wrapping_abs" => ExprKind::IntegerBitTransform {
+                | "wrapping_abs" | "signum" => ExprKind::IntegerBitTransform {
                     base,
                     transform: match method.text {
                         "swap_bytes" => IntegerBitTransform::SwapBytes,
@@ -3998,6 +4015,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         "to_le" => IntegerBitTransform::ToLittleEndian,
                         "wrapping_neg" => IntegerBitTransform::WrappingNegate,
                         "wrapping_abs" => IntegerBitTransform::WrappingAbsolute,
+                        "signum" => IntegerBitTransform::Signum,
                         _ => unreachable!(),
                     },
                 },

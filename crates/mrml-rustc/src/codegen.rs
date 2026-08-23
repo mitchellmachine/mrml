@@ -2290,6 +2290,7 @@ fn validate_runtime_inline_const<
                 recurse(argument)?;
             }
         }
+        ExprKind::SignedIntegerPredicate { base, .. } => recurse(base)?,
         ExprKind::AsciiPredicate { base, .. } => recurse(base)?,
         ExprKind::WrappingArithmetic { base, argument, .. } => {
             recurse(base)?;
@@ -2622,6 +2623,24 @@ fn runtime_expression_type_with_locals<
                         base_type,
                     ))
             {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Bool)
+        }
+        ExprKind::SignedIntegerPredicate { base, .. } => {
+            let RuntimeExpressionType::Integer(Some(integer_type)) =
+                runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    base,
+                    depth + 1,
+                )?
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if !integer_type.is_signed() {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(RuntimeExpressionType::Bool)
@@ -3197,6 +3216,7 @@ fn runtime_expression_type_with_locals<
                 transform,
                 crate::expression::IntegerBitTransform::WrappingNegate
                     | crate::expression::IntegerBitTransform::WrappingAbsolute
+                    | crate::expression::IntegerBitTransform::Signum
             ) && !integer_type.is_signed()
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
@@ -5130,6 +5150,12 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                         self.emit(&[0x48, 0xf7, 0xd8])?;
                         self.patch_forward_branch(nonnegative)?;
                     }
+                    IntegerBitTransform::Signum => {
+                        self.emit(&[
+                            0x48, 0x85, 0xc0, 0x0f, 0x9f, 0xc0, 0x0f, 0x9c, 0xc1, 0x0f, 0xb6, 0xc0,
+                            0x0f, 0xb6, 0xc9, 0x48, 0x29, 0xc8,
+                        ])?;
+                    }
                 }
                 self.emit_normalize()?;
                 self.width = previous_width;
@@ -5438,6 +5464,25 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     ])?;
                     self.patch_forward_branch(end)?;
                 }
+            }
+            ExprKind::SignedIntegerPredicate { base, positive } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.width = previous_width;
+                self.emit(&[0x48, 0x85, 0xc0, 0x0f])?;
+                self.emit(&[if positive { 0x9f } else { 0x9c }, 0xc0, 0x0f, 0xb6, 0xc0])?;
             }
             ExprKind::AsciiPredicate { base, predicate } => {
                 let previous_width = self.width;
@@ -11800,6 +11845,49 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.wrapping_neg() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> u64 { input.wrapping_abs() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.wrapping_neg() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 768, 2, 80>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .unwrap_err()
+                .kind,
+                CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_signed_integer_signs() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> i8 { input.signum() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i16) -> bool { input.is_positive() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i32) -> bool { input.is_negative() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> i64 { input.signum() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: isize) -> bool { input.is_negative() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 2, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> u8 { input.signum() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u32) -> bool { input.is_positive() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> bool { input.is_negative() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

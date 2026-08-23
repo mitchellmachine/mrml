@@ -1843,6 +1843,28 @@ fn rustc_wrapping_integer_methods_reach_native_objects() {
 }
 
 #[test]
+fn rustc_signed_integer_classification_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i8) -> i8 { input.signum() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i16) -> bool { input.is_positive() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i32) -> bool { input.is_negative() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: i64) -> i64 { input.signum() }",
+        "const VALUE: i8 = (-128i8).signum(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+        "const VALUE: bool = (-1i16).is_negative(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
+        "const VALUE: bool = 1i32.is_positive(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
+        "const VALUE: bool = 0i64.is_positive(); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_rotations_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8, distance: u32) -> u8 { input.rotate_left(distance) }",

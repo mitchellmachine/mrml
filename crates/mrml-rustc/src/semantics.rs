@@ -2039,6 +2039,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const)
                 || argument.is_some_and(|argument| recurse(argument, inside_inline_const))
         }
+        ExprKind::SignedIntegerPredicate { base, .. } => recurse(base, inside_inline_const),
         ExprKind::AsciiPredicate { base, .. } => recurse(base, inside_inline_const),
         ExprKind::WrappingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
@@ -2153,6 +2154,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::UnsignedIntegerPredicate { base, argument, .. } => {
             recurse(base) || argument.is_some_and(recurse)
         }
+        ExprKind::SignedIntegerPredicate { base, .. } => recurse(base),
         ExprKind::AsciiPredicate { base, .. } => recurse(base),
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
@@ -2452,6 +2454,7 @@ fn evaluate_call_aware_integer<
                     transform,
                     crate::expression::IntegerBitTransform::WrappingNegate
                         | crate::expression::IntegerBitTransform::WrappingAbsolute
+                        | crate::expression::IntegerBitTransform::Signum
                 ) && !ty.is_signed())
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
@@ -2772,6 +2775,19 @@ fn evaluate_boolean_constant<R: ConstantResolver, const MAX_NODES: usize>(
             tree.evaluate_at(id, constants)
                 .map(|value| value != 0)
                 .map_err(ExecutionError::Arithmetic)
+        }
+        ExprKind::SignedIntegerPredicate { base, positive } => {
+            let base_type = expression_integer_type(tree, base, constants)
+                .filter(|ty| ty.is_signed())
+                .ok_or(ExecutionError::Arithmetic(ConstEvalError::InvalidCast))?;
+            let bits = base_type
+                .bits(64)
+                .ok_or(ExecutionError::Arithmetic(ConstEvalError::InvalidCast))?;
+            let value = tree
+                .evaluate_at(base, constants)
+                .map_err(ExecutionError::Arithmetic)?;
+            let value = decode_signed(value & signed_mask(bits), bits);
+            Ok(if positive { value > 0 } else { value < 0 })
         }
         ExprKind::AsciiPredicate { base, .. } => {
             if expression_integer_type(tree, base, constants) != Some(crate::IntegerType::U8) {
@@ -3365,6 +3381,15 @@ fn transform_integer_bits(
                 value
             } else {
                 0_u128.wrapping_sub(value) & mask
+            }
+        }
+        IntegerBitTransform::Signum => {
+            if value == 0 {
+                0
+            } else if value & (1_u128 << (bits - 1)) == 0 {
+                1
+            } else {
+                mask
             }
         }
     }

@@ -299,6 +299,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::RawPointerIsAlignedTo { .. }
             | ExprKind::RawPointerDrop { .. }
             | ExprKind::UnsignedIntegerPredicate { .. }
+            | ExprKind::SignedIntegerPredicate { .. }
             | ExprKind::AsciiPredicate { .. }
             | ExprKind::WrappingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
