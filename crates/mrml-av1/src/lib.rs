@@ -3203,6 +3203,64 @@ impl Decoder {
     }
 }
 
+#[cfg(feature = "nvidia")]
+pub fn sequence_video_config(sequence: &Sequence) -> nvidia::NvidiaVideoConfig {
+    // AV1 sequence state is validated against decoder limits before GPU usage;
+    // this helper preserves current parsed values for backend construction.
+    nvidia::NvidiaVideoConfig {
+        width: sequence
+            .max_width
+            .try_into()
+            .unwrap_or(u16::MAX),
+        height: sequence
+            .max_height
+            .try_into()
+            .unwrap_or(u16::MAX),
+        bit_depth: sequence.bit_depth,
+        color_format: match sequence.chroma_sampling {
+            ChromaSampling::Cs400 => nvidia::NvPixelFormat::I420,
+            ChromaSampling::Cs420 => nvidia::NvPixelFormat::I420,
+            ChromaSampling::Cs422 => nvidia::NvPixelFormat::I422,
+            ChromaSampling::Cs444 => nvidia::NvPixelFormat::I444,
+        },
+    }
+}
+
+#[cfg(feature = "nvidia")]
+pub fn frame_video_config(frame: &Frame) -> nvidia::NvidiaVideoConfig {
+    // AV1 frame state is preserved as a starting point for encoder or GPU
+    // session construction.
+    nvidia::NvidiaVideoConfig {
+        width: frame.width.try_into().unwrap_or(u16::MAX),
+        height: frame.height.try_into().unwrap_or(u16::MAX),
+        bit_depth: frame.bit_depth,
+        color_format: map_chroma_sampling(frame.chroma_sampling),
+    }
+}
+
+#[cfg(feature = "nvidia")]
+fn map_chroma_sampling(sampling: ChromaSampling) -> nvidia::NvPixelFormat {
+    match sampling {
+        ChromaSampling::Cs400 => nvidia::NvPixelFormat::I420,
+        ChromaSampling::Cs420 => nvidia::NvPixelFormat::I420,
+        ChromaSampling::Cs422 => nvidia::NvPixelFormat::I422,
+        ChromaSampling::Cs444 => nvidia::NvPixelFormat::I444,
+    }
+}
+
+#[cfg(feature = "nvidia")]
+#[cfg(test)]
+mod nvidia_bridge_tests {
+    use super::*;
+
+    #[test]
+    fn map_chroma_sampling_prefers_subsampling_formats() {
+        assert_eq!(map_chroma_sampling(ChromaSampling::Cs420), nvidia::NvPixelFormat::I420);
+        assert_eq!(map_chroma_sampling(ChromaSampling::Cs422), nvidia::NvPixelFormat::I422);
+        assert_eq!(map_chroma_sampling(ChromaSampling::Cs444), nvidia::NvPixelFormat::I444);
+    }
+}
+
 /// Decode an IVF file containing AV1 frame packets.
 pub fn decode_ivf(data: &[u8]) -> Result<Vector<Frame>, Error> {
     if data.len() < 32
