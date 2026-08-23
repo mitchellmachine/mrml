@@ -1,8 +1,8 @@
 use crate::{
-    CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, CowPublishError, ExtentError,
+    CowMetadataImage, CowPublicationBackend, CowPublicationPlan, CowPublishError, ExtentError,
     ExtentKind, ExtentMap, ExtentRecord, FileMetadata, MetadataPointer, StorageAuthorityError,
     StorageAuthorityTable, StorageHandle, StorageObjectId, StorageObjectKind, StoragePrincipal,
-    StorageRights,
+    StorageRights, TransactionError, TransactionParticipant, TransactionReceipt,
 };
 
 pub const MAX_FILE_READ_BYTES: usize = 1 << 20;
@@ -181,12 +181,8 @@ impl<const N: usize> FileState<N> {
         next_metadata.encode(&mut encoded_metadata);
         let mut metadata_digest = mrml_crypto::Sha3_256::new();
         metadata_digest.update(&encoded_metadata);
-        let file_metadata = CowMetadataWrite::new(
-            file_metadata_pointer,
-            generation,
-            metadata_digest.finalize(),
-        )
-        .map_err(|_| FileWriteError::InvalidSuccessor)?;
+        let file_metadata =
+            CowMetadataImage::new(file_metadata_pointer, metadata_digest.finalize());
         let extent_capacity = u64::from(next_metadata.extents().blocks())
             .checked_mul(u64::from(next_extents.block_size()))
             .ok_or(FileWriteError::Arithmetic)?;
@@ -214,12 +210,8 @@ impl<const N: usize> FileState<N> {
             extent_digest.update(&ZEROES[..count]);
             padding -= count as u64;
         }
-        let extent_metadata = CowMetadataWrite::new(
-            next_metadata.extents(),
-            generation,
-            extent_digest.finalize(),
-        )
-        .map_err(|_| FileWriteError::InvalidSuccessor)?;
+        let extent_metadata =
+            CowMetadataImage::new(next_metadata.extents(), extent_digest.finalize());
         for next_index in 0..next_extents.len() {
             let next = next_extents
                 .record(next_index)
@@ -286,8 +278,8 @@ impl<const N: usize> FileState<N> {
 
 pub struct PreparedFileWrite<const N: usize> {
     state: FileState<N>,
-    file_metadata: CowMetadataWrite,
-    extent_metadata: CowMetadataWrite,
+    file_metadata: CowMetadataImage,
+    extent_metadata: CowMetadataImage,
 }
 
 impl<const N: usize> PreparedFileWrite<N> {
@@ -295,12 +287,35 @@ impl<const N: usize> PreparedFileWrite<N> {
         self.state.generation
     }
 
-    pub const fn metadata_write(&self) -> CowMetadataWrite {
+    pub const fn metadata_image(&self) -> CowMetadataImage {
         self.file_metadata
     }
 
-    pub const fn extent_metadata_write(&self) -> CowMetadataWrite {
+    pub const fn extent_metadata_image(&self) -> CowMetadataImage {
         self.extent_metadata
+    }
+
+    pub(crate) fn transaction_participant(
+        &self,
+    ) -> Result<TransactionParticipant, TransactionError> {
+        TransactionParticipant::new(
+            self.state.object,
+            StorageObjectKind::File,
+            self.state.generation - 1,
+            self.state.generation,
+        )
+    }
+
+    pub(crate) const fn metadata_images(&self) -> [CowMetadataImage; 2] {
+        [self.file_metadata, self.extent_metadata]
+    }
+
+    pub fn commit_transaction<const P: usize>(
+        self,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<FileState<N>, TransactionError> {
+        receipt.consume(self.transaction_participant()?)?;
+        Ok(self.state)
     }
 
     pub fn publish<const M: usize, B: CowPublicationBackend>(
@@ -308,10 +323,15 @@ impl<const N: usize> PreparedFileWrite<N> {
         plan: &CowPublicationPlan<M>,
         backend: &mut B,
     ) -> Result<FileState<N>, FileWritePublishError<B::Error>> {
-        if plan.generation() != self.state.generation
-            || !plan.contains_write(self.file_metadata)
-            || !plan.contains_write(self.extent_metadata)
-        {
+        let file_metadata = self
+            .file_metadata
+            .bind(plan.generation())
+            .map_err(|_| FileWritePublishError::WrongMetadataPlan)?;
+        let extent_metadata = self
+            .extent_metadata
+            .bind(plan.generation())
+            .map_err(|_| FileWritePublishError::WrongMetadataPlan)?;
+        if !plan.contains_write(file_metadata) || !plan.contains_write(extent_metadata) {
             return Err(FileWritePublishError::WrongMetadataPlan);
         }
         plan.publish(backend)
@@ -430,7 +450,10 @@ fn data_overlaps_metadata(data: ExtentRecord, metadata: MetadataPointer) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Superblock, VolumeHeader, VolumeId};
+    use crate::{
+        CowMetadataWrite, StorageTransaction, StorageTransactionId, Superblock, VolumeHeader,
+        VolumeId,
+    };
     use mrml_crypto::Sha3_256;
 
     const BLOCK_SIZE: usize = 4096;
@@ -978,8 +1001,8 @@ mod tests {
                 &mut data_backend,
             )
             .unwrap();
-        let file_metadata = prepared.metadata_write();
-        let extent_metadata = prepared.extent_metadata_write();
+        let file_metadata = prepared.metadata_image().bind(4).unwrap();
+        let extent_metadata = prepared.extent_metadata_image().bind(4).unwrap();
         let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
         let active = Superblock::new(
             header,
@@ -1034,7 +1057,7 @@ mod tests {
                 &mut data_backend,
             )
             .unwrap();
-        let second_file_metadata = prepared.metadata_write();
+        let second_file_metadata = prepared.metadata_image().bind(4).unwrap();
         let incomplete = CowPublicationPlan::<3>::build(
             header,
             1,
@@ -1058,6 +1081,107 @@ mod tests {
             Err(FileWritePublishError::WrongMetadataPlan)
         ));
         assert_eq!((rejected.verified, rejected.replaced), (0, 0));
+    }
+
+    #[test]
+    fn prepared_write_commits_from_one_use_transaction_receipt() {
+        let (state, mut data_backend) = state();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let write = authority
+            .insert(
+                object(7),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(),
+            )
+            .unwrap();
+        let patch = [b'E'; 16];
+        let (next, next_metadata, metadata_pointer) = successor_map(&patch);
+        let prepared = state
+            .prepare_write(
+                &authority,
+                write,
+                principal(),
+                4090,
+                &patch,
+                state.length(),
+                next,
+                next_metadata,
+                metadata_pointer,
+                &[MetadataPointer::new(50, 1).unwrap()],
+                &mut data_backend,
+            )
+            .unwrap();
+
+        let publication_generation = 10;
+        let mut transaction = StorageTransaction::<1, 2>::new(
+            StorageTransactionId::new(11).unwrap(),
+            publication_generation,
+        )
+        .unwrap();
+        transaction.admit_file(&prepared).unwrap();
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let active = Superblock::new(
+            header,
+            publication_generation - 1,
+            8,
+            object(1),
+            MetadataPointer::new(50, 1).unwrap(),
+            MetadataPointer::new(60, 1).unwrap(),
+        )
+        .unwrap();
+        let root = CowMetadataWrite::new(
+            MetadataPointer::new(71, 1).unwrap(),
+            publication_generation,
+            [8; 32],
+        )
+        .unwrap();
+        let allocation = CowMetadataWrite::new(
+            MetadataPointer::new(80, 1).unwrap(),
+            publication_generation,
+            [9; 32],
+        )
+        .unwrap();
+        let plan = CowPublicationPlan::<4>::build(
+            header,
+            1,
+            active,
+            object(1),
+            root.pointer(),
+            allocation.pointer(),
+            &[
+                prepared
+                    .metadata_image()
+                    .bind(publication_generation)
+                    .unwrap(),
+                prepared
+                    .extent_metadata_image()
+                    .bind(publication_generation)
+                    .unwrap(),
+                root,
+                allocation,
+            ],
+            &[
+                MetadataPointer::new(50, 1).unwrap(),
+                MetadataPointer::new(60, 1).unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut publication = PublishBackend {
+            verified: 0,
+            replaced: 0,
+        };
+        let mut receipt = transaction.publish(&plan, &mut publication).unwrap();
+        let participant = prepared.transaction_participant().unwrap();
+        let committed = prepared.commit_transaction(&mut receipt).unwrap();
+
+        assert_eq!(committed.generation(), 4);
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(
+            receipt.consume(participant),
+            Err(TransactionError::ParticipantMismatch)
+        );
+        assert_eq!((publication.verified, publication.replaced), (4, 1));
     }
 
     #[test]

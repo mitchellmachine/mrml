@@ -108,8 +108,8 @@ explicitly and downgrade the status rather than guessing.
   metadata and orders durable metadata before atomic inactive-superblock
   replacement, with fail-stop handling once replacement may have begun. No
   concrete block service, allocator, cross-file allocation index, complete COW
-  tree, transaction engine, native file I/O, snapshot, or crash recovery exists
-  yet. Fixed-capacity directory state supports capability-authorized lookup,
+  tree, concrete native block I/O, snapshot, or crash recovery exists yet.
+  Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves, but its
   object-ID allocator is volatile and cross-directory directory moves require a
   future ancestry proof. Capability-authorized bounded file reads resolve the
@@ -118,8 +118,11 @@ explicitly and downgrade the status rather than guessing.
   complete disjoint successor image, flush it, and remain unpublished until a
   matching canonical file-metadata digest and zero-padded extent-list digest are
   included in the COW root plan; the complete logical-file digest is verified
-  before data flush. Concrete block/allocation integration and transactions are
-  not yet implemented. UEFI Simple File System use is boot interoperability,
+  before data flush. Fixed-capacity transactions group multiple prepared file
+  successors under one independently generated COW root publication and return
+  one-use activation receipts; directory/allocator transaction participants and
+  concrete block/allocation integration are not yet implemented. UEFI Simple
+  File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are

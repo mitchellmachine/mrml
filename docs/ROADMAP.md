@@ -241,8 +241,14 @@ authority; unrelated domains continue.
    That state commits only through a COW plan containing the internally derived
    exact file-metadata and canonical zero-padded extent-list digests, while the
    backend verifies the complete logical-file content digest before flush.
-   Concrete block/allocation integration and
-   multi-object transactions remain pending.
+   Explicit fixed-capacity multi-file transactions are now implemented. Each
+   admitted prepared write retains its exact object predecessor/successor while
+   its derived metadata images are bound to one independent volume-publication
+   generation. Duplicate objects or metadata ranges, capacity overflow, missing
+   plan writes, empty transactions, and wrong publication generations fail
+   before backend I/O. One COW root transition produces a receipt whose exact
+   participants can each activate once. Directory/allocator participation,
+   concrete block/allocation integration, and crash recovery remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

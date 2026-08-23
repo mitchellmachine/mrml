@@ -1,6 +1,30 @@
 use crate::{MetadataPointer, StorageObjectId, Superblock, VolumeHeader};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CowMetadataImage {
+    pointer: MetadataPointer,
+    digest: [u8; 32],
+}
+
+impl CowMetadataImage {
+    pub const fn new(pointer: MetadataPointer, digest: [u8; 32]) -> Self {
+        Self { pointer, digest }
+    }
+
+    pub const fn pointer(self) -> MetadataPointer {
+        self.pointer
+    }
+
+    pub const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+
+    pub const fn bind(self, publication_generation: u64) -> Result<CowMetadataWrite, CowPlanError> {
+        CowMetadataWrite::new(self.pointer, publication_generation, self.digest)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CowMetadataWrite {
     pointer: MetadataPointer,
     generation: u64,

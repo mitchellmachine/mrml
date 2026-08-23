@@ -701,3 +701,16 @@ cryptographic construction, device protocol, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional checksummed copy-on-write file
 updates.
+
+## 2026-08-23 — bounded multi-file COW transactions
+
+MRML source: `crates/mrml-storage/src/transaction.rs` and the file/COW modules.
+
+The service uses conventional fixed-capacity transaction admission, duplicate
+participant/range rejection, one copy-on-write root publication, and one-use
+in-memory participant receipts. Object metadata generations remain distinct
+from the volume publication generation. This adds no novel commit protocol,
+filesystem tree, allocation algorithm, cryptographic construction, device
+protocol, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded transaction batching.

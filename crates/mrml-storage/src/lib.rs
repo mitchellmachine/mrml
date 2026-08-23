@@ -13,13 +13,15 @@ mod extent;
 mod file;
 mod format;
 mod identity;
+mod transaction;
 
 pub use authority::{
     StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
     StoragePrincipal, StorageRights,
 };
 pub use cow::{
-    CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan, CowPublishError,
+    CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
+    CowPublishError,
 };
 pub use directory::{DirectoryError, DirectoryState, StorageObjectAllocator};
 pub use extent::{
@@ -37,3 +39,7 @@ pub use format::{
     MetadataPointer, SUPERBLOCK_BYTES, StorageName, Superblock, VOLUME_HEADER_BYTES, VolumeHeader,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
+pub use transaction::{
+    StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,
+    TransactionPublishError, TransactionReceipt,
+};

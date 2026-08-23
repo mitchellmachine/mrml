@@ -235,7 +235,8 @@ remain unfinished.
 - `mrml-storage`: capability-native stable storage identities, attenuated
   authority lineage, canonical versioned metadata records, and bounded extent
   mapping with fail-closed copy-on-write publication planning and
-  capability-authorized bounded directory and verified COW file I/O.
+  capability-authorized bounded directory and verified COW file I/O, including
+  explicit fixed-capacity multi-file publication transactions.
 - `mrml-kvm`, `mrml-kvm-run`, `mrml-whp`, `mrml-whp-run`: Linux and Windows
   virtualization backends and signed probes.
 - `mrml-runtime`, `mrml-tensor`, `mrml-model`, `mrml-tokenizer`: inference and

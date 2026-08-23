@@ -2750,13 +2750,26 @@ either record is rejected before metadata I/O. Successful
 COW publication returns the new immutable `FileState`; publication uncertainty
 retains the existing COW `FailStop` result. Tests use emulated data and metadata
 backends. This is not a physical block, allocator, power-loss, or crash-recovery
-result, and writes are not yet grouped into multi-object transactions.
+result.
 
-Thirty-seven focused unit tests and strict crate-local clippy pass on Windows
+The first explicit transaction layer groups a bounded number of prepared file
+writes without conflating per-object metadata generations with the global
+volume-publication generation. Admission preflights participant and metadata
+capacity, rejects the same object twice, rejects duplicate metadata ranges, and
+binds each service-derived metadata image to the transaction's exact publication
+generation. Publication accepts no empty transaction, requires a matching COW
+plan containing every admitted write, and performs the existing single root
+transition. Only success returns a non-copyable receipt containing the exact
+object/kind/predecessor/successor participants; each participant must consume its
+entry once before exposing its new immutable state. A rejected plan reaches no
+backend, and consuming the same receipt entry twice fails closed. Directory and
+allocator participants and persistent recovery remain later gates.
+
+Forty-one focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
-complete directory hierarchy/lifetime handling, transactions, crash recovery,
-snapshots, a block-device service, and configuration-checkpoint persistence
-remain unimplemented.
+complete directory hierarchy/lifetime handling, directory/allocator transaction
+participation, crash recovery, snapshots, a block-device service, and
+configuration-checkpoint persistence remain unimplemented.
 
 ```text
 cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-storage --release --no-default-features
@@ -2765,7 +2778,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 37 tests, and both strict crate-local clippy
+Both current unit-test runs pass 41 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.

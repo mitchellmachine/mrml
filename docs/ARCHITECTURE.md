@@ -225,8 +225,8 @@ requires exact next-generation nonoverlapping metadata ranges outside the
 protected active generation, verifies staged-image digests, flushes them before
 atomically replacing only the inactive superblock, and treats any failure at or
 after replacement as fail-stop. There is not yet a concrete block backend,
-allocator, cross-file allocation index, complete COW tree, transaction engine,
-or native file I/O. Bounded in-memory directory state now requires exact
+allocator, cross-file allocation index, complete COW tree, or concrete native
+block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke
@@ -243,9 +243,13 @@ data or protected metadata blocks; stage and durably flush the complete new
 extent images; then return an unpublished state that can commit only through a
 matching COW metadata plan containing internally derived digests for both the
 canonical file record and zero-padded extent-list image. The backend also
-verifies the complete logical-file digest before flush. The backend and allocation index remain simulated,
-and multi-object transactions, snapshots, and crash recovery remain
-unimplemented. The EFI
+verifies the complete logical-file digest before flush. The backend and
+allocation index remain simulated. Explicit fixed-capacity transactions admit
+multiple prepared file successors, bind their independently advancing object
+generations to one later volume-publication generation, require every derived
+metadata image in one COW plan, and issue one-use participant receipts only
+after root publication succeeds. Directory/allocator participants, snapshots,
+and crash recovery remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import
 services, but FAT32, legacy formats, POSIX permissions, and a universal global
