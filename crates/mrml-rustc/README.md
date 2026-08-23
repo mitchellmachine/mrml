@@ -2869,9 +2869,26 @@ An adversarial unit test covers both access classes, same-name shadowing, scope
 cleanup, storage-index reuse, monotonic identity, corrupt fact rejection, and
 both exact fact-table capacity failures. Projection tests cover valid and
 out-of-range tuple fields, valid indexes, malformed holes, and the exact four-
-step capacity failure. General nested read-place discovery, parser/semantic
-local IDs, complete typed body facts, CFGs, initialization, moves, borrows,
-loans, and regions remain outside this slice.
+step capacity failure.
+
+Read-place syntax discovery now recursively peels identifiers, dereferences,
+indexes, tuple fields, subslices, transparent wrappers, and sequence tails into
+the same base-to-leaf projection representation. It is independently bounded by
+the existing four-projection capacity and the 64-level lowering depth. Direct
+scalar dereference emission consumes the discovered place and records exactly
+one dereference read instead of first recording an empty base read. The
+specialized direct aggregate paths use the same expression-place recorder.
+Discovery is not yet run across a complete body or consumed by every nested
+emission family. Parser/semantic local IDs, complete typed body facts, CFGs,
+initialization, moves, borrows, loans, and regions remain outside this slice.
+
+The bounded read-place-discovery milestone passed all 565 compiler and driver
+tests on Windows gnullvm and all 565 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial tests prove
+base-to-leaf ordering for a dereference/index/tuple-field chain, the exact fifth-
+projection failure, and the absence of a duplicate empty read fact for direct
+dereferences. Existing pinned-nightly native scalar-reference and raw-pointer
+replacement cases preserve differential executable coverage.
 
 The bounded runtime-read-fact milestone passed all 563 compiler and driver
 tests on Windows gnullvm and all 563 in release mode on native Arch Linux WSL,

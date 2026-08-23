@@ -186,13 +186,17 @@ The exact capacity errors are `TooManyRuntimeLocalFacts` and
 `TooManyRuntimePlaceAccessFacts`; invariant failure is
 `InvalidRuntimePlaceFacts`.
 
-Read facts still resolve names during emission; general nested read-place
-discovery and dereference-read projection are not centralized, and address-
-taking is not yet classified as a borrow. Parser-level IDs, initialization and
-move paths, CFG analysis, borrows, loans, and regions are still absent. The next
-compiler milestone is to turn this emission-side foundation into the bounded
-typed body-wide local/place/access table, then add CFG and initialization/move
-facts.
+Read facts still resolve names during emission. Bounded read-place discovery now
+peels identifier, dereference, index, tuple-field, subslice, transparent wrapper,
+and sequence-tail syntax into base-to-leaf projection order. It rejects a fifth
+projection and 64-level nesting. Direct scalar dereference emission records one
+projected read rather than an empty duplicate base read; specialized direct
+aggregate paths use the same recorder. Discovery is not yet run body-wide or
+consumed by every nested emission family, and address-taking is not yet
+classified as a borrow. Parser-level IDs, initialization and move paths, CFG
+analysis, borrows, loans, and regions are still absent. The next compiler
+milestone is to move this emission-side foundation into the bounded typed
+body-wide local/place/access table, then add CFG and initialization/move facts.
 
 Forward-looking compiler policy does not make Cargo's experimental
 `edition = "future"` a clean-install default. The recoverable baseline remains

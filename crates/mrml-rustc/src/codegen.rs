@@ -2020,6 +2020,84 @@ impl RuntimePlaceProjections {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeReadPlace<'source> {
+    name: &'source str,
+    span: Span,
+    projections: RuntimePlaceProjections,
+}
+
+fn discover_runtime_read_place<'source, const MAX_NODES: usize>(
+    tree: &crate::ExpressionTree<'source, MAX_NODES>,
+    id: crate::ExprId,
+) -> Result<Option<RuntimeReadPlace<'source>>, CodegenErrorKind> {
+    fn recurse<'source, const MAX_NODES: usize>(
+        tree: &crate::ExpressionTree<'source, MAX_NODES>,
+        id: crate::ExprId,
+        depth: usize,
+    ) -> Result<Option<RuntimeReadPlace<'source>>, CodegenErrorKind> {
+        if depth == 64 {
+            return Err(CodegenErrorKind::Lowering(
+                IrErrorKind::NestingLimitExceeded,
+            ));
+        }
+        let expression = tree
+            .expression(id)
+            .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+        let place = match expression.kind {
+            ExprKind::Identifier(name) => Some(RuntimeReadPlace {
+                name,
+                span: expression.span,
+                projections: RuntimePlaceProjections::EMPTY,
+            }),
+            ExprKind::Unary {
+                operator: crate::UnaryOperator::Dereference,
+                operand,
+            } => {
+                let mut place = recurse(tree, operand, depth + 1)?;
+                if let Some(place) = place.as_mut() {
+                    place
+                        .projections
+                        .push(RuntimePlaceProjection::Dereference)?;
+                }
+                place
+            }
+            ExprKind::Index { base, .. } => {
+                let mut place = recurse(tree, base, depth + 1)?;
+                if let Some(place) = place.as_mut() {
+                    place.projections.push(RuntimePlaceProjection::Index)?;
+                }
+                place
+            }
+            ExprKind::TupleField { base, field } => {
+                let mut place = recurse(tree, base, depth + 1)?;
+                if let Some(place) = place.as_mut() {
+                    place
+                        .projections
+                        .push(RuntimePlaceProjection::TupleField(field))?;
+                }
+                place
+            }
+            ExprKind::RangeIndex { base, .. } => {
+                let mut place = recurse(tree, base, depth + 1)?;
+                if let Some(place) = place.as_mut() {
+                    place.projections.push(RuntimePlaceProjection::Subslice)?;
+                }
+                place
+            }
+            ExprKind::Ascribe { operand, .. }
+            | ExprKind::InlineConst { operand }
+            | ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand } => recurse(tree, operand, depth + 1)?,
+            ExprKind::Sequence { then, .. } => recurse(tree, then, depth + 1)?,
+            _ => None,
+        };
+        Ok(place)
+    }
+
+    recurse(tree, id, 0)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeLocalFact<'source> {
     id: RuntimeLocalId,
     name: &'source str,
@@ -6702,6 +6780,24 @@ impl<
         Ok(())
     }
 
+    fn record_expression_place_read<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        id: crate::ExprId,
+        trailing_projection: Option<RuntimePlaceProjection>,
+    ) -> Result<(), CodegenError> {
+        let mut place = discover_runtime_read_place(tree, id)
+            .map_err(|kind| self.error(kind))?
+            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if let Some(projection) = trailing_projection {
+            place
+                .projections
+                .push(projection)
+                .map_err(|kind| self.error(kind))?;
+        }
+        self.record_identifier_read(place.name, place.projections, place.span)
+    }
+
     fn resolved_local(
         &self,
         place: RuntimePlace<'_>,
@@ -11042,7 +11138,14 @@ impl<
                     }
                     _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
                 };
-                self.emit_expression(tree, operand, depth + 1)?;
+                if let Some(ExprKind::Identifier(name)) =
+                    tree.expression(operand).map(|expression| expression.kind)
+                {
+                    self.record_expression_place_read(tree, id, None)?;
+                    self.emit_identifier(name)?;
+                } else {
+                    self.emit_expression(tree, operand, depth + 1)?;
+                }
                 self.emit_reference_load(pointee)?;
             }
             ExprKind::Unary {
@@ -11050,11 +11153,7 @@ impl<
                 operand,
             } => match tree.expression(operand).map(|expression| expression.kind) {
                 Some(ExprKind::Identifier(name)) => {
-                    let span = tree
-                        .expression(operand)
-                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
-                        .span;
-                    self.record_identifier_read(name, RuntimePlaceProjections::EMPTY, span)?;
+                    self.record_expression_place_read(tree, operand, None)?;
                     self.emit_identifier_address(name)?;
                 }
                 Some(ExprKind::Unary {
@@ -11351,11 +11450,7 @@ impl<
                 self.emit(&[0x25, 0xff, 0, 0, 0])
             }
             ExprKind::Identifier(name) => {
-                self.record_identifier_read(
-                    name,
-                    RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
-                    expression.span,
-                )?;
+                self.record_expression_place_read(tree, id, Some(RuntimePlaceProjection::Index))?;
                 if let Some((local_index, local)) = self.locals[..self.saved_locals]
                     .iter()
                     .enumerate()
@@ -11532,14 +11627,10 @@ impl<
                         .map(|_| index)
                 })
         {
-            let span = tree
-                .expression(base)
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
-                .span;
-            self.record_identifier_read(
-                name,
-                RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field)),
-                span,
+            self.record_expression_place_read(
+                tree,
+                base,
+                Some(RuntimePlaceProjection::TupleField(field)),
             )?;
             let slots = self
                 .local_stack_slots_from(index + 1)?
@@ -11765,15 +11856,7 @@ impl<
             self.emit_slice_value_to_stack(tree, base, depth + 1)?;
             self.evaluation_depth += 2;
         } else if let Some(name) = local_name {
-            let span = tree
-                .expression(base)
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
-                .span;
-            self.record_identifier_read(
-                name,
-                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
-                span,
-            )?;
+            self.record_expression_place_read(tree, base, Some(RuntimePlaceProjection::Index))?;
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -11786,15 +11869,22 @@ impl<
             self.emit_stack_cleanup_bytes(16)?;
             self.evaluation_depth -= 2;
         } else if let Some(source) = slice_source {
-            let span = tree
-                .expression(base)
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
-                .span;
-            self.record_identifier_read(
-                source,
-                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
-                span,
-            )?;
+            if matches!(
+                tree.expression(base).map(|expression| expression.kind),
+                Some(ExprKind::Identifier(_))
+            ) {
+                self.record_expression_place_read(tree, base, Some(RuntimePlaceProjection::Index))?;
+            } else {
+                let span = tree
+                    .expression(base)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
+                    .span;
+                self.record_identifier_read(
+                    source,
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                    span,
+                )?;
+            }
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
             self.emit_slice_length(source)?;
@@ -12305,15 +12395,7 @@ impl<
         self.emit(&[0x48, 0x29, 0xc8, 0x50])?;
         self.evaluation_depth += 1;
         if let Some(name) = local_name {
-            let span = tree
-                .expression(base)
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?
-                .span;
-            self.record_identifier_read(
-                name,
-                RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice),
-                span,
-            )?;
+            self.record_expression_place_read(tree, base, Some(RuntimePlaceProjection::Subslice))?;
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -16331,6 +16413,88 @@ mod tests {
                 .unwrap_err()
                 .kind,
             CodegenErrorKind::TooManyRuntimeLocalFacts
+        );
+    }
+
+    #[test]
+    fn direct_dereference_read_retains_the_base_identity_and_projection() {
+        let module = Parser::new("fn value(parameter: &u64) -> u64 { *parameter }")
+            .parse_module::<1, 2>()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let resolver = NoConstants;
+        let mut emitter = RuntimeEmitter::<_, 64, 2> {
+            bytes: [0; 64],
+            length: 0,
+            trap_patches: [0; 64],
+            trap_count: 0,
+            function: &function,
+            resolver: &resolver,
+            abi: X86_64Abi::Windows,
+            width: runtime_width("u64").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 0,
+            locals: [None; 2],
+            saved_locals: 0,
+            local_facts: [None; MAX_RUNTIME_LOCAL_FACTS],
+            local_fact_count: 0,
+            place_access_facts: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
+            place_access_fact_count: 0,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        let tree = function.parse_body_expression::<4>().unwrap();
+        emitter.emit_expression(&tree, tree.root(), 0).unwrap();
+
+        assert_eq!(emitter.place_access_fact_count, 1);
+        let fact = emitter.place_access_facts[0].unwrap();
+        assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(0));
+        assert_eq!(fact.access, RuntimePlaceAccess::Read);
+        assert_eq!(
+            fact.projections,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::Dereference)
+        );
+        assert_eq!(fact.span, Span { start: 1, end: 10 });
+        emitter.validate_runtime_place_facts().unwrap();
+    }
+
+    #[test]
+    fn runtime_read_place_discovery_orders_nested_projections_and_is_bounded() {
+        let module = Parser::new("fn value(values: &[(u64,)]) -> u64 { (*values)[1].0 }")
+            .parse_module::<1, 2>()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let tree = function.parse_body_expression::<16>().unwrap();
+        let place = discover_runtime_read_place(&tree, tree.root())
+            .unwrap()
+            .unwrap();
+        assert_eq!(place.name, "values");
+        assert_eq!(place.span, Span { start: 2, end: 8 });
+        let mut expected = RuntimePlaceProjections::EMPTY;
+        expected.push(RuntimePlaceProjection::Dereference).unwrap();
+        expected.push(RuntimePlaceProjection::Index).unwrap();
+        expected
+            .push(RuntimePlaceProjection::TupleField(0))
+            .unwrap();
+        assert_eq!(place.projections, expected);
+
+        let overflow = Parser::new("fn value(value: &&&&&u64) -> u64 { *****value }")
+            .parse_module::<1, 2>()
+            .unwrap();
+        let Some(Item::Function(function)) = overflow.items()[0] else {
+            panic!("expected function")
+        };
+        let tree = function.parse_body_expression::<16>().unwrap();
+        assert_eq!(
+            discover_runtime_read_place(&tree, tree.root()).unwrap_err(),
+            CodegenErrorKind::TooManyRuntimePlaceProjections
         );
     }
 

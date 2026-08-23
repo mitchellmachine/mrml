@@ -475,6 +475,19 @@ cryptographic construction, or optimization.
 Patent review: `NOT_TRIGGERED` — ordinary bounded compiler place representation
 and type validation within the existing Rust-subset compiler category.
 
+## 2026-08-23 — bounded runtime read-place discovery
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Runtime read syntax now peels conventional identifier, dereference, index,
+tuple-field, subslice, and transparent expression forms into the existing
+fixed-capacity place-projection representation. Direct scalar dereference
+emission uses that result to avoid an empty duplicate base-read fact. This adds
+no novel algorithm, ABI, protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary bounded compiler place/use discovery
+within the existing Rust-subset compiler category.
+
 ## 2026-08-23 — signed CPL3 configuration read dispatch
 
 MRML source: `crates/mrml-config`, `crates/mrml-kernel`, the signed kernel and

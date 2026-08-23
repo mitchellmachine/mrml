@@ -172,12 +172,17 @@ Capacity exhaustion and inconsistent internal facts fail explicitly.
 These tables cover the current runtime emission, including expanded inlined
 helper bodies; they are ephemeral compiler state rather than serialized IR.
 Expression identifiers still resolve by name before their stable fact is
-recorded. General nested read-place discovery and dereference-read projection
-are not yet centralized, although the fact representation can retain their
-future projection chains. Parser/semantic locals also still resolve by name,
-and there is not yet a complete typed body table, move path, borrow, loan, or
-CFG. This runtime place foundation is therefore an incremental prerequisite,
-not a claim of ownership checking.
+recorded. A bounded source-independent discovery pass can now peel identifier,
+dereference, index, tuple-field, subslice, transparent wrapper, and sequence-tail
+syntax into an ordered read-place projection chain. A fifth projection and a
+64-level discovery nesting overflow fail explicitly. Direct scalar dereference
+emission consumes that discovery and records one projected read instead of an
+empty base read. Specialized direct aggregate paths reuse the same recorder.
+The discovery is not yet a body-wide table or universally consumed by nested
+emission paths. Parser/semantic locals also still resolve by name, and there is
+not yet a complete typed body table, move path, borrow, loan, or CFG. This
+runtime place foundation is therefore an incremental prerequisite, not a claim
+of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 
