@@ -1347,6 +1347,97 @@ impl<const N: usize> PreparedDirectoryUpdate<N> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_initial_directory<B: DirectoryWriteBackend>(
+    header: VolumeHeader,
+    object: StorageObjectId,
+    parent: StorageObjectId,
+    metadata_pointer: MetadataPointer,
+    entries_pointer: MetadataPointer,
+    metadata_output: &mut [u8; crate::DIRECTORY_METADATA_BYTES],
+    entries_output: &mut [u8],
+    backend: &mut B,
+) -> Result<PreparedInitialDirectory, DirectoryUpdateError<B::Error>> {
+    if object.volume() != header.volume()
+        || parent.volume() != header.volume()
+        || object == parent
+        || !metadata_pointer_valid(header, metadata_pointer)
+        || !metadata_pointer_valid(header, entries_pointer)
+        || pointers_overlap(metadata_pointer, entries_pointer)
+    {
+        return Err(DirectoryUpdateError::InvalidSuccessor);
+    }
+    let state = DirectoryState::<0>::new(object, 1, &[])
+        .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
+    state
+        .metadata(header, Some(parent), entries_pointer)
+        .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?
+        .encode(metadata_output);
+    let entries = DirectoryImage::from_state(header, entries_pointer, state.clone())
+        .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
+    entries
+        .encode(entries_output)
+        .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
+    let metadata = CowMetadataImage::new(metadata_pointer, digest(metadata_output));
+    let entries = CowMetadataImage::new(entries_pointer, digest(entries_output));
+    backend
+        .stage_directory_metadata(metadata, metadata_output)
+        .map_err(DirectoryUpdateError::Backend)?;
+    backend
+        .stage_directory_entries(entries, entries_output)
+        .map_err(DirectoryUpdateError::Backend)?;
+    backend
+        .flush_directory_update()
+        .map_err(DirectoryUpdateError::Backend)?;
+    Ok(PreparedInitialDirectory {
+        state,
+        metadata,
+        entries,
+    })
+}
+
+pub struct PreparedInitialDirectory {
+    state: DirectoryState<0>,
+    metadata: CowMetadataImage,
+    entries: CowMetadataImage,
+}
+
+impl PreparedInitialDirectory {
+    pub const fn object(&self) -> StorageObjectId {
+        self.state.object
+    }
+
+    pub const fn state(&self) -> &DirectoryState<0> {
+        &self.state
+    }
+
+    pub const fn metadata_image(&self) -> CowMetadataImage {
+        self.metadata
+    }
+
+    pub const fn entries_image(&self) -> CowMetadataImage {
+        self.entries
+    }
+
+    pub(crate) fn transaction_participant(
+        &self,
+    ) -> Result<TransactionParticipant, TransactionError> {
+        TransactionParticipant::creation(self.state.object, StorageObjectKind::Directory)
+    }
+
+    pub(crate) const fn metadata_images(&self) -> [CowMetadataImage; 2] {
+        [self.metadata, self.entries]
+    }
+
+    pub fn commit_transaction<const P: usize>(
+        self,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<DirectoryState<0>, TransactionError> {
+        receipt.consume(self.transaction_participant()?)?;
+        Ok(self.state)
+    }
+}
+
 impl<const N: usize> DirectoryImage<N> {
     fn from_state(
         header: VolumeHeader,
@@ -1926,6 +2017,69 @@ mod tests {
         assert_eq!(committed.entry(0), Some(entry));
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(backend.verified, 3);
+    }
+
+    #[test]
+    fn initial_empty_directory_stages_canonical_creation_images() {
+        let header = VolumeHeader::new(volume(), 4096, 100, 1, 2).unwrap();
+        let metadata_pointer = MetadataPointer::new(60, 1).unwrap();
+        let entries_pointer = MetadataPointer::new(61, 1).unwrap();
+        let mut metadata = [0; crate::DIRECTORY_METADATA_BYTES];
+        let mut entries = [0; 4096];
+        let mut backend = UpdateBackend {
+            staged: 0,
+            flushed: false,
+            verified: 0,
+        };
+        let prepared = prepare_initial_directory(
+            header,
+            object(8),
+            object(1),
+            metadata_pointer,
+            entries_pointer,
+            &mut metadata,
+            &mut entries,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(
+            (prepared.object(), prepared.state().generation()),
+            (object(8), 1)
+        );
+        assert!(prepared.state().is_empty());
+        assert_eq!((backend.staged, backend.flushed), (2, true));
+        let decoded_metadata = DirectoryMetadata::decode(&metadata, header).unwrap();
+        assert_eq!(decoded_metadata.parent(), Some(object(1)));
+        assert!(
+            DirectoryImage::<0>::decode(header, object(8), 1, entries_pointer, &entries)
+                .unwrap()
+                .state()
+                .is_empty()
+        );
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(41).unwrap(), 2).unwrap();
+        transaction.admit_initial_directory(&prepared).unwrap();
+        assert_eq!(transaction.participant_count(), 1);
+
+        let mut rejected = UpdateBackend {
+            staged: 0,
+            flushed: false,
+            verified: 0,
+        };
+        assert!(matches!(
+            prepare_initial_directory(
+                header,
+                object(8),
+                object(1),
+                metadata_pointer,
+                metadata_pointer,
+                &mut metadata,
+                &mut entries,
+                &mut rejected,
+            ),
+            Err(DirectoryUpdateError::InvalidSuccessor)
+        ));
+        assert_eq!(rejected.staged, 0);
     }
 
     #[test]

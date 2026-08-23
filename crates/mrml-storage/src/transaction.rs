@@ -1,7 +1,7 @@
 use crate::{
     CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, CowPublishError,
-    PreparedAllocationUpdate, PreparedDirectoryUpdate, PreparedFileWrite,
-    PreparedObjectIdReservation, StorageObjectId, StorageObjectKind, VolumeId,
+    PreparedAllocationUpdate, PreparedDirectoryUpdate, PreparedFileWrite, PreparedInitialDirectory,
+    PreparedInitialFile, PreparedObjectIdReservation, StorageObjectId, StorageObjectKind, VolumeId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +72,20 @@ impl TransactionParticipant {
         })
     }
 
+    pub fn creation(
+        object: StorageObjectId,
+        kind: StorageObjectKind,
+    ) -> Result<Self, TransactionError> {
+        if kind == StorageObjectKind::Volume {
+            return Err(TransactionError::InvalidGeneration);
+        }
+        Ok(Self {
+            resource: TransactionResource::Object { object, kind },
+            old_generation: 0,
+            new_generation: 1,
+        })
+    }
+
     pub fn object_id_allocator(
         volume: VolumeId,
         old_generation: u64,
@@ -136,6 +150,16 @@ impl<const P: usize, const W: usize> StorageTransaction<P, W> {
         )
     }
 
+    pub fn admit_initial_file(
+        &mut self,
+        prepared: &PreparedInitialFile,
+    ) -> Result<(), TransactionError> {
+        self.admit_parts(
+            prepared.transaction_participant()?,
+            prepared.metadata_images(),
+        )
+    }
+
     pub fn admit_allocation<const N: usize>(
         &mut self,
         prepared: &PreparedAllocationUpdate<N>,
@@ -149,6 +173,16 @@ impl<const P: usize, const W: usize> StorageTransaction<P, W> {
     pub fn admit_directory<const N: usize>(
         &mut self,
         prepared: &PreparedDirectoryUpdate<N>,
+    ) -> Result<(), TransactionError> {
+        self.admit_parts(
+            prepared.transaction_participant()?,
+            prepared.metadata_images(),
+        )
+    }
+
+    pub fn admit_initial_directory(
+        &mut self,
+        prepared: &PreparedInitialDirectory,
     ) -> Result<(), TransactionError> {
         self.admit_parts(
             prepared.transaction_participant()?,

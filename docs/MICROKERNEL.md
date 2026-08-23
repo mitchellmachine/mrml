@@ -2778,6 +2778,14 @@ rejects guessed handles, activates exactly once, and advances the slot
 generation when canceled. This prevents intervening insertions from stealing
 capacity reserved for a later durable create; end-to-end create orchestration
 and cancellation on prepublication failure remain pending.
+The child side of creation now has canonical initialization for both native
+kinds. An empty file stages generation-1 `FileMetadata` with the SHA3-256 empty
+content digest and a canonical empty extent image. An empty directory stages
+generation-1 directory metadata with its exact parent and a canonical empty
+entry image. Both require disjoint valid ranges before backend I/O, flush both
+unreachable images, and enter transactions through an explicit typed `0 -> 1`
+creation participant. Full parent/child/allocation/allocator/authority assembly
+remains pending; neither initializer alone makes an object reachable.
 
 The first file-I/O dependency is a bounded verified read path. Immutable
 `FileState` construction requires its stable object, metadata generation, and
@@ -2947,7 +2955,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Sixty-seven focused unit tests and strict crate-local clippy pass on Windows
+Sixty-nine focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, allocator/create integration,
 complete crash recovery, snapshots, a block-device service, and
@@ -2960,7 +2968,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 67 tests, and both strict crate-local clippy
+Both current unit-test runs pass 69 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -2987,7 +2995,9 @@ backend uncertainty. Allocator images additionally require canonical exhaustion,
 checked identity/generation advance, zero padding, distinct embedded and
 complete-image digests, and one-use activation. Authority reservations remain
 inactive until exact activation, reject guessed/stale tokens, and retire their
-generation on cancellation. This agent review is not
+generation on cancellation. Initial children bind exact type, identity, parent
+where applicable, generation 1, canonical empty subordinate images, and an
+unambiguous creation participant. This agent review is not
 independent human audit.
 
 The next boundary layer now decodes buffered send and receive operations without

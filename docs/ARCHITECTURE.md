@@ -289,6 +289,13 @@ slots consume capacity but cannot authorize, guessed handles are rejected,
 activation succeeds once, and cancellation retires the slot generation before
 reuse. This closes the authority-capacity race needed by later prepared create;
 publication/cancellation orchestration remains pending.
+Canonical empty-file and empty-directory initialization is now staged without
+making either child reachable. Both bind generation 1, exact stable identity,
+disjoint metadata ranges, canonical zero-padded empty subordinate images, and
+complete-image digests; the directory additionally binds its parent. Each is an
+explicit typed `0 -> 1` creation participant rather than an ordinary update.
+Parent-directory, allocation, ID-allocator, child, and authority-reservation
+orchestration remains pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

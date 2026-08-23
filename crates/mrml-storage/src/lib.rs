@@ -38,7 +38,8 @@ pub use directory::{
     DirectoryMoveSuccessorPlan, DirectoryState, DirectorySuccessorBackend,
     DirectorySuccessorClosure, DirectorySuccessorError, DirectorySuccessorLayout,
     DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryMovePlan,
-    PreparedDirectoryUpdate, StorageObjectAllocator, prove_directory_move_ancestry,
+    PreparedDirectoryUpdate, PreparedInitialDirectory, StorageObjectAllocator,
+    prepare_initial_directory, prove_directory_move_ancestry,
 };
 pub use extent::{
     EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,
@@ -46,8 +47,9 @@ pub use extent::{
 };
 pub use file::{
     FileReadBackend, FileReadError, FileState, FileStateError, FileWriteBackend, FileWriteError,
-    FileWritePublishError, MAX_FILE_READ_BYTES, MAX_FILE_WRITE_BYTES,
-    MAX_PROTECTED_METADATA_RANGES, PreparedFileWrite,
+    FileWritePublishError, InitialFileError, InitialFileWriteBackend, MAX_FILE_READ_BYTES,
+    MAX_FILE_WRITE_BYTES, MAX_PROTECTED_METADATA_RANGES, PreparedFileWrite, PreparedInitialFile,
+    prepare_initial_file,
 };
 pub use format::{
     DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, DirectoryEntry, DirectoryMetadata,

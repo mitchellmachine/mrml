@@ -1,8 +1,9 @@
 use crate::{
     CowMetadataImage, CowPublicationBackend, CowPublicationPlan, CowPublishError, ExtentError,
-    ExtentKind, ExtentMap, ExtentRecord, FileMetadata, MetadataPointer, StorageAuthorityError,
-    StorageAuthorityTable, StorageHandle, StorageObjectId, StorageObjectKind, StoragePrincipal,
-    StorageRights, TransactionError, TransactionParticipant, TransactionReceipt,
+    ExtentImage, ExtentKind, ExtentMap, ExtentRecord, FileMetadata, MetadataPointer,
+    StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectId,
+    StorageObjectKind, StoragePrincipal, StorageRights, TransactionError, TransactionParticipant,
+    TransactionReceipt, VolumeHeader,
 };
 
 pub const MAX_FILE_READ_BYTES: usize = 1 << 20;
@@ -14,6 +15,129 @@ pub struct FileState<const N: usize> {
     generation: u64,
     length: u64,
     extents: ExtentMap<N>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_initial_file<B: InitialFileWriteBackend>(
+    header: VolumeHeader,
+    object: StorageObjectId,
+    metadata_pointer: MetadataPointer,
+    extents_pointer: MetadataPointer,
+    metadata_output: &mut [u8; crate::FILE_METADATA_BYTES],
+    extents_output: &mut [u8],
+    backend: &mut B,
+) -> Result<PreparedInitialFile, InitialFileError<B::Error>> {
+    if object.volume() != header.volume()
+        || !metadata_pointer_valid(header, metadata_pointer)
+        || !metadata_pointer_valid(header, extents_pointer)
+        || metadata_pointers_overlap(metadata_pointer, extents_pointer)
+    {
+        return Err(InitialFileError::InvalidLayout);
+    }
+    let content = mrml_crypto::Sha3_256::new();
+    let content_digest = content.finalize();
+    let metadata = FileMetadata::new(header, object, 1, 0, 0, extents_pointer, content_digest)
+        .map_err(|_| InitialFileError::InvalidLayout)?;
+    metadata.encode(metadata_output);
+    let extent_image = ExtentImage::<0>::build(header, object, 1, 0, extents_pointer, &[])
+        .map_err(InitialFileError::Extent)?;
+    extent_image
+        .encode(extents_output)
+        .map_err(InitialFileError::Extent)?;
+    let file_metadata = CowMetadataImage::new(metadata_pointer, complete_digest(metadata_output));
+    let extent_metadata = CowMetadataImage::new(extents_pointer, complete_digest(extents_output));
+    backend
+        .stage_initial_file_metadata(file_metadata, metadata_output)
+        .map_err(InitialFileError::Backend)?;
+    backend
+        .stage_initial_file_extents(extent_metadata, extents_output)
+        .map_err(InitialFileError::Backend)?;
+    backend
+        .flush_initial_file()
+        .map_err(InitialFileError::Backend)?;
+    let extents =
+        ExtentMap::<0>::build(header, object, 1, 0, &[]).map_err(InitialFileError::Extent)?;
+    Ok(PreparedInitialFile {
+        state: FileState::new(object, 1, 0, extents)
+            .map_err(|_| InitialFileError::InvalidLayout)?,
+        file_metadata,
+        extent_metadata,
+    })
+}
+
+pub struct PreparedInitialFile {
+    state: FileState<0>,
+    file_metadata: CowMetadataImage,
+    extent_metadata: CowMetadataImage,
+}
+
+impl PreparedInitialFile {
+    pub const fn object(&self) -> StorageObjectId {
+        self.state.object
+    }
+
+    pub const fn state(&self) -> &FileState<0> {
+        &self.state
+    }
+
+    pub const fn metadata_image(&self) -> CowMetadataImage {
+        self.file_metadata
+    }
+
+    pub const fn extent_metadata_image(&self) -> CowMetadataImage {
+        self.extent_metadata
+    }
+
+    pub(crate) fn transaction_participant(
+        &self,
+    ) -> Result<TransactionParticipant, TransactionError> {
+        TransactionParticipant::creation(self.state.object, StorageObjectKind::File)
+    }
+
+    pub(crate) const fn metadata_images(&self) -> [CowMetadataImage; 2] {
+        [self.file_metadata, self.extent_metadata]
+    }
+
+    pub fn commit_transaction<const P: usize>(
+        self,
+        receipt: &mut TransactionReceipt<P>,
+    ) -> Result<FileState<0>, TransactionError> {
+        receipt.consume(self.transaction_participant()?)?;
+        Ok(self.state)
+    }
+}
+
+/// Persistence boundary for a new unreachable empty file.
+///
+/// # Safety
+///
+/// Implementations must write and verify both complete supplied images at
+/// their exact ranges, keep them unreachable, and make both durable before
+/// `flush_initial_file` succeeds. They must not redirect, shorten, merge, or
+/// acknowledge stale or partially written images.
+pub unsafe trait InitialFileWriteBackend {
+    type Error;
+
+    fn stage_initial_file_metadata(
+        &mut self,
+        image: CowMetadataImage,
+        encoded: &[u8; crate::FILE_METADATA_BYTES],
+    ) -> Result<(), Self::Error>;
+
+    fn stage_initial_file_extents(
+        &mut self,
+        image: CowMetadataImage,
+        encoded: &[u8],
+    ) -> Result<(), Self::Error>;
+
+    fn flush_initial_file(&mut self) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialFileError<E> {
+    InvalidLayout,
+    Extent(ExtentError),
+    Backend(E),
 }
 
 impl<const N: usize> FileState<N> {
@@ -447,6 +571,31 @@ fn data_overlaps_metadata(data: ExtentRecord, metadata: MetadataPointer) -> bool
         && metadata.block() < data_start + u64::from(data.block_count())
 }
 
+fn metadata_pointer_valid(header: VolumeHeader, pointer: MetadataPointer) -> bool {
+    pointer
+        .block()
+        .checked_add(u64::from(pointer.blocks()))
+        .is_some_and(|end| end <= header.block_count())
+        && !metadata_pointer_contains(pointer, 0)
+        && !metadata_pointer_contains(pointer, header.primary_superblock())
+        && !metadata_pointer_contains(pointer, header.secondary_superblock())
+}
+
+fn metadata_pointers_overlap(left: MetadataPointer, right: MetadataPointer) -> bool {
+    left.block() < right.block() + u64::from(right.blocks())
+        && right.block() < left.block() + u64::from(left.blocks())
+}
+
+fn metadata_pointer_contains(pointer: MetadataPointer, block: u64) -> bool {
+    block >= pointer.block() && block < pointer.block() + u64::from(pointer.blocks())
+}
+
+fn complete_digest(input: &[u8]) -> [u8; 32] {
+    let mut digest = mrml_crypto::Sha3_256::new();
+    digest.update(input);
+    digest.finalize()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +724,33 @@ mod tests {
         }
     }
 
+    unsafe impl InitialFileWriteBackend for Backend {
+        type Error = ();
+
+        fn stage_initial_file_metadata(
+            &mut self,
+            _image: CowMetadataImage,
+            _encoded: &[u8; crate::FILE_METADATA_BYTES],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn stage_initial_file_extents(
+            &mut self,
+            _image: CowMetadataImage,
+            _encoded: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn flush_initial_file(&mut self) -> Result<(), Self::Error> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
     struct PublishBackend {
         verified: usize,
         replaced: usize,
@@ -676,6 +852,78 @@ mod tests {
         let length = 2 * BLOCK_SIZE as u64 + 100;
         let map = ExtentMap::build(header, object(7), 3, length, &records).unwrap();
         (FileState::new(object(7), 3, length, map).unwrap(), backend)
+    }
+
+    #[test]
+    fn initial_empty_file_stages_canonical_creation_images() {
+        let header = VolumeHeader::new(volume(), BLOCK_SIZE as u32, 100, 1, 2).unwrap();
+        let mut metadata = [0; crate::FILE_METADATA_BYTES];
+        let mut extents = [0; BLOCK_SIZE];
+        let mut backend = Backend {
+            bytes: [0; 40 * BLOCK_SIZE],
+            calls: 0,
+            staged: 0,
+            flushed: false,
+            fail_stage: false,
+        };
+        let prepared = prepare_initial_file(
+            header,
+            object(8),
+            MetadataPointer::new(30, 1).unwrap(),
+            MetadataPointer::new(31, 1).unwrap(),
+            &mut metadata,
+            &mut extents,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(
+            (prepared.object(), prepared.state().generation()),
+            (object(8), 1)
+        );
+        assert_eq!(prepared.state().length(), 0);
+        assert_eq!((backend.staged, backend.flushed), (2, true));
+        assert_eq!(
+            FileMetadata::decode(&metadata, header)
+                .unwrap()
+                .content_digest(),
+            digest(&[])
+        );
+        assert!(
+            ExtentImage::<0>::decode(
+                header,
+                object(8),
+                1,
+                0,
+                MetadataPointer::new(31, 1).unwrap(),
+                &extents,
+            )
+            .is_ok()
+        );
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(40).unwrap(), 2).unwrap();
+        transaction.admit_initial_file(&prepared).unwrap();
+        assert_eq!(transaction.participant_count(), 1);
+
+        let mut rejected = Backend {
+            bytes: [0; 40 * BLOCK_SIZE],
+            calls: 0,
+            staged: 0,
+            flushed: false,
+            fail_stage: false,
+        };
+        assert!(matches!(
+            prepare_initial_file(
+                header,
+                object(8),
+                MetadataPointer::new(30, 1).unwrap(),
+                MetadataPointer::new(30, 1).unwrap(),
+                &mut metadata,
+                &mut extents,
+                &mut rejected,
+            ),
+            Err(InitialFileError::InvalidLayout)
+        ));
+        assert_eq!(rejected.staged, 0);
     }
 
     #[test]

@@ -260,7 +260,12 @@ authority; unrelated domains continue.
    authority-slot reservation now closes the create activation race: it consumes
    bounded capacity without authorizing access, rejects guessed handles,
    activates once, and advances its generation when canceled. Prepared-create
-   orchestration remains pending.
+   orchestration remains pending. Canonical initial child staging now supports
+   both admitted kinds: an empty file has generation-1 file metadata plus an
+   empty extent image, while an empty directory has generation-1 directory
+   metadata plus an empty entry image and exact parent. Disjoint layouts are
+   checked before I/O and each child participates as an explicit typed
+   `0 -> 1` creation. Full create transaction assembly remains pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

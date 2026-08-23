@@ -159,7 +159,11 @@ explicitly and downgrade the status rather than guessing.
   not yet implemented. Inactive child-authority reservations consume capacity
   without authorizing access and either activate once or retire their generation
   on cancellation, preventing a durable create from racing an unrelated handle
-  insertion once orchestration is added. Redundant-root
+  insertion once orchestration is added. Initial empty files and directories
+  now stage canonical unreachable metadata
+  and empty subordinate images as typed generation-1 creation participants;
+  complete create publication and recovery traversal remain pending.
+  Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming

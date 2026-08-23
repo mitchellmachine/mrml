@@ -903,6 +903,19 @@ persistence, transaction, cryptographic, or storage technique.
 Patent review: `NOT_TRIGGERED` — conventional persistent monotonic allocator
 metadata.
 
+## 2026-08-23 — canonical empty child creation images
+
+MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and
+`transaction.rs`.
+
+The service conventionally encodes and stages empty generation-1 file/extent
+or directory/entry image pairs and labels their typed transaction participant
+as object creation. This adds no novel filesystem object, empty-file,
+transaction, persistence, or encoding technique.
+
+Patent review: `NOT_TRIGGERED` — conventional initial filesystem-object
+metadata.
+
 ## 2026-08-23 — scalar initializer and expression-statement read planning
 
 MRML source: `crates/mrml-rustc/src/codegen.rs`.
