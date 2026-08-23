@@ -211,8 +211,13 @@ authority; unrelated domains continue.
    the volume, excludes the volume header and both superblocks, rejects
    intra-file physical overlap, and returns bounded logical lookup results.
    Reserved future kinds are rejected rather than treated as compression,
-   encryption, or sharing. Allocation ownership across files, checksummed COW
-   metadata publication, and every later operation in this item remain pending.
+   encryption, or sharing. The COW publication planner then requires an exact
+   successor generation, inactive superblock target, nonoverlapping new ranges,
+   active-range preservation, staged-image digest verification, metadata flush,
+   atomic superblock replacement, and final flush in that order. Prepublication
+   failure is clean rejection; replacement or later failure is fail-stop.
+   Concrete block-backend integration, allocation ownership across files, a
+   complete COW tree, and every later operation in this item remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

@@ -282,8 +282,20 @@ impl Superblock {
         self.generation
     }
 
+    pub const fn volume(self) -> VolumeId {
+        self.volume
+    }
+
     pub const fn root(self) -> StorageObjectId {
         self.root
+    }
+
+    pub const fn root_metadata(self) -> MetadataPointer {
+        self.root_metadata
+    }
+
+    pub const fn allocation_metadata(self) -> MetadataPointer {
+        self.allocation_metadata
     }
 
     pub fn encode(self, output: &mut [u8; SUPERBLOCK_BYTES]) {

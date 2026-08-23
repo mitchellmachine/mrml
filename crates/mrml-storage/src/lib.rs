@@ -7,6 +7,7 @@
 //! allocation, COW mutation, transactions, and device I/O are later layers.
 
 mod authority;
+mod cow;
 mod extent;
 mod format;
 mod identity;
@@ -14,6 +15,9 @@ mod identity;
 pub use authority::{
     StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
     StoragePrincipal, StorageRights,
+};
+pub use cow::{
+    CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan, CowPublishError,
 };
 pub use extent::{
     EXTENT_RECORD_BYTES, ExtentError, ExtentKind, ExtentLocation, ExtentMap, ExtentRecord,

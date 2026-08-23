@@ -104,10 +104,12 @@ explicitly and downgrade the status rather than guessing.
   authority with descendant revocation, and canonical checksummed v1 volume,
   superblock, directory-entry, directory, file, and extent metadata. Its bounded
   extent map checks exact logical coverage, physical volume bounds, reserved
-  blocks, and intra-file overlap. No block service, allocator, cross-file
-  allocation index, COW tree, transaction engine, native file I/O, snapshot, or
-  crash recovery exists yet. UEFI Simple File System use is boot
-  interoperability,
+  blocks, and intra-file overlap. Its COW planner verifies staged next-generation
+  metadata and orders durable metadata before atomic inactive-superblock
+  replacement, with fail-stop handling once replacement may have begun. No
+  concrete block service, allocator, cross-file allocation index, complete COW
+  tree, transaction engine, native file I/O, snapshot, or crash recovery exists
+  yet. UEFI Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
 - Graphics: `framebuffer.rs`, UEFI GOP handoff, and signed framebuffer probes are

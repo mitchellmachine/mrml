@@ -234,7 +234,7 @@ remain unfinished.
   configuration/supervision service protocols.
 - `mrml-storage`: capability-native stable storage identities, attenuated
   authority lineage, canonical versioned metadata records, and bounded extent
-  mapping.
+  mapping with fail-closed copy-on-write publication planning.
 - `mrml-kvm`, `mrml-kvm-run`, `mrml-whp`, `mrml-whp-run`: Linux and Windows
   virtualization backends and signed probes.
 - `mrml-runtime`, `mrml-tensor`, `mrml-model`, `mrml-tokenizer`: inference and

@@ -618,3 +618,17 @@ optimization, cryptographic construction, or recovery technique.
 
 Patent review: `NOT_TRIGGERED` — conventional extent validation and sparse-file
 mapping.
+
+## 2026-08-23 — checksummed COW metadata publication planning
+
+MRML source: `crates/mrml-storage/src/cow.rs`.
+
+The storage service uses conventional copy-on-write ordering: validate and
+checksum new unreachable metadata, flush it, atomically replace an inactive
+redundant superblock, and flush again. It distinguishes clean failures before
+root replacement from uncertain failures afterward. This adds no novel
+filesystem tree, allocation algorithm, storage optimization, cryptographic
+construction, or recovery technique.
+
+Patent review: `NOT_TRIGGERED` — conventional checksummed copy-on-write metadata
+publication ordering.

@@ -2674,9 +2674,24 @@ overflow, and capacity exhaustion fail closed. This map does not allocate
 blocks or prove cross-file ownership; those require the later allocation and
 COW metadata layers.
 
-Fifteen focused unit tests and strict crate-local clippy pass on Windows gnullvm
-and Arch Linux under WSL2. COW tree publication, directory operations, file I/O,
-transactions, crash recovery,
+The COW publication prerequisite now models the root transition itself. A
+fixed-capacity plan accepts only the exact successor generation and alternates
+from the identified active superblock to the other configured superblock. Every
+new metadata range must be volume-bounded, nonoverlapping, outside block zero
+and both superblocks, and disjoint from the active root, allocation record, and
+all caller-supplied protected active-tree ranges. The new root and allocation
+ranges must both be present. The unsafe persistence backend contract verifies
+each already-staged unreachable image against its exact SHA3-256 digest, flushes
+all new metadata, atomically replaces the complete inactive superblock, and
+flushes it. A verification or first-flush failure is a clean rejection because
+the old root remains selected. A replacement or final-flush failure is
+`FailStop` because publication may be visible or durable and rollback cannot be
+claimed. This is an ordering and failure-state mechanism with an emulated
+backend; it is not a physical-disk atomic-write result or crash-recovery proof.
+
+Nineteen focused unit tests and strict crate-local clippy pass on Windows gnullvm
+and Arch Linux under WSL2. Concrete COW backend integration, directory
+operations, file I/O, transactions, crash recovery,
 snapshots, a block-device service, and configuration-checkpoint persistence
 remain unimplemented.
 
@@ -2687,7 +2702,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 15 tests, and both strict crate-local clippy
+Both current unit-test runs pass 19 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
