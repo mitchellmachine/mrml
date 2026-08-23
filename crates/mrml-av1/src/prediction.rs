@@ -118,7 +118,7 @@ pub struct ChromaFromLumaConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct IntraPredictionConfig {
+pub struct IntraPredictionConfig<'a> {
     pub region: PredictionRegion,
     pub bit_depth: u8,
     /// Numeric AV1 intra prediction mode (`DC_PRED` through `PAETH_PRED`).
@@ -129,11 +129,16 @@ pub struct IntraPredictionConfig {
     pub have_above: bool,
     pub have_above_right: bool,
     pub have_below_left: bool,
+    pub above_availability: Option<&'a [bool]>,
+    pub left_availability: Option<&'a [bool]>,
 }
 
 /// Prepares normative intra edges and dispatches section 7.11.2 for one
 /// transform-sized prediction region.
-pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> Result<(), Error> {
+pub fn predict_intra_block<'a>(
+    plane: &mut Plane,
+    config: IntraPredictionConfig<'a>,
+) -> Result<(), Error> {
     let region = config.region;
     if region.width == 0
         || region.height == 0
@@ -159,8 +164,29 @@ pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> 
     let midpoint = 1u16 << (config.bit_depth - 1);
     let mut above = Vector::with_capacity(edge_length).map_err(|_| Error::LimitExceeded)?;
     let mut left = Vector::with_capacity(edge_length).map_err(|_| Error::LimitExceeded)?;
+    if config
+        .above_availability
+        .is_some_and(|availability| availability.len() < edge_length)
+        || config
+            .left_availability
+            .is_some_and(|availability| availability.len() < edge_length)
+    {
+        return Err(Error::InvalidObu);
+    }
+    let above_available = |index: usize| {
+        config
+            .above_availability
+            .and_then(|availability| availability.get(index).copied())
+            .unwrap_or(config.have_above)
+    };
+    let left_available = |index: usize| {
+        config
+            .left_availability
+            .and_then(|availability| availability.get(index).copied())
+            .unwrap_or(config.have_left)
+    };
     for index in 0..edge_length {
-        let above_sample = if config.have_above {
+        let above_sample = if above_available(index) {
             let limit = region
                 .x
                 .checked_add(if config.have_above_right {
@@ -172,7 +198,7 @@ pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> 
                 .ok_or(Error::LimitExceeded)?
                 .min(plane.width() - 1);
             plane.sample(region.x.saturating_add(index).min(limit), region.y - 1)?
-        } else if config.have_left {
+        } else if left_available(index) {
             plane.sample(region.x - 1, region.y)?
         } else {
             midpoint - 1
@@ -180,7 +206,7 @@ pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> 
         above
             .try_push(above_sample)
             .map_err(|_| Error::LimitExceeded)?;
-        let left_sample = if config.have_left {
+        let left_sample = if left_available(index) {
             let limit = region
                 .y
                 .checked_add(if config.have_below_left {
@@ -192,7 +218,7 @@ pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> 
                 .ok_or(Error::LimitExceeded)?
                 .min(plane.height() - 1);
             plane.sample(region.x - 1, region.y.saturating_add(index).min(limit))?
-        } else if config.have_above {
+        } else if above_available(index) {
             plane.sample(region.x, region.y - 1)?
         } else {
             midpoint + 1
@@ -200,11 +226,11 @@ pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> 
         left.try_push(left_sample)
             .map_err(|_| Error::LimitExceeded)?;
     }
-    let top_left = if config.have_above && config.have_left {
+    let top_left = if above_available(0) && left_available(0) {
         plane.sample(region.x - 1, region.y - 1)?
-    } else if config.have_above {
+    } else if above_available(0) {
         plane.sample(region.x, region.y - 1)?
-    } else if config.have_left {
+    } else if left_available(0) {
         plane.sample(region.x - 1, region.y)?
     } else {
         midpoint
@@ -224,12 +250,12 @@ pub fn predict_intra_block(plane: &mut Plane, config: IntraPredictionConfig) -> 
             config.bit_depth,
             BasicIntraMode::Dc,
             IntraEdges {
-                above: if config.have_above {
+                above: if above_available(0) {
                     Some(&above)
                 } else {
                     None
                 },
-                left: if config.have_left { Some(&left) } else { None },
+                left: if left_available(0) { Some(&left) } else { None },
                 top_left,
             },
         ),
@@ -861,6 +887,8 @@ mod tests {
                 have_above: false,
                 have_above_right: false,
                 have_below_left: false,
+                above_availability: None,
+                left_availability: None,
             },
         )
         .unwrap();
@@ -885,6 +913,8 @@ mod tests {
                 have_above: false,
                 have_above_right: false,
                 have_below_left: false,
+                above_availability: None,
+                left_availability: None,
             },
         )
         .unwrap();
@@ -940,6 +970,8 @@ mod tests {
                 have_above: true,
                 have_above_right: false,
                 have_below_left: false,
+                above_availability: None,
+                left_availability: None,
             },
         )
         .unwrap();

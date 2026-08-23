@@ -1409,6 +1409,41 @@ impl Decoder {
         let mut context_tile = None;
         let mut restoration_tile = None;
         let mut context_superblock = None;
+        let (mut decoded_y, mut decoded_u, mut decoded_v) = {
+            let has_chroma = !matches!(sequence.chroma_sampling, ChromaSampling::Cs400);
+            let y_count = buffer
+                .y
+                .width()
+                .checked_mul(buffer.y.height())
+                .ok_or(Error::LimitExceeded)?;
+            let mut y_mask = vector_with_capacity::<u8>(y_count)?;
+            y_mask.resize(y_count, 0);
+            let u_mask = if has_chroma {
+                let plane = buffer.u.as_ref().ok_or(Error::InvalidObu)?;
+                let count = plane
+                    .width()
+                    .checked_mul(plane.height())
+                    .ok_or(Error::LimitExceeded)?;
+                let mut mask = vector_with_capacity::<u8>(count)?;
+                mask.resize(count, 0);
+                Some(mask)
+            } else {
+                None
+            };
+            let v_mask = if has_chroma {
+                let plane = buffer.v.as_ref().ok_or(Error::InvalidObu)?;
+                let count = plane
+                    .width()
+                    .checked_mul(plane.height())
+                    .ok_or(Error::LimitExceeded)?;
+                let mut mask = vector_with_capacity::<u8>(count)?;
+                mask.resize(count, 0);
+                Some(mask)
+            } else {
+                None
+            };
+            (y_mask, u_mask, v_mask)
+        };
         let mut current_qindex = header.quantization.base_q_idx;
         let mut delta_lf = [0i8; 4];
         let mut read_deltas = false;
@@ -2282,6 +2317,8 @@ impl Decoder {
                                     } else {
                                         availability.left
                                     },
+                                    above_availability: None,
+                                    left_availability: None,
                                 },
                             )
                             .map_err(|error| {
@@ -2518,6 +2555,89 @@ impl Decoder {
                             } else {
                                 (intra.chroma.mode as u8, intra.chroma.angle_delta, None)
                             };
+                            let mut above_availability = [false; 128];
+                            let mut left_availability = [false; 128];
+                            let have_left = if chroma {
+                                availability.left_chroma || x > base_x
+                            } else {
+                                availability.left || x > base_x
+                            };
+                            let have_above = if chroma {
+                                availability.upper_chroma || y > base_y
+                            } else {
+                                availability.upper || y > base_y
+                            };
+                            let have_above_right = if chroma {
+                                availability.upper_chroma || y > base_y
+                            } else {
+                                availability.upper || y > base_y
+                            };
+                            let have_below_left = if chroma {
+                                availability.left_chroma || x > base_x
+                            } else {
+                                availability.left || x > base_x
+                            };
+                            let edge_length = visible_width + visible_height;
+                            if have_above {
+                                let decoded = match plane {
+                                    0 => &decoded_y,
+                                    1 => decoded_u.as_ref().ok_or(Error::InvalidObu)?,
+                                    2 => decoded_v.as_ref().ok_or(Error::InvalidObu)?,
+                                    _ => return Err(Error::InvalidObu),
+                                };
+                                let above_limit = prediction_x
+                                    .checked_add(if have_above_right {
+                                        visible_width.saturating_mul(2)
+                                    } else {
+                                        visible_width
+                                    })
+                                    .and_then(|value| value.checked_sub(1))
+                                    .ok_or(Error::LimitExceeded)?
+                                    .min(plane_width.saturating_sub(1));
+                                let above_y = prediction_y.checked_sub(1).ok_or(Error::InvalidObu)?;
+                                for index in 0..edge_length {
+                                    let edge_x = prediction_x
+                                        .saturating_add(index)
+                                        .min(above_limit);
+                                    let above_index = above_y
+                                        .checked_mul(plane_width)
+                                        .ok_or(Error::LimitExceeded)?
+                                        .saturating_add(edge_x);
+                                    above_availability[index] = decoded.get(above_index).is_some_and(
+                                        |value| *value != 0,
+                                    );
+                                }
+                            }
+                            if have_left {
+                                let decoded = match plane {
+                                    0 => &decoded_y,
+                                    1 => decoded_u.as_ref().ok_or(Error::InvalidObu)?,
+                                    2 => decoded_v.as_ref().ok_or(Error::InvalidObu)?,
+                                    _ => return Err(Error::InvalidObu),
+                                };
+                                let left_limit = prediction_y
+                                    .checked_add(if have_below_left {
+                                        visible_height.saturating_mul(2)
+                                    } else {
+                                        visible_height
+                                    })
+                                    .and_then(|value| value.checked_sub(1))
+                                    .ok_or(Error::LimitExceeded)?
+                                    .min(plane_height.saturating_sub(1));
+                                let left_x = prediction_x.checked_sub(1).ok_or(Error::InvalidObu)?;
+                                for index in 0..edge_length {
+                                    let edge_y = prediction_y
+                                        .saturating_add(index)
+                                        .min(left_limit);
+                                    let left_index = edge_y
+                                        .checked_mul(plane_width)
+                                        .ok_or(Error::LimitExceeded)?
+                                        .saturating_add(left_x);
+                                    left_availability[index] = decoded.get(left_index).is_some_and(
+                                        |value| *value != 0,
+                                    );
+                                }
+                            }
                             let prediction_config = prediction::IntraPredictionConfig {
                                 region: prediction::PredictionRegion {
                                     x: prediction_x,
@@ -2529,30 +2649,59 @@ impl Decoder {
                                 mode: prediction_mode,
                                 angle_delta,
                                 filter_intra_mode,
-                                have_left: if chroma {
-                                    availability.left_chroma || x > base_x
+                                have_left,
+                                have_above,
+                                have_above_right,
+                                have_below_left,
+                                above_availability: if have_above {
+                                    Some(&above_availability[..edge_length])
                                 } else {
-                                    availability.left || x > base_x
+                                    None
                                 },
-                                have_above: if chroma {
-                                    availability.upper_chroma || y > base_y
+                                left_availability: if have_left {
+                                    Some(&left_availability[..edge_length])
                                 } else {
-                                    availability.upper || y > base_y
-                                },
-                                have_above_right: if chroma {
-                                    availability.upper_chroma || y > base_y
-                                } else {
-                                    availability.upper || y > base_y
-                                },
-                                have_below_left: if chroma {
-                                    availability.left_chroma || x > base_x
-                                } else {
-                                    availability.left || x > base_x
+                                    None
                                 },
                             };
                             let palette_prediction = palette_data
                                 .as_ref()
                                 .is_some_and(|data| data.0.sizes[usize::from(chroma)] > 0);
+                            let mark_decoded_region =
+                                |prediction_x: usize,
+                                 prediction_y: usize,
+                                 mark_width: usize,
+                                 mark_height: usize,
+                                 destination_width: usize,
+                                 decoded_y: &mut Vector<u8>,
+                                 decoded_u: &mut Option<Vector<u8>>,
+                                 decoded_v: &mut Option<Vector<u8>>|
+                                 -> Result<(), Error> {
+                                    let decoded = match plane {
+                                        0 => decoded_y,
+                                        1 => decoded_u.as_mut().ok_or(Error::InvalidObu)?,
+                                        2 => decoded_v.as_mut().ok_or(Error::InvalidObu)?,
+                                        _ => return Err(Error::InvalidObu),
+                                    };
+                                    for row in 0..mark_height {
+                                        let base = prediction_y
+                                            .checked_add(row)
+                                            .ok_or(Error::LimitExceeded)?
+                                            .checked_mul(destination_width)
+                                            .ok_or(Error::LimitExceeded)?;
+                                        for column in 0..mark_width {
+                                            let index = base
+                                                .checked_add(prediction_x.saturating_add(column))
+                                                .ok_or(Error::LimitExceeded)?;
+                                            if let Some(sample) = decoded.get_mut(index) {
+                                                *sample = 1;
+                                            } else {
+                                                return Err(Error::InvalidObu);
+                                            }
+                                        }
+                                    }
+                                    Ok(())
+                                };
                             match plane {
                                 0 if !palette_prediction => prediction::predict_intra_block(
                                     &mut buffer.y,
@@ -2651,6 +2800,16 @@ impl Decoder {
                             let contexts =
                                 coefficient_contexts.as_mut().ok_or(Error::InvalidObu)?;
                             if prefix.skip {
+                                mark_decoded_region(
+                                    prediction_x,
+                                    prediction_y,
+                                    visible_width,
+                                    visible_height,
+                                    plane_width,
+                                    &mut decoded_y,
+                                    &mut decoded_u,
+                                    &mut decoded_v,
+                                )?;
                                 return contexts.update(
                                     plane,
                                     x4,
@@ -2732,6 +2891,16 @@ impl Decoder {
                             if plane == 0 {
                                 grid.fill_tx_type(y4, x4, transform_size, result.tx_type)?;
                             }
+                            mark_decoded_region(
+                                prediction_x,
+                                prediction_y,
+                                visible_width,
+                                visible_height,
+                                plane_width,
+                                &mut decoded_y,
+                                &mut decoded_u,
+                                &mut decoded_v,
+                            )?;
                             contexts.update(plane, x4, y4, transform_size, result)
                         },
                     )?;
