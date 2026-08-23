@@ -1043,8 +1043,8 @@ ran unchanged under the pinned nightly. The current MRML replacement covers its
 module-constant absolute-difference `if` expression and its recursive scalar
 Euclidean GCD behavior. An original scalar iterative Fibonacci replacement now
 covers the same early base case and loop state transitions without copying the
-upstream tuple representation. Recursive loops, tuples, macros, and general
-matches remain separate future slices.
+upstream tuple representation. Recursive loops, tuple forms outside the bounded
+runtime slice below, macros, and general matches remain separate future slices.
 The complete upstream `tests/ui/consts/return-in-const-fn.rs` likewise compiled
 and ran unchanged under the pinned nightly before its explicit tail-return
 replacement was added.
@@ -1867,7 +1867,7 @@ and a fifth guarded assignment is rejected with
 Conditional assignment branches now contain up to four ordered scalar
 assignments rather than exactly one. An original replacement maps this narrow
 sequencing property to pinned `tests/ui/drop/dynamic-drop.rs`; allocation,
-ownership, destructors, deferred initialization, tuples, unwinding, and
+ownership, destructors, deferred initialization, general tuples, unwinding, and
 coroutines are explicitly not claimed. The unchanged pinned editions 2015 and
 2018 revisions compiled and ran on Windows, and edition 2015 compiled and ran
 on Arch Linux WSL. MRML's 868-byte COFF and 1,264-byte ELF objects passed
@@ -2572,9 +2572,10 @@ available to the mapping closure.
 
 Runtime expressions can call a safe, non-const Rust-ABI function declared
 before or after the selected export, with up to four built-in integer, Boolean,
-character, unit, by-value fixed-array, thin scalar raw-pointer, thin
-scalar-reference, or thin fixed-array-reference parameters and a result from
-the same families. A helper result may also be the never type `!` when its
+character, unit, by-value fixed-array, bounded heterogeneous scalar-tuple, thin
+scalar raw-pointer, thin scalar-reference, or thin fixed-array-reference
+parameters and a result from the same families. A helper result may also be the
+never type `!` when its
 parsed body has an existing structurally diverging loop; `!` then coerces into
 the surrounding supported result type without emitting a return edge. Never
 parameters and public never-returning exports are not claimed. Pointer,
@@ -2751,6 +2752,19 @@ than two machine words. Object-emission tests additionally cover Boolean,
 character, and unit arrays. Separate adversarial sources reject element and
 count mismatches. This is fixed-array transport within inlined calls, not a
 general tuple, struct, enum, or public Rust aggregate ABI implementation.
+A bounded heterogeneous scalar-tuple helper chain produced a 760-byte COFF
+object and an 1152-byte ELF64 object. Independent pinned-nightly callers matched
+five paths on Windows and Arch Linux, covering nested tuple helpers, eager
+two-tuple argument evaluation, a normal and explicit-early three-element tuple
+return, Boolean and character fields, numbered projection, local frame removal,
+zero, ordinary, and `u16::MAX` values, and a valid trailing call-argument comma.
+Object-emission tests additionally cover singleton and unit-element tuples,
+typed local reassignment, count and element mismatches, out-of-range fields,
+the four-element capacity boundary, and rejection at both public parameter and
+return ABI boundaries. Tuple elements are limited to built-in
+integers, Boolean, character, and unit; tuple nesting, destructuring, field
+mutation, references in tuples, ownership, and public tuple ABI transport are
+not claimed.
 A diverging `-> !` helper produced a 172-byte COFF object and a 568-byte ELF64
 object. Independent pinned-nightly callers matched six reachable non-diverging
 branch cases on Windows and Arch Linux, including zero and integer-width

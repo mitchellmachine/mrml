@@ -2030,6 +2030,14 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             .flatten()
             .any(|element| recurse(*element, inside_inline_const)),
         ExprKind::ArrayRepeat { element, .. } => recurse(element, inside_inline_const),
+        ExprKind::Tuple {
+            elements,
+            element_count,
+        } => elements[..element_count]
+            .iter()
+            .flatten()
+            .any(|element| recurse(*element, inside_inline_const)),
+        ExprKind::TupleField { base, .. } => recurse(base, inside_inline_const),
         ExprKind::Index { base, index } => {
             recurse(base, inside_inline_const) || recurse(index, inside_inline_const)
         }
@@ -2298,6 +2306,14 @@ fn expression_contains_call<const MAX_NODES: usize>(
             .flatten()
             .any(|element| recurse(*element)),
         ExprKind::ArrayRepeat { element, .. } => recurse(element),
+        ExprKind::Tuple {
+            elements,
+            element_count,
+        } => elements[..element_count]
+            .iter()
+            .flatten()
+            .any(|element| recurse(*element)),
+        ExprKind::TupleField { base, .. } => recurse(base),
         ExprKind::Index { base, index } => recurse(base) || recurse(index),
         ExprKind::RangeIndex {
             base, start, end, ..

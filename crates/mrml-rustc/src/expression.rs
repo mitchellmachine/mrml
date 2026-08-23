@@ -10,6 +10,7 @@ const MAX_MATCH_ALTERNATIVES: usize = 4;
 const MAX_RANGE_VALIDATIONS: usize = MAX_MATCH_PATTERNS * MAX_MATCH_ALTERNATIVES;
 const MAX_LOOP_BREAK_BRANCHES: usize = 4;
 pub(crate) const MAX_ARRAY_ELEMENTS: usize = 16;
+pub(crate) const MAX_TUPLE_ELEMENTS: usize = 4;
 
 type InlineConstBinding<'source> = (&'source str, ExprKind<'source>, bool, Option<ScalarType>);
 
@@ -193,6 +194,10 @@ pub enum ScalarType {
         element: CallArrayElement,
         count: usize,
     },
+    Tuple {
+        elements: [Option<CallArrayElement>; MAX_TUPLE_ELEMENTS],
+        element_count: usize,
+    },
     RawPointer {
         pointee: PointerPointee,
         mutable: bool,
@@ -290,6 +295,33 @@ impl ScalarType {
                     return Some(Self::Array {
                         element: CallArrayElement::from_name(element)?,
                         count,
+                    });
+                }
+                if let Some(body) = name
+                    .trim()
+                    .strip_prefix('(')
+                    .and_then(|body| body.strip_suffix(')'))
+                    && body.contains(',')
+                {
+                    let mut elements = [None; MAX_TUPLE_ELEMENTS];
+                    let mut element_count = 0usize;
+                    for element in body
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|part| !part.is_empty())
+                    {
+                        if element_count == MAX_TUPLE_ELEMENTS {
+                            return None;
+                        }
+                        elements[element_count] = Some(CallArrayElement::from_name(element)?);
+                        element_count += 1;
+                    }
+                    if element_count == 0 {
+                        return None;
+                    }
+                    return Some(Self::Tuple {
+                        elements,
+                        element_count,
                     });
                 }
                 if let Some(target) = name.trim().strip_prefix('&') {
@@ -494,6 +526,14 @@ pub enum ExprKind<'source> {
     ArrayRepeat {
         element: ExprId,
         count: usize,
+    },
+    Tuple {
+        elements: [Option<ExprId>; MAX_TUPLE_ELEMENTS],
+        element_count: usize,
+    },
+    TupleField {
+        base: ExprId,
+        field: usize,
     },
     Index {
         base: ExprId,
@@ -1000,6 +1040,7 @@ pub enum ExpressionErrorKind {
     TooManyNodes,
     TooManyCallArguments,
     TooManyArrayElements,
+    TooManyTupleElements,
     TooManyInlineConstBindings,
     TooManyInlineConstAssignments,
     TooManyInlineConstExpressionStatements,
@@ -1118,6 +1159,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::DefaultValue
             | ExprKind::Array { .. }
             | ExprKind::ArrayRepeat { .. }
+            | ExprKind::Tuple { .. }
+            | ExprKind::TupleField { .. }
             | ExprKind::Index { .. }
             | ExprKind::RangeIndex { .. }
             | ExprKind::SliceLen { .. }
@@ -1201,6 +1244,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     | ScalarType::Char
                     | ScalarType::Unit
                     | ScalarType::Array { .. }
+                    | ScalarType::Tuple { .. }
                     | ScalarType::RawPointer { .. }
                     | ScalarType::Reference { .. }
                     | ScalarType::ArrayReference { .. }
@@ -1385,9 +1429,10 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             .ok_or(ConstEvalError::InvalidExpressionTree)?;
         match expression.kind {
             ExprKind::Unit | ExprKind::DefaultValue => Ok(0),
-            ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } => {
+            ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } | ExprKind::Tuple { .. } => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
+            ExprKind::TupleField { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Index { base, index } => {
                 let index = self.evaluate_node(index, resolver, depth + 1)?;
                 let index =
@@ -1551,6 +1596,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     ScalarType::Never | ScalarType::Unit => Err(ConstEvalError::InvalidCast),
                     ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Array { .. } => Err(ConstEvalError::InvalidCast),
+                    ScalarType::Tuple { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Reference { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::ArrayReference { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::SliceReference { .. } | ScalarType::StrReference { .. } => {
@@ -2431,6 +2477,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                             break;
                         }
                         self.take()?;
+                        if self
+                            .peek()?
+                            .is_some_and(|next| next.kind == TokenKind::CloseParen)
+                        {
+                            break;
+                        }
                     }
                 }
                 let close = self.take()?;
@@ -2557,12 +2609,53 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         },
                     });
                 }
-                let inner = self.expression(0, depth + 1)?;
+                let first = self.expression(0, depth + 1)?;
+                if self
+                    .peek()?
+                    .is_some_and(|value| value.kind == TokenKind::Comma)
+                {
+                    let mut elements = [None; MAX_TUPLE_ELEMENTS];
+                    elements[0] = Some(first);
+                    let mut element_count = 1usize;
+                    while self
+                        .peek()?
+                        .is_some_and(|value| value.kind == TokenKind::Comma)
+                    {
+                        self.take()?;
+                        if self
+                            .peek()?
+                            .is_some_and(|value| value.kind == TokenKind::CloseParen)
+                        {
+                            break;
+                        }
+                        if element_count == MAX_TUPLE_ELEMENTS {
+                            return Err(self
+                                .error(ExpressionErrorKind::TooManyTupleElements, self.lookahead));
+                        }
+                        elements[element_count] = Some(self.expression(0, depth + 1)?);
+                        element_count += 1;
+                    }
+                    let close = self.take()?;
+                    let Some(close) = close.filter(|value| value.kind == TokenKind::CloseParen)
+                    else {
+                        return Err(self.error(ExpressionErrorKind::ExpectedCloseParen, close));
+                    };
+                    return self.push(Expr {
+                        kind: ExprKind::Tuple {
+                            elements,
+                            element_count,
+                        },
+                        span: Span {
+                            start: token.span.start,
+                            end: close.span.end,
+                        },
+                    });
+                }
                 let close = self.take()?;
                 if !close.is_some_and(|value| value.kind == TokenKind::CloseParen) {
                     return Err(self.error(ExpressionErrorKind::ExpectedCloseParen, close));
                 }
-                Ok(inner)
+                Ok(first)
             }
             Some(token) if token.kind == TokenKind::OpenBrace => {
                 self.block_expression(token, depth + 1)
@@ -2964,6 +3057,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::ArrayRepeat { element, .. } => {
                 self.substitute_identifier(element, name, replacement, depth + 1)?;
+            }
+            ExprKind::Tuple {
+                elements,
+                element_count,
+            } => {
+                for element in elements[..element_count].iter().flatten() {
+                    self.substitute_identifier(*element, name, replacement, depth + 1)?;
+                }
+            }
+            ExprKind::TupleField { base, .. } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
             ExprKind::Index { base, index } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -4776,6 +4880,26 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             self.take()?;
             let method = self.take()?;
+            if let Some(field) = method.filter(|field| field.kind == TokenKind::Integer) {
+                let literal = decode_integer(field)?;
+                if literal.suffix.is_some() {
+                    return Err(self.error(ExpressionErrorKind::InvalidIntegerSuffix, Some(field)));
+                }
+                let field_index = usize::try_from(literal.value)
+                    .map_err(|_| self.error(ExpressionErrorKind::InvalidInteger, Some(field)))?;
+                let start = self.node_span(base)?.start;
+                base = self.push(Expr {
+                    kind: ExprKind::TupleField {
+                        base,
+                        field: field_index,
+                    },
+                    span: Span {
+                        start,
+                        end: field.span.end,
+                    },
+                })?;
+                continue;
+            }
             if method.is_some_and(|method| {
                 matches!(
                     method.text,

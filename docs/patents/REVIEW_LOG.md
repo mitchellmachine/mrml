@@ -251,3 +251,17 @@ protocol, cryptographic construction, or optimization is introduced.
 
 Patent review: `NOT_TRIGGERED` — conventional never-type propagation over
 existing bounded compiler control flow.
+
+## 2026-08-23 — bounded heterogeneous scalar tuples
+
+MRML source:
+`crates/mrml-rustc/src/{expression,ir,semantics,codegen,pipeline}.rs`.
+
+The compiler now represents up to four heterogeneous built-in scalar tuple
+elements in fixed arrays, materializes them in existing checked stack slots,
+and applies ordinary numbered projection and inline helper frame cleanup. This
+is conventional parser, type propagation, aggregate copying, and stack-value
+transport; it introduces no novel ABI, algorithm, protocol, cryptographic
+construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary bounded compiler aggregate handling.

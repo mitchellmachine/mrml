@@ -316,7 +316,10 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
                 };
                 self.push(Instruction::PushInteger(value), expression.span)?;
             }
-            ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } => {
+            ExprKind::Array { .. }
+            | ExprKind::ArrayRepeat { .. }
+            | ExprKind::Tuple { .. }
+            | ExprKind::TupleField { .. } => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
                     span: expression.span,
@@ -466,6 +469,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
                     | crate::ScalarType::Char
                     | crate::ScalarType::Unit
                     | crate::ScalarType::Array { .. }
+                    | crate::ScalarType::Tuple { .. }
                     | crate::ScalarType::RawPointer { .. }
                     | crate::ScalarType::Reference { .. }
                     | crate::ScalarType::ArrayReference { .. }

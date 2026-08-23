@@ -283,7 +283,7 @@ mod tests {
         name: &str,
         format: ObjectFormat,
     ) -> Result<ObjectFile<4096>, CompileError> {
-        compile_source_function::<4096, 2048, 8, 4, 8, 64>(
+        compile_source_function::<4096, 2048, 8, 8, 8, 64>(
             source,
             name,
             format,
@@ -566,6 +566,68 @@ mod tests {
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let tuple_helpers = "fn identity(value: (u16, bool, char)) -> (u16, bool, char) { value } fn choose(value: (u16, bool, char), alternate: (u16, bool, char), first: bool) -> (u16, bool, char) { let copy: (u16, bool, char) = identity(value); if first { return copy; } identity(alternate) } #[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, flag: bool, choose_first: bool) -> u64 { let selected: (u16, bool, char) = choose((first, flag, 'x'), (second, !flag, 'y'), choose_first); selected.0 as u64 + if selected.1 { 100 } else { 0 } + if selected.2 == 'x' { 10 } else { 20 } }";
+        let result = compile_wide(tuple_helpers, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
+        let tuple_assignment = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u16, second: u16, flag: bool) -> u64 { let mut selected: (u16, bool) = (first, flag); selected = (second, !flag); selected.0 as u64 + if selected.1 { 100 } else { 0 } }";
+        let result = compile_wide(tuple_assignment, "answer", ObjectFormat::Elf64);
+        assert!(result.is_ok(), "{result:?}");
+
+        let singleton_and_unit = "fn identity(value: (u64,)) -> (u64,) { value } fn carry(value: ((), bool)) -> ((), bool) { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, flag: bool) -> u64 { let unit: ((), bool) = carry(((), flag)); identity((value,)).0 + if unit.1 { 1 } else { 0 } }";
+        let result = compile_wide(singleton_and_unit, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
+        let four_element_tuple = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(first: u8, second: u16, flag: bool) -> u64 { let values: (u8, u16, bool, char) = (first, second, flag, 'z'); values.0 as u64 + values.1 as u64 + if values.2 { 1 } else { 0 } + if values.3 == 'z' { 2 } else { 0 } }";
+        let result = compile_wide(four_element_tuple, "answer", ObjectFormat::Elf64);
+        assert!(result.is_ok(), "{result:?}");
+
+        let wrong_tuple_count = "fn identity(value: (u16, bool, char)) -> (u16, bool, char) { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16, flag: bool) -> u16 { identity((value, flag)).0 }";
+        let error = compile_wide(wrong_tuple_count, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let wrong_tuple_element = "fn identity(value: (u16, bool, char)) -> (u16, bool, char) { value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> u16 { identity((value, value, 'x')).0 }";
+        let error = compile_wide(wrong_tuple_element, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let tuple_field_out_of_range = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16, flag: bool) -> u16 { let pair: (u16, bool) = (value, flag); pair.2 }";
+        let error =
+            compile_wide(tuple_field_out_of_range, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::ValueOutOfRange)
+        );
+
+        let too_many_tuple_elements = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> u16 { (value, false, 'x', (), value).0 }";
+        let error =
+            compile_wide(too_many_tuple_elements, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::Expression(
+                crate::ExpressionErrorKind::TooManyTupleElements
+            ))
+        );
+
+        let public_tuple_parameter = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: (u16, bool)) -> u16 { value.0 }";
+        let error = compile_wide(public_tuple_parameter, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedParameterType)
+        );
+
+        let public_tuple_return = "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u16) -> (u16, bool) { (value, true) }";
+        let error = compile_wide(public_tuple_return, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedReturnType)
         );
 
         let capture = "fn bad(value: u64) -> u64 { hidden + value } #[unsafe(no_mangle)] pub extern \"C\" fn answer(hidden: u64) -> u64 { bad(1) }";
