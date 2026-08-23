@@ -23,6 +23,111 @@ pub struct LocalTime {
 }
 
 pub const ENCLAVE_TYPE_VBS: u32 = 0x10;
+pub const VBS_ENCLAVE_ALIGNMENT: usize = 2 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VbsEnclaveError {
+    ApiUnavailable,
+    Unsupported,
+    CreateFailed(u32),
+}
+
+#[repr(C)]
+#[cfg(windows)]
+struct EnclaveCreateInfoVbs {
+    flags: u32,
+    owner_id: [u8; 32],
+}
+
+#[cfg(windows)]
+type DeleteEnclaveFn = unsafe extern "system" fn(*mut c_void) -> i32;
+
+#[cfg(windows)]
+pub struct VbsEnclaveReservation {
+    base: NonNull<u8>,
+    size: usize,
+    delete: DeleteEnclaveFn,
+    _library: DynamicLibrary,
+}
+
+#[cfg(windows)]
+impl VbsEnclaveReservation {
+    pub fn reserve(owner_id: [u8; 32]) -> Result<Self, VbsEnclaveError> {
+        type CreateEnclaveFn = unsafe extern "system" fn(
+            *mut c_void,
+            *mut c_void,
+            usize,
+            usize,
+            u32,
+            *const c_void,
+            u32,
+            *mut u32,
+        ) -> *mut c_void;
+
+        match vbs_enclave_support() {
+            VbsEnclaveSupport::ApiUnavailable => return Err(VbsEnclaveError::ApiUnavailable),
+            VbsEnclaveSupport::Unsupported => return Err(VbsEnclaveError::Unsupported),
+            VbsEnclaveSupport::Supported => {}
+        }
+        let library = DynamicLibrary::open(c"api-ms-win-core-enclave-l1-1-0.dll")
+            .or_else(|| DynamicLibrary::open(c"kernel32.dll"))
+            .ok_or(VbsEnclaveError::ApiUnavailable)?;
+        let create = library
+            .symbol(c"CreateEnclave")
+            .ok_or(VbsEnclaveError::ApiUnavailable)?;
+        let delete = library
+            .symbol(c"DeleteEnclave")
+            .ok_or(VbsEnclaveError::ApiUnavailable)?;
+        // SAFETY: both symbols are resolved by their documented Kernel32 names
+        // and retained for the lifetime of the reservation by `_library`.
+        let create: CreateEnclaveFn = unsafe { core::mem::transmute(create) };
+        let delete: DeleteEnclaveFn = unsafe { core::mem::transmute(delete) };
+        let information = EnclaveCreateInfoVbs { flags: 0, owner_id };
+        // -1 is the documented pseudo-handle for the current process.
+        let process = usize::MAX as *mut c_void;
+        let base = unsafe {
+            create(
+                process,
+                core::ptr::null_mut(),
+                VBS_ENCLAVE_ALIGNMENT,
+                0,
+                ENCLAVE_TYPE_VBS,
+                core::ptr::from_ref(&information).cast(),
+                core::mem::size_of::<EnclaveCreateInfoVbs>() as u32,
+                core::ptr::null_mut(),
+            )
+        };
+        let base = NonNull::new(base.cast())
+            .ok_or_else(|| VbsEnclaveError::CreateFailed(unsafe { GetLastError() }))?;
+        Ok(Self {
+            base,
+            size: VBS_ENCLAVE_ALIGNMENT,
+            delete,
+            _library: library,
+        })
+    }
+
+    pub const fn base(&self) -> NonNull<u8> {
+        self.base
+    }
+
+    pub const fn size(&self) -> usize {
+        self.size
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(windows)]
+impl Drop for VbsEnclaveReservation {
+    fn drop(&mut self) {
+        // SAFETY: `base` is the live enclave returned by CreateEnclave, and
+        // this owning type invokes DeleteEnclave exactly once during drop.
+        let _ = unsafe { (self.delete)(self.base.as_ptr().cast()) };
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VbsEnclaveSupport {
@@ -59,7 +164,9 @@ impl VbsEnclaveApis {
 
 #[cfg(windows)]
 pub fn vbs_enclave_apis() -> VbsEnclaveApis {
-    let Some(library) = DynamicLibrary::open(c"kernel32.dll") else {
+    let Some(library) = DynamicLibrary::open(c"api-ms-win-core-enclave-l1-1-0.dll")
+        .or_else(|| DynamicLibrary::open(c"kernel32.dll"))
+    else {
         return VbsEnclaveApis(0);
     };
     let mut bits = 0;
@@ -1799,6 +1906,21 @@ mod tests {
             apis.contains(super::VbsEnclaveApis::REQUIRED)
         );
         assert!(apis.contains(super::VbsEnclaveApis::CREATE));
+    }
+
+    #[test]
+    fn vbs_create_info_matches_documented_abi() {
+        assert_eq!(core::mem::size_of::<super::EnclaveCreateInfoVbs>(), 36);
+        assert_eq!(core::mem::align_of::<super::EnclaveCreateInfoVbs>(), 4);
+    }
+
+    #[test]
+    fn supported_vbs_can_reserve_and_delete_non_debug_enclave() {
+        if super::vbs_enclave_support() == super::VbsEnclaveSupport::Supported {
+            let reservation = super::VbsEnclaveReservation::reserve([0x42; 32]).unwrap();
+            assert_eq!(reservation.size(), super::VBS_ENCLAVE_ALIGNMENT);
+            let _ = reservation.base();
+        }
     }
 
     #[test]

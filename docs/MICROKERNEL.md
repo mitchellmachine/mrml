@@ -67,6 +67,15 @@ does not create an enclave and does not upgrade a WHP launch's protection
 claims; signed enclave image construction, loading, and evidence verification
 remain incomplete.
 
+The feasibility backend now performs a real reservation test on supported
+Windows systems: it creates a non-debug, explicitly owned 2 MiB VBS enclave and
+deletes it through an owning RAII handle. ABI layout is asserted as the
+documented 36-byte create-information structure. Lifecycle symbols resolve
+from the enclave API-set DLL with a Kernel32 fallback, which is required on
+systems where forwarded exports are not directly visible. This proves enclave
+reservation on the tested Windows host, but no code has yet been loaded or
+initialized inside that enclave.
+
 The untrusted broker protocol uses fixed-size canonical launch requests and
 authority receipts. A request binds a fresh nonce and sequence to the exact
 SHA3-512 image and policy measurements. The authority receipt binds that full
