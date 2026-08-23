@@ -2193,10 +2193,30 @@ Run the current release microbenchmarks with:
 cargo test --release -p mrml-kernel-bench -- --ignored --nocapture
 ```
 
-They report nanoseconds per capability authorization and scheduler selection.
+They report authorization, scheduling, IPC, wakeup, transfer, revocation,
+shared-binding, and domain-handoff policy costs.
 The generous automated ceiling detects catastrophic regressions; comparative
 optimization decisions require repeated samples on pinned hardware and a
 recorded baseline.
+
+The 2026-08-23 Windows gnullvm Phase 1 observation used 100,000 iterations per
+sample (10,000 for the larger domain handoff):
+
+| Operation | Mean |
+| --- | ---: |
+| one-way IPC authorization/copy policy | 88.576 ns |
+| two-direction IPC round-trip policy | 150.025 ns |
+| blocked receiver delivery/wakeup/dequeue/reblock | 174.810 ns |
+| attenuated capability transfer plus receiver revoke | 2.969 ns |
+| capability revoke plus reissue | 5.311 ns |
+| shared binding setup plus authorized revoke | 2.348 ns |
+| two-way cross-runtime domain detach/attach | 330.240 ns |
+
+These are throughput-derived optimized policy averages. The cross-runtime case
+does not prove execution on separate physical cores, and the shared-binding
+case does not include native page-table changes. None is a syscall, context
+switch, hypervisor, or end-to-end service latency measurement. Hardware-backed
+comparisons require pinned repeated samples and exact environment evidence.
 
 Baseline recorded 2026-08-20 and rechecked on Arch Linux 2026-08-21 on the current development host, one million
 iterations per sample:

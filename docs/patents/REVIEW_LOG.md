@@ -138,3 +138,15 @@ construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional capability-bound resource
 lifecycle and cleanup composition.
+
+## 2026-08-23 — Phase 1 service-policy microbenchmarks
+
+MRML source: `crates/mrml-kernel-bench/src/lib.rs`.
+
+The host-only release harness now times existing IPC, scheduler wakeup,
+capability transfer/revocation, shared-binding, and cross-runtime domain-handoff
+operations using fixed iteration counts and optimization barriers. It introduces
+no new runtime mechanism, algorithm, protocol, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary measurement of existing kernel policy
+operations.
