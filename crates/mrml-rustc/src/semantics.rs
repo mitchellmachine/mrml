@@ -2454,21 +2454,43 @@ fn evaluate_call_aware_integer<
             base,
             argument,
             operator,
+            mixed_signedness,
         } => {
             let base_type = integer_expression_type(context, symbol_count, tree, base, constants);
+            let argument_type = if mixed_signedness {
+                if ty.is_signed() {
+                    ty.unsigned_counterpart()
+                } else {
+                    ty.signed_counterpart()
+                }
+            } else {
+                Some(ty)
+            };
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
                 || integer_expression_type(context, symbol_count, tree, argument, constants)
-                    .is_some_and(|argument_type| argument_type != ty)
+                    .is_some_and(|actual| Some(actual) != argument_type)
             {
                 return Err(arithmetic_error(ConstEvalError::InvalidCast));
             }
             let left = recurse(base)?;
-            let right = recurse(argument)?;
+            let right = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                argument,
+                argument_type.ok_or_else(|| arithmetic_error(ConstEvalError::InvalidCast))?,
+                constants,
+                depth,
+            )?;
             if operator == BinaryOperator::Divide && right & signed_mask(bits) == 0 {
                 return Err(arithmetic_error(ConstEvalError::DivisionByZero));
             }
-            saturating_integer_arithmetic(left, right, bits, ty.is_signed(), operator)
+            if mixed_signedness {
+                saturating_mixed_integer_arithmetic(left, right, bits, ty.is_signed(), operator)
+            } else {
+                saturating_integer_arithmetic(left, right, bits, ty.is_signed(), operator)
+            }
         }
         ExprKind::IntegerRotate {
             base,
@@ -3603,12 +3625,18 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             base,
             argument,
             operator,
+            mixed_signedness,
         } => {
             let base_type = expression_integer_type(tree, base, constants);
+            let argument_type = if mixed_signedness {
+                ty.unsigned_counterpart()
+            } else {
+                Some(ty)
+            };
             if base_type.is_some_and(|base_type| base_type != ty)
                 || (base_type.is_none() && ty != crate::IntegerType::I32)
                 || expression_integer_type(tree, argument, constants)
-                    .is_some_and(|argument_type| argument_type != ty)
+                    .is_some_and(|actual| Some(actual) != argument_type)
             {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
             }
@@ -3617,7 +3645,11 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
             if operator == BinaryOperator::Divide && right & signed_mask(bits) == 0 {
                 return Err(ExecutionError::Arithmetic(ConstEvalError::DivisionByZero));
             }
-            saturating_integer_arithmetic(left, right, bits, true, operator)
+            if mixed_signedness {
+                saturating_mixed_integer_arithmetic(left, right, bits, true, operator)
+            } else {
+                saturating_integer_arithmetic(left, right, bits, true, operator)
+            }
         }
         _ => return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast)),
     };
@@ -3743,6 +3775,34 @@ fn saturating_integer_arithmetic(
             BinaryOperator::Divide => (left & mask) / (right & mask),
             _ => unreachable!(),
         }
+    }
+}
+
+fn saturating_mixed_integer_arithmetic(
+    left: u128,
+    right: u128,
+    bits: u8,
+    receiver_signed: bool,
+    operator: BinaryOperator,
+) -> u128 {
+    match strict_mixed_integer_arithmetic(left, right, bits, receiver_signed, operator) {
+        Ok(value) => value,
+        Err(ConstEvalError::Overflow) if receiver_signed => match operator {
+            BinaryOperator::Add => signed_mask(bits) >> 1,
+            BinaryOperator::Subtract => 1_u128 << (bits - 1),
+            _ => unreachable!(),
+        },
+        Err(ConstEvalError::Overflow) => {
+            let right_is_negative = decode_signed(right, bits) < 0;
+            match (operator, right_is_negative) {
+                (BinaryOperator::Add, false) | (BinaryOperator::Subtract, true) => {
+                    signed_mask(bits)
+                }
+                (BinaryOperator::Add, true) | (BinaryOperator::Subtract, false) => 0,
+                _ => unreachable!(),
+            }
+        }
+        Err(_) => unreachable!(),
     }
 }
 

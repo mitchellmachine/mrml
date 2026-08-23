@@ -1872,7 +1872,7 @@ $(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld \
 readelf -h -S -s answer.o
 ```
 
-The 445 Linux library, conformance, rustc-nightly-replacement, and driver tests
+The 447 Linux library, conformance, rustc-nightly-replacement, and driver tests
 passed. The driver emitted a 496-byte ELF64 relocatable object;
 the bundled linker accepted it as shared-object input. `readelf` independently
 reported five canonical sections, a global 11-byte `answer` function in `.text`,
@@ -2009,6 +2009,13 @@ Four emitted System V objects matched pinned Rust across zero, ordinary signed
 and unsigned products, narrow saturation, 64-bit high-half overflow, both
 signed saturation directions, and the signed minimum multiplied by negative
 one.
+Stable `saturating_add_signed`, `saturating_sub_signed`,
+`saturating_add_unsigned`, and `saturating_sub_unsigned` require the
+corresponding same-width opposite-signed argument and clamp to the receiver's
+numeric bounds. Constants through 128 bits and native 8- through 64-bit paths
+select the lower or upper bound from both the operation and argument sign.
+Four 552- to 568-byte System V objects matched pinned Rust across twelve exact,
+underflowing, and overflowing cross-sign boundary cases.
 Two additional System V objects matched pinned Rust for ordinary signed and
 unsigned division, mixed signs, extrema, and signed minimum divided by negative
 one; the zero-divisor probe terminated with MRML's trap instruction.

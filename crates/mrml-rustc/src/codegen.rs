@@ -3153,7 +3153,12 @@ fn runtime_expression_type_with_locals<
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
             }
         }
-        ExprKind::SaturatingArithmetic { base, argument, .. } => {
+        ExprKind::SaturatingArithmetic {
+            base,
+            argument,
+            mixed_signedness,
+            ..
+        } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -3170,9 +3175,20 @@ fn runtime_expression_type_with_locals<
                 argument,
                 depth + 1,
             )?;
-            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
-                || !runtime_types_compatible(argument_type, base_type)
-            {
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let expected_argument = if mixed_signedness {
+                if integer_type.is_signed() {
+                    integer_type.unsigned_counterpart()
+                } else {
+                    integer_type.signed_counterpart()
+                }
+                .map(|ty| RuntimeExpressionType::Integer(Some(ty)))
+            } else {
+                Some(base_type)
+            };
+            if expected_argument != Some(argument_type) {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
@@ -5173,6 +5189,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 base,
                 argument,
                 operator,
+                mixed_signedness,
             } => {
                 let base_type = runtime_expression_type_with_locals(
                     self.function,
@@ -5190,10 +5207,18 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 self.emit_expression(tree, base, depth + 1)?;
                 self.emit(&[0x50])?;
                 self.evaluation_depth += 1;
+                if mixed_signedness {
+                    self.width.signed = !operand_width.signed;
+                }
                 self.emit_expression(tree, argument, depth + 1)?;
+                self.width = operand_width;
                 self.emit(&[0x59])?;
                 self.evaluation_depth -= 1;
-                self.emit_saturating_arithmetic(operator)?;
+                if mixed_signedness {
+                    self.emit_saturating_mixed_arithmetic(operator)?;
+                } else {
+                    self.emit_saturating_arithmetic(operator)?;
+                }
                 self.width = previous_width;
             }
             ExprKind::IntegerRotate {
@@ -9063,6 +9088,107 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.patch_forward_branch(end)?;
         }
         self.emit_normalize()
+    }
+
+    fn emit_saturating_mixed_arithmetic(
+        &mut self,
+        operator: crate::BinaryOperator,
+    ) -> Result<(), CodegenError> {
+        use crate::BinaryOperator::{Add, Subtract};
+        if self.width.signed {
+            match operator {
+                Add => {
+                    self.emit(&[0x48, 0xba])?;
+                    self.emit(&self.width.maximum.to_le_bytes())?;
+                    self.emit(&[0x48, 0x29, 0xca])?;
+                }
+                Subtract => {
+                    self.emit(&[0x48, 0x89, 0xca, 0x49, 0xb8])?;
+                    self.emit(&(self.width.minimum as u64).to_le_bytes())?;
+                    self.emit(&[0x4c, 0x29, 0xc2])?;
+                }
+                _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeOperator)),
+            }
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let in_range = self.emit_forward_branch(0x86)?;
+            self.emit(&[0x48, 0xb8])?;
+            let clamp = if operator == Add {
+                self.width.maximum
+            } else {
+                self.width.minimum as u64
+            };
+            self.emit(&clamp.to_le_bytes())?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(in_range)?;
+            match operator {
+                Add => self.emit(&[0x48, 0x01, 0xc8])?,
+                Subtract => self.emit(&[0x48, 0x29, 0xc1, 0x48, 0x89, 0xc8])?,
+                _ => unreachable!(),
+            }
+            self.patch_forward_branch(end)?;
+            return self.emit_normalize();
+        }
+
+        if self.width.bits < 64 {
+            match operator {
+                Add => self.emit(&[0x48, 0x01, 0xc8])?,
+                Subtract => self.emit(&[0x48, 0x29, 0xc1, 0x48, 0x89, 0xc8])?,
+                _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeOperator)),
+            }
+            self.emit(&[0x48, 0x85, 0xc0])?;
+            let nonnegative = self.emit_forward_branch(0x89)?;
+            self.emit(&[0x31, 0xc0])?;
+            let end = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(nonnegative)?;
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&self.width.maximum.to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0])?;
+            let in_range = self.emit_forward_branch(0x86)?;
+            self.emit(&[0x48, 0x89, 0xd0])?;
+            self.patch_forward_branch(in_range)?;
+            self.patch_forward_branch(end)?;
+            return self.emit_normalize();
+        }
+
+        self.emit(&[0x48, 0x85, 0xc0])?;
+        let nonnegative = self.emit_forward_branch(0x89)?;
+        self.emit(&[0x48, 0xf7, 0xd8])?;
+        match operator {
+            Add => self.emit(&[0x48, 0x29, 0xc1])?,
+            Subtract => self.emit(&[0x48, 0x01, 0xc1])?,
+            _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeOperator)),
+        }
+        let negative_in_range = self.emit_forward_branch(0x83)?;
+        if operator == Add {
+            self.emit(&[0x31, 0xc0])?;
+        } else {
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&u64::MAX.to_le_bytes())?;
+        }
+        let negative_end = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(negative_in_range)?;
+        self.emit(&[0x48, 0x89, 0xc8])?;
+        let negative_result_end = self.emit_unconditional_forward_branch()?;
+
+        self.patch_forward_branch(nonnegative)?;
+        match operator {
+            Add => self.emit(&[0x48, 0x01, 0xc1])?,
+            Subtract => self.emit(&[0x48, 0x29, 0xc1])?,
+            _ => unreachable!(),
+        }
+        let positive_in_range = self.emit_forward_branch(0x83)?;
+        if operator == Add {
+            self.emit(&[0x48, 0xb8])?;
+            self.emit(&u64::MAX.to_le_bytes())?;
+        } else {
+            self.emit(&[0x31, 0xc0])?;
+        }
+        let positive_end = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(positive_in_range)?;
+        self.emit(&[0x48, 0x89, 0xc8])?;
+        self.patch_forward_branch(negative_end)?;
+        self.patch_forward_branch(negative_result_end)?;
+        self.patch_forward_branch(positive_end)
     }
 
     fn emit_saturating_multiplication(&mut self) -> Result<(), CodegenError> {
@@ -13103,6 +13229,39 @@ mod tests {
                 CodegenErrorKind::RuntimeTypeMismatch,
             );
         }
+    }
+
+    #[test]
+    fn saturates_mixed_signedness_integer_arithmetic() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: u8) -> i8 { left.saturating_add_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i64, right: u64) -> i64 { left.saturating_sub_unsigned(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u16, right: i16) -> u16 { left.saturating_add_signed(right) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: u64, right: i64) -> u64 { left.saturating_sub_signed(right) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1536, 4, 128>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: i8, right: i8) -> i8 { left.saturating_add_unsigned(right) }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, X86_64Abi::Windows,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeTypeMismatch,
+        );
     }
 
     #[test]

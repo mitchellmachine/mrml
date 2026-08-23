@@ -413,6 +413,7 @@ pub enum ExprKind<'source> {
         base: ExprId,
         argument: ExprId,
         operator: BinaryOperator,
+        mixed_signedness: bool,
     },
     IntegerRotate {
         base: ExprId,
@@ -3946,6 +3947,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "strict_pow"
                         | "saturating_add"
                         | "saturating_sub"
+                        | "saturating_add_signed"
+                        | "saturating_sub_signed"
+                        | "saturating_add_unsigned"
+                        | "saturating_sub_unsigned"
                         | "saturating_mul"
                         | "saturating_div"
                         | "abs_diff"
@@ -4051,6 +4056,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "strict_pow"
                     | "saturating_add"
                     | "saturating_sub"
+                    | "saturating_add_signed"
+                    | "saturating_sub_signed"
+                    | "saturating_add_unsigned"
+                    | "saturating_sub_unsigned"
                     | "saturating_mul"
                     | "saturating_div"
                     | "div_euclid"
@@ -4218,21 +4227,32 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     strict: method.text.starts_with("strict_"),
                     mixed_signedness: false,
                 },
-                "saturating_add" | "saturating_sub" | "saturating_mul" | "saturating_div" => {
-                    ExprKind::SaturatingArithmetic {
-                        base,
-                        argument: argument.ok_or_else(|| {
-                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                        })?,
-                        operator: match method.text {
-                            "saturating_add" => BinaryOperator::Add,
-                            "saturating_sub" => BinaryOperator::Subtract,
-                            "saturating_mul" => BinaryOperator::Multiply,
-                            "saturating_div" => BinaryOperator::Divide,
-                            _ => unreachable!(),
-                        },
-                    }
-                }
+                "saturating_add"
+                | "saturating_sub"
+                | "saturating_add_signed"
+                | "saturating_sub_signed"
+                | "saturating_add_unsigned"
+                | "saturating_sub_unsigned"
+                | "saturating_mul"
+                | "saturating_div" => ExprKind::SaturatingArithmetic {
+                    base,
+                    argument: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    operator: match method.text {
+                        "saturating_add" | "saturating_add_signed" | "saturating_add_unsigned" => {
+                            BinaryOperator::Add
+                        }
+                        "saturating_sub" | "saturating_sub_signed" | "saturating_sub_unsigned" => {
+                            BinaryOperator::Subtract
+                        }
+                        "saturating_mul" => BinaryOperator::Multiply,
+                        "saturating_div" => BinaryOperator::Divide,
+                        _ => unreachable!(),
+                    },
+                    mixed_signedness: method.text.ends_with("_signed")
+                        || method.text.ends_with("_unsigned"),
+                },
                 "rotate_left" | "rotate_right" => ExprKind::IntegerRotate {
                     base,
                     distance: argument.ok_or_else(|| {
