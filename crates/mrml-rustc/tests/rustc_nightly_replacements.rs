@@ -2857,6 +2857,9 @@ fn rustc_checked_exact_division_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u32, b: u32, fallback: u32) -> u32 { a.checked_div_exact(b).unwrap_or(fallback) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64, b: i64, fallback: i64) -> i64 { a.checked_div_exact(b).unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u16, b: u16) -> u16 { a.checked_div_exact(b).unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64) -> bool { a.checked_div_exact(b).is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i32, b: i32) -> bool { a.checked_div_exact(b).is_none() }",
     ];
     for source in sources {
         assert_eq!(

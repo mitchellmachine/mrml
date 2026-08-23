@@ -517,7 +517,11 @@ pub enum ExprKind<'source> {
     },
     IntegerOptionUnwrapOr {
         option: ExprId,
-        fallback: ExprId,
+        fallback: Option<ExprId>,
+    },
+    IntegerOptionPredicate {
+        option: ExprId,
+        some: bool,
     },
     IntegerClampMagnitude {
         base: ExprId,
@@ -862,6 +866,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::UncheckedIntegerOperation { .. }
             | ExprKind::CheckedIntegerOption { .. }
             | ExprKind::IntegerOptionUnwrapOr { .. }
+            | ExprKind::IntegerOptionPredicate { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }
@@ -1145,6 +1150,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::UncheckedIntegerOperation { .. }
             | ExprKind::CheckedIntegerOption { .. }
             | ExprKind::IntegerOptionUnwrapOr { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerOptionPredicate { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerClampMagnitude { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerEndianFrom { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerFromBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2660,7 +2666,12 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
                 self.substitute_identifier(option, name, replacement, depth + 1)?;
-                self.substitute_identifier(fallback, name, replacement, depth + 1)?;
+                if let Some(fallback) = fallback {
+                    self.substitute_identifier(fallback, name, replacement, depth + 1)?;
+                }
+            }
+            ExprKind::IntegerOptionPredicate { option, .. } => {
+                self.substitute_identifier(option, name, replacement, depth + 1)?;
             }
             ExprKind::SaturatingArithmetic { base, argument, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
@@ -4403,6 +4414,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "unchecked_disjoint_bitor"
                         | "checked_div_exact"
                         | "unwrap_or"
+                        | "unwrap_or_default"
+                        | "is_some"
+                        | "is_none"
                         | "clamp_magnitude"
                         | "wrapping_shl"
                         | "wrapping_shr"
@@ -4874,9 +4888,17 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 },
                 "unwrap_or" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
-                    fallback: argument.ok_or_else(|| {
+                    fallback: Some(argument.ok_or_else(|| {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?,
+                    })?),
+                },
+                "unwrap_or_default" => ExprKind::IntegerOptionUnwrapOr {
+                    option: base,
+                    fallback: None,
+                },
+                "is_some" | "is_none" => ExprKind::IntegerOptionPredicate {
+                    option: base,
+                    some: method.text == "is_some",
                 },
                 "clamp_magnitude" => ExprKind::IntegerClampMagnitude {
                     base,

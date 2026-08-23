@@ -2327,8 +2327,11 @@ fn validate_runtime_inline_const<
         }
         ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
             recurse(option)?;
-            recurse(fallback)?;
+            if let Some(fallback) = fallback {
+                recurse(fallback)?;
+            }
         }
+        ExprKind::IntegerOptionPredicate { option, .. } => recurse(option)?,
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base)?;
             recurse(argument)?;
@@ -3332,16 +3335,8 @@ fn runtime_expression_type_with_locals<
                 base,
                 depth + 1,
             )?;
-            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
-                || runtime_expression_type_with_locals(
-                    function,
-                    resolver,
-                    locals,
-                    tree,
-                    argument,
-                    depth + 1,
-                )? != base_type
-                || !runtime_types_compatible(
+            let fallback_matches = if let Some(fallback) = fallback {
+                runtime_types_compatible(
                     runtime_expression_type_with_locals(
                         function,
                         resolver,
@@ -3352,10 +3347,57 @@ fn runtime_expression_type_with_locals<
                     )?,
                     base_type,
                 )
+            } else {
+                true
+            };
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    argument,
+                    depth + 1,
+                )? != base_type
+                || !fallback_matches
             {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)
+        }
+        ExprKind::IntegerOptionPredicate { option, .. } => {
+            let option = tree
+                .expression(option)
+                .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+            let ExprKind::CheckedIntegerOption {
+                base,
+                argument,
+                exact_division: true,
+            } = option.kind
+            else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            if !matches!(base_type, RuntimeExpressionType::Integer(Some(_)))
+                || runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    argument,
+                    depth + 1,
+                )? != base_type
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(RuntimeExpressionType::Bool)
         }
         ExprKind::SaturatingArithmetic {
             base,
@@ -5763,66 +5805,30 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
-                let option = tree
-                    .expression(option)
-                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                let ExprKind::CheckedIntegerOption {
-                    base,
-                    argument,
-                    exact_division: true,
-                } = option.kind
-                else {
-                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                };
-                let base_type = runtime_expression_type_with_locals(
-                    self.function,
-                    self.resolver,
-                    &self.locals[..self.saved_locals],
-                    tree,
-                    base,
-                    depth + 1,
-                )
-                .map_err(|kind| self.error(kind))?;
-                let operand_width = runtime_expression_width(base_type)
-                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
-                let previous_width = self.width;
-                self.width = operand_width;
-                self.emit_expression(tree, base, depth + 1)?;
-                self.emit(&[0x50])?;
-                self.evaluation_depth += 1;
-                self.emit_expression(tree, argument, depth + 1)?;
-                self.emit(&[0x59, 0x45, 0x31, 0xc0, 0x48, 0x85, 0xc0])?;
-                self.evaluation_depth -= 1;
-                let zero_divisor = self.emit_forward_branch(0x84)?;
-                let mut signed_overflow = None;
-                if operand_width.signed {
-                    self.emit(&[0x48, 0x83, 0xf8, 0xff])?;
-                    let ordinary_divisor = self.emit_forward_branch(0x85)?;
-                    self.emit(&[0x48, 0xba])?;
-                    self.emit(&(operand_width.minimum as u64).to_le_bytes())?;
-                    self.emit(&[0x48, 0x39, 0xd1])?;
-                    signed_overflow = Some(self.emit_forward_branch(0x84)?);
-                    self.patch_forward_branch(ordinary_divisor)?;
-                }
-                self.emit(&[0x48, 0x87, 0xc1])?;
-                if operand_width.signed {
-                    self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9])?;
-                } else {
-                    self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
-                }
-                self.emit(&[0x48, 0x85, 0xd2])?;
-                let remainder = self.emit_forward_branch(0x85)?;
-                self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
-                self.patch_forward_branch(zero_divisor)?;
-                if let Some(signed_overflow) = signed_overflow {
-                    self.patch_forward_branch(signed_overflow)?;
-                }
-                self.patch_forward_branch(remainder)?;
+                let (operand_width, previous_width) =
+                    self.emit_checked_integer_option(tree, option, depth + 1)?;
                 self.emit(&[0x50, 0x41, 0x50])?;
                 self.evaluation_depth += 2;
-                self.emit_expression(tree, fallback, depth + 1)?;
+                if let Some(fallback) = fallback {
+                    self.emit_expression(tree, fallback, depth + 1)?;
+                } else {
+                    self.emit(&[0x31, 0xc0])?;
+                }
                 self.emit(&[0x41, 0x58, 0x59, 0x4d, 0x85, 0xc0, 0x48, 0x0f, 0x45, 0xc1])?;
                 self.evaluation_depth -= 2;
+                self.width = operand_width;
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerOptionPredicate { option, some } => {
+                let (_, previous_width) =
+                    self.emit_checked_integer_option(tree, option, depth + 1)?;
+                self.emit(&[0x4c, 0x89, 0xc0])?;
+                if !some {
+                    self.emit(&[0x48, 0x83, 0xf0, 1])?;
+                }
+                self.width = runtime_width("u64")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -10603,6 +10609,70 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         self.emit_normalize()
     }
 
+    fn emit_checked_integer_option<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        option: crate::ExprId,
+        depth: usize,
+    ) -> Result<(RuntimeWidth, RuntimeWidth), CodegenError> {
+        let option = tree
+            .expression(option)
+            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        let ExprKind::CheckedIntegerOption {
+            base,
+            argument,
+            exact_division: true,
+        } = option.kind
+        else {
+            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+        };
+        let base_type = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            base,
+            depth + 1,
+        )
+        .map_err(|kind| self.error(kind))?;
+        let operand_width = runtime_expression_width(base_type)
+            .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+        let previous_width = self.width;
+        self.width = operand_width;
+        self.emit_expression(tree, base, depth + 1)?;
+        self.emit(&[0x50])?;
+        self.evaluation_depth += 1;
+        self.emit_expression(tree, argument, depth + 1)?;
+        self.emit(&[0x59, 0x45, 0x31, 0xc0, 0x48, 0x85, 0xc0])?;
+        self.evaluation_depth -= 1;
+        let zero_divisor = self.emit_forward_branch(0x84)?;
+        let mut signed_overflow = None;
+        if operand_width.signed {
+            self.emit(&[0x48, 0x83, 0xf8, 0xff])?;
+            let ordinary_divisor = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&(operand_width.minimum as u64).to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd1])?;
+            signed_overflow = Some(self.emit_forward_branch(0x84)?);
+            self.patch_forward_branch(ordinary_divisor)?;
+        }
+        self.emit(&[0x48, 0x87, 0xc1])?;
+        if operand_width.signed {
+            self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9])?;
+        } else {
+            self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
+        }
+        self.emit(&[0x48, 0x85, 0xd2])?;
+        let remainder = self.emit_forward_branch(0x85)?;
+        self.emit(&[0x41, 0xb8, 1, 0, 0, 0])?;
+        self.patch_forward_branch(zero_divisor)?;
+        if let Some(signed_overflow) = signed_overflow {
+            self.patch_forward_branch(signed_overflow)?;
+        }
+        self.patch_forward_branch(remainder)?;
+        Ok((operand_width, previous_width))
+    }
+
     fn emit_binary(&mut self, operator: crate::BinaryOperator) -> Result<(), CodegenError> {
         use crate::BinaryOperator::*;
         match operator {
@@ -15235,6 +15305,9 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, b: u32, fallback: u32) -> u32 { a.checked_div_exact(b).unwrap_or(fallback) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: i64, fallback: i64) -> i64 { a.checked_div_exact(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u16, b: u16) -> u16 { a.checked_div_exact(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> bool { a.checked_div_exact(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32) -> bool { a.checked_div_exact(b).is_none() }",
         ] {
             let module = Parser::new(source).parse_module::<4, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
@@ -15251,6 +15324,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div_exact(b).unwrap_or(0) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_div_exact(b).unwrap_or(0) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> bool { a.checked_div_exact(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_div_exact(b).is_none() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

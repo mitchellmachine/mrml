@@ -340,6 +340,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::UncheckedIntegerOperation { .. }
             | ExprKind::CheckedIntegerOption { .. }
             | ExprKind::IntegerOptionUnwrapOr { .. }
+            | ExprKind::IntegerOptionPredicate { .. }
             | ExprKind::IntegerClampMagnitude { .. }
             | ExprKind::IntegerEndianFrom { .. }
             | ExprKind::IntegerFromBytes { .. }

@@ -2082,8 +2082,10 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
         ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
-            recurse(option, inside_inline_const) || recurse(fallback, inside_inline_const)
+            recurse(option, inside_inline_const)
+                || fallback.is_some_and(|fallback| recurse(fallback, inside_inline_const))
         }
+        ExprKind::IntegerOptionPredicate { option, .. } => recurse(option, inside_inline_const),
         ExprKind::SaturatingArithmetic { base, argument, .. } => {
             recurse(base, inside_inline_const) || recurse(argument, inside_inline_const)
         }
@@ -2245,8 +2247,9 @@ fn expression_contains_call<const MAX_NODES: usize>(
         } => recurse(base) || argument.is_some_and(recurse) || second_argument.is_some_and(recurse),
         ExprKind::CheckedIntegerOption { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerOptionUnwrapOr { option, fallback } => {
-            recurse(option) || recurse(fallback)
+            recurse(option) || fallback.is_some_and(recurse)
         }
+        ExprKind::IntegerOptionPredicate { option, .. } => recurse(option),
         ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerFunnelShift {
