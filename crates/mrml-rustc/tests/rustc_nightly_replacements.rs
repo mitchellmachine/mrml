@@ -3470,6 +3470,7 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "fn adjust(value: u16, choose: bool) -> u64 { let mut total: u16 = value; if choose { let delta: u16 = 3; total += delta; } else if value > 10 { total *= 2; } else { total += 1; } total as u64 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u16, choose: bool) -> u64 { adjust(value, choose) + 5 }",
         "fn adjust(value: u64, choose: bool) -> u64 { let mut total: u64 = value; if choose { let delta: u64 = 3; total += delta; return total; } else if value > 10 { total *= 2; } else { total += 1; } total } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u64, choose: bool) -> u64 { adjust(value, choose) + 5 }",
         "fn sum_to(limit: u64) -> u64 { let mut index: u64 = 0; let mut total: u64 = 0; while index < limit { let current: u64 = index; total += current; index += 1; } total } #[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u64) -> u64 { sum_to(limit) + 1 }",
+        "fn odd_sum_until(limit: u64) -> u64 { let mut index: u64 = 0; let mut total: u64 = 0; while index < limit { index += 1; let current: u64 = index; if current % 2 == 0 { continue; } total += current; if total > 20 { break; } } total } #[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u64) -> u64 { odd_sum_until(limit) + 1 }",
     ];
     for source in sources {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
