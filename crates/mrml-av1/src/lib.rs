@@ -442,6 +442,8 @@ pub enum Error {
     MissingSequence,
     MissingReference,
     MissingAnchorFrame,
+    NvDecoderUnavailable,
+    NvEncoderUnavailable,
     LimitExceeded,
 }
 
@@ -487,6 +489,12 @@ impl fmt::Display for Error {
             Self::MissingReference => f.write_str("required AV1 reference frame is unavailable"),
             Self::MissingAnchorFrame => {
                 f.write_str("required external AV1 anchor frame is unavailable")
+            }
+            Self::NvDecoderUnavailable => {
+                f.write_str("NVIDIA decoder backend is unavailable or not initialized")
+            }
+            Self::NvEncoderUnavailable => {
+                f.write_str("NVIDIA encoder backend is unavailable or not initialized")
             }
             Self::LimitExceeded => f.write_str("configured decoder limit exceeded"),
         }
