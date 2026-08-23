@@ -2925,8 +2925,10 @@ remain outside this slice.
 Scalar local initializers use the same bounded visitor before the declared
 binding enters the active environment. Reads in a shadowing initializer retain
 the previous binding's stable ID; the replacement binding receives its new ID
-afterward. Aggregate and fat-reference initializer materialization remains an
-emission-time fact family.
+afterward. Direct array literals, single-evaluation array repeats, and tuple
+literals now plan their scalar operand reads in exact materialization order.
+Aggregate copies, conditional aggregates, and fat-reference initializer
+materialization remain emission-time fact families.
 Supported scalar expression statements now use that visitor at top level,
 inside conditional arms, in direct and nested loop actions, and after loops.
 Their reads are reserved in exact scoped emission order without introducing a
@@ -2991,6 +2993,14 @@ WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
 nested entry condition, controls before and after a nested local declaration,
 conditional return value, later assignment RHS, and final tail. Its original
 replacement emits both COFF and ELF64 objects through the same ordered controls.
+
+The literal aggregate-read milestone passed all 586 compiler and driver tests
+on Windows gnullvm and all 586 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts. Its adversarial unit test proves 14 exact
+read identities across a single-evaluation array repeat, an array literal with
+runtime local-array indexing and a lazy conditional element, a tuple literal,
+and the scalar tuple-field tail. Its original replacement emits both COFF and
+ELF64 objects through the same materialization shapes.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

@@ -209,7 +209,10 @@ The same bounded visitor now runs for scalar local initializers before the new
 binding enters the active environment. Sequential and scoped shadowing therefore
 records reads against the previous binding identity; the replacement binding
 receives its monotonic ID only after initializer emission. Aggregate and fat-
-reference initializers retain their specialized emission-time materialization.
+reference initializers retain their specialized emission-time materialization,
+except that direct array literals, single-evaluation array repeats, and tuple
+literals now preanalyze their scalar operands in the same order as stack
+materialization.
 The visitor also runs for every supported scalar expression statement at the
 top level, in conditional arms, in direct and nested loop actions, and after
 loops. Each statement is parsed once and its reads are reserved against the
@@ -243,9 +246,10 @@ by the supported runtime body and loop parsers, plus root-place and supported
 nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
-It does not yet preanalyze compound array-base materialization, aggregate/fat-
-reference initializers or returns, method/call, aggregate tails, or other body
-reads, or replace name lookup across the whole body. Expanded
+It does not yet preanalyze compound array-base materialization, aggregate copies,
+conditional aggregate values, fat-reference initializers or returns, method/call,
+aggregate tails, or other body reads, or replace name lookup across the whole
+body. Expanded
 inlined-helper locals still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of

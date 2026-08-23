@@ -77,7 +77,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   local-array element read, and every runtime local-array materialization read
   before its runtime index; and
 - scalar local-initializer read planning before binding activation, preserving
-  previous-binding identity across sequential and scoped shadowing; and
+  previous-binding identity across sequential and scoped shadowing, including
+  source-ordered scalar operands of direct array literals, single-evaluation
+  array repeats, and tuple literals; and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
   statements in the emitter's exact scoped order; and
@@ -132,8 +134,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 584 tests on each host: 322
-library tests, 10 conformance tests, 250 replacement tests, and 2 driver tests.
+The checkpoint source passed 586 tests on each host: 323
+library tests, 10 conformance tests, 251 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
