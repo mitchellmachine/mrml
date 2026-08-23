@@ -2244,6 +2244,24 @@ fn rustc_integer_div_ceil_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_integer_div_floor_reaches_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.div_floor(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i8, right: i8) -> i8 { left.div_floor(right) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: i64, right: i64) -> i64 { left.div_floor(right) }",
+        "const VALUE: i8 = (-7i8).div_floor(4); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> i8 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_integer_next_multiple_of_reaches_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(left: u8, right: u8) -> u8 { left.next_multiple_of(right) }",

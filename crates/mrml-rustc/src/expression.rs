@@ -542,6 +542,7 @@ pub enum IntegerBitTransform {
 pub enum IntegerPairTransform {
     AbsoluteDifference,
     Midpoint,
+    DivideFloor,
     DivideCeiling,
     NextMultiple,
 }
@@ -3955,6 +3956,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "saturating_div"
                         | "abs_diff"
                         | "midpoint"
+                        | "div_floor"
                         | "div_ceil"
                         | "next_multiple_of"
                         | "count_ones"
@@ -4078,6 +4080,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "pow"
                     | "abs_diff"
                     | "midpoint"
+                    | "div_floor"
                     | "div_ceil"
                     | "next_multiple_of"
                     | "offset"
@@ -4297,7 +4300,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     binary: method.text == "ilog2",
                 },
                 "unsigned_abs" => ExprKind::IntegerUnsignedAbsolute { base },
-                "abs_diff" | "midpoint" | "div_ceil" | "next_multiple_of" => {
+                "abs_diff" | "midpoint" | "div_floor" | "div_ceil" | "next_multiple_of" => {
                     ExprKind::IntegerPairTransform {
                         base,
                         other: argument.ok_or_else(|| {
@@ -4306,6 +4309,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         transform: match method.text {
                             "abs_diff" => IntegerPairTransform::AbsoluteDifference,
                             "midpoint" => IntegerPairTransform::Midpoint,
+                            "div_floor" => IntegerPairTransform::DivideFloor,
                             "div_ceil" => IntegerPairTransform::DivideCeiling,
                             "next_multiple_of" => IntegerPairTransform::NextMultiple,
                             _ => unreachable!(),

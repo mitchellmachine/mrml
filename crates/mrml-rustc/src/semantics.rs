@@ -2700,6 +2700,10 @@ fn evaluate_call_aware_integer<
                 crate::expression::IntegerPairTransform::Midpoint => {
                     midpoint_integer_bits(left, right, base_bits, base_type.is_signed())
                 }
+                crate::expression::IntegerPairTransform::DivideFloor => {
+                    divide_floor_integer_bits(left, right, base_bits, base_type.is_signed())
+                        .map_err(arithmetic_error)?
+                }
                 crate::expression::IntegerPairTransform::DivideCeiling => {
                     divide_ceiling_integer_bits(left, right, base_bits, base_type.is_signed())
                         .map_err(arithmetic_error)?
@@ -3893,6 +3897,33 @@ fn divide_ceiling_integer_bits(
     let remainder = left.checked_rem(right).ok_or(ConstEvalError::Overflow)?;
     let result = if remainder != 0 && (left < 0) == (right < 0) {
         quotient.checked_add(1).ok_or(ConstEvalError::Overflow)?
+    } else {
+        quotient
+    };
+    encode_signed(result, bits).map_err(|error| match error {
+        ExecutionError::Arithmetic(error) => error,
+        _ => ConstEvalError::InvalidExpressionTree,
+    })
+}
+
+fn divide_floor_integer_bits(
+    left: u128,
+    right: u128,
+    bits: u8,
+    signed: bool,
+) -> Result<u128, ConstEvalError> {
+    if right == 0 {
+        return Err(ConstEvalError::DivisionByZero);
+    }
+    if !signed {
+        return Ok(left / right);
+    }
+    let left = decode_signed(left, bits);
+    let right = decode_signed(right, bits);
+    let quotient = left.checked_div(right).ok_or(ConstEvalError::Overflow)?;
+    let remainder = left.checked_rem(right).ok_or(ConstEvalError::Overflow)?;
+    let result = if remainder != 0 && (left < 0) != (right < 0) {
+        quotient.checked_sub(1).ok_or(ConstEvalError::Overflow)?
     } else {
         quotient
     };

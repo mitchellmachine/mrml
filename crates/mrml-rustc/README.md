@@ -2037,6 +2037,12 @@ toward zero for signed values, including odd negative sums, without widening
 or allocating. Four linked System V objects matched pinned Rust across operand
 orders, exact and fractional averages, mixed signs, and narrow/full-width
 extrema.
+Primitive `div_floor` supports ordinary unsigned division and the pinned
+nightly's `int_roundings` signed form. Signed results round toward negative
+infinity when a nonzero remainder has the opposite sign from the divisor;
+division by zero and signed minimum divided by negative one trap. Signed 8- and
+64-bit System V objects of 560 bytes each matched pinned Rust across every
+operand-sign pairing, zero, and signed minima with ordinary divisors.
 Primitive `div_ceil` supports stable unsigned integers and the pinned nightly's
 `int_roundings` signed form. It returns the quotient rounded toward positive
 infinity, requires a same-typed divisor, and traps on division by zero or signed
