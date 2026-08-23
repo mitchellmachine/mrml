@@ -367,6 +367,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::IntegerOptionOrElse { .. }
             | ExprKind::IntegerOptionOr { .. }
             | ExprKind::IntegerOptionXor { .. }
+            | ExprKind::IntegerOptionAnd { .. }
             | ExprKind::IntegerOptionInspect { .. }
             | ExprKind::IntegerOptionFilter { .. }
             | ExprKind::IntegerClampMagnitude { .. }

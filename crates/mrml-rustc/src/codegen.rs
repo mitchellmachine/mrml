@@ -2394,6 +2394,13 @@ fn validate_runtime_inline_const<
             recurse(option)?;
             recurse(alternative)?;
         }
+        ExprKind::IntegerOptionAnd {
+            option,
+            alternative,
+        } => {
+            recurse(option)?;
+            recurse(alternative)?;
+        }
         ExprKind::IntegerOptionInspect { option, closure } => {
             recurse(option)?;
             recurse(closure)?;
@@ -2634,6 +2641,21 @@ fn checked_option_integer_type<
         return (alternative_type == input_type)
             .then_some(input_type)
             .ok_or(CodegenErrorKind::RuntimeTypeMismatch);
+    }
+    if let ExprKind::IntegerOptionAnd {
+        option,
+        alternative,
+    } = expression.kind
+    {
+        checked_option_integer_type(function, resolver, locals, tree, option, depth + 1)?;
+        return checked_option_integer_type(
+            function,
+            resolver,
+            locals,
+            tree,
+            alternative,
+            depth + 1,
+        );
     }
     if let ExprKind::IntegerOptionInspect { option, closure } = expression.kind {
         let input_type =
@@ -3647,6 +3669,7 @@ fn runtime_expression_type_with_locals<
                         | ExprKind::IntegerOptionOrElse { .. }
                         | ExprKind::IntegerOptionOr { .. }
                         | ExprKind::IntegerOptionXor { .. }
+                        | ExprKind::IntegerOptionAnd { .. }
                 )
             ) {
                 let result_type =
@@ -3667,7 +3690,8 @@ fn runtime_expression_type_with_locals<
                     | ExprKind::IntegerOptionAndThen { option, .. }
                     | ExprKind::IntegerOptionOrElse { option, .. }
                     | ExprKind::IntegerOptionOr { option, .. }
-                    | ExprKind::IntegerOptionXor { option, .. } => option,
+                    | ExprKind::IntegerOptionXor { option, .. }
+                    | ExprKind::IntegerOptionAnd { option, .. } => option,
                     _ => unreachable!(),
                 };
                 let mut producer_tree = *tree;
@@ -4070,13 +4094,15 @@ fn runtime_expression_type_with_locals<
                     | ExprKind::IntegerOptionOrElse { .. }
                     | ExprKind::IntegerOptionOr { .. }
                     | ExprKind::IntegerOptionXor { .. }
+                    | ExprKind::IntegerOptionAnd { .. }
             ) {
                 let producer = match option_expression.kind {
                     ExprKind::IntegerOptionMap { option, .. }
                     | ExprKind::IntegerOptionAndThen { option, .. }
                     | ExprKind::IntegerOptionOrElse { option, .. }
                     | ExprKind::IntegerOptionOr { option, .. }
-                    | ExprKind::IntegerOptionXor { option, .. } => option,
+                    | ExprKind::IntegerOptionXor { option, .. }
+                    | ExprKind::IntegerOptionAnd { option, .. } => option,
                     _ => unreachable!(),
                 };
                 let input_type = checked_option_integer_type(
@@ -4592,6 +4618,10 @@ fn runtime_expression_type_with_locals<
             Err(CodegenErrorKind::RuntimeExpressionUnsupported)
         }
         ExprKind::IntegerOptionXor { .. } => {
+            checked_option_integer_type(function, resolver, locals, tree, id, depth + 1)?;
+            Err(CodegenErrorKind::RuntimeExpressionUnsupported)
+        }
+        ExprKind::IntegerOptionAnd { .. } => {
             checked_option_integer_type(function, resolver, locals, tree, id, depth + 1)?;
             Err(CodegenErrorKind::RuntimeExpressionUnsupported)
         }
@@ -7291,6 +7321,9 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::IntegerOptionXor { .. } => {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            ExprKind::IntegerOptionAnd { .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::IntegerOptionInspect { .. } => {
@@ -12360,6 +12393,35 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.evaluation_depth -= 2;
             self.width = input_width;
             return Ok((input_width, previous_width));
+        }
+        if let ExprKind::IntegerOptionAnd {
+            option: producer,
+            alternative,
+        } = option.kind
+        {
+            checked_option_integer_type(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                producer,
+                depth + 1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let (_, previous_width) =
+                self.emit_checked_integer_option(tree, producer, depth + 1)?;
+            self.emit(&[0x41, 0x50])?;
+            self.evaluation_depth += 1;
+            let (output_width, _) =
+                self.emit_checked_integer_option(tree, alternative, depth + 1)?;
+            self.emit(&[0x48, 0x83, 0x3c, 0x24, 0])?;
+            let original_some = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x45, 0x31, 0xc0])?;
+            self.patch_forward_branch(original_some)?;
+            self.emit(&[0x48, 0x83, 0xc4, 0x08])?;
+            self.evaluation_depth -= 1;
+            self.width = output_width;
+            return Ok((output_width, previous_width));
         }
         if let ExprKind::IntegerOptionInspect {
             option: producer,
@@ -18815,6 +18877,44 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, fallback: u16) -> u8 { a.checked_add(b).xor(fallback.checked_add(1)).unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).xor(1u8).unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).xor().unwrap_or_default() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 4096, 4, 192>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn sequences_checked_integer_options_eagerly() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, fallback: u16) -> u16 { a.checked_add(b).and(fallback.checked_mul(1000)).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8, b: i8, fallback: i64) -> i64 { a.checked_mul(b).and(fallback.checked_abs()).map(|value| value + 1).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64, fallback: i16) -> bool { a.checked_signed_diff(b).and(fallback.checked_abs()).is_some_and(|value| value > 10) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 4096, 4, 192>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).and(1u8).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).and().unwrap_or_default() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

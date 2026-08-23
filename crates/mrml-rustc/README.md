@@ -1198,7 +1198,7 @@ cargo +nightly-x86_64-pc-windows-gnullvm check -p mrml-rustc `
   --target nvptx64-nvidia-cuda --offline
 ```
 
-The 543 Windows library, conformance, rustc-nightly-replacement, and driver
+The 545 Windows library, conformance, rustc-nightly-replacement, and driver
 tests passed.
 A checked-option `and_then` probe emitted a 261-byte COFF object and a 656-byte
 ELF64 object. Independent pinned-nightly callers observed the mapped value 60,
@@ -1216,6 +1216,11 @@ An eager checked-option `xor` probe emitted a 271-byte COFF object and a
 664-byte ELF64 object. Independent pinned-nightly callers exercised the full
 validity truth table: left-only and right-only `Some` selected their respective
 values, while both-`Some` and both-`None` produced `None` on both hosts.
+An eager cross-width checked-option `and` probe emitted a 248-byte COFF object
+and a 640-byte ELF64 object. Independent pinned-nightly callers observed the
+right-hand `u16` value only when both the left `u8` and right `u16` producers
+succeeded; either failure and the combined failure produced `None` on both
+hosts.
 A release driver emitted a 93-byte COFF object. Rust's bundled `rust-lld`
 accepted it as the sole input to a 1 KiB PE executable with `/entry:answer
 /subsystem:console /nodefaultlib`; the resulting executable returned status 42.
@@ -2494,6 +2499,13 @@ producers with the same integer payload type. Both operands are evaluated in
 source order, and the result remains present only when exactly one operand is
 present. If both succeed or both fail, the result is `None`; otherwise the
 successful operand's value remains available to later option combinators.
+
+Checked integer options support eager `Option::and` with a second checked
+producer. Both operands execute in source order even when the receiver is
+`None`. A present receiver yields the alternative option; an absent receiver
+forces `None` after the alternative has executed. The alternative may use a
+different built-in integer payload type, and that type is retained through
+later option combinators and terminal consumers.
 
 Checked integer options also support composable `Option::inspect`. Its closure
 receives an immutable reference to a present candidate, must return unit, and
