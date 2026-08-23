@@ -2383,6 +2383,70 @@ fn preanalyze_runtime_local_binding<
             &tree,
             local.initializer_span,
         )?;
+    } else if (runtime_type_is_array(ty) || runtime_type_is_tuple(ty))
+        && let Some(ExprKind::Identifier(name)) = tree
+            .expression(tree.root())
+            .map(|expression| expression.kind)
+    {
+        let (base, base_type) = locals
+            .iter()
+            .rev()
+            .flatten()
+            .find(|candidate| candidate.name == name)
+            .map(|candidate| (RuntimePlaceIdentity::Local(candidate.id), candidate.ty))
+            .or_else(|| {
+                function
+                    .parameters()
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                    .find(|(_, parameter)| parameter.name == name)
+                    .and_then(|(index, parameter)| {
+                        runtime_type_from_text(parameter.ty.text)
+                            .map(|ty| (RuntimePlaceIdentity::Parameter(index), ty))
+                    })
+            })
+            .ok_or(CodegenError {
+                kind: CodegenErrorKind::UnknownRuntimeName,
+                span: local.initializer_span,
+            })?;
+        let root_span = tree
+            .expression(tree.root())
+            .ok_or(CodegenError {
+                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                span: local.initializer_span,
+            })?
+            .span;
+        let (projection, read_count) = match ty {
+            RuntimeExpressionType::Array { count, .. } => (RuntimePlaceProjection::Index, count),
+            RuntimeExpressionType::Tuple { element_count, .. } => {
+                (RuntimePlaceProjection::TupleField(0), element_count)
+            }
+            _ => {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::RuntimeTypeMismatch,
+                    span: local.initializer_span,
+                });
+            }
+        };
+        for field in 0..read_count {
+            let projection = match projection {
+                RuntimePlaceProjection::TupleField(_) => RuntimePlaceProjection::TupleField(field),
+                other => other,
+            };
+            facts
+                .push_assignment_read(RuntimePlaceAccessFact {
+                    base,
+                    projections: RuntimePlaceProjections::single(projection),
+                    ty: base_type,
+                    access: RuntimePlaceAccess::Read,
+                    span: root_span,
+                })
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: local.initializer_span,
+                })?;
+        }
     }
     if local.name == "_" {
         return Ok(());
@@ -18685,6 +18749,62 @@ mod tests {
         ]) {
             assert_eq!(fact.unwrap().base, identity);
         }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_aggregate_copy_projections() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(values: [u16; 3], first: u16, second: u16) -> u16 { let copied: [u16; 3] = values; let pair: (u16, u16) = (first, second); let pair_copy: (u16, u16) = pair; pair_copy.1 }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(facts.assignment_read_count, 8);
+        for index in 0..3 {
+            let fact = facts.assignment_reads[index].unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(0));
+            assert_eq!(
+                fact.projections,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::Index)
+            );
+        }
+        assert_eq!(
+            facts.assignment_reads[3].unwrap().base,
+            RuntimePlaceIdentity::Parameter(1)
+        );
+        assert_eq!(
+            facts.assignment_reads[4].unwrap().base,
+            RuntimePlaceIdentity::Parameter(2)
+        );
+        for (index, field) in [(5, 0), (6, 1)] {
+            let fact = facts.assignment_reads[index].unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Local(RuntimeLocalId(1)));
+            assert_eq!(
+                fact.projections,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field))
+            );
+        }
+        assert_eq!(
+            facts.assignment_reads[7].unwrap().base,
+            RuntimePlaceIdentity::Local(RuntimeLocalId(2))
+        );
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
