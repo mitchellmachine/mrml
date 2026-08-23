@@ -29,13 +29,15 @@ into a functional commit.
 ## 2. Reconstruct intent
 
 Read `AGENTS.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
-`docs/APPLICATION_PLATFORM.md`, this file, `docs/ROADMAP.md`, and
-`docs/MICROKERNEL.md` completely. Then inspect recent history for the affected
+`docs/APPLICATION_PLATFORM.md`, `docs/COMPILER.md`, this file,
+`docs/ROADMAP.md`, and `docs/MICROKERNEL.md` completely. Then inspect recent
+history for the affected
 subsystem. README gives repository-wide rules; ARCHITECTURE gives stable
 direction; SECURITY gives normative boundaries; APPLICATION_PLATFORM gives the
-native/VM/browser/GUI/AI contract; ROADMAP gives dependency order; MICROKERNEL
-is the detailed dated evidence ledger. Source and tests decide whether a stated
-item actually exists.
+native/VM/browser/GUI/AI contract; COMPILER gives the future-Rust compatibility,
+analysis, profile, and oracle direction; ROADMAP gives dependency order;
+MICROKERNEL is the detailed dated evidence ledger. Source and tests decide
+whether a stated item actually exists.
 
 If documents disagree, prefer in this order for factual implementation status:
 
@@ -63,6 +65,9 @@ explicitly and downgrade the status rather than guessing.
   `scheduler.rs`, `task_runtime.rs`, `service_lifecycle.rs`.
 - Compiler: `crates/mrml-rustc/`, `crates/mrml-rustc-driver/`; never infer a
   complete compiler or application ABI from supported subset code generation.
+  Read `docs/COMPILER.md` and every record under `docs/compiler/oracles/` before
+  selecting compiler work. Recover the future-Rust direction, not an assumed
+  obligation to reproduce old editions or arbitrary historical rustc behavior.
 - Host browser automation: `crates/mrml-tools/src/browser.rs` and `web.rs`; this
   is not an MRML browser engine, compositor, or OS application implementation.
 - Application/GUI/browser OS work: search the whole tree; absence is meaningful
@@ -109,6 +114,13 @@ right names.
 Use `rg` to locate definitions, callers, tests, TODOs, probe modes, and feature
 gates. Inspect manifests and the pinned toolchain before assuming build targets.
 
+For compiler recovery, verify the exact oracle version, full commit, date,
+edition/default behavior, Polonius state, trait-solver state, relevant unstable
+features, semantic deltas, and corpus result from its generation record. Never
+substitute whichever nightly is installed. If advancing the oracle, retain the
+old record, run both generations, classify every delta, change semantics only
+deliberately, and retain original regression probes.
+
 ## 4. Select the next work
 
 Compare the current source and tests with the first incomplete security gate in
@@ -116,6 +128,13 @@ ROADMAP. Choose the smallest coherent end-to-end milestone that advances that
 gate and can be tested in the available environments. Preserve backend-neutral
 policy and both WHP/KVM adapters. Do not skip service-foundation dependencies to
 implement attractive high-level policy prematurely.
+
+For the independent compiler lane, compare current source and tests with the
+dependency order in `docs/COMPILER.md`. Prefer the typed ownership/place/CFG,
+Polonius-direction borrowing, modern trait solver, post-2024 systems features,
+profiles, and security-metadata path over historical compatibility work. Treat
+Rust 2024 as a floor, keep unsupported semantics fail-closed, and never attempt
+the complete borrow checker or trait solver in one patch.
 
 Restore the project work-in-progress limit after context loss: select exactly
 one foundational OS milestone. At most one separately scoped compiler milestone

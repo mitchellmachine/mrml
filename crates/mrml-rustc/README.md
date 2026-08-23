@@ -5,10 +5,22 @@ MRML. It is being bootstrapped against the observable behavior of the pinned
 Rust nightly while remaining suitable for MRML's `no_std`, no-global-`alloc`
 environment.
 
+The long-term target is contemporary and forward-looking Rust semantics with
+MRML-specific security and systems integration. Rust 2024 is the floor, not the
+destination. The compiler does not promise Rust 2015/2018/2021, every stable or
+nightly release, historical unsoundness, rustc implementation quirks,
+diagnostic wording, or unstable Rust ABI/symbol compatibility. It remains a
+Rust compiler and must not deliberately break modern Rust merely to diverge.
+The normative feature classifications, Polonius and trait-solver prerequisites,
+security profiles, gap matrix, and priority rules are in
+[`docs/COMPILER.md`](../../docs/COMPILER.md).
+
 The initial reference compiler is `rustc 1.100.0-nightly`, commit
 `f7d782a3be46d6bb4b9792fe69a61db389ba1769` (2026-08-19). The rustup `rust-src`
 component does not contain the rustc compiler suites, so the matching official
-`rust-lang/rust` commit is the test source of truth. Consequently:
+`rust-lang/rust` commit is the test source of truth. Its durable generation
+record is [`ORACLE-0001`](../../docs/compiler/oracles/ORACLE-0001.md).
+Consequently:
 
 - `tests/conformance.rs` records original black-box language observations used
   to bootstrap and later regression-test the MRML compiler.
@@ -21,6 +33,14 @@ component does not contain the rustc compiler suites, so the matching official
 - The current upstream nightly is only the stage-zero oracle. Each test must
   eventually run through an MRML-owned parser, type checker, lowering pipeline,
   code generator, and test runner.
+
+An oracle generation is exact and reproducible; whichever nightly is installed
+today is not a substitute. Future generations retain earlier metadata, rerun
+the corpus against both versions, classify semantic differences, and update
+MRML behavior only deliberately. Modern successor semantics take priority over
+legacy behavior unless current MRML source or a required probe depends on it.
+Unsupported borrowing, traits, provenance, unsafe behavior, ABI, assembly,
+const evaluation, control flow, and security metadata continue to fail closed.
 
 The implemented bootstrap grammar currently recognizes module-level `fn`, `const fn`,
 typed `const`, and immutable typed `static` items, optional `pub`, named typed parameters, optional return
@@ -2762,9 +2782,10 @@ Object-emission tests additionally cover singleton and unit-element tuples,
 typed local reassignment, count and element mismatches, out-of-range fields,
 the four-element capacity boundary, and rejection at both public parameter and
 return ABI boundaries. Tuple elements are limited to built-in
-integers, Boolean, character, and unit; tuple nesting, destructuring, field
-mutation, references in tuples, ownership, and public tuple ABI transport are
-not claimed.
+integers, Boolean, character, and unit; tuple nesting, destructuring, references
+in tuples, ownership, and public tuple ABI transport are not claimed. Numeric
+fields of mutable local tuples support the separately evidenced bounded stores
+below.
 A tuple-control probe produced an 854-byte COFF object and a 1248-byte ELF64
 object. Independent pinned-nightly callers matched four conditional and
 value-loop paths on Windows and Arch Linux. Its helper condition toggled a

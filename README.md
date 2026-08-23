@@ -24,7 +24,7 @@ drop-in replacement for mature codec and inference ecosystems.
 | Microkernel | PE32+ x86_64 kernel, UEFI handoff, page tables, GDT/IDT/TSS, CPL3 tasks, APIC timer, preemption, capabilities, IPC, fault retirement, SMP, and service lifecycle | Booting research kernel with signed QEMU, KVM, and WHP probes; not production ready |
 | Virtualization | Common VM policy plus native KVM and Hyper-V/WHP launchers, signed launch manifests, isolated guest memory, interrupt handling, and authenticated queues | Development and benchmark harnesses; a compromised host remains authoritative |
 | Mediated GPU | Authenticated rings, signed kernels, capabilities, quotas, watchdogs, reset, CPU fallback, fail-stop EPT/VT-d, checked DMAR/MCFG, complete-route proofs, one-shot MMIO ownership, generation-checked domain authority, root-race-checked direct tables, and fail-closed all-unit assembly | Register and benchmark plumbing exist; physical execution and hardware IOMMU validation, plus near-native in-VM CUDA, remain unfinished |
-| Rust compiler | Original lexer, parser, semantic analysis, constant evaluation, code generation, and source-to-object driver for a documented Rust subset | Experimental subset, not a complete `rustc` replacement |
+| Rust compiler | Original forward-looking Rust lexer, parser, semantic analysis, constant evaluation, code generation, and source-to-object driver for a documented subset | Experimental contemporary/future-Rust subset, not a complete `rustc` replacement |
 | Git | Original repository, index, object, pack, ref, diff, checkout, commit, SSH transport, and signing functionality | Useful native client with documented unsupported Git features |
 | AV1 | Original parser, transform, prediction, reconstruction, and encoder/decoder work | Active conformance work; do not claim complete AV1 interoperability yet |
 | Opus | Original range coding, SILK/CELT primitives, packet handling, and encoder/decoder work | Active implementation and conformance work; not yet a production codec claim |
@@ -234,7 +234,8 @@ remain unfinished.
 - `mrml-cli`, `mrml-machine`, `mrml-server`, `mrml-agent`, `mrml-tools`:
   interactive, automated, server, and agent interfaces.
 - `mrml-rustc`, `mrml-rustc-driver`: original Rust language subset and object
-  compiler.
+  compiler. Its future-Rust compatibility, analysis, profile, and oracle policy
+  is in [COMPILER.md](docs/COMPILER.md).
 - `mrml-git`, `mrml-ssh`: repository management, transport, and signing.
 - `mrml-av1`, `mrml-opus`: native video and audio codec work.
 - `mrml-http`, `mrml-tls`, `mrml-crypto`, `mrml-sign`: native protocol,
@@ -245,7 +246,10 @@ remain unfinished.
 
 ## Build and run
 
-MRML uses Rust 2024 and the pinned nightly in `rust-toolchain.toml`.
+MRML uses Rust 2024 and the nightly build toolchain configured in
+`rust-toolchain.toml`. That development toolchain is distinct from
+`mrml-rustc`'s exact dated behavioral oracle recorded under
+`docs/compiler/oracles/`; a floating installed nightly is never oracle evidence.
 
 Windows requires the self-contained GNU/LLVM toolchain:
 
@@ -322,6 +326,10 @@ the repository or undoing its invariants.
    under `docs/`, not in an ever-growing README status narrative.
 7. Commit and push only after proportional Windows and Linux testing and an
    explicit review of security and performance impact.
+8. For compiler work, read [COMPILER.md](docs/COMPILER.md) and the relevant
+   [oracle generation](docs/compiler/oracles/ORACLE-0001.md). Rust 2024 is the
+   floor; prioritize modern/future semantics and do not infer old-edition,
+   stable-Rust, every-nightly, or unstable-Rust-ABI compatibility.
 
 ## License
 

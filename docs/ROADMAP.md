@@ -78,6 +78,39 @@ fault result before returning any peer continuation. This closes the signed
 two-service Phase 1 substrate gate. The next dependency-ordered OS milestone is
 the Phase 2 policy/configuration service and its supervision protocol.
 
+## Concurrent compiler lane
+
+The independently scoped compiler lane follows
+[COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
+Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,
+then prioritize:
+
+1. an explicit typed ownership/place/control-flow representation;
+2. move, shared-loan, mutable-loan, reborrow, and flow-sensitive outlives
+   analysis toward modern Polonius semantics;
+3. bounded modern trait-goal, canonicalization, where-clause, normalization,
+   coherence, ambiguity, recursion, and cycle foundations;
+4. post-2024 systems gaps, especially naked functions/`naked_asm!`, validated
+   inline assembly, strict provenance, modern const behavior, and `no_std`/ABI
+   facilities needed by MRML;
+5. Application, System, and Compiler/Kernel admission profiles;
+6. compiler-derived executable security metadata and loader validation; and
+7. reproducible advancement through exact recorded future-Rust oracles.
+
+The highest-value next major compiler milestone is the bounded typed
+ownership/place/CFG representation needed by both sound borrow checking and
+future dataflow analyses. Smaller aggregate, pattern, control-flow, and
+diagnostic prerequisites remain appropriate when they directly unlock that
+model. Old-edition parsing, historical unsoundness, rustc diagnostic wording,
+unstable symbol/ABI quirks, and legacy cases with no current MRML dependency are
+deprioritized.
+
+Compiler candidates are ranked by MRML usefulness, modern Rust relevance,
+security relevance, dependency unlocks, implementation complexity, oracle
+stability, and testability—not superficial upstream test counts. The compiler
+and OS lanes progress concurrently and converge when real MRML services compile
+under validated profiles; neither waits for the other to become complete.
+
 ## Phase 1 — Kernel and service foundation
 
 1. Complete multi-client blocking send/receive and scheduler sleep/wakeup.

@@ -5,7 +5,8 @@ probe evidence remain in [MICROKERNEL.md](MICROKERNEL.md); security boundaries
 are normative in [SECURITY.md](SECURITY.md); dependency order is in
 [ROADMAP.md](ROADMAP.md); the application contract is in
 [APPLICATION_PLATFORM.md](APPLICATION_PLATFORM.md); context-loss recovery is in
-[RECOVERY.md](RECOVERY.md).
+[RECOVERY.md](RECOVERY.md); compiler direction is in
+[COMPILER.md](COMPILER.md).
 
 ## Status vocabulary
 
@@ -65,6 +66,38 @@ physical VT-d/device-reset validation; recovery and release key rotation.
 **ASPIRATIONAL:** a production-secure sovereign local-AI OS, broad device
 support, machine-checked noninterference, independently audited security, and
 additional architectures.
+
+## Rust compiler architecture
+
+`mrml-rustc` is an original MRML Rust compiler targeting contemporary and
+forward-looking Rust semantics. Rust 2024 is its floor, not its final target.
+Compatibility means deliberately reproduced observable language semantics, not
+every historical edition or nightly, old unsoundness, rustc/LLVM internals,
+diagnostic text, unstable Rust ABI, or symbol accidents. It remains recognizably
+Rust and must not diverge merely to create an MRML-specific language.
+
+**IMPLEMENTED:** a fixed-capacity, dependency-free, `no_std`, no-global-`alloc`
+compiler core; bounded parsing, semantic and const-evaluation subsets;
+deterministic x86-64 COFF/ELF64 emission; substantial modern integer and raw-
+pointer operations; and original Windows/Arch differential probes against an
+exact stage-zero nightly.
+
+**PARTIALLY IMPLEMENTED:** typed places and mutations, references/reborrowing,
+modern pointer/provenance-facing APIs, patterns/matches, never coercion, unsafe
+operations, aggregates, control flow, and modern const behavior. These bounded
+features are not an ownership checker, provenance model, general type system,
+stable Rust ABI, or application security proof.
+
+**PLANNED:** an explicit typed ownership/place/CFG representation; staged
+Polonius-direction flow-sensitive loan/outlives checking; an independent modern
+trait-goal solver; naked functions and validated assembly; application/system/
+compiler profiles; compiler-derived security metadata; loader validation; and
+progressive exact future-Rust oracle generations.
+
+Unsupported semantics fail closed. Language support for unsafe systems work is
+separate from the stricter admission profile planned for ordinary native
+applications. The detailed feature matrix, prerequisites, priority policy, and
+oracle procedure are normative in [COMPILER.md](COMPILER.md).
 
 ## The microkernel boundary
 

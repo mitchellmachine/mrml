@@ -109,6 +109,31 @@ Finish and verify the current OS dependency gate before starting another. The
 compiler task may proceed alongside it only when changes, tests, and review
 remain separable and shared-file edits do not couple the milestones.
 
+Compiler direction is durable in `docs/COMPILER.md`. `mrml-rustc` targets
+contemporary and forward-looking Rust semantics with Rust 2024 as its floor; it
+does not carry a standing obligation to support Rust 2015/2018/2021, every
+historical nightly, obsolete unsoundness, diagnostic wording, rustc internals,
+or unstable Rust ABI/symbol quirks. Do not deliberately diverge from modern Rust
+or turn it into an unrelated Rust-inspired language. Prefer modern successor
+semantics unless current MRML source or a required conformance dependency needs
+legacy behavior.
+
+Every Rust oracle must be an exact dated rustc version and full commit recorded
+under `docs/compiler/oracles/`; an installed latest nightly is not a reproducible
+oracle. Preserve previous generations, classify every upgrade delta, and use
+black-box observations plus independently authored MRML probes. Do not copy
+upstream compiler implementation source or upstream test bodies.
+
+Prioritize an explicit typed ownership/place/control-flow representation,
+Polonius-direction flow-sensitive borrowing, modern trait-goal solving, modern
+pointer provenance, bounded const evaluation, naked functions/assembly, and
+compiler-derived security profiles/metadata. Do not implement Polonius or a
+trait solver as one giant patch. Language capability and application admission
+are separate: preserve audited systems Rust while the planned Application
+Profile forbids unsafe code and native unsafe FFI. Unsupported borrowing,
+traits, provenance, unsafe, ABI, assembly, const, or metadata semantics must
+continue to fail closed.
+
 Patent review is technical risk screening, not legal adjudication. For each
 substantial new mechanism, report `Patent review: NOT_TRIGGERED` or
 `Patent review: TRIGGERED` with the reason and a link to
