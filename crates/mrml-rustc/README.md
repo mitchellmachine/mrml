@@ -2353,7 +2353,8 @@ bit-or are rejected; unsafe blocks are not accepted as a substitute because
 this bounded parser does not yet represent their safety context.
 
 Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
-`checked_mul`, `checked_div`, `checked_rem`, `checked_neg`, `checked_abs`,
+`checked_mul`, `checked_div`, `checked_rem`, `checked_div_euclid`,
+`checked_rem_euclid`, `checked_neg`, `checked_abs`,
 `checked_shl`, `checked_shr`, `checked_pow`, and unsigned
 `checked_next_power_of_two`, plus `checked_ilog`, `checked_ilog2`, and
 `checked_ilog10`, pinned-nightly
@@ -2376,6 +2377,8 @@ would exceed the unsigned receiver's highest representable power of two.
 Checked logarithms return a `u32` through the same consumers. Zero or negative
 receivers and generic radices below two produce `None`; positive receivers use
 integer floor-logarithm semantics.
+Checked Euclidean division uses a nonnegative remainder for signed receivers,
+while retaining the checked zero-divisor and signed `MIN / -1` behavior.
 Signed and unsigned division receivers
 require a same-type divisor, and explicit fallbacks match the option's result
 type. These consumers share one value-plus-validity emitter while

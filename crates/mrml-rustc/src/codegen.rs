@@ -11100,7 +11100,17 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
         let exact = operation == crate::expression::CheckedIntegerOptionOperation::ExactDivision;
         let remainder_result = matches!(
             operation,
-            crate::expression::CheckedIntegerOptionOperation::Division { remainder: true }
+            crate::expression::CheckedIntegerOptionOperation::Division {
+                remainder: true,
+                ..
+            }
+        );
+        let euclidean = matches!(
+            operation,
+            crate::expression::CheckedIntegerOptionOperation::Division {
+                euclidean: true,
+                ..
+            }
         );
         if !exact
             && !matches!(
@@ -11133,6 +11143,26 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             self.emit(&[0x48, 0x99, 0x48, 0xf7, 0xf9])?;
         } else {
             self.emit(&[0x48, 0x31, 0xd2, 0x48, 0xf7, 0xf1])?;
+        }
+        if euclidean && source_width.signed {
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let nonnegative_remainder = self.emit_forward_branch(0x89)?;
+            self.emit(&[0x48, 0x85, 0xc9])?;
+            let negative_divisor = self.emit_forward_branch(0x88)?;
+            if remainder_result {
+                self.emit(&[0x48, 0x01, 0xca])?;
+            } else {
+                self.emit(&[0x48, 0xff, 0xc8])?;
+            }
+            let adjusted = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative_divisor)?;
+            if remainder_result {
+                self.emit(&[0x48, 0x29, 0xca])?;
+            } else {
+                self.emit(&[0x48, 0xff, 0xc0])?;
+            }
+            self.patch_forward_branch(adjusted)?;
+            self.patch_forward_branch(nonnegative_remainder)?;
         }
         let inexact = if exact {
             self.emit(&[0x48, 0x85, 0xd2])?;
@@ -15887,6 +15917,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div(b).unwrap_or_default() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_rem(b).unwrap_or(fallback) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_div(b) }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_euclidean_division_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64, b: i64, fallback: i64) -> i64 { a.checked_div_euclid(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16, b: i16) -> i16 { a.checked_rem_euclid(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32, b: u32) -> bool { a.checked_div_euclid(b).is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_rem_euclid(b).is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16) -> u8 { a.checked_div_euclid(b).unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i32, b: i32, fallback: u32) -> i32 { a.checked_rem_euclid(b).unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_div_euclid(b) }",
         ] {
             let module = Parser::new(source).parse_module::<3, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

@@ -165,7 +165,7 @@ pub enum IntegerWidthCastMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CheckedIntegerOptionOperation {
     ExactDivision,
-    Division { remainder: bool },
+    Division { remainder: bool, euclidean: bool },
     Arithmetic(BinaryOperator),
     SignedUnary { absolute: bool },
     Shift { left: bool },
@@ -4443,6 +4443,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_div_exact"
                         | "checked_div"
                         | "checked_rem"
+                        | "checked_div_euclid"
+                        | "checked_rem_euclid"
                         | "checked_neg"
                         | "checked_abs"
                         | "checked_shl"
@@ -4628,6 +4630,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "checked_div_exact"
                     | "checked_div"
                     | "checked_rem"
+                    | "checked_div_euclid"
+                    | "checked_rem_euclid"
                     | "checked_shl"
                     | "checked_shr"
                     | "checked_pow"
@@ -4944,15 +4948,18 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?),
                     operation: CheckedIntegerOptionOperation::ExactDivision,
                 },
-                "checked_div" | "checked_rem" => ExprKind::CheckedIntegerOption {
-                    base,
-                    argument: Some(argument.ok_or_else(|| {
-                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
-                    })?),
-                    operation: CheckedIntegerOptionOperation::Division {
-                        remainder: method.text == "checked_rem",
-                    },
-                },
+                "checked_div" | "checked_rem" | "checked_div_euclid" | "checked_rem_euclid" => {
+                    ExprKind::CheckedIntegerOption {
+                        base,
+                        argument: Some(argument.ok_or_else(|| {
+                            self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                        })?),
+                        operation: CheckedIntegerOptionOperation::Division {
+                            remainder: matches!(method.text, "checked_rem" | "checked_rem_euclid"),
+                            euclidean: method.text.ends_with("_euclid"),
+                        },
+                    }
+                }
                 "checked_neg" | "checked_abs" => ExprKind::CheckedIntegerOption {
                     base,
                     argument: None,
