@@ -156,6 +156,9 @@ pub enum IntegerWidthCastMode {
     Truncate,
     SaturatingTruncate,
     Widen,
+    Saturating,
+    Wrapping,
+    Strict,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,10 +201,21 @@ pub struct IntegerLiteral<'source> {
 
 impl IntegerType {
     pub const fn supports_width_cast(self, target: Self, mode: IntegerWidthCastMode) -> bool {
+        if matches!(
+            mode,
+            IntegerWidthCastMode::Saturating
+                | IntegerWidthCastMode::Wrapping
+                | IntegerWidthCastMode::Strict
+        ) {
+            return true;
+        }
         if self.is_signed() != target.is_signed() {
             return false;
         }
         match mode {
+            IntegerWidthCastMode::Saturating
+            | IntegerWidthCastMode::Wrapping
+            | IntegerWidthCastMode::Strict => unreachable!(),
             IntegerWidthCastMode::Truncate | IntegerWidthCastMode::SaturatingTruncate => match self
             {
                 Self::U8 | Self::I8 => matches!(target, Self::U8 | Self::I8),
@@ -4195,7 +4209,15 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             self.take()?;
             let method = self.take()?;
             if method.is_some_and(|method| {
-                matches!(method.text, "truncate" | "saturating_truncate" | "widen")
+                matches!(
+                    method.text,
+                    "truncate"
+                        | "saturating_truncate"
+                        | "widen"
+                        | "saturating_cast"
+                        | "wrapping_cast"
+                        | "strict_cast"
+                )
             }) {
                 let method = method.expect("method was checked");
                 let separator = self.take()?;
@@ -4230,6 +4252,9 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     "truncate" => IntegerWidthCastMode::Truncate,
                     "saturating_truncate" => IntegerWidthCastMode::SaturatingTruncate,
                     "widen" => IntegerWidthCastMode::Widen,
+                    "saturating_cast" => IntegerWidthCastMode::Saturating,
+                    "wrapping_cast" => IntegerWidthCastMode::Wrapping,
+                    "strict_cast" => IntegerWidthCastMode::Strict,
                     _ => unreachable!(),
                 };
                 base = self.push(Expr {

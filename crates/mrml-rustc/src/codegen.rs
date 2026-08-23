@@ -5723,6 +5723,69 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     }
                     self.patch_forward_branch(saturated_maximum)?;
                 }
+                if matches!(
+                    mode,
+                    crate::expression::IntegerWidthCastMode::Saturating
+                        | crate::expression::IntegerWidthCastMode::Strict
+                ) {
+                    let strict = mode == crate::expression::IntegerWidthCastMode::Strict;
+                    let check_minimum = source_width.signed
+                        && (!target_width.signed || target_width.bits < source_width.bits);
+                    let check_maximum = if source_width.signed {
+                        target_width.bits < source_width.bits
+                    } else if target_width.signed {
+                        target_width.bits <= source_width.bits
+                    } else {
+                        target_width.bits < source_width.bits
+                    };
+                    let mut saturated_minimum = None;
+                    if check_minimum {
+                        let minimum = if target_width.signed {
+                            target_width.minimum as u64
+                        } else {
+                            0
+                        };
+                        self.emit(&[0x48, 0xba])?;
+                        self.emit(&minimum.to_le_bytes())?;
+                        self.emit(&[0x48, 0x39, 0xd0])?;
+                        if strict {
+                            self.emit_trap_branch(0x8c)?;
+                        } else {
+                            let within_minimum = self.emit_forward_branch(0x8d)?;
+                            self.emit(&[0x48, 0xb8])?;
+                            self.emit(&minimum.to_le_bytes())?;
+                            saturated_minimum = Some(self.emit_unconditional_forward_branch()?);
+                            self.patch_forward_branch(within_minimum)?;
+                        }
+                    }
+                    let mut saturated_maximum = None;
+                    if check_maximum {
+                        self.emit(&[0x48, 0xba])?;
+                        self.emit(&target_width.maximum.to_le_bytes())?;
+                        self.emit(&[0x48, 0x39, 0xd0])?;
+                        let overflow_condition = if source_width.signed { 0x8f } else { 0x87 };
+                        if strict {
+                            self.emit_trap_branch(overflow_condition)?;
+                        } else {
+                            let within_maximum =
+                                self.emit_forward_branch(if source_width.signed {
+                                    0x8e
+                                } else {
+                                    0x86
+                                })?;
+                            self.emit(&[0x48, 0xb8])?;
+                            self.emit(&target_width.maximum.to_le_bytes())?;
+                            saturated_maximum = Some(self.emit_unconditional_forward_branch()?);
+                            self.patch_forward_branch(within_maximum)?;
+                        }
+                    }
+                    if let Some(branch) = saturated_minimum {
+                        self.patch_forward_branch(branch)?;
+                    }
+                    if let Some(branch) = saturated_maximum {
+                        self.patch_forward_branch(branch)?;
+                    }
+                }
                 self.width = target_width;
                 self.emit_normalize()?;
                 self.width = previous_width;
@@ -14686,6 +14749,49 @@ mod tests {
                 .unwrap_err()
                 .kind,
                 CodegenErrorKind::RuntimeTypeMismatch,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn casts_between_all_primitive_integer_types() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> u8 { input.saturating_cast::<u8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> i8 { input.saturating_cast::<i8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i8) -> u64 { input.wrapping_cast::<u64>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64) -> i16 { input.wrapping_cast::<i16>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: i64) -> usize { input.strict_cast::<usize>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: usize) -> i8 { input.strict_cast::<i8>() }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert!(
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi).is_ok(),
+                    "{source}"
+                );
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: bool) -> u8 { input.wrapping_cast::<u8>() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u8) -> bool { input.saturating_cast::<u8>() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows,
+                )
+                .is_err(),
                 "{source}"
             );
         }

@@ -2329,6 +2329,14 @@ traits. Constant evaluation and x86-64 code generation preserve truncation,
 saturation, signed extension, and unsigned extension semantics; unsupported
 width, signedness, and pointer-sized pairs are rejected as type mismatches.
 
+Pinned-nightly generic `saturating_cast::<T>`, `wrapping_cast::<T>`, and
+`strict_cast::<T>` support every integer source/target pair exposed by
+`BoundedCastFromInt` and `CheckedCastFromInt`. Runtime and constant paths apply
+numeric-bound saturation, Rust `as` wrapping, and unconditional strict overflow
+traps across signedness and width changes. The `Option`-returning `checked_cast`
+and unsafe `unchecked_cast` remain outside this scalar milestone until their
+result and unsafe-expression forms can be represented without partial behavior.
+
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
 Windows development host and 0.005 seconds under Arch Linux WSL2. These are

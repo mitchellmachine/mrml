@@ -2665,8 +2665,15 @@ fn evaluate_call_aware_integer<
                 constants,
                 depth,
             )?;
-            width_cast_bits(value, source_bits, bits, source_type.is_signed(), mode)
-                .map_err(arithmetic_error)?
+            width_cast_bits(
+                value,
+                source_bits,
+                bits,
+                source_type.is_signed(),
+                target.is_signed(),
+                mode,
+            )
+            .map_err(arithmetic_error)?
         }
         ExprKind::IntegerWrappingShift {
             base,
@@ -3829,8 +3836,15 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .ok_or(ExecutionError::Arithmetic(ConstEvalError::InvalidCast))?;
             let value =
                 evaluate_signed_integer(tree, base, source_type, target, constants, depth + 1)?;
-            width_cast_bits(value, source_bits, bits, source_type.is_signed(), mode)
-                .map_err(ExecutionError::Arithmetic)?
+            width_cast_bits(
+                value,
+                source_bits,
+                bits,
+                source_type.is_signed(),
+                cast_target.is_signed(),
+                mode,
+            )
+            .map_err(ExecutionError::Arithmetic)?
         }
         ExprKind::IntegerClampMagnitude { .. } => {
             return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
@@ -4207,34 +4221,97 @@ fn width_cast_bits(
     value: u128,
     source_bits: u8,
     target_bits: u8,
-    signed: bool,
+    source_signed: bool,
+    target_signed: bool,
     mode: crate::expression::IntegerWidthCastMode,
 ) -> Result<u128, ConstEvalError> {
+    use crate::expression::IntegerWidthCastMode;
+
     let target_mask = signed_mask(target_bits);
-    if !signed {
-        let value = value & signed_mask(source_bits);
-        return Ok(
-            if mode == crate::expression::IntegerWidthCastMode::SaturatingTruncate {
-                value.min(target_mask)
-            } else {
-                value & target_mask
-            },
-        );
+    if mode == IntegerWidthCastMode::Wrapping {
+        return Ok(value & target_mask);
     }
-    let value = decode_signed(value & signed_mask(source_bits), source_bits);
-    let value = if mode == crate::expression::IntegerWidthCastMode::SaturatingTruncate {
-        value.clamp(
-            if target_bits == 128 {
+    if matches!(
+        mode,
+        IntegerWidthCastMode::Truncate
+            | IntegerWidthCastMode::SaturatingTruncate
+            | IntegerWidthCastMode::Widen
+    ) && !source_signed
+    {
+        let value = value & signed_mask(source_bits);
+        return Ok(if mode == IntegerWidthCastMode::SaturatingTruncate {
+            value.min(target_mask)
+        } else {
+            value & target_mask
+        });
+    }
+    if matches!(
+        mode,
+        IntegerWidthCastMode::Truncate
+            | IntegerWidthCastMode::SaturatingTruncate
+            | IntegerWidthCastMode::Widen
+    ) {
+        let value = decode_signed(value & signed_mask(source_bits), source_bits);
+        let value = if mode == IntegerWidthCastMode::SaturatingTruncate {
+            value.clamp(
+                if target_bits == 128 {
+                    i128::MIN
+                } else {
+                    -(1_i128 << (target_bits - 1))
+                },
+                signed_maximum(target_bits),
+            )
+        } else {
+            value
+        };
+        return Ok((value as u128) & target_mask);
+    }
+
+    let (below_minimum, above_maximum) = if source_signed {
+        let value = decode_signed(value & signed_mask(source_bits), source_bits);
+        if target_signed {
+            let minimum = if target_bits == 128 {
                 i128::MIN
             } else {
                 -(1_i128 << (target_bits - 1))
-            },
-            signed_maximum(target_bits),
-        )
+            };
+            (value < minimum, value > signed_maximum(target_bits))
+        } else {
+            (value < 0, value >= 0 && (value as u128) > target_mask)
+        }
     } else {
-        value
+        let value = value & signed_mask(source_bits);
+        let maximum = if target_signed {
+            signed_maximum(target_bits) as u128
+        } else {
+            target_mask
+        };
+        (false, value > maximum)
     };
-    Ok((value as u128) & target_mask)
+    if mode == IntegerWidthCastMode::Strict && (below_minimum || above_maximum) {
+        return Err(ConstEvalError::Overflow);
+    }
+    if mode == IntegerWidthCastMode::Saturating {
+        if below_minimum {
+            return Ok(if target_signed {
+                1_u128 << (target_bits - 1)
+            } else {
+                0
+            });
+        }
+        if above_maximum {
+            return Ok(if target_signed {
+                signed_maximum(target_bits) as u128
+            } else {
+                target_mask
+            });
+        }
+    }
+    Ok(if source_signed {
+        (decode_signed(value & signed_mask(source_bits), source_bits) as u128) & target_mask
+    } else {
+        value & target_mask
+    })
 }
 
 fn saturating_integer_arithmetic(
@@ -5867,5 +5944,25 @@ mod tests {
         assert_eq!(values.resolve("SATURATED_HIGH"), Some(127));
         assert_eq!(values.resolve("SATURATED_LOW"), Some(128));
         assert_eq!(values.resolve("WIDENED"), Some(u128::from(u64::MAX - 41)));
+    }
+
+    #[test]
+    fn evaluates_generic_integer_cast_constants() {
+        let module = Parser::new(
+            "const SATURATED_LOW: u8 = (-42i16).saturating_cast::<u8>(); const SATURATED_HIGH: i8 = 300u16.saturating_cast::<i8>(); const WRAPPED_NEGATIVE: u8 = (-42i16).wrapping_cast::<u8>(); const WRAPPED_HIGH: i8 = 300u16.wrapping_cast::<i8>(); const STRICT: i64 = 42u8.strict_cast::<i64>();",
+        )
+        .parse_module::<5, 2>()
+        .unwrap();
+        let values = analyze_constants::<5, 64, 5, 2>(&module, TargetLayout::X86_64).unwrap();
+        assert_eq!(values.resolve("SATURATED_LOW"), Some(0));
+        assert_eq!(values.resolve("SATURATED_HIGH"), Some(127));
+        assert_eq!(values.resolve("WRAPPED_NEGATIVE"), Some(214));
+        assert_eq!(values.resolve("WRAPPED_HIGH"), Some(44));
+        assert_eq!(values.resolve("STRICT"), Some(42));
+
+        let overflow = Parser::new("const VALUE: u8 = (-1i8).strict_cast::<u8>();")
+            .parse_module::<1, 2>()
+            .unwrap();
+        assert!(analyze_constants::<1, 16, 1, 2>(&overflow, TargetLayout::X86_64).is_err());
     }
 }
