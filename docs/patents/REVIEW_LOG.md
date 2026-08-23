@@ -408,3 +408,15 @@ it introduces no novel algorithm, ABI, protocol, cryptographic construction, or
 optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary compiler local/place identity.
+
+## 2026-08-23 — explicit runtime place access intent
+
+MRML source: `crates/mrml-rustc/src/codegen.rs`.
+
+Resolved assignment places now distinguish a plain write from a
+read-modify-write, and existing assignment emitters consume that classification
+when deciding whether to load the previous value. This is conventional compiler
+use/definition and place-access representation; it introduces no novel
+algorithm, ABI, protocol, cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — ordinary compiler access classification.

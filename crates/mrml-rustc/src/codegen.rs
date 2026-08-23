@@ -1919,11 +1919,32 @@ enum RuntimePlaceBase {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePlaceAccess {
+    Write,
+    ReadModifyWrite,
+}
+
+impl RuntimePlaceAccess {
+    const fn from_operator(operator: crate::AssignmentOperator) -> Self {
+        if matches!(operator, crate::AssignmentOperator::Assign) {
+            Self::Write
+        } else {
+            Self::ReadModifyWrite
+        }
+    }
+
+    const fn reads_previous_value(self) -> bool {
+        matches!(self, Self::ReadModifyWrite)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimePlace<'source> {
     base: RuntimePlaceBase,
     projection: Option<crate::parser::AssignmentProjection<'source>>,
     ty: RuntimeExpressionType,
     mutable: bool,
+    access: RuntimePlaceAccess,
 }
 
 fn runtime_array_type(text: &str) -> Option<RuntimeExpressionType> {
@@ -6421,6 +6442,7 @@ impl<
             projection: assignment.projection,
             ty,
             mutable,
+            access: RuntimePlaceAccess::from_operator(assignment.operator),
         })
     }
 
@@ -12503,11 +12525,11 @@ impl<
                         count,
                         layout,
                     },
-                mutable,
+                ..
             } = place.ty
             {
                 return self.emit_reference_array_assignment::<MAX_EXPRESSION_NODES>(
-                    assignment, body_start, element, count, layout, mutable,
+                    assignment, body_start, element, count, layout, place,
                 );
             }
             if let RuntimeExpressionType::Reference {
@@ -12516,7 +12538,11 @@ impl<
             } = place.ty
             {
                 return self.emit_slice_assignment::<MAX_EXPRESSION_NODES>(
-                    assignment, body_start, element, mutable,
+                    assignment,
+                    body_start,
+                    element,
+                    mutable,
+                    place.access,
                 );
             }
         }
@@ -12535,12 +12561,21 @@ impl<
             Some(crate::parser::AssignmentProjection::Index { .. })
         ) {
             return self.emit_indexed_assignment::<MAX_EXPRESSION_NODES>(
-                assignment, body_start, index, target,
+                assignment,
+                body_start,
+                index,
+                target,
+                place.access,
             );
         }
         if let Some(field) = assignment.tuple_field() {
             return self.emit_tuple_field_assignment::<MAX_EXPRESSION_NODES>(
-                assignment, body_start, index, target, field,
+                assignment,
+                body_start,
+                index,
+                target,
+                field,
+                place.access,
             );
         }
         if target.ty == RuntimeExpressionType::Bool
@@ -12591,7 +12626,7 @@ impl<
                     ..
                 }
             ) {
-                if assignment.operator != crate::AssignmentOperator::Assign {
+                if place.access.reads_previous_value() {
                     return Err(CodegenError {
                         kind: CodegenErrorKind::UnsupportedRuntimeOperator,
                         span: translate_span(body_start, assignment.name_span),
@@ -12613,7 +12648,7 @@ impl<
                 return self.emit_stack_cleanup_bytes(16);
             }
             if let RuntimeExpressionType::Array { element, count } = target.ty {
-                if assignment.operator != crate::AssignmentOperator::Assign {
+                if place.access.reads_previous_value() {
                     return Err(CodegenError {
                         kind: CodegenErrorKind::UnsupportedRuntimeOperator,
                         span: translate_span(body_start, assignment.name_span),
@@ -12622,7 +12657,7 @@ impl<
                 return self.emit_array_assignment(&tree, tree.root(), index, element, count);
             }
             if let RuntimeExpressionType::Tuple { element_count, .. } = target.ty {
-                if assignment.operator != crate::AssignmentOperator::Assign {
+                if place.access.reads_previous_value() {
                     return Err(CodegenError {
                         kind: CodegenErrorKind::UnsupportedRuntimeOperator,
                         span: translate_span(body_start, assignment.name_span),
@@ -12645,7 +12680,7 @@ impl<
                         .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
                 );
             }
-            if assignment.operator == crate::AssignmentOperator::Assign {
+            if !place.access.reads_previous_value() {
                 self.emit_expression(&tree, tree.root(), 0)?;
             } else {
                 self.emit_identifier(assignment.binding_name())?;
@@ -12674,6 +12709,7 @@ impl<
         local_index: usize,
         target: RuntimeLocal<'_>,
         field: usize,
+        access: RuntimePlaceAccess,
     ) -> Result<(), CodegenError> {
         let RuntimeExpressionType::Tuple {
             elements,
@@ -12741,7 +12777,7 @@ impl<
                 .local_stack_slots_from(local_index + 1)?
                 .checked_add(field)
                 .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-            if assignment.operator == crate::AssignmentOperator::Assign {
+            if !access.reads_previous_value() {
                 self.emit_expression(&tree, tree.root(), 0)?;
             } else {
                 self.emit_stack_slot(destination)?;
@@ -12771,9 +12807,9 @@ impl<
         element: RuntimeArrayElementType,
         count: usize,
         layout: RuntimeReferenceArrayLayout,
-        mutable: bool,
+        place: RuntimePlace<'_>,
     ) -> Result<(), CodegenError> {
-        if !mutable {
+        if !place.mutable {
             return Err(CodegenError {
                 kind: CodegenErrorKind::ImmutableAssignment,
                 span: translate_span(body_start, assignment.name_span),
@@ -12797,7 +12833,7 @@ impl<
         if matches!(
             element_type,
             RuntimeExpressionType::Unit | RuntimeExpressionType::Char
-        ) && assignment.operator != crate::AssignmentOperator::Assign
+        ) && place.access.reads_previous_value()
         {
             return Err(CodegenError {
                 kind: CodegenErrorKind::UnsupportedRuntimeOperator,
@@ -12815,7 +12851,7 @@ impl<
             self.evaluation_depth += 1;
             let element_bytes = runtime_array_element_bytes(element)
                 .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if place.access.reads_previous_value() {
                 self.emit_reference_array_address_from_stack_index(element_bytes, layout, 1)?;
                 if element_bytes == 0 {
                     self.emit(&[0x31, 0xc0])?;
@@ -12826,7 +12862,7 @@ impl<
                 self.evaluation_depth += 1;
             }
             self.emit_indexed_assignment_value::<MAX_NODES>(assignment, body_start, element_type)?;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if place.access.reads_previous_value() {
                 self.evaluation_depth -= 1;
                 self.emit(&[0x59])?;
                 self.emit_binary(assignment_binary_operator(assignment.operator).ok_or(
@@ -12855,6 +12891,7 @@ impl<
         body_start: usize,
         element: RuntimeArrayElementType,
         mutable: bool,
+        access: RuntimePlaceAccess,
     ) -> Result<(), CodegenError> {
         if !mutable {
             return Err(CodegenError {
@@ -12880,7 +12917,7 @@ impl<
         if matches!(
             element_type,
             RuntimeExpressionType::Unit | RuntimeExpressionType::Char
-        ) && assignment.operator != crate::AssignmentOperator::Assign
+        ) && access.reads_previous_value()
         {
             return Err(CodegenError {
                 kind: CodegenErrorKind::UnsupportedRuntimeOperator,
@@ -12898,7 +12935,7 @@ impl<
             self.evaluation_depth += 1;
             let element_bytes = runtime_array_element_bytes(element)
                 .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if access.reads_previous_value() {
                 self.emit_reference_array_address_from_stack_index(
                     element_bytes,
                     RuntimeReferenceArrayLayout::Native,
@@ -12913,7 +12950,7 @@ impl<
                 self.evaluation_depth += 1;
             }
             self.emit_indexed_assignment_value::<MAX_NODES>(assignment, body_start, element_type)?;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if access.reads_previous_value() {
                 self.evaluation_depth -= 1;
                 self.emit(&[0x59])?;
                 self.emit_binary(assignment_binary_operator(assignment.operator).ok_or(
@@ -13070,9 +13107,7 @@ impl<
                 span: translate_span(body_start, assignment.name_span),
             });
         }
-        if value_type == RuntimeExpressionType::Char
-            && assignment.operator != crate::AssignmentOperator::Assign
-        {
+        if value_type == RuntimeExpressionType::Char && place.access.reads_previous_value() {
             return Err(CodegenError {
                 kind: CodegenErrorKind::UnsupportedRuntimeOperator,
                 span: translate_span(body_start, assignment.name_span),
@@ -13085,7 +13120,7 @@ impl<
             self.emit_identifier(name)?;
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if place.access.reads_previous_value() {
                 self.emit_reference_load(pointee)?;
                 self.emit(&[0x50])?;
                 self.evaluation_depth += 1;
@@ -13115,7 +13150,7 @@ impl<
                 });
             }
             self.emit_expression(&tree, tree.root(), 0)?;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if place.access.reads_previous_value() {
                 self.evaluation_depth -= 1;
                 self.emit(&[0x59])?;
                 self.emit_binary(assignment_binary_operator(assignment.operator).ok_or(
@@ -13141,6 +13176,7 @@ impl<
         body_start: usize,
         local_index: usize,
         target: RuntimeLocal<'tree>,
+        access: RuntimePlaceAccess,
     ) -> Result<(), CodegenError> {
         let RuntimeExpressionType::Array { element, count } = target.ty else {
             return Err(CodegenError {
@@ -13166,7 +13202,7 @@ impl<
         if matches!(
             element_type,
             RuntimeExpressionType::Unit | RuntimeExpressionType::Char
-        ) && assignment.operator != crate::AssignmentOperator::Assign
+        ) && access.reads_previous_value()
         {
             return Err(CodegenError {
                 kind: CodegenErrorKind::UnsupportedRuntimeOperator,
@@ -13179,13 +13215,13 @@ impl<
             self.emit_indexed_assignment_index::<MAX_NODES>(assignment, body_start, count)?;
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if access.reads_previous_value() {
                 self.emit_array_local_element(local_index, element, count, 0)?;
                 self.emit(&[0x50])?;
                 self.evaluation_depth += 1;
             }
             self.emit_indexed_assignment_value::<MAX_NODES>(assignment, body_start, element_type)?;
-            if assignment.operator != crate::AssignmentOperator::Assign {
+            if access.reads_previous_value() {
                 self.evaluation_depth -= 1;
                 self.emit(&[0x59])?;
                 self.emit_binary(assignment_binary_operator(assignment.operator).ok_or(
@@ -15734,8 +15770,10 @@ mod tests {
             value: "1",
             value_span: Span { start: 8, end: 9 },
         };
+        let first_place = emitter.resolve_assignment_place(&assignment).unwrap();
+        assert_eq!(first_place.access, RuntimePlaceAccess::Write);
         assert_eq!(
-            emitter.resolve_assignment_place(&assignment).unwrap().base,
+            first_place.base,
             RuntimePlaceBase::Local {
                 id: RuntimeLocalId(1),
                 index: 1,
@@ -15750,6 +15788,14 @@ mod tests {
                 1,
             )
             .unwrap();
+        let compound = crate::Assignment {
+            operator: crate::AssignmentOperator::Add,
+            ..assignment
+        };
+        assert_eq!(
+            emitter.resolve_assignment_place(&compound).unwrap().access,
+            RuntimePlaceAccess::ReadModifyWrite
+        );
         assert_eq!(
             emitter.resolve_assignment_place(&assignment).unwrap().base,
             RuntimePlaceBase::Local {

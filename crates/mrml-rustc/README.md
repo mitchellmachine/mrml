@@ -2827,8 +2827,8 @@ text and an exact body-relative span without later bracket searches. Numeric
 tuple fields are parsed once, while non-numeric and suffixed tuple assignment
 fields fail closed after the parser confirms an assignment operator; method-call
 expressions are not misclassified as assignments. This is a prerequisite for
-typed place analysis only. Stable local/place IDs, arbitrary projection lists,
-explicit read/write/move/borrow accesses, CFG blocks, loans, regions, and a
+typed place analysis only. Parser/semantic local IDs, arbitrary projection
+lists, body-wide read/write/move/borrow facts, CFG blocks, loans, regions, and a
 borrow checker remain unimplemented.
 
 Runtime write places now add a stable-identity layer above that syntax. Each
@@ -2837,9 +2837,14 @@ active local and each inlined-helper parameter receives a checked monotonic
 binding cannot inherit the identity of an earlier binding merely by reusing its
 fixed-array or stack position. Non-wildcard assignments resolve once to a typed
 base (exact local ID plus current storage index, or parameter index), the parsed
-projection, and effective mutability. A local store validates the ID before
-using its storage index. An adversarial unit test covers same-name shadowing,
-scope cleanup, storage-index reuse, and monotonic identity. Expression reads,
+projection, effective mutability, and an explicit `Write` or
+`ReadModifyWrite` access. Direct, tuple-field, fixed-array, reference-array,
+slice, dereference, and indexed-local stores all use that access fact when
+deciding whether to load the previous value; only the compound operation itself
+still depends on the specific operator. A local store validates the ID before
+using its storage index. An adversarial unit test covers both access classes,
+same-name shadowing, scope cleanup, storage-index reuse, and monotonic identity.
+Expression reads,
 parser/semantic local IDs, arbitrary projection lists, body-wide access facts,
 CFGs, moves, loans, and regions remain outside this slice.
 
