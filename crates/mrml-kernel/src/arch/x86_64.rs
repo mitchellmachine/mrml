@@ -74,7 +74,7 @@ pub use vtd_tables::{
     DirectVtdTables, VerifiedVtdUnit, VtdAuthorizedDmaSet, VtdAuthorizedRoutes, VtdBindingError,
     VtdDomainAuthority, VtdDomainError, VtdIdentityLeaf, VtdSetBindingError, VtdTableError,
     VtdTableMemory, VtdTableProvenance, bind_legacy_identity_leaf, bind_routed_dma_isolation,
-    bind_routed_dma_set, bind_routed_legacy_identity_leaf,
+    bind_routed_dma_set, bind_routed_legacy_identity_leaf, prepare_direct_vtd_tables,
 };
 
 const MAX_PHYSICAL_ADDRESS: u64 = (1u64 << 52) - PAGE_SIZE;

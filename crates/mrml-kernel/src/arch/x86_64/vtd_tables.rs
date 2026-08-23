@@ -1,6 +1,7 @@
 use crate::{
     DeviceAddress, DomainId, GranuleHardwareOutcome, MonitorError, PhysAddr, ProtectedMonitor,
 };
+use core::mem::MaybeUninit;
 
 use super::{
     CompleteVtdRoutes, DmaIsolation, NativeVtdMmio, PlatformMmioPurpose, VerifiedPlatformMmio,
@@ -228,6 +229,10 @@ impl<const UNITS: usize> VtdAuthorizedRoutes<UNITS> {
     fn into_parts(self) -> ([VtdRequesterRoute; UNITS], [u16; UNITS]) {
         (self.routes, self.hardware_domains)
     }
+
+    fn routes(&self) -> &[VtdRequesterRoute; UNITS] {
+        &self.routes
+    }
 }
 
 /// A one-shot verified MMIO token coupled to the sole invalidator that may use
@@ -275,6 +280,32 @@ impl VerifiedVtdUnit<NativeVtdMmio> {
 }
 
 impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
+    /// Samples the active root through this exact unit and creates the exclusive
+    /// direct-map view that coherent binding will independently revalidate.
+    ///
+    /// # Safety
+    ///
+    /// Every table reachable from the sampled root must be identity mapped,
+    /// pinned, supervisor writable, and exclusively owned. Root changes and
+    /// concurrent table writers must be serialized until binding completes.
+    pub unsafe fn prepare_direct_tables(
+        &mut self,
+        route: VtdRequesterRoute,
+    ) -> Result<DirectVtdTables, VtdBindingError> {
+        if !verified_unit_matches_route(&self.verified, route) {
+            return Err(VtdBindingError::UnitSubstitution);
+        }
+        let root = self
+            .invalidator
+            .active_legacy_root()
+            .map_err(VtdBindingError::Unit)?;
+        let root_table = PhysAddr::new(root).map_err(|_| VtdBindingError::TableSubstitution)?;
+        // SAFETY: inherited from this method's direct-map ownership contract.
+        Ok(unsafe {
+            DirectVtdTables::assume_exclusive_identity_mapping(route.register_base(), root_table)
+        })
+    }
+
     #[cfg(test)]
     fn for_test(verified: VerifiedPlatformMmio, invalidator: VtdInvalidator<R>) -> Self {
         Self {
@@ -286,6 +317,16 @@ impl<R: VtdRegisterIo> VerifiedVtdUnit<R> {
     fn into_parts(self) -> (VerifiedPlatformMmio, VtdInvalidator<R>) {
         (self.verified, self.invalidator)
     }
+}
+
+fn verified_unit_matches_route(verified: &VerifiedPlatformMmio, route: VtdRequesterRoute) -> bool {
+    let requirement = verified.requirement();
+    requirement.physical() == route.register_base()
+        && matches!(
+            requirement.purpose(),
+            PlatformMmioPurpose::VtdBootstrap { segment }
+                if segment == route.requester().segment()
+        )
 }
 
 /// Exclusive access to live legacy VT-d translation tables.
@@ -369,6 +410,51 @@ unsafe impl VtdTableMemory for DirectVtdTables {
         // mapping and serialize all competing table access.
         Ok(unsafe { &mut *(table.get() as *mut u64).add(index) })
     }
+}
+
+/// Builds every direct-map table view in authorization order without heap
+/// allocation. A failed unit destroys every view already prepared and returns
+/// no partially usable array.
+///
+/// # Safety
+///
+/// The direct-map ownership and serialization contract of
+/// `VerifiedVtdUnit::prepare_direct_tables` must hold for every unit.
+pub unsafe fn prepare_direct_vtd_tables<R: VtdRegisterIo, const UNITS: usize>(
+    authorized_routes: &VtdAuthorizedRoutes<UNITS>,
+    units: &mut [VerifiedVtdUnit<R>; UNITS],
+) -> Result<[DirectVtdTables; UNITS], VtdSetBindingError> {
+    if UNITS == 0 {
+        return Err(VtdSetBindingError::Empty);
+    }
+    let mut views: [MaybeUninit<DirectVtdTables>; UNITS] = [const { MaybeUninit::uninit() }; UNITS];
+    let mut initialized = 0usize;
+    for (index, (route, unit)) in authorized_routes
+        .routes()
+        .iter()
+        .copied()
+        .zip(units.iter_mut())
+        .enumerate()
+    {
+        // SAFETY: inherited from this function's all-unit contract.
+        let view = match unsafe { unit.prepare_direct_tables(route) } {
+            Ok(view) => view,
+            Err(error) => {
+                while initialized != 0 {
+                    initialized -= 1;
+                    // SAFETY: precisely the prefix below `initialized` was
+                    // written, and each element is dropped exactly once.
+                    unsafe { views[initialized].assume_init_drop() };
+                }
+                return Err(VtdSetBindingError::Unit { index, error });
+            }
+        };
+        views[index].write(view);
+        initialized += 1;
+    }
+    // SAFETY: every element was initialized exactly once and the MaybeUninit
+    // array does not drop its contents after this move.
+    Ok(unsafe { (&raw const views).cast::<[DirectVtdTables; UNITS]>().read() })
 }
 
 pub struct VtdIdentityLeaf<'a> {
@@ -527,13 +613,7 @@ where
 {
     let (verified_unit, mut invalidator) = unit.into_parts();
     let requirement = verified_unit.requirement();
-    if requirement.physical() != route.register_base()
-        || !matches!(
-            requirement.purpose(),
-            PlatformMmioPurpose::VtdBootstrap { segment }
-                if segment == route.requester().segment()
-        )
-    {
+    if !verified_unit_matches_route(&verified_unit, route) {
         return Err(VtdBindingError::UnitSubstitution);
     }
     if requirement.pages() < invalidator.register_pages() {
@@ -939,6 +1019,90 @@ mod tests {
         assert!(matches!(
             authority.authorize(&monitor, owner, CompleteVtdRoutes::for_test(routes),),
             Err(VtdDomainError::Monitor(MonitorError::StaleDomain))
+        ));
+    }
+
+    #[test]
+    fn prepares_direct_views_in_order_and_rechecks_root_before_walking() {
+        let empty_authorized = VtdAuthorizedRoutes::for_test(test_owner(), [], []);
+        let mut empty_units: [VerifiedVtdUnit<UnitRegisters>; 0] = [];
+        assert!(matches!(
+            unsafe { prepare_direct_vtd_tables(&empty_authorized, &mut empty_units) },
+            Err(VtdSetBindingError::Empty)
+        ));
+
+        let first_base = PhysAddr::new(0xfed9_0000).unwrap();
+        let second_base = PhysAddr::new(0xfeda_0000).unwrap();
+        let route = VtdRequesterRoute::for_test(requester(), first_base);
+        let second_route = VtdRequesterRoute::for_test(requester(), second_base);
+        let authorized =
+            VtdAuthorizedRoutes::for_test(test_owner(), [route, second_route], [9, 10]);
+        let first_root_page = RegisterPage([0; 512]);
+        let second_root_page = RegisterPage([0; 512]);
+        let first_root = PhysAddr::new(first_root_page.0.as_ptr() as u64).unwrap();
+        let second_root = PhysAddr::new(second_root_page.0.as_ptr() as u64).unwrap();
+        let mut units = [
+            verified_unit(first_base, UnitRegisters::active(first_root.get())),
+            verified_unit(second_base, UnitRegisters::active(second_root.get())),
+        ];
+        let views = unsafe { prepare_direct_vtd_tables(&authorized, &mut units) }.unwrap();
+        assert_eq!(views[0].provenance().register_base(), first_base);
+        assert_eq!(views[0].provenance().root_table(), first_root);
+        assert_eq!(views[1].provenance().register_base(), second_base);
+        assert_eq!(views[1].provenance().root_table(), second_root);
+
+        let mut reordered_units = [
+            verified_unit(second_base, UnitRegisters::active(second_root.get())),
+            verified_unit(first_base, UnitRegisters::active(first_root.get())),
+        ];
+        assert!(matches!(
+            unsafe { prepare_direct_vtd_tables(&authorized, &mut reordered_units) },
+            Err(VtdSetBindingError::Unit {
+                index: 0,
+                error: VtdBindingError::UnitSubstitution
+            })
+        ));
+
+        let mut inactive = UnitRegisters::active(second_root.get());
+        inactive.status &= !(1 << 30);
+        let mut partial_units = [
+            verified_unit(first_base, UnitRegisters::active(first_root.get())),
+            verified_unit(second_base, inactive),
+        ];
+        assert!(matches!(
+            unsafe { prepare_direct_vtd_tables(&authorized, &mut partial_units) },
+            Err(VtdSetBindingError::Unit {
+                index: 1,
+                error: VtdBindingError::Unit(VtdError::RootPointerInactive)
+            })
+        ));
+
+        let replacement_root_page = RegisterPage([0; 512]);
+        let replacement_root = PhysAddr::new(replacement_root_page.0.as_ptr() as u64).unwrap();
+        let one_authorized = VtdAuthorizedRoutes::for_test(test_owner(), [route], [9]);
+        let mut original_unit = [verified_unit(
+            first_base,
+            UnitRegisters::active(first_root.get()),
+        )];
+        let mut stale_view =
+            unsafe { prepare_direct_vtd_tables(&one_authorized, &mut original_unit) }.unwrap();
+        let replacement_unit = [verified_unit(
+            first_base,
+            UnitRegisters::active(replacement_root.get()),
+        )];
+        assert!(matches!(
+            unsafe {
+                bind_routed_dma_set(
+                    &mut stale_view,
+                    one_authorized,
+                    replacement_unit,
+                    PhysAddr::new(0x20_0000).unwrap(),
+                )
+            },
+            Err(VtdSetBindingError::Unit {
+                index: 0,
+                error: VtdBindingError::TableSubstitution
+            })
         ));
     }
 

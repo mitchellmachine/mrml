@@ -360,8 +360,15 @@ bundle containing every route and its registered hardware-domain ID. Missing
 unit bindings and stale domain generations fail closed. Registry removal and
 dynamic hardware-domain reuse are not implemented; the current authority is
 boot/static and exhausts capacity rather than recycling an ID whose hardware
-invalidation is unproven. Collecting exclusive native table views remains
-platform boot integration, not an inferred protection claim.
+invalidation is unproven. A no-allocation preparation step now consumes the
+ordered authorization by reference and asks each one-shot unit to sample its
+active root into an exclusive direct table view. It builds the fixed-size array
+with explicitly tracked initialization; if any unit fails, every prepared view
+is destroyed and no partial array is returned. Unit substitution, inactive
+roots, and zero-capacity arrays fail closed. This makes the boot API usable
+without callers manually copying hidden RTADDR values. Supplying the underlying
+identity-mapped, pinned, exclusive table ownership remains an unsafe platform
+integration responsibility, not an inferred protection claim.
 
 Boot binding now starts from a fixed-capacity platform-MMIO manifest derived
 only from the validated DMAR and MCFG copies. It requests one bootstrap page
@@ -418,6 +425,11 @@ domains, pass-through contexts, aliases, and huge pages, and prove mutation
 reaches only the resolved leaf. The provenance remains an unsafe assertion by
 the direct-map constructor; physical boot integration must establish exclusive
 ownership and serialize root changes.
+Preparation does not freeze hardware RTADDR. Binding therefore samples the
+active root again and compares it with the prepared view immediately before the
+walk. A root change between phases is rejected as table substitution before any
+physical table read. Tests cover ordered two-unit preparation, reordered MMIO
+units, partial preparation failure, and this prepare/bind root race.
 The coherent builder rejects a verified MMIO token whose physical DRHD base or
 segment differs from the checked requester route, and rejects a mapping shorter
 than the capability-derived register extent. It reads GSTS and proceeds only
