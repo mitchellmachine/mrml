@@ -94,6 +94,8 @@ pub struct PreparedWhpGuest<'system> {
     service_entry: [Option<u64>; 2],
     service_root: [Option<PhysAddr>; 2],
     service_instance: [Option<ServiceInstance>; 2],
+    service_shared: Option<Mapping>,
+    service_shared_live: [bool; 2],
     ap_trampoline: Option<u64>,
 }
 
@@ -105,6 +107,8 @@ struct ServiceInstance {
     image_bytes: u64,
     stack_physical: u64,
     stack_bytes: u64,
+    table_physical: u64,
+    table_pages: u64,
 }
 
 pub struct WhpServiceEraser<'guest, 'artifact, 'system> {
@@ -214,6 +218,69 @@ impl<'system> PreparedWhpGuest<'system> {
         self.service_entry[slot] = Some(entry);
         self.service_root[slot] = Some(root);
         Ok((entry, root))
+    }
+
+    pub fn attach_service_shared_page(mut self, mapping: Mapping) -> Result<Self, WhpError> {
+        if self.service_shared.is_some()
+            || mapping.pages() != 1
+            || mapping.permissions() != PagePermissions::USER_READ_WRITE
+            || self.service_instance.iter().any(Option::is_none)
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.partition.map_zeroed(range(
+            mapping.physical_start().get(),
+            PAGE_SIZE,
+            MapPermissions::read_write(),
+        )?)?;
+        for slot in 0..2 {
+            self.mutate_service_shared_leaf(slot, mapping, true)?;
+            self.service_shared_live[slot] = true;
+        }
+        self.service_shared = Some(mapping);
+        Ok(self)
+    }
+
+    pub fn revoke_service_shared_page(&mut self, slot: usize) -> Result<(), WhpError> {
+        let mapping = self.service_shared.ok_or(WhpError::InvalidMapping)?;
+        if slot >= 2 || !self.service_shared_live[slot] {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.mutate_service_shared_leaf(slot, mapping, false)?;
+        self.service_shared_live[slot] = false;
+        Ok(())
+    }
+
+    pub fn restore_service_shared_page(&mut self, slot: usize) -> Result<(), WhpError> {
+        let mapping = self.service_shared.ok_or(WhpError::InvalidMapping)?;
+        if slot >= 2 || self.service_shared_live[slot] {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.mutate_service_shared_leaf(slot, mapping, true)?;
+        self.service_shared_live[slot] = true;
+        Ok(())
+    }
+
+    fn mutate_service_shared_leaf(
+        &mut self,
+        slot: usize,
+        mapping: Mapping,
+        install: bool,
+    ) -> Result<(), WhpError> {
+        let instance = self.service_instance[slot].ok_or(WhpError::InvalidMapping)?;
+        let root = self.service_root[slot].ok_or(WhpError::InvalidMapping)?;
+        let store = WhpPageTableStore::open_existing(
+            &mut self.partition,
+            instance.table_physical,
+            instance.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, root);
+        if install {
+            tables.map(mapping)
+        } else {
+            tables.unmap_exact(mapping)
+        }
+        .map_err(|_| WhpError::PageTable)
     }
     pub fn run(&mut self) -> Result<VmExit, WhpError> {
         self.partition.run()
@@ -605,6 +672,8 @@ impl<'system> PreparedWhpGuest<'system> {
             image_bytes,
             stack_physical,
             stack_bytes,
+            table_physical,
+            table_pages,
         });
         Ok(self)
     }
@@ -1037,6 +1106,8 @@ impl WhpSystem {
             service_entry: [None; 2],
             service_root: [None; 2],
             service_instance: [None; 2],
+            service_shared: None,
+            service_shared_live: [false; 2],
             ap_trampoline: trampoline,
         })
     }
@@ -1280,6 +1351,16 @@ impl<'a, 'system> WhpPageTableStore<'a, 'system> {
             next: start,
             end,
         })
+    }
+
+    fn open_existing(
+        partition: &'a mut PreparedWhpPartition<'system>,
+        start: u64,
+        pages: u64,
+    ) -> Result<Self, WhpError> {
+        let mut store = Self::new(partition, start, pages)?;
+        store.next = store.end;
+        Ok(store)
     }
 
     fn entry_address(&self, table: PhysAddr, index: usize) -> Result<u64, PageTableBuildError> {
@@ -1578,6 +1659,8 @@ mod tests {
             service_entry: [None; 2],
             service_root: [None; 2],
             service_instance: [None; 2],
+            service_shared: None,
+            service_shared_live: [false; 2],
             ap_trampoline: None,
         };
         assert_eq!(VmBackend::run(&mut guest, 1), Err(WhpError::InvalidVcpu));

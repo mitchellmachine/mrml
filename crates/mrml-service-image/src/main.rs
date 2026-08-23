@@ -16,6 +16,9 @@ global_asm!(
             .section .text
             .global efi_main
         efi_main:
+            mov r11, 0x6fe000
+            cmp qword ptr [r11], r12
+            je 3f
             mov eax, 2
             xor edi, edi
             xor esi, esi
@@ -30,6 +33,8 @@ global_asm!(
             jne 3f
             cmp r10d, 0x676e6970
             jne 3f
+            cmp qword ptr [r11], r12
+            jne 3f
             int3
         3:
             ud2
@@ -39,6 +44,8 @@ global_asm!(
             .org efi_main + 128, 0xcc
             .global mrml_service_sender
         mrml_service_sender:
+            mov r11, 0x6fe000
+            mov qword ptr [r11], r12
             mov eax, 1
             mov rdi, r13
             mov rsi, r14

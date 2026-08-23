@@ -265,3 +265,19 @@ transport; it introduces no novel ABI, algorithm, protocol, cryptographic
 construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — ordinary bounded compiler aggregate handling.
+
+## 2026-08-23 — signed task-owned shared-page lifecycle
+
+MRML source: `crates/mrml-{kvm,whp}/src/native/{launch.rs,rs}`,
+`crates/mrml-{kvm,whp}-run/src/main.rs`, and
+`crates/mrml-{kernel,service}-image/src/main.rs`.
+
+The hosted service probe maps one common frame through independent page-table
+leaves, removes the retired task's exact leaf, preserves the peer leaf, and
+re-arms the mapping for a fresh generation. This is conventional page-table
+mapping, exact-match unmapping, lifecycle ordering, and controlled-probe
+verification; it introduces no novel algorithm, device protocol, codec,
+cryptographic construction, or optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional shared-memory mapping and
+lifecycle revocation.

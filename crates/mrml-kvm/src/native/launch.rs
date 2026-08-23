@@ -1,14 +1,18 @@
 #[cfg(test)]
 use mrml_kernel::arch::x86_64::PRIVILEGE_STACK_ARENA_PAGES;
 use mrml_kernel::arch::x86_64::{
-    Mapping, PagePermissions, PerCpuPrivilegeStacks, PrivilegeStackLayout, VirtAddr,
+    Mapping, PagePermissions, PageTableBuilder, PerCpuPrivilegeStacks, PrivilegeStackLayout,
+    VirtAddr,
 };
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE, PhysAddr,
     RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable, VmBackend, VmExit,
 };
 
-use super::{KvmBackend, KvmError, KvmSystem, KvmVcpuSnapshot, map_loaded_handoff, map_loaded_pe};
+use super::{
+    KvmBackend, KvmError, KvmPageTableStore, KvmSystem, KvmVcpuSnapshot, map_loaded_handoff,
+    map_loaded_pe,
+};
 
 const XAPIC_BASE: u64 = 0xfee0_0000;
 
@@ -89,6 +93,8 @@ pub struct PreparedKvmGuest<const N: usize> {
     service_entry: [Option<u64>; 2],
     service_root: [Option<PhysAddr>; 2],
     service_instance: [Option<ServiceInstance>; 2],
+    service_shared: Option<Mapping>,
+    service_shared_live: [bool; 2],
 }
 
 #[derive(Clone, Copy)]
@@ -99,6 +105,8 @@ struct ServiceInstance {
     image_bytes: u64,
     stack_physical: u64,
     stack_bytes: u64,
+    table_physical: u64,
+    table_pages: u64,
 }
 
 pub struct KvmServiceEraser<'guest, 'artifact, const N: usize> {
@@ -211,6 +219,73 @@ impl<const N: usize> PreparedKvmGuest<N> {
         self.service_entry[slot] = Some(loaded.entry());
         self.service_root[slot] = Some(root);
         Ok((loaded.entry(), root))
+    }
+
+    /// Installs one exact user read/write page into both already constructed
+    /// service roots. The backing is a single host-owned guest frame; only the
+    /// page-table leaves are shared.
+    pub fn attach_service_shared_page(mut self, mapping: Mapping) -> Result<Self, KvmError> {
+        if self.service_shared.is_some()
+            || mapping.pages() != 1
+            || mapping.permissions() != PagePermissions::USER_READ_WRITE
+            || self.service_instance.iter().any(Option::is_none)
+        {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.backend
+            .map_memory(mapping.physical_start().get(), PAGE_SIZE as usize, false)?;
+        for slot in 0..2 {
+            self.mutate_service_shared_leaf(slot, mapping, true)?;
+            self.service_shared_live[slot] = true;
+        }
+        self.service_shared = Some(mapping);
+        Ok(self)
+    }
+
+    /// Removes only the stopped task's exact shared leaf. The sibling root and
+    /// common backing remain live. Subsequent service entry reloads CR3 with
+    /// PCID disabled, flushing translations before any peer can continue.
+    pub fn revoke_service_shared_page(&mut self, slot: usize) -> Result<(), KvmError> {
+        let mapping = self.service_shared.ok_or(KvmError::InvalidMapping)?;
+        if slot >= 2 || !self.service_shared_live[slot] {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.mutate_service_shared_leaf(slot, mapping, false)?;
+        self.service_shared_live[slot] = false;
+        Ok(())
+    }
+
+    /// Re-arms the exact leaf only for a freshly created task generation.
+    pub fn restore_service_shared_page(&mut self, slot: usize) -> Result<(), KvmError> {
+        let mapping = self.service_shared.ok_or(KvmError::InvalidMapping)?;
+        if slot >= 2 || self.service_shared_live[slot] {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.mutate_service_shared_leaf(slot, mapping, true)?;
+        self.service_shared_live[slot] = true;
+        Ok(())
+    }
+
+    fn mutate_service_shared_leaf(
+        &mut self,
+        slot: usize,
+        mapping: Mapping,
+        install: bool,
+    ) -> Result<(), KvmError> {
+        let instance = self.service_instance[slot].ok_or(KvmError::InvalidMapping)?;
+        let root = self.service_root[slot].ok_or(KvmError::InvalidMapping)?;
+        let store = KvmPageTableStore::open_existing(
+            &mut self.backend.memory,
+            instance.table_physical,
+            instance.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, root);
+        if install {
+            tables.map(mapping)
+        } else {
+            tables.unmap_exact(mapping)
+        }
+        .map_err(|_| KvmError::PageTable)
     }
     pub fn snapshot(&self) -> Result<KvmVcpuSnapshot, KvmError> {
         self.backend.snapshot()
@@ -469,6 +544,8 @@ impl<const N: usize> PreparedKvmGuest<N> {
             image_bytes,
             stack_physical,
             stack_bytes,
+            table_physical,
+            table_pages,
         });
         Ok(self)
     }
@@ -964,6 +1041,8 @@ impl KvmSystem {
             service_entry: [None; 2],
             service_root: [None; 2],
             service_instance: [None; 2],
+            service_shared: None,
+            service_shared_live: [false; 2],
         })
     }
 }

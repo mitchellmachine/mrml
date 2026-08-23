@@ -1350,12 +1350,13 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                 .as_ref()
                 .unwrap_or_else(|| halt());
             let controls = (*core::ptr::addr_of!(SERVICE_CONTROLS)).unwrap_or_else(|| halt());
-            let fresh_context = UserContext::new(
+            let mut fresh_context = UserContext::new(
                 PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
                 SERVICE_ENTRY,
                 SERVICE_STACK_TOP,
             )
             .unwrap_or_else(|_| halt());
+            fresh_context.r12 = 2;
             let recovery = supervisor
                 .recover_current_fault(
                     runtime,
@@ -2029,18 +2030,20 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "service-probe")]
     unsafe {
-        let context_a = UserContext::new(
+        let mut context_a = UserContext::new(
             PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
             SERVICE_ENTRY,
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
-        let context_b = UserContext::new(
+        let mut context_b = UserContext::new(
             PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
             SERVICE_SENDER_ENTRY,
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
+        context_a.r12 = 1;
+        context_b.r12 = 1;
         let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap_or_else(|_| halt());
         let receiver = runtime
             .create(Priority::NORMAL, context_a)
@@ -2538,12 +2541,13 @@ unsafe fn restart_service_pair(
     };
     let controls = unsafe { (*core::ptr::addr_of!(SERVICE_CONTROLS)).unwrap_or_else(|| halt()) };
     let retired = unsafe { (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt()) };
-    let sender_context = UserContext::new(
+    let mut sender_context = UserContext::new(
         PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
         SERVICE_SENDER_ENTRY,
         SERVICE_STACK_TOP,
     )
     .unwrap_or_else(|_| halt());
+    sender_context.r12 = 2;
     // Recovery has already created the receiver generation. Recreate the
     // sender, then explicitly yield to the receiver if the retained scheduler
     // cursor initially selects the sender. This preserves the proof that an

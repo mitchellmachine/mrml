@@ -5,7 +5,7 @@
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 use mrml_error::{Result, anyhow};
 #[cfg(target_os = "linux")]
-use mrml_kernel::arch::x86_64::PRIVILEGE_STACK_ARENA_PAGES;
+use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
 #[cfg(target_os = "linux")]
 use mrml_kernel::{
     ArtifactKind, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity,
@@ -66,6 +66,10 @@ const SERVICE_B_PHYSICAL: u64 = 0x0090_0000;
 const SERVICE_B_STACK_PHYSICAL: u64 = 0x00e0_0000;
 #[cfg(target_os = "linux")]
 const SERVICE_B_TABLE_PHYSICAL: u64 = 0x00d0_0000;
+#[cfg(target_os = "linux")]
+const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
+#[cfg(target_os = "linux")]
+const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -341,6 +345,18 @@ fn application_main() -> Result<()> {
                 local_apic,
             )
             .map_err(|error| anyhow!("second isolated service preparation failed: {:?}", error))?;
+        let shared = Mapping::new(
+            VirtAddr::new(SERVICE_SHARED_VIRTUAL)
+                .map_err(|_| anyhow!("invalid service shared virtual address"))?,
+            PhysAddr::new(SERVICE_SHARED_PHYSICAL)
+                .map_err(|_| anyhow!("invalid service shared physical address"))?,
+            1,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .map_err(|_| anyhow!("invalid service shared-page mapping"))?;
+        guest = guest
+            .attach_service_shared_page(shared)
+            .map_err(|error| anyhow!("service shared-page attachment failed: {:?}", error))?;
         if guest.service_entry() != Some(0x0000_0001_4000_1000)
             || guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_entry_at(1) != Some(0x0000_0001_4000_1000)
@@ -749,6 +765,14 @@ fn application_main() -> Result<()> {
             {
                 return Err(anyhow!("KVM restart stage {:#x} failed: {:?}", stage, exit));
             }
+            if stage == 0x31 {
+                VmBackend::write_guest(&mut guest, SERVICE_SHARED_PHYSICAL, &[0; 8])
+                    .map_err(|error| anyhow!("failed to reset KVM shared page: {:?}", error))?;
+                guest
+                    .restore_service_shared_page(0)
+                    .and_then(|_| guest.restore_service_shared_page(1))
+                    .map_err(|error| anyhow!("failed to re-arm KVM shared page: {:?}", error))?;
+            }
             exit = VmBackend::run(&mut guest, 0).map_err(|error| {
                 anyhow!("KVM execution during service restart failed: {:?}", error)
             })?;
@@ -1026,6 +1050,9 @@ fn complete_kvm_service_cleanup<const N: usize>(
     wrong: &VerifiedExecutable<'_>,
     service: &VerifiedExecutable<'_>,
 ) -> Result<()> {
+    guest
+        .revoke_service_shared_page(slot)
+        .map_err(|error| anyhow!("KVM shared-page revocation failed: {:?}", error))?;
     if guest.reprovision_isolated_service_at(slot, wrong).is_ok() {
         return Err(anyhow!(
             "KVM service cleanup accepted a different signed executable"

@@ -1130,6 +1130,19 @@ impl<'a, const N: usize> KvmPageTableStore<'a, N> {
         })
     }
 
+    /// Opens a fully constructed arena for bounded mutation of an existing
+    /// root. Allocation is deliberately exhausted so a leaf-only operation
+    /// can never overwrite or extend the established hierarchy.
+    pub(crate) fn open_existing(
+        memory: &'a mut KvmGuestMemory<N>,
+        guest_start: u64,
+        pages: u64,
+    ) -> Result<Self, KvmError> {
+        let mut store = Self::new(memory, guest_start, pages)?;
+        store.next = store.end;
+        Ok(store)
+    }
+
     fn allocated_entry(&self, table: PhysAddr, index: usize) -> Result<u64, PageTableBuildError> {
         if index >= 512
             || table.get() < self.start
@@ -1406,7 +1419,9 @@ mod tests {
         let mut backend = system.create_backend::<1>(0).unwrap();
         let start = Instant::now();
         for _ in 0..ITERATIONS {
-            backend.map_memory(0x10_0000, PAGE_SIZE as usize, false).unwrap();
+            backend
+                .map_memory(0x10_0000, PAGE_SIZE as usize, false)
+                .unwrap();
             backend.revoke_guest_mapping(0x10_0000, PAGE_SIZE).unwrap();
         }
         let elapsed = start.elapsed().as_nanos();

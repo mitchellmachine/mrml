@@ -1641,8 +1641,31 @@ artifacts completed both generations under Arch Linux/WSL2 `/dev/kvm`
 (`verify=21224us`, `prepare=2833us`, `execute=1075us`, `total=48573us`) and
 Windows WHP (`verify=18294us`, `prepare=3764us`, `execute=663us`,
 `total=26432us`). This proves typed clean peer-death and envelope attribution in
-the hosted control path. A surviving peer observing typed fault death and live
-task-owned shared-page revocation remain separate outstanding evidence.
+the hosted control path.
+
+The following signed revision adds the task-owned bulk page without treating
+the hosted VMM as a confidentiality boundary. KVM and WHP allocate one common
+4 KiB guest frame and install independent exact `USER_READ_WRITE` leaves in the
+two isolated service roots. Generation 1 and generation 2 carry distinct
+kernel-supplied values in `r12`: the sender writes that value through its leaf,
+and the receiver rejects both the generation's value before blocking and any
+different value after wakeup. Thus the restarted path cannot pass by observing
+stale generation-1 contents. Each cleanup handshake removes only the retired
+root's exact leaf while the vCPU is stopped; the sibling leaf and common backing
+remain live, and service transition reloads CR3 before continuation. After both
+old tasks are retired, the host clears the backing and re-arms each leaf only
+after the kernel has created both replacement generations. Exact-match removal,
+duplicate removal/re-arm rejection, signed service checks, and terminal CPL3
+breakpoint stages fail closed. Fresh 2026-08-23 artifacts completed both
+generations under Arch Linux/WSL2 `/dev/kvm` (`verify=21162us`,
+`prepare=2604us`, `execute=934us`, `total=46438us`) and Windows WHP
+(`verify=17639us`, `prepare=3951us`, `execute=636us`, `total=25948us`). A
+surviving peer observing typed fault death remains the next separate evidence
+gate.
+
+Patent review: `NOT_TRIGGERED` — this is conventional shared-memory mapping,
+exact-match page-table removal, lifecycle ordering, and controlled-probe
+verification.
 
 Every registration now binds a validated restart policy containing a nonzero
 maximum restart count, base delay, and maximum delay. Retirement computes the
@@ -1682,8 +1705,9 @@ substitution, final-reference reporting, native failure, host-resource failure,
 eraser failure, exact-ticket retry, rejected-restart retry, and a composite
 native mapping/binding/host-resource/address-space cleanup followed by fresh
 generation creation. The signed backend probes now exercise cleanup-gated
-address-space reprovisioning, but have not yet exercised the full task-owned
-shared-binding and host-resource path live.
+address-space reprovisioning and the concrete task-owned shared-page lifecycle.
+The general opaque shared-binding/host-resource adapter remains
+simulation-tested rather than live-probe evidence.
 
 Each `TaskRuntime` domain now owns a fixed two-message inbox in addition to its
 context and capability space. `receive_or_block_current` dequeues immediately

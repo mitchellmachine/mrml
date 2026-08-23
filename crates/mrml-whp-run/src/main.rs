@@ -5,7 +5,7 @@
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 use mrml_error::{Result, anyhow};
-use mrml_kernel::arch::x86_64::PRIVILEGE_STACK_ARENA_PAGES;
+use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
 #[cfg(all(target_os = "windows", feature = "cuda"))]
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
@@ -65,6 +65,10 @@ const SERVICE_B_PHYSICAL: u64 = 0x0090_0000;
 const SERVICE_B_STACK_PHYSICAL: u64 = 0x00e0_0000;
 #[cfg(target_os = "windows")]
 const SERVICE_B_TABLE_PHYSICAL: u64 = 0x00d0_0000;
+#[cfg(target_os = "windows")]
+const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
+#[cfg(target_os = "windows")]
+const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
 
 #[cfg(target_os = "windows")]
 fn application_main() -> Result<()> {
@@ -301,6 +305,18 @@ fn application_main() -> Result<()> {
                     error
                 )
             })?;
+        let shared = Mapping::new(
+            VirtAddr::new(SERVICE_SHARED_VIRTUAL)
+                .map_err(|_| anyhow!("invalid WHP service shared virtual address"))?,
+            PhysAddr::new(SERVICE_SHARED_PHYSICAL)
+                .map_err(|_| anyhow!("invalid WHP service shared physical address"))?,
+            1,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .map_err(|_| anyhow!("invalid WHP service shared-page mapping"))?;
+        guest = guest
+            .attach_service_shared_page(shared)
+            .map_err(|error| anyhow!("WHP service shared-page attachment failed: {:?}", error))?;
         if guest.service_entry() != Some(0x0000_0001_4000_1000)
             || guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_entry_at(1) != Some(0x0000_0001_4000_1000)
@@ -694,6 +710,14 @@ fn application_main() -> Result<()> {
                     exit
                 ));
             }
+            if stage == 0x31 {
+                VmBackend::write_guest(&mut guest, SERVICE_SHARED_PHYSICAL, &[0; 8])
+                    .map_err(|error| anyhow!("failed to reset WHP shared page: {:?}", error))?;
+                guest
+                    .restore_service_shared_page(0)
+                    .and_then(|_| guest.restore_service_shared_page(1))
+                    .map_err(|error| anyhow!("failed to re-arm WHP shared page: {:?}", error))?;
+            }
             exit = VmBackend::run(&mut guest, 0).map_err(|error| {
                 anyhow!("WHP execution during service restart failed: {:?}", error)
             })?;
@@ -929,6 +953,9 @@ fn complete_whp_service_cleanup(
     wrong: &VerifiedExecutable<'_>,
     service: &VerifiedExecutable<'_>,
 ) -> Result<()> {
+    guest
+        .revoke_service_shared_page(slot)
+        .map_err(|error| anyhow!("WHP shared-page revocation failed: {:?}", error))?;
     if guest.reprovision_isolated_service_at(slot, wrong).is_ok() {
         return Err(anyhow!(
             "WHP service cleanup accepted a different signed executable"

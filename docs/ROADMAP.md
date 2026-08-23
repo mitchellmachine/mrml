@@ -33,7 +33,8 @@ reference is gone without exposing the opaque host handle to a guest.
 Backend-neutral revocation now removes the exact KVM memory slot or every WHP
 GPA submapping before retiring the common mapping identity. Any uncertain
 native teardown poisons subsequent vCPU execution. Live Linux KVM and Windows
-WHP revocation probes remain required before this gate is physically verified.
+WHP probes now also exercise stopped-task leaf revocation for a common service
+page while the peer mapping and backing remain live.
 Service retirement now preflights restart timing and publishes an exact one-use
 cleanup ticket. Restart remains blocked until the corresponding KVM/WHP eraser
 proves the retired task and page-table root and completes exact-artifact
@@ -51,8 +52,9 @@ scheduling outcome. Cleanup failure retains the exact ticket for retry; restart
 rejection leaves a clean stopped service that can be authorized and retried
 separately. Freshly signed WHP and KVM runs now exercise cleanup-ticket-gated
 per-slot address-space reprovisioning across clean exit, fault, restart, and
-restart-budget exhaustion. The task-owned shared-binding/host-resource
-composition remains simulation-tested rather than live-probe evidence.
+restart-budget exhaustion. The general task-owned shared-binding/opaque
+host-resource composition remains simulation-tested; the signed service path
+now exercises its concrete one-page hosted realization on both backends.
 Those signed paths now also establish an exact-generation control-peer relation
 in each generation. Clean sender exit publishes a typed `Exited` result; the
 kernel verifies its retired task identity and the queued message envelope's
@@ -68,10 +70,10 @@ and add adversarial unit tests. This milestone must not claim host-resistant
 confidentiality.
 
 The signed two-service path now covers the blocking control channel, exact
-sender/sequence envelopes, typed clean peer death, cleanup-gated fault
-retirement, and bounded restart on both hosted backends. Its remaining Phase 1
-integration work is the revocable task-owned shared-page bulk channel and typed
-fault-death observation by a peer that remains live through the crash.
+sender/sequence envelopes, typed clean peer death, a revocable task-owned
+shared page, cleanup-gated fault retirement, and bounded restart on both hosted
+backends. The next Phase 1 integration gate is typed fault-death observation by
+a peer that remains live through the crash.
 
 ## Phase 1 — Kernel and service foundation
 
@@ -86,9 +88,15 @@ fault-death observation by a peer that remains live through the crash.
    preflighted, denied transfers roll back both handles and edges, and domains
    with live delegation relations cannot migrate.
 5. Add shared-page/ring setup with explicit ownership and access attenuation.
+   **IMPLEMENTED** for the bounded one-page service substrate: KVM and WHP map
+   one common frame through independent exact user read/write leaves, revoke
+   only the retired task's leaf while preserving its peer, and re-arm leaves
+   only after fresh task generations exist. General multi-page ring protocol,
+   backpressure, and application-facing setup remain later work.
 6. Pair mapping revocation with native KVM/WHP invalidation before vCPU resume.
-   **IMPLEMENTED** in code and focused simulation tests; live backend probes
-   remain outstanding.
+   **IMPLEMENTED** in code, focused tests, and signed hosted probes. The vCPU is
+   stopped for exact-leaf removal; the next service transition reloads CR3
+   before peer continuation, and stale retired roots are never resumed.
 7. Integrate fault cleanup, peer notification, erasure, and bounded restart.
    **IMPLEMENTED** in kernel mechanism and focused simulation tests: typed peer
    notification, task-domain revocation, native-first task-owned shared-resource
@@ -96,9 +104,10 @@ fault-death observation by a peer that remains live through the crash.
    restart are coupled through one supervised recovery operation. Cleanup and
    restart failures retain retryable fail-closed state. Signed KVM and WHP runs
    exercise exact per-slot address-space cleanup before restart plus
-   exact-generation control-peer reconstruction and typed clean-death delivery;
-   the broader task-owned shared-binding/host-resource composition remains
-   outstanding live evidence rather than a missing kernel mechanism.
+   exact-generation control-peer reconstruction, typed clean-death delivery,
+   per-task shared-leaf revocation, surviving-peer access, and fresh-generation
+   re-arm. The broader opaque host-resource composition remains outstanding
+   live evidence rather than a missing kernel mechanism.
 8. Benchmark one-way, round-trip, cross-core, wakeup, transfer, revocation, and
    shared-memory setup costs.
    **IMPLEMENTED:** release microbenchmarks cover backend-neutral
