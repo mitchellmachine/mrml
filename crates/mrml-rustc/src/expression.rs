@@ -167,6 +167,7 @@ pub enum CheckedIntegerOptionOperation {
     ExactDivision,
     Division { remainder: bool },
     Arithmetic(BinaryOperator),
+    SignedUnary { absolute: bool },
     Cast(IntegerType),
     SignCast { signed: bool },
 }
@@ -4438,6 +4439,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_div_exact"
                         | "checked_div"
                         | "checked_rem"
+                        | "checked_neg"
+                        | "checked_abs"
                         | "checked_add"
                         | "checked_sub"
                         | "checked_mul"
@@ -4933,6 +4936,13 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?),
                     operation: CheckedIntegerOptionOperation::Division {
                         remainder: method.text == "checked_rem",
+                    },
+                },
+                "checked_neg" | "checked_abs" => ExprKind::CheckedIntegerOption {
+                    base,
+                    argument: None,
+                    operation: CheckedIntegerOptionOperation::SignedUnary {
+                        absolute: method.text == "checked_abs",
                     },
                 },
                 "checked_add" | "checked_sub" | "checked_mul" => ExprKind::CheckedIntegerOption {

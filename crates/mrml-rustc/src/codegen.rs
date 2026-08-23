@@ -3359,6 +3359,12 @@ fn runtime_expression_type_with_locals<
                 {
                     RuntimeExpressionType::Integer(Some(target))
                 }
+                crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. }
+                    if argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed()) =>
+                {
+                    base_type
+                }
                 crate::expression::CheckedIntegerOptionOperation::SignCast { signed }
                     if argument.is_none() =>
                 {
@@ -3453,6 +3459,10 @@ fn runtime_expression_type_with_locals<
                             depth + 1,
                         ) == Ok(base_type)
                     }),
+                crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => {
+                    argument.is_none()
+                        && matches!(base_type, RuntimeExpressionType::Integer(Some(source)) if source.is_signed())
+                }
                 crate::expression::CheckedIntegerOptionOperation::Cast(_) => argument.is_none(),
                 crate::expression::CheckedIntegerOptionOperation::SignCast { signed } => {
                     argument.is_none()
@@ -10726,6 +10736,7 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
             crate::expression::CheckedIntegerOptionOperation::ExactDivision => None,
             crate::expression::CheckedIntegerOptionOperation::Division { .. } => None,
             crate::expression::CheckedIntegerOptionOperation::Arithmetic(_) => None,
+            crate::expression::CheckedIntegerOptionOperation::SignedUnary { .. } => None,
         };
         if let Some(target) = cast_target {
             if argument.is_some() {
@@ -10824,6 +10835,26 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     self.patch_forward_branch(below_minimum)?;
                 }
                 self.patch_forward_branch(above_maximum)?;
+            }
+            self.emit_normalize()?;
+            return Ok((source_width, previous_width));
+        }
+        if let crate::expression::CheckedIntegerOptionOperation::SignedUnary { absolute } =
+            operation
+        {
+            if argument.is_some() || !source_width.signed {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit(&[0x48, 0xba])?;
+            self.emit(&(source_width.minimum as u64).to_le_bytes())?;
+            self.emit(&[0x48, 0x39, 0xd0, 0x41, 0x0f, 0x95, 0xc0])?;
+            if absolute {
+                self.emit(&[0x48, 0x85, 0xc0])?;
+                let nonnegative = self.emit_forward_branch(0x89)?;
+                self.emit(&[0x48, 0xf7, 0xd8])?;
+                self.patch_forward_branch(nonnegative)?;
+            } else {
+                self.emit(&[0x48, 0xf7, 0xd8])?;
             }
             self.emit_normalize()?;
             return Ok((source_width, previous_width));
@@ -15620,6 +15651,46 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { a.checked_div(b) }",
         ] {
             let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn consumes_checked_signed_unary_options() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8, fallback: i8) -> i8 { a.checked_neg().unwrap_or(fallback) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_abs().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: isize) -> bool { a.checked_neg().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i16) -> bool { a.checked_abs().is_none() }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8) -> u8 { a.checked_neg().unwrap_or_default() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u32) -> bool { a.checked_abs().is_some() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i64) -> i64 { a.checked_neg() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };

@@ -2919,6 +2919,24 @@ fn rustc_checked_division_and_remainder_options_reach_native_objects() {
 }
 
 #[test]
+fn rustc_checked_signed_unary_options_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i8, fallback: i8) -> i8 { a.checked_neg().unwrap_or(fallback) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i64) -> i64 { a.checked_abs().unwrap_or_default() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: isize) -> bool { a.checked_neg().is_some() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: i16) -> bool { a.checked_abs().is_none() }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_generic_checked_cast_options_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, fallback: u8) -> u8 { input.checked_cast::<u8>().unwrap_or(fallback) }",
