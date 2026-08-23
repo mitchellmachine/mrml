@@ -295,7 +295,12 @@ disjoint metadata ranges, canonical zero-padded empty subordinate images, and
 complete-image digests; the directory additionally binds its parent. Each is an
 explicit typed `0 -> 1` creation participant rather than an ordinary update.
 Parent-directory, allocation, ID-allocator, child, and authority-reservation
-orchestration remains pending.
+orchestration remains pending. A general one-directory mutation proof now walks
+the exact target generation to the selected root through the immutable backend.
+For create it reloads every predecessor, inserts the generation-1 child only in
+the target successor, advances every affected directory once, and rewrites each
+parent entry bottom-up through the root. Staging and publication of this create
+closure remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

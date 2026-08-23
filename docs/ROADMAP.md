@@ -265,7 +265,11 @@ authority; unrelated domains continue.
    empty extent image, while an empty directory has generation-1 directory
    metadata plus an empty entry image and exact parent. Disjoint layouts are
    checked before I/O and each child participates as an explicit typed
-   `0 -> 1` creation. Full create transaction assembly remains pending.
+   `0 -> 1` creation. A general bounded mutation proof now binds the exact
+   target-to-root path. Create successor construction reloads all predecessors,
+   inserts the child at the target, advances every directory once, and
+   propagates exact child generations to the root. Closure staging and full
+   create transaction assembly remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

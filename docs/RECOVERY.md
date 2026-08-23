@@ -162,7 +162,10 @@ explicitly and downgrade the status rather than guessing.
   insertion once orchestration is added. Initial empty files and directories
   now stage canonical unreachable metadata
   and empty subordinate images as typed generation-1 creation participants;
-  complete create publication and recovery traversal remain pending.
+  a bounded exact-generation mutation path constructs the parent-to-root
+  directory successor closure and propagates child generations bottom-up.
+  Closure staging, complete create publication, and recovery traversal remain
+  pending.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

@@ -232,6 +232,162 @@ impl<const N: usize> DirectoryAncestryProof<N> {
     }
 }
 
+pub struct DirectoryMutationProof<const N: usize> {
+    target: StorageObjectId,
+    target_generation: u64,
+    path: DirectoryAncestryPath<N>,
+}
+
+impl<const N: usize> DirectoryMutationProof<N> {
+    pub const fn path_len(&self) -> usize {
+        self.path.count
+    }
+
+    pub const fn ancestor(&self, index: usize) -> Option<StorageObjectId> {
+        if index < self.path.count {
+            match self.path.nodes[index] {
+                Some(node) => Some(node.object),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub const fn ancestor_generation(&self, index: usize) -> Option<u64> {
+        if index < self.path.count {
+            match self.path.nodes[index] {
+                Some(node) => Some(node.generation),
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn construct_create_successors<
+        const C: usize,
+        const E: usize,
+        B: DirectorySuccessorBackend<E>,
+    >(
+        &self,
+        entry: DirectoryEntry,
+        backend: &mut B,
+    ) -> Result<DirectoryMutationSuccessorPlan<C, E>, DirectorySuccessorError<B::Error>> {
+        if self.path.count > C {
+            return Err(DirectorySuccessorError::Capacity);
+        }
+        if entry.object().volume() != self.target.volume() || entry.object() == self.target {
+            return Err(DirectorySuccessorError::InvalidProof);
+        }
+        let mut successors: [Option<DirectoryMoveSuccessor<E>>; C] = core::array::from_fn(|_| None);
+        for (index, slot) in successors.iter_mut().enumerate().take(self.path.count) {
+            let node = self.path.nodes[index].ok_or(DirectorySuccessorError::InvalidProof)?;
+            let predecessor = backend
+                .load_directory_state(node.object, node.generation)
+                .map_err(DirectorySuccessorError::Backend)?;
+            if predecessor.object != node.object || predecessor.generation != node.generation {
+                return Err(DirectorySuccessorError::InvalidProof);
+            }
+            let mut state = predecessor.clone();
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .ok_or(DirectorySuccessorError::GenerationExhausted)?;
+            let parent = if index + 1 < self.path.count {
+                Some(
+                    self.path.nodes[index + 1]
+                        .ok_or(DirectorySuccessorError::InvalidProof)?
+                        .object,
+                )
+            } else {
+                None
+            };
+            *slot = Some(DirectoryMoveSuccessor {
+                predecessor,
+                parent,
+                state,
+            });
+        }
+        let target = successors[0]
+            .as_mut()
+            .ok_or(DirectorySuccessorError::InvalidProof)?;
+        if target.predecessor.object != self.target
+            || target.predecessor.generation != self.target_generation
+        {
+            return Err(DirectorySuccessorError::InvalidProof);
+        }
+        if target.state.count == E {
+            return Err(DirectorySuccessorError::Capacity);
+        }
+        if target.state.entries[..target.state.count]
+            .iter()
+            .flatten()
+            .any(|current| current.name() == entry.name() || current.object() == entry.object())
+        {
+            return Err(DirectorySuccessorError::InvalidProof);
+        }
+        target.state.entries[target.state.count] = Some(entry);
+        target.state.count += 1;
+
+        for index in 0..self.path.count.saturating_sub(1) {
+            let child = successors[index]
+                .as_ref()
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            let child_object = child.state.object;
+            let predecessor_generation = child.predecessor.generation;
+            let successor_generation = child.state.generation;
+            let parent = successors[index + 1]
+                .as_mut()
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            let parent_entry = parent.state.entries[..parent.state.count]
+                .iter_mut()
+                .flatten()
+                .find(|current| current.object() == child_object)
+                .ok_or(DirectorySuccessorError::InvalidProof)?;
+            if parent_entry.kind() != StorageObjectKind::Directory
+                || parent_entry.metadata_generation() != predecessor_generation
+            {
+                return Err(DirectorySuccessorError::InvalidProof);
+            }
+            *parent_entry = DirectoryEntry::new(
+                parent_entry.name(),
+                child_object,
+                StorageObjectKind::Directory,
+                successor_generation,
+            )
+            .map_err(|_| DirectorySuccessorError::InvalidProof)?;
+        }
+        Ok(DirectoryMutationSuccessorPlan {
+            successors,
+            count: self.path.count,
+        })
+    }
+}
+
+pub struct DirectoryMutationSuccessorPlan<const C: usize, const E: usize> {
+    successors: [Option<DirectoryMoveSuccessor<E>>; C],
+    count: usize,
+}
+
+impl<const C: usize, const E: usize> DirectoryMutationSuccessorPlan<C, E> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub const fn successor(&self, index: usize) -> Option<&DirectoryMoveSuccessor<E>> {
+        if index < self.count {
+            self.successors[index].as_ref()
+        } else {
+            None
+        }
+    }
+}
+
 pub struct DirectorySuccessorClosure<const N: usize> {
     objects: [Option<StorageObjectId>; N],
     generations: [u64; N],
@@ -770,9 +926,15 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
     {
         return Err(DirectoryAncestryError::InvalidProof);
     }
-    let source_path = load_ancestry_path::<N, B>(root, source, source_generation, moved, backend)?;
-    let destination_path =
-        load_ancestry_path::<N, B>(root, destination, destination_generation, moved, backend)?;
+    let source_path =
+        load_ancestry_path::<N, B>(root, source, source_generation, Some(moved), backend)?;
+    let destination_path = load_ancestry_path::<N, B>(
+        root,
+        destination,
+        destination_generation,
+        Some(moved),
+        backend,
+    )?;
     Ok(DirectoryAncestryProof {
         source,
         source_generation,
@@ -785,18 +947,35 @@ pub fn prove_directory_move_ancestry<const N: usize, B: DirectoryAncestryBackend
     })
 }
 
+pub fn prove_directory_mutation_ancestry<const N: usize, B: DirectoryAncestryBackend>(
+    root: StorageObjectId,
+    target: StorageObjectId,
+    target_generation: u64,
+    backend: &mut B,
+) -> Result<DirectoryMutationProof<N>, DirectoryAncestryError<B::Error>> {
+    if N == 0 || root.volume() != target.volume() || target_generation == 0 {
+        return Err(DirectoryAncestryError::InvalidProof);
+    }
+    let path = load_ancestry_path::<N, B>(root, target, target_generation, None, backend)?;
+    Ok(DirectoryMutationProof {
+        target,
+        target_generation,
+        path,
+    })
+}
+
 fn load_ancestry_path<const N: usize, B: DirectoryAncestryBackend>(
     root: StorageObjectId,
     start: StorageObjectId,
     start_generation: u64,
-    forbidden: StorageObjectId,
+    forbidden: Option<StorageObjectId>,
     backend: &mut B,
 ) -> Result<DirectoryAncestryPath<N>, DirectoryAncestryError<B::Error>> {
     let mut visited: [Option<DirectoryAncestryNode>; N] = [None; N];
     let mut count = 0;
     let mut current = start;
     loop {
-        if current == forbidden
+        if forbidden == Some(current)
             || visited[..count]
                 .iter()
                 .flatten()
@@ -2080,6 +2259,98 @@ mod tests {
             Err(DirectoryUpdateError::InvalidSuccessor)
         ));
         assert_eq!(rejected.staged, 0);
+    }
+
+    #[test]
+    fn create_successor_closure_propagates_exact_generations_to_root() {
+        let mut ancestry = AncestryBackend {
+            records: [
+                Some(directory_metadata(object(3), 1, Some(object(4)))),
+                Some(directory_metadata(object(4), 3, Some(object(1)))),
+                Some(directory_metadata(object(1), 5, None)),
+                None,
+                None,
+            ],
+        };
+        let proof =
+            prove_directory_mutation_ancestry::<3, _>(object(1), object(3), 1, &mut ancestry)
+                .unwrap();
+        assert_eq!(proof.path_len(), 3);
+        assert_eq!(proof.ancestor(0), Some(object(3)));
+        assert_eq!(proof.ancestor_generation(1), Some(3));
+        assert_eq!(proof.ancestor(3), None);
+
+        let retained =
+            DirectoryEntry::new(name("retained"), object(8), StorageObjectKind::File, 2).unwrap();
+        let target = DirectoryState::<3>::new(object(3), 1, &[retained]).unwrap();
+        let target_entry =
+            DirectoryEntry::new(name("target"), object(3), StorageObjectKind::Directory, 1)
+                .unwrap();
+        let common = DirectoryState::<3>::new(object(4), 3, &[target_entry]).unwrap();
+        let common_entry =
+            DirectoryEntry::new(name("common"), object(4), StorageObjectKind::Directory, 3)
+                .unwrap();
+        let root = DirectoryState::<3>::new(object(1), 5, &[common_entry]).unwrap();
+        let mut backend = SuccessorBackend {
+            records: [
+                Some(target.clone()),
+                Some(common.clone()),
+                Some(root.clone()),
+                None,
+                None,
+            ],
+        };
+        let created =
+            DirectoryEntry::new(name("created"), object(9), StorageObjectKind::File, 1).unwrap();
+        let plan = proof
+            .construct_create_successors::<3, 3, _>(created, &mut backend)
+            .unwrap();
+        assert_eq!(plan.len(), 3);
+        let target_successor = plan.successor(0).unwrap();
+        assert_eq!(target_successor.parent(), Some(object(4)));
+        assert_eq!(target_successor.state().generation(), 2);
+        assert_eq!(target_successor.state().entry(0), Some(retained));
+        assert_eq!(target_successor.state().entry(1), Some(created));
+        let common_successor = plan.successor(1).unwrap();
+        assert_eq!(common_successor.state().generation(), 4);
+        assert_eq!(
+            common_successor
+                .state()
+                .entry(0)
+                .unwrap()
+                .metadata_generation(),
+            2
+        );
+        let root_successor = plan.successor(2).unwrap();
+        assert_eq!(root_successor.parent(), None);
+        assert_eq!(root_successor.state().generation(), 6);
+        assert_eq!(
+            root_successor
+                .state()
+                .entry(0)
+                .unwrap()
+                .metadata_generation(),
+            4
+        );
+        assert!(plan.successor(3).is_none());
+
+        assert!(matches!(
+            proof.construct_create_successors::<2, 3, _>(created, &mut backend),
+            Err(DirectorySuccessorError::Capacity)
+        ));
+        let mut stale = SuccessorBackend {
+            records: [
+                Some(target),
+                Some(DirectoryState::<3>::new(object(4), 4, &[target_entry]).unwrap()),
+                Some(root),
+                None,
+                None,
+            ],
+        };
+        assert!(matches!(
+            proof.construct_create_successors::<3, 3, _>(created, &mut stale),
+            Err(DirectorySuccessorError::InvalidProof)
+        ));
     }
 
     #[test]

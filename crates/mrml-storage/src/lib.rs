@@ -35,11 +35,12 @@ pub use directory::{
     CommittedDirectoryMovePlan, DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend,
     DirectoryAncestryError, DirectoryAncestryProof, DirectoryClosureError, DirectoryError,
     DirectoryImage, DirectoryImageError, DirectoryMoveStageError, DirectoryMoveSuccessor,
-    DirectoryMoveSuccessorPlan, DirectoryState, DirectorySuccessorBackend,
-    DirectorySuccessorClosure, DirectorySuccessorError, DirectorySuccessorLayout,
-    DirectoryUpdateError, DirectoryWriteBackend, PreparedDirectoryMovePlan,
-    PreparedDirectoryUpdate, PreparedInitialDirectory, StorageObjectAllocator,
-    prepare_initial_directory, prove_directory_move_ancestry,
+    DirectoryMoveSuccessorPlan, DirectoryMutationProof, DirectoryMutationSuccessorPlan,
+    DirectoryState, DirectorySuccessorBackend, DirectorySuccessorClosure, DirectorySuccessorError,
+    DirectorySuccessorLayout, DirectoryUpdateError, DirectoryWriteBackend,
+    PreparedDirectoryMovePlan, PreparedDirectoryUpdate, PreparedInitialDirectory,
+    StorageObjectAllocator, prepare_initial_directory, prove_directory_move_ancestry,
+    prove_directory_mutation_ancestry,
 };
 pub use extent::{
     EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,
