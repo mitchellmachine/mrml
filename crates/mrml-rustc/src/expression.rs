@@ -540,6 +540,7 @@ pub enum ExprKind<'source> {
         fallback: Option<ExprId>,
         trap: bool,
         message: bool,
+        unchecked: bool,
     },
     IntegerOptionPredicate {
         option: ExprId,
@@ -4489,6 +4490,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "checked_mul"
                         | "expect"
                         | "unwrap"
+                        | "unwrap_unchecked"
                         | "unwrap_or"
                         | "unwrap_or_default"
                         | "is_some"
@@ -5098,18 +5100,21 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?),
                     trap: false,
                     message: false,
+                    unchecked: false,
                 },
                 "unwrap_or_default" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
                     fallback: None,
                     trap: false,
                     message: false,
+                    unchecked: false,
                 },
                 "unwrap" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
                     fallback: None,
                     trap: true,
                     message: false,
+                    unchecked: false,
                 },
                 "expect" => ExprKind::IntegerOptionUnwrapOr {
                     option: base,
@@ -5118,6 +5123,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     })?),
                     trap: true,
                     message: true,
+                    unchecked: false,
+                },
+                "unwrap_unchecked" => ExprKind::IntegerOptionUnwrapOr {
+                    option: base,
+                    fallback: None,
+                    trap: false,
+                    message: false,
+                    unchecked: true,
                 },
                 "is_some" | "is_none" => ExprKind::IntegerOptionPredicate {
                     option: base,

@@ -3324,8 +3324,12 @@ fn runtime_expression_type_with_locals<
             option,
             fallback,
             message,
+            unchecked,
             ..
         } => {
+            if unchecked && !function.unsafe_function {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let option = tree
                 .expression(option)
                 .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
@@ -6125,10 +6129,13 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                 fallback,
                 trap,
                 message,
+                unchecked,
             } => {
                 let (operand_width, previous_width) =
                     self.emit_checked_integer_option(tree, option, depth + 1)?;
-                if trap {
+                if unchecked {
+                    // The caller promises that the checked producer returned `Some`.
+                } else if trap {
                     if message {
                         let message =
                             fallback.ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
@@ -16937,6 +16944,45 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).expect() }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, message: u8) -> u8 { a.checked_add(b).expect(message) }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, message: &str) -> u8 { a.expect(message) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 4, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_err(),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unwraps_checked_integer_options_unchecked_in_unsafe_functions() {
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).unwrap_unchecked() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u64, b: u64) -> i64 { a.checked_signed_diff(b).unwrap_unchecked() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(input: i64) -> i16 { input.checked_truncate::<i16>().unwrap_unchecked() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                let result =
+                    compile_x86_64_function::<_, 1024, 4, 96>(&function, &NoConstants, abi);
+                assert!(result.is_ok(), "{source}: {result:?}");
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.checked_add(b).unwrap_unchecked() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> bool { a.checked_add(b).unwrap_unchecked() }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unwrap_unchecked() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 4>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

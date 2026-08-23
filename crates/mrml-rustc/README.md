@@ -2365,7 +2365,8 @@ Runtime integer expressions can consume stable `checked_add`, `checked_sub`,
 `checked_cast::<T>`, and same-width checked sign-cast results with
 `Option::unwrap_or` and
 `Option::unwrap_or_default`, extract them with `Option::unwrap` or
-`Option::expect`, or observe them with `Option::is_some` and
+`Option::expect`, or extract them in an unsafe function with
+`Option::unwrap_unchecked`; callers can observe them with `Option::is_some` and
 `Option::is_none`. Non-overflowing arithmetic, valid divisions and remainders,
 exact nonzero divisions, and representable casts return their scalar value or
 `Some`; inexact exact-divisions, zero divisors, signed `MIN / -1`, and
@@ -2406,7 +2407,11 @@ evaluates a runtime message after the checked receiver, and uses the same
 bounded trap because this compiler does not embed diagnostic formatting in
 generated freestanding objects. String literals now have their own expression
 node and type as immutable `&str`; other runtime uses remain rejected until
-object data and relocation emission are implemented. These consumers share one value-plus-validity emitter while
+object data and relocation emission are implemented.
+Unsafe `Option::unwrap_unchecked` returns the producer's candidate directly
+without testing its validity flag; safe functions reject the call, and callers
+must uphold Rust's `Some` precondition. These consumers share one
+value-plus-validity emitter while
 direct `Option` returns, option locals, other option consumers, and constant
 evaluation remain outside this milestone until their enum ABI and value
 representation are implemented.
