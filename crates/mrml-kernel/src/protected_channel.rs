@@ -16,6 +16,10 @@ pub const VBS_ATTESTATION_ENVELOPE_BYTES: usize = 8 + VBS_ATTESTATION_REPORT_MAX
 pub const VBS_SEALED_KEY_BLOB_MAX_BYTES: usize = 4096;
 pub const VBS_SEALED_KEY_ENVELOPE_BYTES: usize = 8 + VBS_SEALED_KEY_BLOB_MAX_BYTES;
 pub const VBS_SEALED_KEY_CONFIRMATION_BYTES: usize = 32;
+pub const VBS_WORKLOAD_CHALLENGE_BYTES: usize = 32;
+pub const VBS_WORKLOAD_SECRET_REQUEST_BYTES: usize =
+    LAUNCH_REQUEST_BYTES + VBS_SEALED_KEY_ENVELOPE_BYTES + VBS_WORKLOAD_CHALLENGE_BYTES;
+pub const VBS_WORKLOAD_RESULT_BYTES: usize = 32;
 pub const VBS_REPORT_PACKAGE_HEADER_BYTES: usize = 24;
 pub const VBS_REPORT_SIGNED_STATEMENT_BYTES: usize = 224;
 pub const VBS_ENCLAVE_IDENTITY_BYTES: usize = 152;
@@ -34,6 +38,8 @@ pub enum VbsAuthorityOperation {
     GenerateAttestationChallenge = 5,
     VerifyAttestationReport = 6,
     VerifyReceipt = 7,
+    GenerateWorkloadSecret = 8,
+    ConsumeWorkloadSecret = 9,
 }
 
 impl VbsAuthorityOperation {
@@ -46,6 +52,8 @@ impl VbsAuthorityOperation {
             5 => Ok(Self::GenerateAttestationChallenge),
             6 => Ok(Self::VerifyAttestationReport),
             7 => Ok(Self::VerifyReceipt),
+            8 => Ok(Self::GenerateWorkloadSecret),
+            9 => Ok(Self::ConsumeWorkloadSecret),
             _ => Err(ProtectedChannelError::Malformed),
         }
     }
@@ -977,7 +985,7 @@ mod tests {
         assert_eq!(admitted.policy_measurement(), policy_measurement);
         assert!(!admitted.debug_allowed());
         assert_eq!(admitted.security_version(), 1);
-        assert!(!admitted.permits_secret_release());
+        assert!(admitted.permits_secret_release());
     }
 
     #[test]

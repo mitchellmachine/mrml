@@ -291,9 +291,21 @@ are never copied to VTL0; host-visible confirmation markers are diagnostic only.
 The current probe creates a fresh session key rather than persistent storage,
 and a fixed key remains only under `cfg(test)`. This protects the local receipt
 key from VTL0 but is not remote attestation and does not protect against
-compromised Hyper-V or the secure kernel. `SEALED_KEYS` remains absent from the
-workload report until actual workload-secret consumption is confined to VTL1;
-`ATTESTATION` remains absent because local VBS reports are not remote evidence.
+compromised Hyper-V or the secure kernel. `ATTESTATION` remains absent because
+local VBS reports are not remote evidence.
+
+The workload-secret path now completes that local lifecycle. The authority
+generates a second random 256-bit secret and returns only its exact-code sealed
+envelope. The verifier records receipt authentication and Windows-verified code
+attestation as separate one-use gates, each bound to the exact canonical launch
+request. `ConsumeWorkloadSecret` copies a fixed request/envelope/challenge tuple
+into VTL1, rejects a zero challenge, unseals exactly 32 non-stale bytes, requires
+both gates to match, consumes them atomically, and computes a domain-separated
+HMAC entirely in enclave memory. It then volatile-erases the plaintext and
+copies only the 32-byte result to VTL0. Missing, duplicate, mismatched, or replayed
+gates fail closed. Consequently the VBS backend may now claim `SEALED_KEYS` for
+this implemented consumer. This is a narrowly scoped capability claim: it does
+not imply that arbitrary WHP guest memory is sealed or confidential.
 
 WHP now provides a fixed-capacity untrusted launch broker for that protocol.
 Generational tickets prevent a canceled or completed request from acquiring a
@@ -327,9 +339,10 @@ domains cannot issue evidence, and a malformed nonce does not consume the
 sequence. This report is still local evidence until independently
 authenticated; the ownership state machine alone is not remote attestation.
 
-The allowable claim sets now match implemented mechanisms. Neither VBS nor the
-bare-metal monitor may claim `SEALED_KEYS`; attempts are rejected as unsupported
-until the respective protected key lifecycle actually exists. Bare-metal also
+The allowable claim sets now match implemented mechanisms. VBS may claim
+`SEALED_KEYS` because its exact-code sealed, dual-gated consumer is implemented;
+the bare-metal monitor still rejects that claim until its protected key lifecycle
+exists. Bare-metal also
 does not claim `PRIVATE_MEMORY`, `HOST_VMM_ISOLATION`, `TRUSTED_IO`, or
 `ATTESTED` merely because VMX or a domain record exists. These claims require
 hardware page-transition/IOMMU enforcement and an authenticated evidence path,

@@ -26,7 +26,9 @@ impl ProtectionBackend {
     pub const fn maximum_claims(self) -> ProtectionClaims {
         match self {
             Self::Unprotected => ProtectionClaims::NONE,
-            Self::VbsEnclave => ProtectionClaims::VTL0_ISOLATION.union(ProtectionClaims::MEASURED),
+            Self::VbsEnclave => ProtectionClaims::VTL0_ISOLATION
+                .union(ProtectionClaims::MEASURED)
+                .union(ProtectionClaims::SEALED_KEYS),
             Self::BareMetalMonitor => {
                 ProtectionClaims::DOMAIN_ISOLATION.union(ProtectionClaims::MEASURED)
             }
@@ -624,25 +626,25 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_key_sealing_cannot_be_claimed() {
-        for backend in [
-            ProtectionBackend::VbsEnclave,
-            ProtectionBackend::BareMetalMonitor,
-        ] {
-            assert_eq!(
-                ProtectionReport::new(
-                    backend,
-                    backend
-                        .maximum_claims()
-                        .union(ProtectionClaims::SEALED_KEYS),
-                    false,
-                    1,
-                    1,
-                    MEASUREMENT,
-                    NONCE,
-                ),
-                Err(ProtectionError::UnsupportedClaim)
-            );
-        }
+    fn sealed_keys_are_supported_only_by_the_implemented_vbs_path() {
+        assert!(
+            ProtectionBackend::VbsEnclave
+                .maximum_claims()
+                .contains(ProtectionClaims::SEALED_KEYS)
+        );
+        assert_eq!(
+            ProtectionReport::new(
+                ProtectionBackend::BareMetalMonitor,
+                ProtectionBackend::BareMetalMonitor
+                    .maximum_claims()
+                    .union(ProtectionClaims::SEALED_KEYS),
+                false,
+                1,
+                1,
+                MEASUREMENT,
+                NONCE,
+            ),
+            Err(ProtectionError::UnsupportedClaim)
+        );
     }
 }

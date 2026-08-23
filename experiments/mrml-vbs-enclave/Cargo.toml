@@ -9,6 +9,7 @@ license = "CC0-1.0"
 description = "Original dependency-free MRML VBS enclave feasibility image"
 
 [dependencies]
+mrml-crypto = { path = "../../crates/mrml-crypto", default-features = false }
 mrml-kernel = { path = "../../crates/mrml-kernel" }
 
 [lib]

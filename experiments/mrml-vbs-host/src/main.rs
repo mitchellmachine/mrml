@@ -8,8 +8,9 @@ use mrml_kernel::{
     ProtectionPolicy, VBS_ATTESTATION_CHALLENGE_BYTES, VBS_ATTESTATION_DATA_BYTES,
     VBS_ATTESTATION_ENVELOPE_BYTES, VBS_AUTHORITY_CONTEXT_BYTES,
     VBS_RECEIPT_VERIFICATION_INPUT_BYTES, VBS_SEALED_KEY_CONFIRMATION_BYTES,
-    VBS_SEALED_KEY_ENVELOPE_BYTES, VbsAttestationData, VbsAttestationEnvelope, VbsAuthorityContext,
-    VbsAuthorityOperation, VbsSealedKeyEnvelope,
+    VBS_SEALED_KEY_ENVELOPE_BYTES, VBS_WORKLOAD_CHALLENGE_BYTES, VBS_WORKLOAD_RESULT_BYTES,
+    VBS_WORKLOAD_SECRET_REQUEST_BYTES, VbsAttestationData, VbsAttestationEnvelope,
+    VbsAuthorityContext, VbsAuthorityOperation, VbsSealedKeyEnvelope,
 };
 #[cfg(windows)]
 use mrml_runtime::{Vector, mrml_println, read_file_bounded};
@@ -107,6 +108,25 @@ fn application_main() -> Result<()> {
     let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, policy_measurement)
         .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
     let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
+    let mut workload_secret = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
+    let workload_key_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::GenerateWorkloadSecret,
+        encoded_request.as_ptr() as usize as u64,
+        encoded_request.len() as u64,
+        workload_secret.as_mut_ptr() as usize as u64,
+        workload_secret.len() as u64,
+    )
+    .map_err(|error| anyhow!("workload-secret context rejected: {:?}", error))?;
+    let mut workload_key_call = workload_key_context.encode();
+    let workload_key_status = enclave
+        .call_authority(authority, &mut workload_key_call)
+        .map_err(|error| anyhow!("workload-secret CallEnclave failed: {:?}", error))?;
+    if workload_key_status != 0 || VbsSealedKeyEnvelope::decode(&workload_secret).is_err() {
+        return Err(anyhow!(
+            "VTL1 authority rejected workload-secret generation with status {}",
+            workload_key_status
+        ));
+    }
     let mut sealed_key = [0; VBS_SEALED_KEY_ENVELOPE_BYTES];
     let key_context = VbsAuthorityContext::new(
         VbsAuthorityOperation::GenerateSealedKey,
@@ -245,6 +265,36 @@ fn application_main() -> Result<()> {
     }
     mrml_println!(
         "independent VTL1 enclave verified authority code identity, policy, and fresh challenge"
+    );
+    let mut workload_challenge = [0; VBS_WORKLOAD_CHALLENGE_BYTES];
+    mrml_runtime::fill_random(&mut workload_challenge)
+        .map_err(|_| anyhow!("workload challenge generation failed"))?;
+    let mut consume_input = [0; VBS_WORKLOAD_SECRET_REQUEST_BYTES];
+    consume_input[..LAUNCH_REQUEST_BYTES].copy_from_slice(&encoded_request);
+    let envelope_end = LAUNCH_REQUEST_BYTES + VBS_SEALED_KEY_ENVELOPE_BYTES;
+    consume_input[LAUNCH_REQUEST_BYTES..envelope_end].copy_from_slice(&workload_secret);
+    consume_input[envelope_end..].copy_from_slice(&workload_challenge);
+    let mut workload_result = [0; VBS_WORKLOAD_RESULT_BYTES];
+    let consume_context = VbsAuthorityContext::new(
+        VbsAuthorityOperation::ConsumeWorkloadSecret,
+        consume_input.as_ptr() as usize as u64,
+        consume_input.len() as u64,
+        workload_result.as_mut_ptr() as usize as u64,
+        workload_result.len() as u64,
+    )
+    .map_err(|error| anyhow!("workload consumption context rejected: {:?}", error))?;
+    let mut consume_call = consume_context.encode();
+    let consume_status = verifier
+        .call_authority(authority, &mut consume_call)
+        .map_err(|error| anyhow!("workload consumption CallEnclave failed: {:?}", error))?;
+    if consume_status != 0 || workload_result == [0; VBS_WORKLOAD_RESULT_BYTES] {
+        return Err(anyhow!(
+            "VTL1 verifier rejected workload-secret consumption with status {}",
+            consume_status
+        ));
+    }
+    mrml_println!(
+        "VTL1 consumed a sealed workload secret after receipt and code-attestation gates"
     );
     Ok(())
 }

@@ -149,8 +149,11 @@ The Windows probe loads separate authority and verifier VBS instances. The
 verifier creates a one-use enclave-random challenge, retains the complete
 expected request binding inside VTL1, validates Windows' report signature, and
 requires the authority identity and security versions to match its own signed
-image. A VTL0-visible success value
-is diagnostic only and cannot authorize host-side secret release.
+image. Receipt and attestation gates are retained independently inside VTL1 and
+must match the exact request before a one-use sealed workload secret can be
+unsealed and consumed there. Only an HMAC result leaves the enclave; every
+VTL0-visible success value remains diagnostic and cannot itself authorize
+secret release.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.
