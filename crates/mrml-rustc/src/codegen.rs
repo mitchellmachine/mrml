@@ -6951,7 +6951,8 @@ impl<
         let loop_start = self.length;
         self.emit_expression(&condition, condition.root(), 0)?;
         self.emit(&[0x48, 0x85, 0xc0])?;
-        let mut exit_patches = [None; crate::MAX_LOOP_OPERATIONS + 1];
+        let mut exit_patches =
+            [None; 1 + crate::MAX_LOOP_OPERATIONS * (crate::MAX_CONDITIONAL_LOOP_ELSE_ARMS + 1)];
         exit_patches[0] = Some(self.emit_forward_branch(0x84)?);
         let mut exit_count = 1usize;
         let local_checkpoint = self.saved_locals;
@@ -7026,9 +7027,25 @@ impl<
                     terminated = true;
                     break;
                 }
-                crate::LoopOperation::ConditionalBlock(_)
-                | crate::LoopOperation::NestedUnitLoop
-                | crate::LoopOperation::NestedBlock(_) => {
+                crate::LoopOperation::ConditionalBlock(index) => {
+                    let block = loop_statement.conditional_blocks()[*index]
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    self.emit_inline_conditional_loop_block::<MAX_NODES>(
+                        loop_statement,
+                        &block,
+                        expected_type,
+                        operand_type,
+                        call_checkpoint,
+                        local_checkpoint,
+                        loop_start,
+                        body_start,
+                        return_patches,
+                        return_count,
+                        &mut exit_patches,
+                        &mut exit_count,
+                    )?;
+                }
+                crate::LoopOperation::NestedUnitLoop | crate::LoopOperation::NestedBlock(_) => {
                     return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                 }
             }
@@ -7082,6 +7099,202 @@ impl<
         };
         self.patch_forward_branch(skip)?;
         Ok(exit)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_inline_conditional_loop_block<const MAX_NODES: usize>(
+        &mut self,
+        loop_statement: &crate::WhileLoop<'tree>,
+        block: &crate::ConditionalLoopBlock<'tree>,
+        expected_type: RuntimeExpressionType,
+        operand_type: &str,
+        call_checkpoint: usize,
+        loop_checkpoint: usize,
+        loop_start: usize,
+        body_start: usize,
+        return_patches: &mut [Option<usize>],
+        return_count: &mut usize,
+        exit_patches: &mut [Option<usize>],
+        exit_count: &mut usize,
+    ) -> Result<(), CodegenError> {
+        let condition = block
+            .parse_condition::<MAX_NODES>()
+            .map_err(|error| CodegenError {
+                kind: CodegenErrorKind::Expression(error.kind),
+                span: translate_span(body_start + block.condition_span.start, error.span),
+            })?;
+        self.emit_inline_loop_arm_condition(&condition)?;
+        let skip_block = self.emit_forward_branch(0x84)?;
+        let block_checkpoint = self.saved_locals;
+        self.emit_inline_loop_actions::<MAX_NODES>(block.actions(), operand_type, body_start)?;
+        let block_terminated = self.emit_inline_loop_terminal::<MAX_NODES>(
+            block.terminal.as_ref(),
+            expected_type,
+            call_checkpoint,
+            loop_checkpoint,
+            loop_start,
+            body_start,
+            return_patches,
+            return_count,
+            exit_patches,
+            exit_count,
+        )?;
+        if !block_terminated {
+            self.emit_stack_cleanup_to(block_checkpoint)?;
+        }
+        self.truncate_scoped_locals(block_checkpoint)?;
+        let mut end_patches = [None; crate::MAX_CONDITIONAL_LOOP_ELSE_ARMS + 1];
+        let mut end_count = 0usize;
+        if block.else_arm.is_some() && !block_terminated {
+            end_patches[end_count] = Some(self.emit_unconditional_forward_branch()?);
+            end_count += 1;
+        }
+        self.patch_forward_branch(skip_block)?;
+        if let Some(else_index) = block.else_arm {
+            let end = else_index
+                .checked_add(block.else_arm_count)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            let arms = loop_statement
+                .conditional_else_arms()
+                .get(else_index..end)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            for arm in arms.iter().flatten() {
+                let skip_arm = if let Some(condition) =
+                    arm.parse_condition::<MAX_NODES>()
+                        .map_err(|error| CodegenError {
+                            kind: CodegenErrorKind::Expression(error.kind),
+                            span: translate_span(body_start + arm.condition_span.start, error.span),
+                        })? {
+                    self.emit_inline_loop_arm_condition(&condition)?;
+                    Some(self.emit_forward_branch(0x84)?)
+                } else {
+                    None
+                };
+                let arm_checkpoint = self.saved_locals;
+                self.emit_inline_loop_actions::<MAX_NODES>(
+                    arm.actions(),
+                    operand_type,
+                    body_start,
+                )?;
+                let terminated = self.emit_inline_loop_terminal::<MAX_NODES>(
+                    arm.terminal.as_ref(),
+                    expected_type,
+                    call_checkpoint,
+                    loop_checkpoint,
+                    loop_start,
+                    body_start,
+                    return_patches,
+                    return_count,
+                    exit_patches,
+                    exit_count,
+                )?;
+                if !terminated {
+                    self.emit_stack_cleanup_to(arm_checkpoint)?;
+                }
+                self.truncate_scoped_locals(arm_checkpoint)?;
+                if !terminated {
+                    end_patches[end_count] = Some(self.emit_unconditional_forward_branch()?);
+                    end_count += 1;
+                }
+                if let Some(skip_arm) = skip_arm {
+                    self.patch_forward_branch(skip_arm)?;
+                } else {
+                    break;
+                }
+            }
+        }
+        for patch in end_patches[..end_count].iter().flatten().copied() {
+            self.patch_forward_branch(patch)?;
+        }
+        Ok(())
+    }
+
+    fn emit_inline_loop_arm_condition<const MAX_NODES: usize>(
+        &mut self,
+        condition: &crate::ExpressionTree<'_, MAX_NODES>,
+    ) -> Result<(), CodegenError> {
+        let ty = runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            condition,
+            condition.root(),
+            0,
+        )
+        .map_err(|kind| self.error(kind))?;
+        if ty != RuntimeExpressionType::Bool {
+            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        }
+        self.emit_expression(condition, condition.root(), 0)?;
+        self.emit(&[0x48, 0x85, 0xc0])
+    }
+
+    fn emit_inline_loop_actions<const MAX_NODES: usize>(
+        &mut self,
+        actions: &[Option<crate::ConditionalLoopAction<'tree>>],
+        operand_type: &str,
+        body_start: usize,
+    ) -> Result<(), CodegenError> {
+        for action in actions.iter().flatten() {
+            match action {
+                crate::ConditionalLoopAction::Local(local) => {
+                    self.emit_local::<MAX_NODES>(local, operand_type, body_start)?;
+                }
+                crate::ConditionalLoopAction::Assignment(assignment) => {
+                    self.emit_assignment::<MAX_NODES>(assignment, body_start)?;
+                }
+                crate::ConditionalLoopAction::Expression(statement) => {
+                    self.emit_expression_statement::<MAX_NODES>(statement, body_start)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_inline_loop_terminal<const MAX_NODES: usize>(
+        &mut self,
+        terminal: Option<&crate::ConditionalLoopTerminal<'tree>>,
+        expected_type: RuntimeExpressionType,
+        call_checkpoint: usize,
+        loop_checkpoint: usize,
+        loop_start: usize,
+        body_start: usize,
+        return_patches: &mut [Option<usize>],
+        return_count: &mut usize,
+        exit_patches: &mut [Option<usize>],
+        exit_count: &mut usize,
+    ) -> Result<bool, CodegenError> {
+        let Some(terminal) = terminal else {
+            return Ok(false);
+        };
+        match terminal {
+            crate::ConditionalLoopTerminal::Break => {
+                self.emit_stack_cleanup_to(loop_checkpoint)?;
+                let patch = self.emit_unconditional_forward_branch()?;
+                *exit_patches
+                    .get_mut(*exit_count)
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                *exit_count += 1;
+            }
+            crate::ConditionalLoopTerminal::Continue => {
+                self.emit_stack_cleanup_to(loop_checkpoint)?;
+                self.emit_backward_branch(loop_start)?;
+            }
+            crate::ConditionalLoopTerminal::Return(return_statement) => {
+                let patch = self.emit_inline_return::<MAX_NODES>(
+                    return_statement,
+                    expected_type,
+                    call_checkpoint,
+                    body_start,
+                )?;
+                *return_patches
+                    .get_mut(*return_count)
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? = Some(patch);
+                *return_count += 1;
+            }
+        }
+        Ok(true)
     }
 
     fn emit_expression_with_width<const MAX_NODES: usize>(

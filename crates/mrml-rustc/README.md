@@ -2599,6 +2599,12 @@ return removes the iteration frame and the rest of the callee frame before
 joining caller execution; an untaken conditional return retains the iteration
 locals and proceeds to later operations or the normal backedge. A false loop
 condition still reaches the callee's later statements and tail.
+One-level `if`/`else if`/`else` blocks inside those loops may combine scoped
+scalar actions with terminal `break`, `continue`, or scalar `return` edges.
+Each arm removes exactly its branch locals on ordinary fallthrough, the full
+iteration frame on a loop-control edge, or the full callee frame on return;
+untaken conditions continue through sibling arms and nonterminal arms join the
+later loop operations. Nested loops remain outside this bounded subset.
 Direct scalar `return` statements, conditional early returns, and exhaustive
 `if`/`else if`/`else` return chains are remapped to a per-call inline join.
 Every returning edge removes only that callee's arguments and locals before
@@ -2616,12 +2622,15 @@ object. A separate multi-return probe produced a 334-byte COFF object and a
 736-byte ELF64 objects. A normal-exit loop probe produced 274-byte COFF and
 664-byte ELF64 objects. A controlled-loop probe produced 398-byte COFF and
 792-byte ELF64 objects. A loop-return probe produced 314-byte COFF and 704-byte
-ELF64 objects. Independent pinned-nightly callers exercised taken and untaken
-loop returns, alternating continue edges, threshold break, zero, one, and 100
-requested iterations, returning and falling-through action arms, all three
-mutation arms, scoped-local cleanup, persistent outer mutation, normal-tail and
-both early-return edges, caller-side result composition, Boolean branches, and
-inputs at narrow-width boundaries on Windows and Arch Linux WSL.
+ELF64 objects. A structured loop-arm probe produced a 469-byte COFF object and
+an 856-byte ELF64 object. Independent pinned-nightly callers exercised taken
+and untaken loop returns, alternating continue edges, threshold break, zero,
+one, and 100 requested iterations, returning and falling-through action arms,
+an `else if` chain whose sibling arms continue, break, return, and mutate, all
+three mutation arms, scoped-local cleanup, persistent outer mutation,
+normal-tail and both early-return edges, caller-side result composition,
+Boolean branches, and inputs at narrow-width boundaries on Windows and Arch
+Linux WSL.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

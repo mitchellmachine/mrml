@@ -3472,6 +3472,7 @@ fn rustc_prior_scalar_function_calls_reach_native_objects() {
         "fn sum_to(limit: u64) -> u64 { let mut index: u64 = 0; let mut total: u64 = 0; while index < limit { let current: u64 = index; total += current; index += 1; } total } #[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u64) -> u64 { sum_to(limit) + 1 }",
         "fn odd_sum_until(limit: u64) -> u64 { let mut index: u64 = 0; let mut total: u64 = 0; while index < limit { index += 1; let current: u64 = index; if current % 2 == 0 { continue; } total += current; if total > 20 { break; } } total } #[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u64) -> u64 { odd_sum_until(limit) + 1 }",
         "fn find_three(limit: u64) -> u64 { let mut index: u64 = 0; while index < limit { let current: u64 = index; if current == 3 { return current + 10; } index += 1; } 99 } #[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u64) -> u64 { find_three(limit) + 1 }",
+        "fn route_loop(limit: u64, return_five: bool) -> u64 { let mut index: u64 = 0; let mut total: u64 = 0; while index < limit { index += 1; if index == 5 && return_five { return 50; } else if index % 2 == 0 { continue; } else if index > 6 { break; } else { total += index; } } total } #[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u64, return_five: bool) -> u64 { route_loop(limit, return_five) + 1 }",
     ];
     for source in sources {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

@@ -412,6 +412,16 @@ mod tests {
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
         );
 
+        let structured_loop = "fn select(value: u64, choose: bool) -> u64 { let mut total: u64 = 0; while total < value { if choose { total += 1; break; } else { total += 1; continue; } } total } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, choose: bool) -> u64 { select(value, choose) }";
+        assert!(compile(structured_loop, "answer", ObjectFormat::Elf64).is_ok());
+
+        let nested_loop = "fn count(value: u64) -> u64 { let mut current: u64 = 0; while current < value { while current < 3 { current += 1; } current += 1; } current } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { count(value) }";
+        let error = compile(nested_loop, "answer", ObjectFormat::Elf64).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeExpressionUnsupported)
+        );
+
         let unconditional_loop = "fn spin(value: u64) -> u64 { loop {} } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { spin(value) }";
         let error = compile(unconditional_loop, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
