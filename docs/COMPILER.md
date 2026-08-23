@@ -173,11 +173,13 @@ Local and access facts now live in a standalone fixed-capacity
 `RuntimeBodyFacts` object borrowed by the x86 emitter rather than in its machine-
 code state. Before the prologue is emitted, a bounded analysis pass types the
 supported leading straight-line local-declaration prefix and assigns each named
-binding its stable ID, mutability, type, and translated declaration span. If
-that prefix reaches a supported conditional assignment, the pass also visits
-each branch's local declarations in source emission order. Every branch starts
-with the same outer scope while the fact-ID sequence remains monotonic, so
-same-named locals in mutually exclusive branches retain distinct identities.
+binding its stable ID, mutability, type, and translated declaration span. Across
+the supported top-level region before the first loop, the pass continues through
+assignments, expressions, returns, and repeated conditional assignments. It
+visits each conditional branch's local declarations in source emission order.
+Every branch starts with the same outer scope while the fact-ID sequence remains
+monotonic, so same-named locals in mutually exclusive or sequential branches
+retain distinct identities. Later top-level locals cannot inherit a branch ID.
 Emission must consume every preassigned declaration exactly once. Inlined helper
 parameters and later scoped locals append to a checked dynamic tail and cannot
 steal a preassigned source identity; mismatches fail as
@@ -193,9 +195,9 @@ syntax into an ordered read-place projection chain. A fifth projection and a
 emission consumes that discovery and records one projected read instead of an
 empty base read. Specialized direct aggregate paths reuse the same recorder.
 The discovery is not yet universally consumed by nested emission paths. The
-prepass does not yet continue after that conditional, enumerate loop or
-arbitrary nested scopes, analyze all reads and writes, or replace name lookup
-across the whole body. There is not
+prepass stops at the first loop and does not yet enumerate loop or arbitrary
+nested scopes, analyze all reads and writes, or replace name lookup across the
+whole body. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
 place foundation is therefore an incremental prerequisite, not a claim of
 ownership checking.

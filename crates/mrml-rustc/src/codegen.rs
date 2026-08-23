@@ -837,7 +837,7 @@ pub fn compile_x86_64_function_with_options<
         })?;
     let mut body_facts = RuntimeBodyFacts::EMPTY;
     let preanalyzed_local_count =
-        preanalyze_runtime_local_prefix::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+        preanalyze_runtime_body_declarations::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             function,
             resolver,
             &body,
@@ -2388,7 +2388,7 @@ fn preanalyze_runtime_conditional_actions<
     Ok(())
 }
 
-fn preanalyze_runtime_local_prefix<
+fn preanalyze_runtime_body_declarations<
     'source,
     R: ConstantResolver,
     const MAX_PARAMETERS: usize,
@@ -2452,9 +2452,13 @@ fn preanalyze_runtime_local_prefix<
                     &locals,
                     local_count,
                 )?;
-                break;
             }
-            _ => break,
+            crate::BodyStatement::Loop(_) => break,
+            crate::BodyStatement::Assignment(_)
+            | crate::BodyStatement::ConditionalReturn(_)
+            | crate::BodyStatement::ConditionalReturnElse(_)
+            | crate::BodyStatement::Expression(_)
+            | crate::BodyStatement::Return(_) => {}
         }
     }
     Ok(facts.local_count)
@@ -16658,7 +16662,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_body_facts_preanalyze_typed_straight_line_local_prefixes() {
+    fn runtime_body_facts_preanalyze_typed_straight_line_locals() {
         let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16) -> u16 { let first: u16 = input; let second = first + 1; second }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -16667,7 +16671,7 @@ mod tests {
         let body = function.parse_body::<4>().unwrap();
         let resolver = NoConstants;
         let mut facts = RuntimeBodyFacts::EMPTY;
-        let count = preanalyze_runtime_local_prefix::<_, 4, 16>(
+        let count = preanalyze_runtime_body_declarations::<_, 4, 16>(
             &function,
             &resolver,
             &body,
@@ -16757,7 +16761,7 @@ mod tests {
         let body = function.parse_body::<4>().unwrap();
         let resolver = NoConstants;
         let mut facts = RuntimeBodyFacts::EMPTY;
-        let count = preanalyze_runtime_local_prefix::<_, 4, 32>(
+        let count = preanalyze_runtime_body_declarations::<_, 4, 32>(
             &function,
             &resolver,
             &body,
@@ -16785,6 +16789,51 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 1024, 4, 32>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_continue_across_statements_and_conditionals() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u16, mode: u16) -> u16 { let mut result: u16 = input; result += 1; if mode == 0 { let branch: u16 = result + 1; result = branch; } else { let branch: u16 = result + 2; result = branch; } result += 3; let after: u16 = result; if mode == 2 { let second: u16 = after + 4; result = second; } else { let second: u16 = after + 5; result = second; } let tail: u16 = result; tail }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 7);
+        for (id, (fact, name)) in facts.locals[..count]
+            .iter()
+            .zip([
+                "result", "branch", "branch", "after", "second", "second", "tail",
+            ])
+            .enumerate()
+        {
+            assert_eq!(fact.unwrap().name, name);
+            assert_eq!(fact.unwrap().id, RuntimeLocalId(id));
+        }
+        assert_ne!(
+            facts.locals[1].unwrap().declaration_span,
+            facts.locals[2].unwrap().declaration_span
+        );
+        assert_ne!(
+            facts.locals[4].unwrap().declaration_span,
+            facts.locals[5].unwrap().declaration_span
+        );
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 2048, 8, 64>(&function, &resolver, abi).unwrap();
         }
     }
 

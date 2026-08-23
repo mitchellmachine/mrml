@@ -2894,14 +2894,23 @@ Runtime local and access facts now reside in a standalone fixed-capacity body
 table outside the x86 emitter's machine-code buffers. A pre-emission pass types
 the supported leading straight-line named-local prefix and assigns stable IDs,
 mutability, types, and translated declaration spans before the prologue exists.
-When that prefix reaches a supported conditional assignment, it visits every
-branch action list from the same outer scope without rewinding the monotonic
-fact identity, giving same-named mutually exclusive branch locals distinct IDs.
+Across the supported top-level region before the first loop, it continues
+through intervening assignments, expressions, returns, and repeated conditional
+assignments. Every conditional branch starts from the same outer scope without
+rewinding the monotonic fact identity, giving same-named mutually exclusive or
+sequential branch locals distinct IDs and reserving later top-level identities.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
-steal a reserved source identity. The prepass stops after that conditional and
-does not yet enumerate later conditionals, loop declarations, arbitrary nested
-scopes, or all body accesses; it is not a complete typed body IR.
+steal a reserved source identity. The prepass stops at the first loop and does
+not yet enumerate loop declarations, arbitrary nested scopes, or all body
+accesses; it is not a complete typed body IR.
+
+The sequential top-level declaration milestone passed all 570 compiler and
+driver tests on Windows gnullvm and all 570 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+seven monotonic IDs across two conditional scopes, intervening assignments, and
+later top-level declarations. Its original differential replacement emits both
+COFF and ELF64 objects.
 
 The conditional branch-local identity milestone passed all 568 compiler and
 driver tests on Windows gnullvm and all 568 in release mode on native Arch Linux

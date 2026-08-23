@@ -1325,6 +1325,24 @@ fn rustc_conditional_branch_local_identities_reach_native_objects() {
 }
 
 #[test]
+fn rustc_sequential_conditional_local_identities_reach_native_objects() {
+    // Original repeated-scope probe paired with the pinned nightly's lexical
+    // binding and conditional mutation behavior.
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, mode: u16) -> u16 { let mut result: u16 = input; result += 1; if mode == 0 { let branch: u16 = result + 1; result = branch; } else { let branch: u16 = result + 2; result = branch; } result += 3; let after: u16 = result; if mode == 2 { let second: u16 = after + 4; result = second; } else { let second: u16 = after + 5; result = second; } let tail: u16 = result; tail }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<4096, 2048, 4, 8, 8, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_guarded_mutation_reaches_native_objects() {
     // Original scalar replacement for the guard-before-mutation ordering in
     // tests/ui/consts/control-flow/basics.rs at the pinned nightly commit.
