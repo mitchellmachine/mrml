@@ -2603,6 +2603,26 @@ fn rustc_unsigned_bit_gather_scatter_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_unsigned_funnel_shifts_reach_native_objects() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, n: u32) -> u8 { a.funnel_shl(b, n) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8, n: u32) -> u8 { a.funnel_shr(b, n) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64, n: u32) -> u64 { a.funnel_shl(b, n) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64, n: u32) -> u64 { a.funnel_shr(b, n) }",
+        "const VALUE: u8 = 0x81u8.funnel_shl(0x42, 1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+        "const VALUE: u8 = 0x81u8.funnel_shr(0x42, 1); #[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { VALUE }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_ascii_byte_predicates_reach_native_objects() {
     let methods = [
         "is_ascii",

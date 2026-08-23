@@ -2122,6 +2122,11 @@ mask-selected source bits toward the least-significant end, while deposition
 scatters the receiver's low bits into mask-selected positions. Six 552- to
 576-byte System V objects matched pinned Rust at 8 and 64 bits across zero and
 full masks, sparse high/low masks, mixed values, and unsigned maxima.
+Pinned-nightly unsigned `funnel_shl` and `funnel_shr` combine two same-width
+integers across an exact `u32` distance in constants and runtime functions.
+Distances must be smaller than the receiver width; zero selects the left input
+for `funnel_shl` and the right input for `funnel_shr`, while out-of-range
+runtime distances trap.
 Unsigned primitives support stable `next_power_of_two` and pinned-nightly
 `wrapping_next_power_of_two`. Zero maps to one; checked runtime objects trap
 when the rounded power exceeds the receiver width, while unchecked and explicit

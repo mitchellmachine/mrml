@@ -420,6 +420,12 @@ pub enum ExprKind<'source> {
         distance: ExprId,
         left: bool,
     },
+    IntegerFunnelShift {
+        base: ExprId,
+        other: ExprId,
+        distance: ExprId,
+        left: bool,
+    },
     IntegerWrappingShift {
         base: ExprId,
         distance: ExprId,
@@ -714,6 +720,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::WrappingArithmetic { .. }
             | ExprKind::SaturatingArithmetic { .. }
             | ExprKind::IntegerRotate { .. }
+            | ExprKind::IntegerFunnelShift { .. }
             | ExprKind::IntegerWrappingShift { .. }
             | ExprKind::IntegerWrappingPower { .. }
             | ExprKind::IntegerBitTransform { .. }
@@ -985,6 +992,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::WrappingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::SaturatingArithmetic { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerRotate { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::IntegerFunnelShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingShift { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerWrappingPower { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::IntegerBitTransform { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2289,6 +2297,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             ExprKind::IntegerRotate { base, distance, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(distance, name, replacement, depth + 1)?;
+            }
+            ExprKind::IntegerFunnelShift {
+                base,
+                other,
+                distance,
+                ..
+            } => {
+                self.substitute_identifier(base, name, replacement, depth + 1)?;
+                self.substitute_identifier(other, name, replacement, depth + 1)?;
                 self.substitute_identifier(distance, name, replacement, depth + 1)?;
             }
             ExprKind::IntegerWrappingShift { base, distance, .. } => {
@@ -3902,6 +3920,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         | "wrapping_rem"
                         | "rotate_left"
                         | "rotate_right"
+                        | "funnel_shl"
+                        | "funnel_shr"
                         | "wrapping_shl"
                         | "wrapping_shr"
                         | "unbounded_shl"
@@ -4083,6 +4103,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     | "ilog"
                     | "rotate_left"
                     | "rotate_right"
+                    | "funnel_shl"
+                    | "funnel_shr"
                     | "wrapping_shl"
                     | "wrapping_shr"
                     | "unbounded_shl"
@@ -4131,6 +4153,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             let second_argument = if matches!(
                 method.text,
                 "write_bytes"
+                    | "funnel_shl"
+                    | "funnel_shr"
                     | "copy_to"
                     | "copy_to_nonoverlapping"
                     | "copy_from"
@@ -4277,6 +4301,16 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                         self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
                     })?,
                     left: method.text == "rotate_left",
+                },
+                "funnel_shl" | "funnel_shr" => ExprKind::IntegerFunnelShift {
+                    base,
+                    other: argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    distance: second_argument.ok_or_else(|| {
+                        self.error(ExpressionErrorKind::ExpectedExpression, Some(close))
+                    })?,
+                    left: method.text == "funnel_shl",
                 },
                 "wrapping_shl" | "wrapping_shr" | "unbounded_shl" | "unbounded_shr"
                 | "strict_shl" | "strict_shr" => ExprKind::IntegerWrappingShift {

@@ -211,6 +211,7 @@ pub fn analyze_constants<
                     ExprKind::WrappingArithmetic { .. }
                         | ExprKind::SaturatingArithmetic { .. }
                         | ExprKind::IntegerRotate { .. }
+                        | ExprKind::IntegerFunnelShift { .. }
                         | ExprKind::IntegerWrappingShift { .. }
                         | ExprKind::IntegerWrappingPower { .. }
                         | ExprKind::IntegerBitTransform { .. }
@@ -1914,6 +1915,7 @@ fn evaluate_integer_const_expression<
             ExprKind::WrappingArithmetic { .. }
                 | ExprKind::SaturatingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
+                | ExprKind::IntegerFunnelShift { .. }
                 | ExprKind::IntegerWrappingShift { .. }
                 | ExprKind::IntegerWrappingPower { .. }
                 | ExprKind::IntegerBitTransform { .. }
@@ -2058,6 +2060,16 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::IntegerRotate { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
+        ExprKind::IntegerFunnelShift {
+            base,
+            other,
+            distance,
+            ..
+        } => {
+            recurse(base, inside_inline_const)
+                || recurse(other, inside_inline_const)
+                || recurse(distance, inside_inline_const)
+        }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base, inside_inline_const) || recurse(distance, inside_inline_const)
         }
@@ -2178,6 +2190,12 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::WrappingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::SaturatingArithmetic { base, argument, .. } => recurse(base) || recurse(argument),
         ExprKind::IntegerRotate { base, distance, .. } => recurse(base) || recurse(distance),
+        ExprKind::IntegerFunnelShift {
+            base,
+            other,
+            distance,
+            ..
+        } => recurse(base) || recurse(other) || recurse(distance),
         ExprKind::IntegerWrappingShift { base, distance, .. } => recurse(base) || recurse(distance),
         ExprKind::IntegerWrappingPower { base, exponent, .. } => recurse(base) || recurse(exponent),
         ExprKind::IntegerBitTransform { base, .. } => recurse(base),
@@ -2516,6 +2534,38 @@ fn evaluate_call_aware_integer<
                 depth,
             )?;
             rotate_integer_bits(value, distance, bits, left)
+        }
+        ExprKind::IntegerFunnelShift {
+            base,
+            other,
+            distance,
+            left,
+        } => {
+            if ty.is_signed()
+                || integer_expression_type(context, symbol_count, tree, base, constants)
+                    .is_some_and(|actual| actual != ty)
+                || integer_expression_type(context, symbol_count, tree, other, constants)
+                    .is_some_and(|actual| actual != ty)
+                || integer_expression_type(context, symbol_count, tree, distance, constants)
+                    .is_some_and(|actual| actual != crate::IntegerType::U32)
+            {
+                return Err(arithmetic_error(ConstEvalError::InvalidCast));
+            }
+            let first = recurse(base)? & signed_mask(bits);
+            let second = recurse(other)? & signed_mask(bits);
+            let distance = evaluate_call_aware_integer(
+                context,
+                symbol_count,
+                tree,
+                distance,
+                crate::IntegerType::U32,
+                constants,
+                depth,
+            )?;
+            if distance >= u128::from(bits) {
+                return Err(arithmetic_error(ConstEvalError::InvalidShift));
+            }
+            funnel_shift_bits(first, second, distance, bits, left)
         }
         ExprKind::IntegerWrappingShift {
             base,
@@ -3495,6 +3545,31 @@ fn evaluate_signed_integer<R: ConstantResolver, const MAX_NODES: usize>(
                 .map_err(ExecutionError::Arithmetic)?;
             rotate_integer_bits(value, distance, bits, left)
         }
+        ExprKind::IntegerFunnelShift {
+            base,
+            other,
+            distance,
+            left,
+        } => {
+            if ty.is_signed()
+                || expression_integer_type(tree, base, constants).is_some_and(|actual| actual != ty)
+                || expression_integer_type(tree, other, constants)
+                    .is_some_and(|actual| actual != ty)
+                || expression_integer_type(tree, distance, constants)
+                    .is_some_and(|actual| actual != crate::IntegerType::U32)
+            {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidCast));
+            }
+            let first = recurse(base)? & signed_mask(bits);
+            let second = recurse(other)? & signed_mask(bits);
+            let distance = tree
+                .evaluate_at(distance, constants)
+                .map_err(ExecutionError::Arithmetic)?;
+            if distance >= u128::from(bits) {
+                return Err(ExecutionError::Arithmetic(ConstEvalError::InvalidShift));
+            }
+            funnel_shift_bits(first, second, distance, bits, left)
+        }
         ExprKind::IntegerWrappingShift {
             base,
             distance,
@@ -3702,6 +3777,7 @@ fn expression_integer_type<R: ConstantResolver, const MAX_NODES: usize>(
             expression_integer_type(tree, base, constants)
         }
         ExprKind::IntegerRotate { base, .. } => expression_integer_type(tree, base, constants),
+        ExprKind::IntegerFunnelShift { base, .. } => expression_integer_type(tree, base, constants),
         ExprKind::IntegerWrappingShift { base, .. } => {
             expression_integer_type(tree, base, constants)
         }
@@ -3761,6 +3837,20 @@ fn rotate_integer_bits(value: u128, distance: u128, bits: u8, left: bool) -> u12
         ((value << distance) | (value >> (u32::from(bits) - distance))) & mask
     } else {
         ((value >> distance) | (value << (u32::from(bits) - distance))) & mask
+    }
+}
+
+fn funnel_shift_bits(first: u128, second: u128, distance: u128, bits: u8, left: bool) -> u128 {
+    let distance = distance as u32;
+    let mask = signed_mask(bits);
+    if distance == 0 {
+        return (if left { first } else { second }) & mask;
+    }
+    let complement = u32::from(bits) - distance;
+    if left {
+        ((first << distance) | (second >> complement)) & mask
+    } else {
+        ((first << complement) | (second >> distance)) & mask
     }
 }
 

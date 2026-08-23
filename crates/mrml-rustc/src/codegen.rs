@@ -2304,6 +2304,16 @@ fn validate_runtime_inline_const<
             recurse(base)?;
             recurse(distance)?;
         }
+        ExprKind::IntegerFunnelShift {
+            base,
+            other,
+            distance,
+            ..
+        } => {
+            recurse(base)?;
+            recurse(other)?;
+            recurse(distance)?;
+        }
         ExprKind::IntegerWrappingShift { base, distance, .. } => {
             recurse(base)?;
             recurse(distance)?;
@@ -3211,6 +3221,50 @@ fn runtime_expression_type_with_locals<
                         tree,
                         distance,
                         depth + 1,
+                    )?,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            Ok(base_type)
+        }
+        ExprKind::IntegerFunnelShift {
+            base,
+            other,
+            distance,
+            ..
+        } => {
+            let base_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )?;
+            let other_type = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                other,
+                depth + 1,
+            )?;
+            let RuntimeExpressionType::Integer(Some(integer_type)) = base_type else {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            };
+            if integer_type.is_signed()
+                || other_type != base_type
+                || !matches!(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        distance,
+                        depth + 1
                     )?,
                     RuntimeExpressionType::Integer(None)
                         | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
@@ -5263,6 +5317,95 @@ impl<'tree, 'source, R: ConstantResolver, const MAX_BYTES: usize, const MAX_PARA
                     (64, false) => self.emit(&[0x48, 0xd3, 0xc8])?,
                     _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
                 }
+                self.emit_normalize()?;
+                self.width = previous_width;
+            }
+            ExprKind::IntegerFunnelShift {
+                base,
+                other,
+                distance,
+                left,
+            } => {
+                let base_type = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    tree,
+                    base,
+                    depth + 1,
+                )
+                .map_err(|kind| self.error(kind))?;
+                let operand_width = runtime_expression_width(base_type)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                let previous_width = self.width;
+                self.width = operand_width;
+                self.emit_expression(tree, base, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_expression(tree, other, depth + 1)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.width = runtime_width("u32")
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_expression(tree, distance, depth + 1)?;
+                self.emit(&[0x49, 0x89, 0xc2, 0x59, 0x58])?;
+                self.evaluation_depth -= 2;
+                self.width = operand_width;
+                self.emit(&[0x41, 0x83, 0xfa, operand_width.bits])?;
+                self.emit_trap_branch(0x83)?;
+                self.emit(&[0x4d, 0x85, 0xd2])?;
+                let nonzero = self.emit_forward_branch(0x85)?;
+                self.emit(if left {
+                    &[0x90][..]
+                } else {
+                    &[0x48, 0x89, 0xc8][..]
+                })?;
+                let done = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(nonzero)?;
+                self.emit(&[0x49, 0x89, 0xc0, 0x49, 0x89, 0xc9])?;
+                if left {
+                    self.emit(&[
+                        0x44,
+                        0x89,
+                        0xd1,
+                        0x49,
+                        0xd3,
+                        0xe0,
+                        0xb9,
+                        operand_width.bits,
+                        0,
+                        0,
+                        0,
+                        0x44,
+                        0x29,
+                        0xd1,
+                        0x49,
+                        0xd3,
+                        0xe9,
+                    ])?;
+                } else {
+                    self.emit(&[
+                        0xb9,
+                        operand_width.bits,
+                        0,
+                        0,
+                        0,
+                        0x44,
+                        0x29,
+                        0xd1,
+                        0x49,
+                        0xd3,
+                        0xe0,
+                        0x44,
+                        0x89,
+                        0xd1,
+                        0x49,
+                        0xd3,
+                        0xe9,
+                    ])?;
+                }
+                self.emit(&[0x4d, 0x09, 0xc8, 0x4c, 0x89, 0xc0])?;
+                self.patch_forward_branch(done)?;
                 self.emit_normalize()?;
                 self.width = previous_width;
             }
@@ -13834,6 +13977,46 @@ mod tests {
                 .unwrap_err()
                 .kind,
                 CodegenErrorKind::RuntimeTypeMismatch,
+            );
+        }
+    }
+
+    #[test]
+    fn funnels_unsigned_integer_bits() {
+        let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, n: u32) -> u8 { a.funnel_shl(b, n) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u16, b: u16, n: u32) -> u16 { a.funnel_shr(b, n) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64, n: u32) -> u64 { a.funnel_shl(b, n) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: usize, b: usize, n: u32) -> usize { a.funnel_shr(b, n) }",
+        ];
+        for source in sources {
+            let module = Parser::new(source).parse_module::<4, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                assert!(
+                    compile_x86_64_function::<_, 1024, 8, 96>(&function, &NoConstants, abi).is_ok()
+                );
+            }
+        }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: i8, b: i8, n: u32) -> i8 { a.funnel_shl(b, n) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u16, n: u32) -> u8 { a.funnel_shr(b, n) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8, n: u16) -> u8 { a.funnel_shl(b, n) }",
+        ] {
+            let module = Parser::new(source).parse_module::<4, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 1024, 8, 96>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::Windows
+                )
+                .is_err()
             );
         }
     }
