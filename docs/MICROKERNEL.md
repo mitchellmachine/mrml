@@ -203,11 +203,16 @@ pointer, requires the compiled workload measurement and recomputes the canonical
 compiled-policy commitment, constructs a non-debug VBS report, seals the
 canonical receipt, and copies it out with
 `EnclaveCopyOutOfEnclave`. Pure tests cover a correctly bound receipt, malformed
-requests, and unapproved measurements. The current constant development MAC
-key is intentionally not a production secret: anyone who can read the image
-can forge it, so the report does not claim sealed keys or attestation. Production
-admission remains blocked on an accepted image plus protected key provisioning
-and sealing inside VTL1.
+requests, unapproved measurements, and unsafe key-platform rejection. Before
+issuing any receipt, the entry calls `EnclaveUsesAttestedKeys` and fails closed
+unless Windows reports that boot, kernel, and hypervisor debugging have never
+been enabled and that the TPM safely provisioned master and encryption keys.
+That query requires Windows 11 24H2 or newer and establishes only platform-key
+safety, not remote attestation. The current constant development MAC key is
+intentionally not a production secret: anyone who can read the image can forge
+it, so the report does not claim sealed keys or attestation. Production admission
+remains blocked on an accepted image plus protected key provisioning and sealing
+inside VTL1.
 
 The host and enclave no longer duplicate a native pointer structure. The
 kernel protocol crate owns one 48-byte, pointer-free x86_64 descriptor with an
@@ -222,13 +227,14 @@ currently fail closed at the enclave dispatcher.
 
 Windows exposes `EnclaveSealData`, `EnclaveUnsealData`, and
 `EnclaveUsesAttestedKeys` in Vertdll, so protected persistence is feasible on
-supported Windows 11 systems. It is not yet implemented. Merely sealing the
-current symmetric receipt key would not complete authentication: an untrusted
-VTL0 verifier cannot safely hold the matching HMAC key, while a key generated
-only inside VTL1 is unknown to an independent verifier. Production design must
-therefore combine sealing with independently provisioned verifier trust or an
-attested asymmetric authority. Until that protocol exists, the embedded
-development key remains explicitly forgeable and `SEALED_KEYS` and
+supported Windows 11 systems. The safe-attested-key query is now enforced for
+receipt issuance; blob sealing and unsealing are not yet implemented. Merely
+sealing the current symmetric receipt key would not complete authentication: an
+untrusted VTL0 verifier cannot safely hold the matching HMAC key, while a key
+generated only inside VTL1 is unknown to an independent verifier. Production
+design must therefore combine sealing with independently provisioned verifier
+trust or an attested asymmetric authority. Until that protocol exists, the
+embedded development key remains explicitly forgeable and `SEALED_KEYS` and
 `ATTESTATION` remain absent from reports.
 
 WHP now provides a fixed-capacity untrusted launch broker for that protocol.

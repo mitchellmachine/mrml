@@ -40,7 +40,7 @@ unsafe extern "system" {
         enclave_address: *const c_void,
         bytes: usize,
     ) -> i32;
-
+    fn EnclaveUsesAttestedKeys() -> u8;
 }
 
 #[cfg(target_os = "windows")]
@@ -256,12 +256,17 @@ enum AuthorityStatus {
     RequestCopyFailed = 3,
     RequestRejected = 4,
     ReceiptCopyFailed = 5,
+    UnsafeKeyPlatform = 6,
 }
 
 #[cfg(any(target_os = "windows", test))]
 fn process_authority_request(
     encoded_request: &[u8; LAUNCH_REQUEST_BYTES],
+    uses_attested_keys: bool,
 ) -> Result<[u8; AUTHORITY_RECEIPT_BYTES], ()> {
+    if !uses_attested_keys {
+        return Err(());
+    }
     let request = LaunchRequest::decode(encoded_request).map_err(|_| ())?;
     if request.image_measurement() != AUTHORITY_MEASUREMENT
         || request.policy_measurement() != authority_policy().commitment()
@@ -328,7 +333,13 @@ pub extern "system" fn mrml_launch_authority(context: *mut c_void) -> *mut c_voi
     {
         return AuthorityStatus::RequestCopyFailed as usize as *mut c_void;
     }
-    let receipt = match process_authority_request(&request) {
+    // SAFETY: this zero-argument Vertdll query is available only inside a VBS
+    // enclave and returns a Windows BOOLEAN. False means receipt issuance must
+    // fail closed because debugger or TPM key-provisioning guarantees are absent.
+    if unsafe { EnclaveUsesAttestedKeys() } == 0 {
+        return AuthorityStatus::UnsafeKeyPlatform as usize as *mut c_void;
+    }
+    let receipt = match process_authority_request(&request, true) {
         Ok(receipt) => receipt,
         Err(()) => return AuthorityStatus::RequestRejected as usize as *mut c_void,
     };
@@ -401,7 +412,7 @@ mod tests {
             authority_policy().commitment(),
         )
         .unwrap();
-        let receipt = process_authority_request(&request.encode()).unwrap();
+        let receipt = process_authority_request(&request.encode(), true).unwrap();
         let verified = AuthorityReceipt::verify(&AUTHORITY_KEY, request, &receipt).unwrap();
         assert_eq!(verified.report().backend(), ProtectionBackend::VbsEnclave);
         assert_eq!(
@@ -414,12 +425,27 @@ mod tests {
     fn authority_rejects_unapproved_measurement_and_malformed_request() {
         let wrong =
             LaunchRequest::new(9, [0xa2; 32], [0x52; 64], authority_policy().commitment()).unwrap();
-        assert_eq!(process_authority_request(&wrong.encode()), Err(()));
+        assert_eq!(process_authority_request(&wrong.encode(), true), Err(()));
         let wrong_policy =
             LaunchRequest::new(9, [0xa2; 32], AUTHORITY_MEASUREMENT, [0x73; 64]).unwrap();
-        assert_eq!(process_authority_request(&wrong_policy.encode()), Err(()));
+        assert_eq!(
+            process_authority_request(&wrong_policy.encode(), true),
+            Err(())
+        );
         let mut malformed = wrong.encode();
         malformed[0] ^= 1;
-        assert_eq!(process_authority_request(&malformed), Err(()));
+        assert_eq!(process_authority_request(&malformed, true), Err(()));
+    }
+
+    #[test]
+    fn authority_refuses_receipts_without_safe_attested_keys() {
+        let request = LaunchRequest::new(
+            9,
+            [0xa2; 32],
+            AUTHORITY_MEASUREMENT,
+            authority_policy().commitment(),
+        )
+        .unwrap();
+        assert_eq!(process_authority_request(&request.encode(), false), Err(()));
     }
 }

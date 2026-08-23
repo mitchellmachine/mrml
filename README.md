@@ -126,6 +126,10 @@ Raw and receipt-authenticated admissions are distinct public types. The latter
 carries the exact request digest and independently approved policy identity;
 only it can evaluate secret release, and then only for non-debug execution with
 measured sealed-key claims.
+The VBS authority also refuses receipt issuance unless Windows 11 24H2 reports
+safe TPM-provisioned attested keys with boot, kernel, and hypervisor debugging
+never enabled. This platform query does not make the embedded development MAC
+key secret or constitute remote attestation.
 Reports are policy inputs, not attestation, until authenticated by the
 corresponding hardware-backed launch authority. See `docs/MICROKERNEL.md` for
 the layered design.
