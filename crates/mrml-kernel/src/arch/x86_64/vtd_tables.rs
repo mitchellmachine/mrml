@@ -1,8 +1,8 @@
 use crate::{DeviceAddress, PhysAddr};
 
 use super::{
-    PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation, VtdError, VtdInvalidator,
-    VtdRegisterIo, VtdRequesterRoute,
+    PlatformMmioPurpose, VerifiedPlatformMmio, VtdDmaIsolation, VtdDmaSet, VtdError,
+    VtdInvalidator, VtdRegisterIo, VtdRequesterRoute,
 };
 
 const ADDRESS_MASK: u64 = 0x000f_ffff_ffff_f000;
@@ -33,6 +33,16 @@ pub enum VtdBindingError {
     InsufficientRegisterMapping,
     Unit(VtdError),
     Table(VtdTableError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VtdSetBindingError {
+    Empty,
+    DuplicateUnit,
+    Unit {
+        index: usize,
+        error: VtdBindingError,
+    },
 }
 
 /// Exclusive access to live legacy VT-d translation tables.
@@ -283,6 +293,65 @@ where
     let entry = unsafe { leaf.into_live_entry() };
     // SAFETY: identity and unique-leaf requirements were checked above.
     unsafe { VtdDmaIsolation::new(physical, entry, invalidator) }.map_err(VtdBindingError::Unit)
+}
+
+/// Atomically assembles the complete fixed-size set of remapping units for one
+/// protected granule.
+///
+/// # Safety
+///
+/// The arrays must contain every distinct remapping unit through which DMA can
+/// reach `physical`, as established from checked firmware and live PCI
+/// topology. Each invalidator must originate from its corresponding verified
+/// MMIO token, and each table-memory element must exclusively control that
+/// unit's pinned translation tables. No transition may use the returned set if
+/// topology changes without rebuilding it.
+pub unsafe fn bind_routed_dma_set<'a, M, R, const UNITS: usize>(
+    memories: &'a mut [M; UNITS],
+    routes: [VtdRequesterRoute; UNITS],
+    verified_units: [VerifiedPlatformMmio; UNITS],
+    invalidators: [VtdInvalidator<R>; UNITS],
+    physical: PhysAddr,
+    expected_domains: [u16; UNITS],
+) -> Result<VtdDmaSet<'a, R, UNITS>, VtdSetBindingError>
+where
+    M: VtdTableMemory,
+    R: VtdRegisterIo,
+{
+    if UNITS == 0 {
+        return Err(VtdSetBindingError::Empty);
+    }
+    for index in 0..UNITS {
+        if routes[..index]
+            .iter()
+            .any(|route| route.register_base() == routes[index].register_base())
+        {
+            return Err(VtdSetBindingError::DuplicateUnit);
+        }
+    }
+
+    let mut set = VtdDmaSet::new(physical);
+    for (index, ((((memory, route), verified), invalidator), domain)) in memories
+        .iter_mut()
+        .zip(routes)
+        .zip(verified_units)
+        .zip(invalidators)
+        .zip(expected_domains)
+        .enumerate()
+    {
+        // SAFETY: inherited from this function's per-index correspondence and
+        // complete-topology contract.
+        let isolation = unsafe {
+            bind_routed_dma_isolation(memory, route, verified, invalidator, physical, domain)
+        }
+        .map_err(|error| VtdSetBindingError::Unit { index, error })?;
+        // SAFETY: distinct DRHD bases were checked above and every isolation
+        // maps the same physical granule by construction.
+        unsafe { set.push(isolation) }
+            .map_err(VtdBindingError::Unit)
+            .map_err(|error| VtdSetBindingError::Unit { index, error })?;
+    }
+    Ok(set)
 }
 
 fn checked_table(address: u64) -> Result<PhysAddr, VtdTableError> {
@@ -542,5 +611,102 @@ mod tests {
             },
             Err(VtdBindingError::Unit(VtdError::RootPointerInactive))
         ));
+    }
+
+    #[test]
+    fn complete_set_binding_revokes_every_distinct_unit() {
+        let physical = PhysAddr::new(0x20_0000).unwrap();
+        let first_base = PhysAddr::new(0xfed9_0000).unwrap();
+        let second_base = PhysAddr::new(0xfeda_0000).unwrap();
+        let routes = [
+            VtdRequesterRoute::for_test(requester(), first_base),
+            VtdRequesterRoute::for_test(requester(), second_base),
+        ];
+        let verified = [
+            verified_vtd_for_test(first_base, 1, requester().segment()),
+            verified_vtd_for_test(second_base, 1, requester().segment()),
+        ];
+        let invalidators = [
+            VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+            VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+        ];
+        let mut tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+
+        {
+            let mut set = unsafe {
+                bind_routed_dma_set(
+                    &mut tables,
+                    routes,
+                    verified,
+                    invalidators,
+                    physical,
+                    [9, 9],
+                )
+            }
+            .unwrap();
+            assert_eq!(set.len(), 2);
+            assert_eq!(
+                set.deny_and_invalidate(physical),
+                GranuleHardwareOutcome::Applied
+            );
+        }
+        assert_eq!(tables[0].level1[0] & 0x3, 0);
+        assert_eq!(tables[1].level1[0] & 0x3, 0);
+    }
+
+    #[test]
+    fn complete_set_binding_rejects_empty_duplicate_and_partial_sets() {
+        let physical = PhysAddr::new(0x20_0000).unwrap();
+        let empty = unsafe {
+            bind_routed_dma_set::<Tables, UnitRegisters, 0>(&mut [], [], [], [], physical, [])
+        };
+        assert!(matches!(empty, Err(VtdSetBindingError::Empty)));
+
+        let register_base = PhysAddr::new(0xfed9_0000).unwrap();
+        let route = VtdRequesterRoute::for_test(requester(), register_base);
+        let verified = verified_vtd_for_test(register_base, 1, requester().segment());
+        let mut duplicate_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+        let duplicate = unsafe {
+            bind_routed_dma_set(
+                &mut duplicate_tables,
+                [route, route],
+                [verified, verified],
+                [
+                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                ],
+                physical,
+                [9, 9],
+            )
+        };
+        assert!(matches!(duplicate, Err(VtdSetBindingError::DuplicateUnit)));
+
+        let second_base = PhysAddr::new(0xfeda_0000).unwrap();
+        let mut partial_tables = [Tables::identity(physical, 9), Tables::identity(physical, 9)];
+        let partial = unsafe {
+            bind_routed_dma_set(
+                &mut partial_tables,
+                [route, VtdRequesterRoute::for_test(requester(), second_base)],
+                [
+                    verified,
+                    verified_vtd_for_test(second_base, 1, requester().segment()),
+                ],
+                [
+                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                    VtdInvalidator::new(UnitRegisters::active(ROOT), 4).unwrap(),
+                ],
+                physical,
+                [9, 10],
+            )
+        };
+        assert!(matches!(
+            partial,
+            Err(VtdSetBindingError::Unit {
+                index: 1,
+                error: VtdBindingError::Table(VtdTableError::WrongDomain)
+            })
+        ));
+        assert_eq!(partial_tables[0].level1[0] & 0x3, 0x3);
+        assert_eq!(partial_tables[1].level1[0] & 0x3, 0x3);
     }
 }
