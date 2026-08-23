@@ -8,8 +8,15 @@ authors = ["Mitchell Renouf <mitchell@localhost>"]
 license = "CC0-1.0"
 description = "Original dependency-free MRML VBS enclave lifecycle probe"
 
+[[bin]]
+name = "mrml-vbs-host"
+path = "src/main.rs"
+test = false
+bench = false
+
 [dependencies]
 mrml-error = { path = "../../crates/mrml-error" }
+mrml-kernel = { path = "../../crates/mrml-kernel" }
 mrml-runtime = { path = "../../crates/mrml-runtime" }
 mrml-windows = { path = "../../crates/mrml-windows" }
 
@@ -17,4 +24,3 @@ mrml-windows = { path = "../../crates/mrml-windows" }
 panic = "abort"
 lto = "thin"
 codegen-units = 1
-

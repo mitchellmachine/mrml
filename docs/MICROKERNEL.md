@@ -126,13 +126,26 @@ certificate signature is still required before the real load test.
 `experiments/mrml-vbs-host` is an original `no_std` lifecycle probe using only
 MRML crates and `core`. It reports capability/ABI discovery, creates the
 non-debug enclave, passes a bounded canonical UTF-16 image path, loads the
-image, and initializes one enclave thread. On the current Windows host, the
+image, initializes one enclave thread, and then invokes the authority with
+`CallEnclave`. Before reservation it reads at most 16 MiB and resolves the exact
+`mrml_launch_authority` export using MRML's allocation-free PE parser. That
+parser caps section/export counts, checks every RVA translation, rejects
+forwarders and unterminated names, and accepts only an RVA inside an executable
+section. The owning lifecycle accepts that opaque validated-RVA type only after
+the `Initialized` state, keeps the call context mutably borrowed for the
+synchronous wait-for-thread call, and returns either the enclave status or the
+exact Windows failure. The probe generates a fresh OS-cryptographic nonce,
+submits the canonical request, requires zero authority status, and verifies the
+returned receipt before reporting its claims. On the current Windows host, the
 finalized DLL was Authenticode-signed with a newly generated RSA-3072/SHA-256
 development certificate carrying Code Signing, VBS Enclave, and Author EKUs.
 The probe reached `LoadEnclaveImageW` and returned Windows error 577
 (`ERROR_INVALID_IMAGE_HASH`) because that self-signed root is deliberately not
 trusted and Windows test-signing was not enabled. This is evidence that create
-and load dispatch execute, but not that Windows has accepted or run the image.
+and load dispatch execute. The current probe also proves its real built-image
+export is structurally accepted before reaching that loader gate, but error 577
+prevents initialization and therefore prevents a real `CallEnclave` execution.
+It is not evidence that Windows has accepted or run the image.
 Enabling global test-signing or trusting a development code-signing root weakens
 the host policy and is never performed automatically by the build.
 

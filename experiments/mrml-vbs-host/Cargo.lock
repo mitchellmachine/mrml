@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "mrml-crypto"
+version = "0.4.0"
+
+[[package]]
 name = "mrml-error"
 version = "0.4.0"
 dependencies = [
@@ -15,6 +19,13 @@ name = "mrml-json"
 version = "0.4.0"
 dependencies = [
  "mrml-runtime",
+]
+
+[[package]]
+name = "mrml-kernel"
+version = "0.4.0"
+dependencies = [
+ "mrml-crypto",
 ]
 
 [[package]]
@@ -34,6 +45,7 @@ name = "mrml-vbs-host"
 version = "0.1.0"
 dependencies = [
  "mrml-error",
+ "mrml-kernel",
  "mrml-runtime",
  "mrml-windows",
 ]

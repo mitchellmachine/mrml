@@ -3,7 +3,19 @@
 
 use mrml_error::{Result, anyhow};
 #[cfg(windows)]
-use mrml_runtime::{Vector, mrml_println};
+use mrml_kernel::{AUTHORITY_RECEIPT_BYTES, AuthorityReceipt, LAUNCH_REQUEST_BYTES, LaunchRequest};
+#[cfg(windows)]
+use mrml_runtime::{Vector, mrml_println, read_file_bounded};
+
+#[cfg(windows)]
+const MAX_ENCLAVE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(windows)]
+const AUTHORITY_KEY: [u8; 32] = [0x39; 32];
+#[cfg(windows)]
+const AUTHORITY_MEASUREMENT: [u8; 64] = [0x51; 64];
+
+#[cfg(windows)]
+const AUTHORITY_CALL_MAGIC: u64 = u64::from_le_bytes(*b"MRMLAC01");
 
 #[cfg(windows)]
 fn application_main() -> Result<()> {
@@ -12,6 +24,10 @@ fn application_main() -> Result<()> {
         return Err(anyhow!("usage: mrml-vbs-host ENCLAVE.dll"));
     }
     let path = arguments[1].as_str();
+    let image = read_file_bounded(path, MAX_ENCLAVE_IMAGE_BYTES)
+        .map_err(|_| anyhow!("failed to read bounded enclave image"))?;
+    let authority = mrml_windows::vbs_enclave_export_rva(&image, b"mrml_launch_authority")
+        .map_err(|error| anyhow!("invalid authority export: {:?}", error))?;
     let mut wide = Vector::with_capacity(path.len() + 1)
         .map_err(|_| anyhow!("failed to allocate bounded UTF-16 path"))?;
     for unit in path.encode_utf16() {
@@ -37,6 +53,36 @@ fn application_main() -> Result<()> {
         .initialize(1)
         .map_err(|error| anyhow!("InitializeEnclave failed: {:?}", error))?;
     mrml_println!("initialized VBS enclave with {} thread(s)", threads);
+
+    let mut nonce = [0; 32];
+    mrml_runtime::fill_random(&mut nonce)
+        .map_err(|_| anyhow!("cryptographic nonce generation failed"))?;
+    let request = LaunchRequest::new(1, nonce, AUTHORITY_MEASUREMENT, [0x72; 64])
+        .map_err(|error| anyhow!("launch request rejected: {:?}", error))?;
+    let encoded_request: [u8; LAUNCH_REQUEST_BYTES] = request.encode();
+    let mut receipt = [0; AUTHORITY_RECEIPT_BYTES];
+    let mut call = [0; mrml_windows::VBS_AUTHORITY_CONTEXT_BYTES];
+    call[..8].copy_from_slice(&AUTHORITY_CALL_MAGIC.to_le_bytes());
+    call[8..16].copy_from_slice(&(encoded_request.as_ptr() as u64).to_le_bytes());
+    call[16..24].copy_from_slice(&(encoded_request.len() as u64).to_le_bytes());
+    call[24..32].copy_from_slice(&(receipt.as_mut_ptr() as u64).to_le_bytes());
+    call[32..40].copy_from_slice(&(receipt.len() as u64).to_le_bytes());
+    let authority_status = enclave
+        .call_authority(authority, &mut call)
+        .map_err(|error| anyhow!("CallEnclave failed: {:?}", error))?;
+    if authority_status != 0 {
+        return Err(anyhow!(
+            "VTL1 launch authority rejected request with status {}",
+            authority_status
+        ));
+    }
+    let verified = AuthorityReceipt::verify(&AUTHORITY_KEY, request, &receipt)
+        .map_err(|error| anyhow!("authority receipt verification failed: {:?}", error))?;
+    mrml_println!(
+        "verified VTL1 authority receipt: backend={:?} claims={:?}",
+        verified.report().backend(),
+        verified.report().claims()
+    );
     Ok(())
 }
 

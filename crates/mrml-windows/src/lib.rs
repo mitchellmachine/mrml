@@ -1,5 +1,8 @@
 #![no_std]
 
+mod enclave_image;
+pub use enclave_image::{VbsEnclaveImageError, VbsEnclaveRoutineRva, vbs_enclave_export_rva};
+
 #[cfg(windows)]
 use core::alloc::{GlobalAlloc, Layout};
 #[cfg(windows)]
@@ -24,6 +27,7 @@ pub struct LocalTime {
 
 pub const ENCLAVE_TYPE_VBS: u32 = 0x10;
 pub const VBS_ENCLAVE_ALIGNMENT: usize = 2 * 1024 * 1024;
+pub const VBS_AUTHORITY_CONTEXT_BYTES: usize = 40;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VbsEnclaveError {
@@ -34,6 +38,7 @@ pub enum VbsEnclaveError {
     InvalidPath,
     LoadFailed(u32),
     InitializeFailed(u32),
+    CallFailed(u32),
 }
 
 #[repr(C)]
@@ -50,6 +55,9 @@ type LoadEnclaveImageWFn = unsafe extern "system" fn(*mut c_void, *const u16) ->
 #[cfg(windows)]
 type InitializeEnclaveFn =
     unsafe extern "system" fn(*mut c_void, *mut c_void, *const c_void, u32, *mut u32) -> i32;
+#[cfg(windows)]
+type CallEnclaveFn =
+    unsafe extern "system" fn(*const c_void, *mut c_void, i32, *mut *mut c_void) -> i32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VbsEnclaveState {
@@ -65,6 +73,7 @@ pub struct VbsEnclaveReservation {
     delete: DeleteEnclaveFn,
     load_image: LoadEnclaveImageWFn,
     initialize_enclave: InitializeEnclaveFn,
+    call_enclave: CallEnclaveFn,
     state: VbsEnclaveState,
     _library: DynamicLibrary,
 }
@@ -103,6 +112,9 @@ impl VbsEnclaveReservation {
         let initialize_enclave = library
             .symbol(c"InitializeEnclave")
             .ok_or(VbsEnclaveError::ApiUnavailable)?;
+        let call_enclave = library
+            .symbol(c"CallEnclave")
+            .ok_or(VbsEnclaveError::ApiUnavailable)?;
         // SAFETY: both symbols are resolved by their documented Kernel32 names
         // and retained for the lifetime of the reservation by `_library`.
         let create: CreateEnclaveFn = unsafe { core::mem::transmute(create) };
@@ -110,6 +122,7 @@ impl VbsEnclaveReservation {
         let load_image: LoadEnclaveImageWFn = unsafe { core::mem::transmute(load_image) };
         let initialize_enclave: InitializeEnclaveFn =
             unsafe { core::mem::transmute(initialize_enclave) };
+        let call_enclave: CallEnclaveFn = unsafe { core::mem::transmute(call_enclave) };
         let information = EnclaveCreateInfoVbs { flags: 0, owner_id };
         // -1 is the documented pseudo-handle for the current process.
         let process = usize::MAX as *mut c_void;
@@ -133,6 +146,7 @@ impl VbsEnclaveReservation {
             delete,
             load_image,
             initialize_enclave,
+            call_enclave,
             state: VbsEnclaveState::Reserved,
             _library: library,
         })
@@ -200,6 +214,39 @@ impl VbsEnclaveReservation {
         }
         self.state = VbsEnclaveState::Initialized;
         Ok(information.thread_count)
+    }
+
+    /// Calls one executable export RVA obtained from `vbs_enclave_export_rva`.
+    /// Windows additionally applies the enclave image's call-target policy.
+    pub fn call_authority(
+        &self,
+        routine: VbsEnclaveRoutineRva,
+        context: &mut [u8; VBS_AUTHORITY_CONTEXT_BYTES],
+    ) -> Result<usize, VbsEnclaveError> {
+        if self.state != VbsEnclaveState::Initialized
+            || routine.get() == 0
+            || routine.get() as usize >= self.size
+        {
+            return Err(VbsEnclaveError::InvalidState);
+        }
+        let routine_address = self.base.as_ptr().wrapping_add(routine.get() as usize);
+        let mut result = core::ptr::null_mut();
+        // SAFETY: the reservation is initialized, the RVA was produced by the
+        // bounded PE export validator, the computed address stays within the
+        // reservation, and `context` remains exclusively borrowed until this
+        // synchronous, wait-for-thread call returns.
+        if unsafe {
+            (self.call_enclave)(
+                routine_address.cast(),
+                context.as_mut_ptr().cast(),
+                1,
+                &mut result,
+            )
+        } == 0
+        {
+            return Err(VbsEnclaveError::CallFailed(unsafe { GetLastError() }));
+        }
+        Ok(result as usize)
     }
 }
 
