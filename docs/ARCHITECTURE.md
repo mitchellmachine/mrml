@@ -225,8 +225,8 @@ requires exact next-generation nonoverlapping metadata ranges outside the
 protected active generation, verifies staged-image digests, flushes them before
 atomically replacing only the inactive superblock, and treats any failure at or
 after replacement as fail-stop. There is not yet a concrete block backend,
-allocator, cross-file allocation index, complete COW tree, or concrete native
-block I/O. Bounded in-memory directory state now requires exact
+persistent allocation/free engine, complete COW tree, or concrete native block
+I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke
@@ -244,7 +244,10 @@ extent images; then return an unpublished state that can commit only through a
 matching COW metadata plan containing internally derived digests for both the
 canonical file record and zero-padded extent-list image. The backend also
 verifies the complete logical-file digest before flush. The backend and
-allocation index remain simulated. Explicit fixed-capacity transactions admit
+allocation persistence remain simulated. A canonical fixed-capacity allocation
+index binds each data or metadata range to one exact object generation, requires
+physical ordering, and rejects overlap across all owners plus volume-header and
+superblock use. Explicit fixed-capacity transactions admit
 multiple prepared file successors, bind their independently advancing object
 generations to one later volume-publication generation, require every derived
 metadata image in one COW plan, and issue one-use participant receipts only
@@ -252,7 +255,9 @@ after root publication succeeds. Redundant-root recovery decodes both exact
 superblock images, requires complete reachable-metadata validation through a
 fail-closed backend contract, selects only identical or adjacent valid
 generations, and permits fallback only when the other candidate is proven
-invalid. The complete validator, block backend, directory/allocator
+invalid. The allocation index provides the ownership proof needed by that
+validator but is not yet loaded from or published to a concrete block backend.
+The complete validator, block backend, directory/allocator
 participants, snapshots, power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

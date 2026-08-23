@@ -107,8 +107,8 @@ explicitly and downgrade the status rather than guessing.
   blocks, and intra-file overlap. Its COW planner verifies staged next-generation
   metadata and orders durable metadata before atomic inactive-superblock
   replacement, with fail-stop handling once replacement may have begun. No
-  concrete block service, allocator, cross-file allocation index, complete COW
-  tree, concrete native block I/O, snapshot, or crash recovery exists yet.
+  concrete block service, persistent allocation/free engine, complete COW tree,
+  concrete native block I/O, snapshot, or crash recovery exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves, but its
   object-ID allocator is volatile and cross-directory directory moves require a
@@ -126,7 +126,11 @@ explicitly and downgrade the status rather than guessing.
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming
   rollback. The complete reachable-tree validator, real block backend,
-  power-loss evidence, repair, and anti-rollback state do not yet exist. UEFI
+  power-loss evidence, repair, and anti-rollback state do not yet exist. A
+  canonical fixed-capacity allocation index now supplies exact object-generation
+  ownership for physically ordered file-data and object-metadata ranges and
+  rejects cross-object overlap and reserved blocks, but it is not yet persisted
+  or traversed by the recovery validator. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

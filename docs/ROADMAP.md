@@ -258,6 +258,13 @@ authority; unrelated domains continue.
    rolling back. A concrete reachable-tree validator, block backend, power-loss
    harness, repair, and authenticated anti-rollback state remain pending, so
    crash recovery is still only partially implemented.
+   Canonical checksummed allocation records and their fixed-capacity global
+   ownership index are now implemented as the next validator prerequisite.
+   Records bind one exact object generation, range, and data/metadata kind; the
+   index requires physical ordering, volume bounds, reserved-block exclusion,
+   and cross-object nonoverlap. Exact extent and metadata ownership queries do
+   not accept containment, wrong generations, or kind substitution. Persistence,
+   allocation/free mutation, and complete graph traversal remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

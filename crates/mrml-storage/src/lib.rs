@@ -6,6 +6,7 @@
 //! The storage service owns bounded generational handles and canonical metadata;
 //! allocation, COW mutation, transactions, and device I/O are later layers.
 
+mod allocation;
 mod authority;
 mod cow;
 mod directory;
@@ -16,6 +17,10 @@ mod identity;
 mod recovery;
 mod transaction;
 
+pub use allocation::{
+    ALLOCATION_RECORD_BYTES, AllocationError, AllocationIndex, AllocationKind, AllocationRecord,
+    MAX_ALLOCATION_BLOCKS,
+};
 pub use authority::{
     StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectKind,
     StoragePrincipal, StorageRights,

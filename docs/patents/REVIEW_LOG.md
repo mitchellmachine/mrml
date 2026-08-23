@@ -740,3 +740,14 @@ novel recovery algorithm, filesystem tree, repair method, cryptographic
 construction, device protocol, or anti-rollback technique.
 
 Patent review: `NOT_TRIGGERED` — conventional redundant-root selection.
+
+## 2026-08-23 — canonical allocation ownership index
+
+MRML source: `crates/mrml-storage/src/allocation.rs`.
+
+The service uses conventional checksummed allocation records, physical ordering,
+reserved-range exclusion, global overlap rejection, and exact owner/generation/
+kind lookups. This adds no novel allocator, free-space structure, filesystem
+tree, recovery method, cryptographic construction, or storage optimization.
+
+Patent review: `NOT_TRIGGERED` — conventional allocation ownership bookkeeping.
