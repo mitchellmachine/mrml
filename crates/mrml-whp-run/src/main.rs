@@ -603,7 +603,7 @@ fn application_main() -> Result<()> {
         let mut exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!("WHP execution entering sender cleanup failed: {:?}", error)
         })?;
-        for stage in [1u32, 2, 3] {
+        for stage in [1u32, 2, 1, 2, 1, 2, 3] {
             if exit
                 != (VmExit::Io {
                     port: SERVICE_CALL_PORT,
@@ -771,7 +771,7 @@ fn application_main() -> Result<()> {
                 )
             })?;
         }
-        for stage in [1u32, 2, 3, 1] {
+        for stage in [1u32, 2, 1, 2, 1, 2, 3, 1] {
             if exit
                 != (VmExit::Io {
                     port: SERVICE_CALL_PORT,

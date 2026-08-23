@@ -7,6 +7,7 @@ registry clone, a secret store, or a completed production service.
 Implemented boundaries:
 
 - fixed, typed schemas for Boolean, bounded unsigned, and bounded byte values;
+- root-CONTROL-authorized bounded schema admission that freezes after commit;
 - exact capability-object authorization for reads and every transaction write;
 - atomic bounded commits tied to an expected monotonic revision;
 - bounded audit retention with explicit sequence-gap reporting;
@@ -21,12 +22,13 @@ Implemented boundaries:
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The adapters are
-simulation-tested through the kernel's real capability-transfer path. Real read
-and commit dispatch now also run in the signed CPL3 image under WHP and KVM. The
-commit client sends a canonical one-update request with zero authority fields
-and independently delegates root CONTROL and setting WRITE. The service accepts
-only the two derived opaque handles, validates each exact object through the
-detail-free kernel syscall, commits revision 1 atomically, and returns a
-canonical 112-byte response. The supervised replacement repeats the commit from
-fresh volatile state; persistence is not implied. Signed schema admission
-remains next, followed by persistent export/import and native-storage recovery.
+simulation-tested through the kernel's real capability-transfer path. Each
+signed service generation starts with a trusted root identity and no settings.
+The client first sends a canonical schema-admission request and delegates only
+root CONTROL; after exact kernel authorization the service admits the Boolean
+setting. A separate commit request has zero authority fields and independently
+delegates fresh root CONTROL and setting WRITE. The service validates both
+opaque handles, commits revision 1 atomically, and returns a canonical 112-byte
+response. The supervised replacement repeats admission and commit from fresh
+volatile state; persistence is not implied. Persistent export/import and
+native-storage recovery remain next.

@@ -401,19 +401,21 @@ exact-object, cleanup, backoff, restart-limit, and trusted-context gates. Names,
 numeric setting IDs, and service handles never authorize. A bounded CPL3
 request-buffer ABI now decodes fixed payload/capability-buffer descriptors and
 validates every active user leaf before a directional copy. The signed service
-probe now executes real `mrml-config` read and atomic commit dispatch under both
-WHP and KVM. Commit payload authority remains zero: the sender independently
-attenuates configuration-root CONTROL and setting WRITE, and the receiver asks
-the kernel to validate both derived opaque handles against exact generation,
-rights, and objects through a detail-free syscall before revision 1 is applied.
-The canonical 112-byte response returns over the same bounded IPC path. The
-supervised replacement repeats the transaction from fresh volatile service
-state, without claiming persistence across cleanup. Two simultaneous blocked
-buffered receives retain independent bounded state. Service page-table
+probe now executes real `mrml-config` schema admission and atomic commit
+dispatch under both WHP and KVM. Each generation begins with a trusted root
+identity and no settings. A canonical admission request identifies a bounded
+typed schema but delegates only root CONTROL; object IDs remain names. Schema
+mutation freezes after commit. A separate commit keeps payload authority zero,
+independently attenuates fresh configuration-root CONTROL and setting WRITE,
+and applies revision 1 only after both derived opaque handles pass exact kernel
+validation. The canonical 112-byte responses return over the same bounded IPC
+path. The supervised replacement repeats admission and commit from fresh
+volatile service state, without claiming persistence across cleanup. Two
+simultaneous blocked buffered receives retain independent bounded state. Service page-table
 frames and a host-published signed-image entry page are supervisor-only mapped
 so active-root validation and recovery remain available without granting CPL3
-access. Signed schema admission, persistent export/import, and storage-backed
-recovery remain planned. It is not a clone of the Windows
+access. Persistent export/import and storage-backed recovery remain planned. It
+is not a clone of the Windows
 Registry, and secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,

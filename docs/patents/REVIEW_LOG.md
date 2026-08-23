@@ -519,3 +519,19 @@ or cryptographic construction.
 
 Patent review: `NOT_TRIGGERED` — conventional capability RPC and bounded
 transaction integration.
+
+## 2026-08-23 — signed CPL3 configuration schema admission
+
+MRML source: `crates/mrml-config`, the signed service image, and the WHP/KVM
+hosted probe sequencing.
+
+The service decodes a conventional fixed schema record for Boolean, bounded
+integer, or bounded bytes values, checks ordinary duplicate/capacity/freeze
+conditions, and requires exact root-control authorization before insertion into
+a fixed array. The signed proof performs this ordinary RPC before the existing
+commit RPC in each volatile service generation. This introduces no novel
+algorithm, ABI optimization, device protocol, codec, or cryptographic
+construction.
+
+Patent review: `NOT_TRIGGERED` — conventional schema validation and capability
+RPC integration.

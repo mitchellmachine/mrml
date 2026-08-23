@@ -2615,11 +2615,11 @@ only from the kernel message. `ServiceSupervisor::state_authorized` requires
 exact READ authority. The adapter supplies priority and fresh launch context
 from trusted state rather than request bytes, and successful restart still
 passes exact CONTROL, completed cleanup, backoff, restart-limit, and fresh-task
-gates. Windows gnullvm tests cover eleven configuration/protocol/dispatch cases
+gates. Windows gnullvm tests cover thirteen configuration/protocol/dispatch cases
 and the kernel suite covers authorized introspection. This is **PARTIALLY
-IMPLEMENTED** Phase 2 foundation: read and atomic commit dispatch now run
-through the signed CPL3 service image, while signed schema admission and native-
-storage persistence/export remain incomplete.
+IMPLEMENTED** Phase 2 foundation: schema admission and atomic commit dispatch
+now run through the signed CPL3 service image, while native-storage persistence,
+export, and recovery remain incomplete.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte
@@ -2656,16 +2656,25 @@ generation, rights, and object checks and returns only success or rejection.
 Every unused register and every result register is canonicalized so rejection
 does not disclose which check failed.
 
-The signed sender now encodes a canonical one-update commit request with zero
-authority placeholders and transfers configuration-root CONTROL and setting
-WRITE as two independently attenuated descriptors. The signed receiver obtains
-only the derived opaque tokens, invokes the real `mrml-config` envelope decoder
-and commit dispatcher, and validates both exact objects through separate kernel
-operations before the bounded transaction changes state. It checks the atomic
-revision-1 result and sends the canonical 112-byte response back to the sender,
-which independently decodes and checks it before exiting or entering the
-generation-2 lifecycle proof. The service-probe runtime allows four bounded
-capabilities per task so the endpoint plus both transaction authorities fit;
+Each signed service generation now initializes only a trusted nonzero root
+identity. The sender first encodes a canonical 80-byte operation-3 schema
+request. It binds setting identity, nonzero object identity, Boolean/unsigned/
+bytes constraint kind, canonical constraint parameters, fixed length, reserved
+zeros, and request identity; payload authority is zero. Only one independently
+attenuated root CONTROL descriptor accompanies it. The receiver admits the
+schema only after exact root authorization. Duplicate setting/object identities,
+root aliasing, capacity exhaustion, malformed constraints, missing/extra
+authority, and any admission after revision advancement fail closed.
+
+The sender then encodes the canonical one-update commit request and transfers
+fresh configuration-root CONTROL and setting WRITE as two independently
+attenuated descriptors. The receiver obtains only derived opaque tokens,
+invokes the real envelope decoder and commit dispatcher, and validates both
+exact objects through separate kernel operations before state changes. It
+checks the admission response and atomic revision-1 commit response, each a
+canonical 112-byte record, and the sender independently decodes both before
+exiting or entering the generation-2 lifecycle proof. The service-probe runtime
+allows four bounded capabilities per task so the endpoint plus both transaction authorities fit;
 derivation remains atomic and fail-closed. Pending
 buffered receives are a two-slot task-keyed table rather than one global value,
 so the client and service can block simultaneously without one overwriting the
@@ -2679,15 +2688,16 @@ revocation. Page-table frames remain supervisor-only self-mapped for active
 walking. This is a hosted launch contract, not authenticated evidence against
 the host.
 
-Fresh one-time Lamport-signed runs on 2026-08-23 completed commit, response,
-cleanup, restart, a second commit from the replacement's fresh volatile state,
-derived-authority revocation, and the restart-budget proof on both backends.
+Fresh one-time Lamport-signed runs on 2026-08-23 completed schema admission,
+commit, both responses, cleanup, restart, repeated admission and commit from the
+replacement's fresh volatile state, derived-authority revocation, and the
+restart-budget proof on both backends.
 Nested KVM reported
-`verify=18150us prepare=2544us execute=1094us total=22931us`; WHP reported
-`verify=18493us prepare=3940us execute=752us total=26611us`. These are hosted
+`verify=18059us prepare=2407us execute=1044us total=22746us`; WHP reported
+`verify=18086us prepare=4022us execute=780us total=26549us`. These are hosted
 controlled probes, not physical-hardware, host-resistant isolation, persistent
-configuration, or bare-metal evidence. Signed schema-admission and supervision
-requests have not yet executed through this CPL3 path.
+configuration, or bare-metal evidence. Signed supervision requests have not yet
+executed through this CPL3 path.
 
 Focused verification after the live integration used:
 
@@ -2700,8 +2710,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 11 configuration, 309 kernel, and 19 WHP tests with one ignored;
-Linux passed 11 configuration, 309 kernel, and 16 KVM tests with one ignored.
+Windows passed 13 configuration, 309 kernel, and 19 WHP tests with one ignored;
+Linux passed 13 configuration, 309 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

@@ -173,15 +173,16 @@ authority; unrelated domains continue.
    capability-descriptor addresses/counts, and
    mapping policy validates every complete user leaf and access direction before
    invoking a copy backend. Signed WHP and KVM probes now execute real
-   `mrml-config` read and commit dispatch in CPL3. For commit, the client sends
-   a canonical one-update request with zero payload authority and independently
-   delegates attenuated root CONTROL and setting WRITE; the service validates
-   both derived opaque handles through the detail-free exact-object kernel
-   syscall before atomically committing revision 1 and returning the canonical
-   112-byte response. The supervised replacement repeats the transaction from
-   fresh volatile state. The same proof retains bounded lifecycle cleanup and
-   covers two simultaneously blocked buffered receivers. The next gate is
-   signed schema admission, followed by storage-backed export/recovery before
+   `mrml-config` schema admission and commit dispatch in CPL3. Each signed
+   generation begins with the trusted configuration-root identity and no
+   settings. The client sends a canonical bounded schema record and delegates
+   only attenuated root CONTROL; exact kernel authorization precedes admission,
+   and schemas freeze after the first commit. A separate one-update request has
+   zero payload authority and independently delegates fresh root CONTROL and
+   setting WRITE before atomically committing revision 1. The supervised
+   replacement repeats admission and commit from fresh volatile state. The same
+   proof retains bounded lifecycle cleanup and covers two simultaneously blocked
+   buffered receivers. The next gate is storage-backed export/recovery before
    this item is complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.

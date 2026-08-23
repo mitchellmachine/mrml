@@ -8,7 +8,7 @@ use mrml_config::{
     CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError, ConfigTransaction, ConfigUpdate,
     ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
     ResponseStatus, SettingId, SettingSchema, dispatch_configuration_envelope,
-    encode_commit_message_request,
+    encode_commit_message_request, encode_schema_message_request,
 };
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
@@ -97,14 +97,41 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
     if unsafe { (*configuration).is_none() } {
-        let schema =
-            SettingSchema::boolean(setting, CONFIG_SETTING_OBJECT).unwrap_or_else(|_| halt());
         unsafe {
             configuration.write(Some(
-                ConfigurationService::new(CONFIG_ROOT_OBJECT, &[schema]).unwrap_or_else(|_| halt()),
+                ConfigurationService::empty(CONFIG_ROOT_OBJECT).unwrap_or_else(|_| halt()),
             ))
         };
     }
+    let schema_request_id = generation
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .unwrap_or_else(|| halt());
+    unsafe {
+        dispatch_next_request(
+            configuration,
+            endpoint,
+            sender,
+            schema_request_id,
+            0,
+            Some(setting),
+        )
+    };
+    let commit_request_id = generation.checked_mul(2).unwrap_or_else(|| halt());
+    unsafe { dispatch_next_request(configuration, endpoint, sender, commit_request_id, 1, None) };
+    unsafe { yield_now() };
+    unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+unsafe fn dispatch_next_request(
+    configuration: *mut Option<ConfigurationService<1, 2>>,
+    endpoint: u64,
+    sender: u64,
+    request_id: u64,
+    expected_revision: u64,
+    expected_setting: Option<SettingId>,
+) {
     let mut request = [0u8; mrml_config::MAX_CONFIG_REQUEST_BYTES];
     let mut capability_tokens = [0u64; mrml_kernel::MAX_CAPABILITIES];
     let (request_length, capability_count) =
@@ -114,12 +141,6 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         *slot = Capability::from_token(token);
     }
     let mut response = [0u8; CONFIG_RESPONSE_BYTES];
-    let prior_revision = unsafe {
-        (*configuration)
-            .as_ref()
-            .unwrap_or_else(|| halt())
-            .revision()
-    };
     dispatch_configuration_envelope(
         unsafe { (*configuration).as_mut().unwrap_or_else(|| halt()) },
         &KernelAuthorizer,
@@ -129,27 +150,29 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     )
     .unwrap_or_else(|_| halt());
     let decoded = ConfigurationResponse::decode(&response).unwrap_or_else(|_| halt());
-    let expected_revision = prior_revision.checked_add(1).unwrap_or_else(|| halt());
-    if decoded.request_id != generation
+    if decoded.request_id != request_id
         || decoded.status != ResponseStatus::Ok
         || decoded.revision != expected_revision
-        || decoded.setting.is_some()
+        || decoded.setting != expected_setting
         || decoded.value.is_some()
     {
         halt();
     }
     unsafe { send_buffer(endpoint, sender, &response, &[]) };
-    unsafe { yield_now() };
-    unsafe { asm!("int3", options(noreturn, nostack)) }
 }
 
 #[cfg(not(feature = "preemption-probe"))]
-unsafe fn verify_response(response: &[u8; CONFIG_RESPONSE_BYTES], generation: u64) {
+unsafe fn verify_response(
+    response: &[u8; CONFIG_RESPONSE_BYTES],
+    request_id: u64,
+    revision: u64,
+    setting: Option<SettingId>,
+) {
     let decoded = ConfigurationResponse::decode(response).unwrap_or_else(|_| halt());
-    if decoded.request_id != generation
+    if decoded.request_id != request_id
         || decoded.status != ResponseStatus::Ok
-        || decoded.revision != 1
-        || decoded.setting.is_some()
+        || decoded.revision != revision
+        || decoded.setting != setting
         || decoded.value.is_some()
     {
         halt();
@@ -186,29 +209,56 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     setting_capability: u64,
     generation: u64,
 ) -> ! {
-    let mut transaction = ConfigTransaction::<1>::new(0);
-    transaction
-        .push(ConfigUpdate::new(
-            SettingId::new(1).unwrap_or_else(|_| halt()),
-            Capability::from_token(0),
-            ConfigValue::boolean(generation == 1),
-        ))
-        .unwrap_or_else(|_| halt());
-    let mut request = [0u8; MAX_CONFIG_REQUEST_BYTES];
-    let request_length = encode_commit_message_request(generation, &transaction, &mut request)
-        .unwrap_or_else(|_| halt());
-    let descriptors = capability_descriptors(
-        (root_capability, Rights::CONTROL),
-        (setting_capability, Rights::WRITE),
-    );
-    unsafe { send_buffer(endpoint, receiver, &request[..request_length], &descriptors) };
+    let setting = SettingId::new(1).unwrap_or_else(|_| halt());
+    let schema = SettingSchema::boolean(setting, CONFIG_SETTING_OBJECT).unwrap_or_else(|_| halt());
+    let mut schema_request = [0u8; MAX_CONFIG_REQUEST_BYTES];
+    let schema_request_id = generation
+        .checked_mul(2)
+        .and_then(|value| value.checked_sub(1))
+        .unwrap_or_else(|| halt());
+    let schema_length =
+        encode_schema_message_request(schema_request_id, schema, &mut schema_request)
+            .unwrap_or_else(|_| halt());
+    let root_descriptor = capability_descriptor(root_capability, Rights::CONTROL);
+    unsafe {
+        send_buffer(
+            endpoint,
+            receiver,
+            &schema_request[..schema_length],
+            &root_descriptor,
+        )
+    };
     let mut response = [0u8; CONFIG_RESPONSE_BYTES];
     let mut no_capabilities = [0u64; 0];
     let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
     if length != CONFIG_RESPONSE_BYTES || count != 0 {
         halt();
     }
-    unsafe { verify_response(&response, generation) };
+    unsafe { verify_response(&response, schema_request_id, 0, Some(setting)) };
+
+    let mut transaction = ConfigTransaction::<1>::new(0);
+    transaction
+        .push(ConfigUpdate::new(
+            setting,
+            Capability::from_token(0),
+            ConfigValue::boolean(generation == 1),
+        ))
+        .unwrap_or_else(|_| halt());
+    let mut request = [0u8; MAX_CONFIG_REQUEST_BYTES];
+    let commit_request_id = generation.checked_mul(2).unwrap_or_else(|| halt());
+    let request_length =
+        encode_commit_message_request(commit_request_id, &transaction, &mut request)
+            .unwrap_or_else(|_| halt());
+    let descriptors = capability_descriptors(
+        (root_capability, Rights::CONTROL),
+        (setting_capability, Rights::WRITE),
+    );
+    unsafe { send_buffer(endpoint, receiver, &request[..request_length], &descriptors) };
+    let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
+    if length != CONFIG_RESPONSE_BYTES || count != 0 {
+        halt();
+    }
+    unsafe { verify_response(&response, commit_request_id, 1, None) };
     if generation == 2 {
         unsafe { receive_buffer(&mut response, &mut no_capabilities) };
         halt();
@@ -225,6 +275,14 @@ fn capability_descriptors(first: (u64, Rights), second: (u64, Rights)) -> [u8; 3
         descriptors[start + 8..start + 10].copy_from_slice(&rights.bits().to_le_bytes());
     }
     descriptors
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+fn capability_descriptor(capability: u64, rights: Rights) -> [u8; 16] {
+    let mut descriptor = [0u8; 16];
+    descriptor[..8].copy_from_slice(&capability.to_le_bytes());
+    descriptor[8..10].copy_from_slice(&rights.bits().to_le_bytes());
+    descriptor
 }
 
 #[cfg(not(feature = "preemption-probe"))]

@@ -19,6 +19,7 @@ pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
 pub const MAX_WIRE_UPDATES: usize = 4;
 pub const CONFIG_REQUEST_HEADER_BYTES: usize = 48;
 pub const CONFIG_UPDATE_BYTES: usize = 80;
+pub const CONFIG_SCHEMA_BYTES: usize = 32;
 pub const MAX_CONFIG_REQUEST_BYTES: usize =
     CONFIG_REQUEST_HEADER_BYTES + MAX_WIRE_UPDATES * CONFIG_UPDATE_BYTES;
 pub const CONFIG_RESPONSE_BYTES: usize = 112;
@@ -291,6 +292,7 @@ pub enum ConfigError {
     RevisionConflict { current: u64 },
     RevisionExhausted,
     SequenceExhausted,
+    SchemaFrozen,
     Unauthorized(CapabilityError),
     WrongObject,
     AuditUnavailable { oldest: u64 },
@@ -389,42 +391,17 @@ pub struct ConfigurationService<const SETTINGS: usize, const AUDIT: usize> {
 }
 
 impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, AUDIT> {
-    pub fn new(root: ObjectId, schemas: &[SettingSchema]) -> Result<Self, ConfigError> {
+    pub fn empty(root: ObjectId) -> Result<Self, ConfigError> {
         if root.0 == 0 {
             return Err(ConfigError::InvalidRoot);
         }
-        if SETTINGS == 0 || AUDIT == 0 || schemas.is_empty() || schemas.len() > SETTINGS {
+        if SETTINGS == 0 || AUDIT == 0 {
             return Err(ConfigError::Capacity);
-        }
-        for (index, schema) in schemas.iter().enumerate() {
-            if schema.object == root {
-                return Err(ConfigError::DuplicateObject);
-            }
-            if schemas[index + 1..]
-                .iter()
-                .any(|other| other.setting == schema.setting)
-            {
-                return Err(ConfigError::DuplicateSetting);
-            }
-            if schemas[index + 1..]
-                .iter()
-                .any(|other| other.object == schema.object)
-            {
-                return Err(ConfigError::DuplicateObject);
-            }
-        }
-        let mut settings = array::from_fn(|_| None);
-        for (slot, schema) in settings.iter_mut().zip(schemas.iter().copied()) {
-            *slot = Some(SettingEntry {
-                schema,
-                value: None,
-                revision: 0,
-            });
         }
         Ok(Self {
             root,
-            settings,
-            setting_count: schemas.len(),
+            settings: array::from_fn(|_| None),
+            setting_count: 0,
             revision: 0,
             audit: [None; AUDIT],
             audit_head: 0,
@@ -433,8 +410,39 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
         })
     }
 
+    pub fn new(root: ObjectId, schemas: &[SettingSchema]) -> Result<Self, ConfigError> {
+        if root.0 == 0 {
+            return Err(ConfigError::InvalidRoot);
+        }
+        if schemas.is_empty() || schemas.len() > SETTINGS {
+            return Err(ConfigError::Capacity);
+        }
+        let mut service = Self::empty(root)?;
+        for schema in schemas.iter().copied() {
+            service.insert_schema(schema)?;
+        }
+        Ok(service)
+    }
+
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub const fn setting_count(&self) -> usize {
+        self.setting_count
+    }
+
+    pub fn admit_schema<A: CapabilityAuthorizer + ?Sized>(
+        &mut self,
+        capabilities: &A,
+        root_capability: Capability,
+        schema: SettingSchema,
+    ) -> Result<(), ConfigError> {
+        Self::authorize(capabilities, root_capability, Rights::CONTROL, self.root)?;
+        if self.revision != 0 {
+            return Err(ConfigError::SchemaFrozen);
+        }
+        self.insert_schema(schema)
     }
 
     pub fn read<A: CapabilityAuthorizer + ?Sized>(
@@ -556,6 +564,35 @@ impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, A
             .ok_or(ConfigError::MissingSetting)
     }
 
+    fn insert_schema(&mut self, schema: SettingSchema) -> Result<(), ConfigError> {
+        if schema.object == self.root
+            || self.settings[..self.setting_count]
+                .iter()
+                .flatten()
+                .any(|entry| entry.schema.object == schema.object)
+        {
+            return Err(ConfigError::DuplicateObject);
+        }
+        if self.settings[..self.setting_count]
+            .iter()
+            .flatten()
+            .any(|entry| entry.schema.setting == schema.setting)
+        {
+            return Err(ConfigError::DuplicateSetting);
+        }
+        let slot = self
+            .settings
+            .get_mut(self.setting_count)
+            .ok_or(ConfigError::Capacity)?;
+        *slot = Some(SettingEntry {
+            schema,
+            value: None,
+            revision: 0,
+        });
+        self.setting_count += 1;
+        Ok(())
+    }
+
     fn push_audit(&mut self, event: AuditEvent) {
         if self.audit_count < AUDIT {
             let tail = (self.audit_head + self.audit_count) % AUDIT;
@@ -582,6 +619,11 @@ pub enum ConfigurationRequest {
         request_id: u64,
         root: Capability,
         transaction: ConfigTransaction<MAX_WIRE_UPDATES>,
+    },
+    AdmitSchema {
+        request_id: u64,
+        root: Capability,
+        schema: SettingSchema,
     },
 }
 
@@ -654,6 +696,40 @@ impl ConfigurationRequest {
                     transaction,
                 })
             }
+            3 if count == 0
+                && expected_revision == 0
+                && encoded_length == CONFIG_REQUEST_HEADER_BYTES + CONFIG_SCHEMA_BYTES =>
+            {
+                let object = ObjectId(read_u64(input, CONFIG_REQUEST_HEADER_BYTES)?);
+                let kind = input[CONFIG_REQUEST_HEADER_BYTES + 8];
+                let maximum_length = input[CONFIG_REQUEST_HEADER_BYTES + 9];
+                if input[CONFIG_REQUEST_HEADER_BYTES + 10..CONFIG_REQUEST_HEADER_BYTES + 16]
+                    .iter()
+                    .any(|byte| *byte != 0)
+                {
+                    return Err(ConfigError::NonCanonical);
+                }
+                let minimum = read_u64(input, CONFIG_REQUEST_HEADER_BYTES + 16)?;
+                let maximum = read_u64(input, CONFIG_REQUEST_HEADER_BYTES + 24)?;
+                let setting = SettingId::new(target)?;
+                let schema = match kind {
+                    1 if maximum_length == 0 && minimum == 0 && maximum == 0 => {
+                        SettingSchema::boolean(setting, object)?
+                    }
+                    2 if maximum_length == 0 => {
+                        SettingSchema::unsigned(setting, object, minimum, maximum)?
+                    }
+                    3 if minimum == 0 && maximum == 0 => {
+                        SettingSchema::bytes(setting, object, maximum_length)?
+                    }
+                    _ => return Err(ConfigError::NonCanonical),
+                };
+                Ok(Self::AdmitSchema {
+                    request_id,
+                    root: authority,
+                    schema,
+                })
+            }
             _ => Err(ConfigError::NonCanonical),
         }
     }
@@ -723,9 +799,23 @@ impl ConfigurationRequest {
                     return Err(ConfigError::InvalidAuthorityEnvelope);
                 }
             }
+            Self::AdmitSchema { root, .. } => {
+                if payload[32..40].iter().any(|byte| *byte != 0) || capabilities.len() != 1 {
+                    return Err(ConfigError::InvalidAuthorityEnvelope);
+                }
+                *root = capabilities[0];
+            }
         }
         Ok(request)
     }
+}
+
+pub fn encode_schema_message_request(
+    request_id: u64,
+    schema: SettingSchema,
+    output: &mut [u8],
+) -> Result<usize, ConfigError> {
+    encode_schema_request(request_id, Capability::from_token(0), schema, output)
 }
 
 pub fn encode_read_message_request(
@@ -766,6 +856,43 @@ pub fn encode_read_request(
     write_u64(output, 16, request_id)?;
     write_u64(output, 32, capability.token())?;
     write_u32(output, 40, setting.get())
+}
+
+pub fn encode_schema_request(
+    request_id: u64,
+    root: Capability,
+    schema: SettingSchema,
+    output: &mut [u8],
+) -> Result<usize, ConfigError> {
+    let length = CONFIG_REQUEST_HEADER_BYTES + CONFIG_SCHEMA_BYTES;
+    if request_id == 0 {
+        return Err(ConfigError::NonCanonical);
+    }
+    if output.len() < length {
+        return Err(ConfigError::Truncated);
+    }
+    output[..length].fill(0);
+    output[..4].copy_from_slice(&CONFIG_REQUEST_MAGIC);
+    write_u16(output, 4, SYSTEM_PROTOCOL_VERSION)?;
+    write_u16(output, 6, 3)?;
+    write_u16(output, 8, length as u16)?;
+    write_u64(output, 16, request_id)?;
+    write_u64(output, 32, root.token())?;
+    write_u32(output, 40, schema.setting.get())?;
+    write_u64(output, CONFIG_REQUEST_HEADER_BYTES, schema.object.0)?;
+    match schema.constraint {
+        Constraint::Bool => output[CONFIG_REQUEST_HEADER_BYTES + 8] = 1,
+        Constraint::U64 { minimum, maximum } => {
+            output[CONFIG_REQUEST_HEADER_BYTES + 8] = 2;
+            write_u64(output, CONFIG_REQUEST_HEADER_BYTES + 16, minimum)?;
+            write_u64(output, CONFIG_REQUEST_HEADER_BYTES + 24, maximum)?;
+        }
+        Constraint::Bytes { maximum_length } => {
+            output[CONFIG_REQUEST_HEADER_BYTES + 8] = 3;
+            output[CONFIG_REQUEST_HEADER_BYTES + 9] = maximum_length;
+        }
+    }
+    Ok(length)
 }
 
 pub fn encode_commit_request<const UPDATES: usize>(
@@ -979,6 +1106,26 @@ pub fn dispatch_configuration_envelope<
                 status: ResponseStatus::Ok,
                 revision,
                 setting: None,
+                value: None,
+            },
+            Err(_) => ConfigurationResponse {
+                request_id,
+                status: ResponseStatus::Rejected,
+                revision: service.revision(),
+                setting: None,
+                value: None,
+            },
+        },
+        ConfigurationRequest::AdmitSchema {
+            request_id,
+            root,
+            schema,
+        } => match service.admit_schema(authorizer, root, schema) {
+            Ok(()) => ConfigurationResponse {
+                request_id,
+                status: ResponseStatus::Ok,
+                revision: service.revision(),
+                setting: Some(schema.setting()),
                 value: None,
             },
             Err(_) => ConfigurationResponse {
@@ -1795,5 +1942,85 @@ mod tests {
             ConfigurationService::<1, 1>::new(ObjectId(9), &aliases_root),
             Err(ConfigError::DuplicateObject)
         ));
+    }
+
+    #[test]
+    fn schema_admission_uses_only_root_authority_from_the_message_envelope() {
+        let root_object = ObjectId(10);
+        let schema = SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap();
+        let mut service = ConfigurationService::<2, 2>::empty(root_object).unwrap();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let root = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let mut wire = [0; MAX_CONFIG_REQUEST_BYTES];
+        let length = encode_schema_message_request(41, schema, &mut wire).unwrap();
+        assert_eq!(length, CONFIG_REQUEST_HEADER_BYTES + CONFIG_SCHEMA_BYTES);
+        assert!(wire[32..40].iter().all(|byte| *byte == 0));
+        let message = Message::new(&wire[..length], &[root]).unwrap();
+        assert_eq!(
+            ConfigurationRequest::decode_message(&message),
+            Ok(ConfigurationRequest::AdmitSchema {
+                request_id: 41,
+                root,
+                schema,
+            })
+        );
+        let mut response = [0; CONFIG_RESPONSE_BYTES];
+        dispatch_configuration_message(&mut service, &capabilities, &message, &mut response)
+            .unwrap();
+        assert_eq!(service.setting_count(), 1);
+        assert_eq!(
+            ConfigurationResponse::decode(&response).unwrap(),
+            ConfigurationResponse {
+                request_id: 41,
+                status: ResponseStatus::Ok,
+                revision: 0,
+                setting: Some(schema.setting()),
+                value: None,
+            }
+        );
+
+        let missing = Message::new(&wire[..length], &[]).unwrap();
+        assert_eq!(
+            ConfigurationRequest::decode_message(&missing),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        wire[CONFIG_REQUEST_HEADER_BYTES + 10] = 1;
+        assert_eq!(
+            ConfigurationRequest::decode(&wire[..length]),
+            Err(ConfigError::NonCanonical)
+        );
+    }
+
+    #[test]
+    fn schema_admission_rejects_aliases_capacity_and_post_commit_mutation() {
+        let root_object = ObjectId(20);
+        let setting = SettingId::new(1).unwrap();
+        let schema = SettingSchema::boolean(setting, ObjectId(21)).unwrap();
+        let mut service = ConfigurationService::<1, 1>::empty(root_object).unwrap();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let root = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let write = capabilities.insert(ObjectId(21), Rights::WRITE).unwrap();
+        service.admit_schema(&capabilities, root, schema).unwrap();
+        assert_eq!(
+            service.admit_schema(&capabilities, root, schema),
+            Err(ConfigError::DuplicateObject)
+        );
+        let mut transaction = ConfigTransaction::<1>::new(0);
+        transaction
+            .push(ConfigUpdate::new(
+                setting,
+                write,
+                ConfigValue::boolean(true),
+            ))
+            .unwrap();
+        service.commit(&capabilities, root, &transaction).unwrap();
+        assert_eq!(
+            service.admit_schema(
+                &capabilities,
+                root,
+                SettingSchema::boolean(SettingId::new(2).unwrap(), ObjectId(22)).unwrap(),
+            ),
+            Err(ConfigError::SchemaFrozen)
+        );
     }
 }
