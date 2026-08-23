@@ -2574,7 +2574,11 @@ Runtime expressions can call a safe, non-const Rust-ABI function declared
 before or after the selected export, with up to four built-in integer, Boolean,
 character, unit, by-value fixed-array, thin scalar raw-pointer, thin
 scalar-reference, or thin fixed-array-reference parameters and a result from
-the same families. Pointer, reference, and array signatures preserve their
+the same families. A helper result may also be the never type `!` when its
+parsed body has an existing structurally diverging loop; `!` then coerces into
+the surrounding supported result type without emitting a return edge. Never
+parameters and public never-returning exports are not claimed. Pointer,
+reference, and array signatures preserve their
 target or element, fixed count, and const/mutability distinctions; mutable
 values may coerce or reborrow as immutable values, while the reverse direction
 and mismatched targets fail type checking.
@@ -2747,6 +2751,15 @@ than two machine words. Object-emission tests additionally cover Boolean,
 character, and unit arrays. Separate adversarial sources reject element and
 count mismatches. This is fixed-array transport within inlined calls, not a
 general tuple, struct, enum, or public Rust aggregate ABI implementation.
+A diverging `-> !` helper produced a 172-byte COFF object and a 568-byte ELF64
+object. Independent pinned-nightly callers matched six reachable non-diverging
+branch cases on Windows and Arch Linux, including zero and integer-width
+boundaries. Object-emission tests retain the helper's unconditional loop
+backedge, exercise never-to-scalar branch coercion, and reject a falsely
+declared never-returning helper with a returning integer tail. This is bounded
+bottom-type propagation for inlined safe Rust helpers, not a public never ABI,
+never parameters, arbitrary control-flow divergence analysis, or general
+never-type support.
 
 There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the

@@ -98,9 +98,13 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
         let return_type_name = function.return_type.map_or("()", |ty| ty.text);
         let mut parameters = [None; CALL_PARAMETERS];
         for (index, parameter) in function.parameters().iter().flatten().enumerate() {
+            let ty = scalar_type(parameter.ty.text)?;
+            if ty == crate::ScalarType::Never {
+                return None;
+            }
             parameters[index] = Some(crate::RuntimeCallParameter {
                 name: parameter.name,
-                ty: scalar_type(parameter.ty.text)?,
+                ty,
             });
         }
         Some(crate::RuntimeCallTarget {
@@ -544,6 +548,21 @@ mod tests {
         let wrong_array_value_element = "fn identity(values: [bool; 2]) -> [bool; 2] { values } #[unsafe(no_mangle)] pub extern \"C\" fn answer(values: [u16; 2]) -> bool { identity(values)[0] }";
         let error =
             compile_wide(wrong_array_value_element, "answer", ObjectFormat::Coff).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)
+        );
+
+        let diverging_helper = "fn diverge(seed: u64) -> ! { let mut value: u64 = seed; loop { value += 1; } } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, diverges: bool) -> u64 { if diverges { diverge(value); } value + 1 }";
+        let result = compile(diverging_helper, "answer", ObjectFormat::Coff);
+        assert!(result.is_ok(), "{result:?}");
+
+        let diverging_value = "fn diverge() -> ! { loop {} } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64, diverges: bool) -> u64 { let selected: u64 = if diverges { diverge() } else { value }; selected }";
+        let result = compile(diverging_value, "answer", ObjectFormat::Elf64);
+        assert!(result.is_ok(), "{result:?}");
+
+        let invalid_never_tail = "fn bad(value: u64) -> ! { 1 } #[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { bad(value) }";
+        let error = compile(invalid_never_tail, "answer", ObjectFormat::Elf64).unwrap_err();
         assert_eq!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::RuntimeTypeMismatch)

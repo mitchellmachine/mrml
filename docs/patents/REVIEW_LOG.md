@@ -208,3 +208,16 @@ construction, or optimization.
 
 Patent review: `NOT_TRIGGERED` — conventional fail-closed service lifecycle
 composition.
+
+## 2026-08-23 — diverging Rust helper signatures
+
+MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+
+Safe inlined Rust helpers may declare the never return type when their existing
+bounded body representation proves an unconditional diverging loop. Call-site
+typing applies ordinary bottom-type coercion and reuses the existing loop
+backedge and inline-frame bookkeeping; no new control-flow algorithm, ABI,
+protocol, cryptographic construction, or optimization is introduced.
+
+Patent review: `NOT_TRIGGERED` — conventional never-type propagation over
+existing bounded compiler control flow.

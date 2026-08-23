@@ -216,7 +216,8 @@ pub fn compile_x86_64_constant_function<
             integer_type
         } else {
             match expression_type {
-                RuntimeExpressionType::Unit
+                RuntimeExpressionType::Never
+                | RuntimeExpressionType::Unit
                 | RuntimeExpressionType::Default
                 | RuntimeExpressionType::Array { .. }
                 | RuntimeExpressionType::Reference { .. }
@@ -1776,6 +1777,7 @@ fn validate_stable_export<const MAX_PARAMETERS: usize>(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeExpressionType {
+    Never,
     Unit,
     Default,
     Integer(Option<crate::IntegerType>),
@@ -1857,6 +1859,7 @@ fn runtime_array_element_type(
     ty: RuntimeExpressionType,
 ) -> Result<RuntimeArrayElementType, CodegenErrorKind> {
     match ty {
+        RuntimeExpressionType::Never => Err(CodegenErrorKind::RuntimeTypeMismatch),
         RuntimeExpressionType::Unit => Ok(RuntimeArrayElementType::Unit),
         RuntimeExpressionType::Default => Ok(RuntimeArrayElementType::Default),
         RuntimeExpressionType::Integer(ty) => Ok(RuntimeArrayElementType::Integer(ty)),
@@ -1951,6 +1954,7 @@ fn runtime_raw_pointer_type(text: &str) -> Option<RuntimeExpressionType> {
 
 fn runtime_type_stack_slots(ty: RuntimeExpressionType) -> usize {
     match ty {
+        RuntimeExpressionType::Never => 0,
         RuntimeExpressionType::Array { count, .. } => count,
         RuntimeExpressionType::Reference {
             target: RuntimeReferenceTarget::Slice(_) | RuntimeReferenceTarget::Str,
@@ -2005,6 +2009,7 @@ fn runtime_expression_width(ty: RuntimeExpressionType) -> Option<RuntimeWidth> {
 
 fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
     match ty {
+        crate::ScalarType::Never => RuntimeExpressionType::Never,
         crate::ScalarType::Integer(ty) => RuntimeExpressionType::Integer(Some(ty)),
         crate::ScalarType::Bool => RuntimeExpressionType::Bool,
         crate::ScalarType::Char => RuntimeExpressionType::Char,
@@ -2107,6 +2112,7 @@ fn runtime_array_elements_in_word(ty: RuntimeExpressionType, word: usize) -> Opt
 
 fn runtime_types_compatible(left: RuntimeExpressionType, right: RuntimeExpressionType) -> bool {
     match (left, right) {
+        (RuntimeExpressionType::Never, _) => true,
         (RuntimeExpressionType::Default, _) | (_, RuntimeExpressionType::Default) => true,
         (RuntimeExpressionType::Unit, RuntimeExpressionType::Unit) => true,
         (RuntimeExpressionType::Bool, RuntimeExpressionType::Bool) => true,
@@ -3005,7 +3011,9 @@ fn validate_runtime_range_endpoints<
             }
             RuntimeExpressionType::Integer(None) => continue,
             RuntimeExpressionType::Bool => return Err(CodegenErrorKind::InvalidRangeType),
-            RuntimeExpressionType::Unit | RuntimeExpressionType::Default => {
+            RuntimeExpressionType::Never
+            | RuntimeExpressionType::Unit
+            | RuntimeExpressionType::Default => {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             RuntimeExpressionType::Array { .. }
@@ -6100,7 +6108,8 @@ fn runtime_expression_type_with_locals<
                 }
                 return match left_type {
                     RuntimeExpressionType::Integer(_) => Ok(left_type),
-                    RuntimeExpressionType::Unit
+                    RuntimeExpressionType::Never
+                    | RuntimeExpressionType::Unit
                     | RuntimeExpressionType::Default
                     | RuntimeExpressionType::Array { .. }
                     | RuntimeExpressionType::Reference { .. }
@@ -10274,7 +10283,8 @@ impl<
                     crate::ScalarType::Bool => {
                         self.emit(&[0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0])?;
                     }
-                    crate::ScalarType::Char
+                    crate::ScalarType::Never
+                    | crate::ScalarType::Char
                     | crate::ScalarType::Unit
                     | crate::ScalarType::Array { .. }
                     | crate::ScalarType::RawPointer { .. }
@@ -10493,6 +10503,9 @@ impl<
                     )))
                 })?;
                 match expression_type {
+                    RuntimeExpressionType::Never => {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
                     RuntimeExpressionType::Unit | RuntimeExpressionType::Default => {
                         self.emit(&[0x31, 0xc0])?;
                     }
@@ -11704,6 +11717,12 @@ impl<
             }
         } else {
             match initializer_type {
+                RuntimeExpressionType::Never => {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                        span: translate_span(body_start, local.initializer_span),
+                    });
+                }
                 RuntimeExpressionType::Unit => RuntimeExpressionType::Unit,
                 RuntimeExpressionType::Default => {
                     return Err(CodegenError {

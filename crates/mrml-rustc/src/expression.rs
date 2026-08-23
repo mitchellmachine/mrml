@@ -184,6 +184,7 @@ pub enum CheckedIntegerOptionOperation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
+    Never,
     Integer(IntegerType),
     Bool,
     Char,
@@ -268,6 +269,7 @@ pub enum CastType {
 impl ScalarType {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
+            "!" => Some(Self::Never),
             "bool" => Some(Self::Bool),
             "char" => Some(Self::Char),
             "()" => Some(Self::Unit),
@@ -1194,7 +1196,8 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             } => self.is_boolean_expression(operand, depth + 1),
             ExprKind::Ascribe {
                 target:
-                    ScalarType::Integer(_)
+                    ScalarType::Never
+                    | ScalarType::Integer(_)
                     | ScalarType::Char
                     | ScalarType::Unit
                     | ScalarType::Array { .. }
@@ -1545,7 +1548,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                     {
                         Ok(0)
                     }
-                    ScalarType::Unit => Err(ConstEvalError::InvalidCast),
+                    ScalarType::Never | ScalarType::Unit => Err(ConstEvalError::InvalidCast),
                     ScalarType::RawPointer { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Array { .. } => Err(ConstEvalError::InvalidCast),
                     ScalarType::Reference { .. } => Err(ConstEvalError::InvalidCast),

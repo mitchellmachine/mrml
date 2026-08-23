@@ -950,6 +950,24 @@ fn rustc_empty_while_and_top_level_diverging_loops_have_executable_replacements(
 }
 
 #[test]
+fn rustc_diverging_helper_signatures_have_an_executable_replacement() {
+    // Original bounded replacement for never-returning Rust helpers and their
+    // coercion into an ordinary scalar branch result.
+    let source = "fn diverge(seed: u32) -> ! { let mut value: u32 = seed; loop { value += 1; } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(value: u32, diverges: bool) -> u32 { let selected: u32 = if diverges { diverge(value) } else { value }; selected + 1 }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert!(
+            compile_source_function::<2048, 1536, 4, 4, 4, 64>(
+                source,
+                "probe",
+                format,
+                TargetLayout::X86_64,
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[test]
 fn rustc_labeled_statement_loop_controls_have_an_executable_replacement() {
     // Original scalar replacement for same-loop labels in pinned
     // tests/ui/for-loop-while/loop-break-value.rs and loop-break-cont.rs.
