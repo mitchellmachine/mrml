@@ -788,6 +788,16 @@ choose separate doorbell and acknowledgement runner functions. The caller
 still supplies an exact finite exit budget and invokes one transaction at a
 time; a general scheduler-integrated loop remains pending.
 
+The first transport-separation prerequisite is now explicit: each virtual-
+block device owns one transport identity, and the canonical configuration,
+guest queue publisher, protected acknowledgement path, device handlers, and
+common host runner all derive their mechanics from that same binding. The only
+implemented identity is deliberately named `MrmlSpecificScalarIo`; its record
+encoding remains canonical and carries no authority. This does not implement a
+PCI function, PCI configuration space, BAR, MSI/MSI-X, MMIO notification,
+VirtIO compatibility, or a QEMU differential harness. Those gates remain
+before broader virtual-device coverage.
+
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
 configuration, publishes a complete request before its producer, and rings only

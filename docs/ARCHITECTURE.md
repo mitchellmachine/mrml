@@ -658,6 +658,14 @@ fails the VM on every other disposition or stage error. The KVM and WHP block
 launchers use this common dispatch instead of selecting separate host-side
 runner entry points. Progress remains explicitly caller-bounded; this is not a
 general scheduler loop or unbounded execution.
+Virtual-block transport identity is now an explicit part of the device and its
+canonical configuration rather than a set of independently repeated port
+constants. The guest driver, configuration encoder/decoder, device processing,
+and common host runner derive the doorbell and protected acknowledgement
+mechanics from the exact `MrmlSpecificScalarIo` binding. The binding is data,
+not port or device authority, and reset validation still rejects stale
+configuration generations. No PCI, VirtIO, MMIO, or compatibility transport is
+implemented by this separation.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

@@ -1783,3 +1783,14 @@ runner used by both hosted adapters. Exact tuple matching and fail-closed error
 handling are standard defensive virtual-device techniques. No new protocol,
 authority model, storage format, or patent-candidate mechanism was identified.
 This agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Virtual-block transport identity binding
+
+**Result: NOT_TRIGGERED.** The change conventionally represents the existing
+fixed scalar I/O mechanics as one typed device/configuration binding and derives
+guest and host port/value selection from it. Exact canonical encoding, stale-
+generation rejection, and keeping transport data separate from authority are
+standard defensive virtual-device techniques. No PCI/VirtIO implementation,
+new protocol, authority model, storage format, or patent-candidate mechanism
+was introduced. This agent review does not replace the required independent
+human dual review.

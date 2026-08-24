@@ -4268,6 +4268,54 @@ Patent review: `NOT_TRIGGERED` — conventional consolidation of bounded exit
 dispatch, fixed scalar I/O tuples, queue processing, and interrupt delivery;
 see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+Virtual-block transport mechanics now have one typed identity binding. The
+device owns `VirtualBlockTransport::MrmlSpecificScalarIo`; its canonical
+configuration exposes the same binding, and configuration encoding derives the
+two fixed ports from it. Guest request publication and protected completion
+acknowledgement, host doorbell and acknowledgement revalidation, and the common
+transaction runner likewise derive their exact port/value tuples from the
+bound transport. `VirtualBlockDevice::new_with_transport` makes transport
+selection explicit while the existing constructor selects the sole implemented
+MRML-specific variant. Transport identity remains data and grants no I/O,
+queue, backend, mapping, or interrupt authority. No unimplemented PCI or VirtIO
+variant is exposed.
+
+Recorded verification on 2026-08-24: Arch Linux under WSL2 passed all 390
+release `mrml-kernel` tests, all 6 release `mrml-kvm-run` tests, strict scoped
+`--no-deps` Clippy for the kernel and KVM runner, and strict nightly UEFI
+Clippy for the `block-guest-driver-probe` image. Native Windows test-target
+`check` and strict scoped Clippy passed for the kernel, WHP adapter, and WHP
+runner with default/CUDA features excluded. A fresh one-time Lamport-signed
+version-1 KVM probe completed with `verify=17070us prepare=1936us
+execute=105801us total=126078us`. All temporary signing artifacts were verified
+absent afterward. No linked/live WHP claim is made because `link.exe` remains
+unavailable. This is unit/simulation and hosted controlled KVM evidence for the
+existing scalar transport only—not PCI, PCI configuration space, BARs,
+MSI/MSI-X, MMIO, VirtIO compatibility, QEMU differential behavior, native
+boot, bare metal, or physical hardware.
+
+The transport-binding `DIGITAL-RIGHTS REVIEW` found no new identity,
+collection, retention, correlation, disclosure, attestation mandate, DRM,
+vendor/publisher control, first-party bypass, accessibility restriction, AI
+authority, persistence, or durable owner-state change. Naming the existing
+mechanics creates no authority or tracking surface. The `HOSTILE SECURITY
+REVIEW` treats transport identity, canonical configuration bytes, generation,
+port/value tuples, guest transport calls, translated exits, device/bridge
+identity and lifecycle, queue counters, interrupt authority, reset, and
+substitution attempts as hostile. All layers derive the same exact binding;
+configuration corruption remains noncanonical; reset makes old configuration
+stale; scalar data never authorizes I/O; and every existing fail-stop path is
+preserved. The implementation exposes no nominal PCI/VirtIO path that could be
+mistaken for compatibility. Existing capability, revocation, rollback-
+resistance, accessibility, evidence, owner-sovereignty, data-minimization,
+anti-DRM, owner-controlled-attestation, third-party-accessibility, AI-
+containment, and anti-persistence gates remain unchanged. This agent review
+does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional typed selection of fixed virtual-
+device transport mechanics; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

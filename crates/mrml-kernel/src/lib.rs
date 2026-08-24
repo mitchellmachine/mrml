@@ -145,10 +145,11 @@ pub use virtual_block::{
     VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockRestartImage, VirtualBlockResumePage,
     VirtualBlockResumeState, VirtualBlockRunError, VirtualBlockRunResult, VirtualBlockTicket,
     VirtualBlockTransactionOutcome, VirtualBlockTransactionRunError,
-    VirtualBlockTransactionRunResult, VirtualBlockVmmMemory, execute_virtual_block_request,
-    process_virtual_block_completion_ack, process_virtual_block_doorbell,
-    process_virtual_block_request, run_virtual_block_completion_ack_once,
-    run_virtual_block_doorbell_once, run_virtual_block_transaction_once,
+    VirtualBlockTransactionRunResult, VirtualBlockTransport, VirtualBlockVmmMemory,
+    execute_virtual_block_request, process_virtual_block_completion_ack,
+    process_virtual_block_doorbell, process_virtual_block_request,
+    run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
+    run_virtual_block_transaction_once,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

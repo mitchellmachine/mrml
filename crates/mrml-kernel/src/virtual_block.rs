@@ -274,6 +274,41 @@ pub struct VirtualBlockQueueLayout {
     slots: u16,
 }
 
+/// Transport identity for an MRML virtual-block configuration. Transport data
+/// selects mechanics only and never grants queue, interrupt, backend, or port
+/// authority. The sole implemented variant is MRML-specific scalar I/O; PCI
+/// and compatibility transports require distinct later implementations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockTransport {
+    MrmlSpecificScalarIo,
+}
+
+impl VirtualBlockTransport {
+    pub const fn doorbell_port(self) -> u16 {
+        match self {
+            Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_DOORBELL_PORT,
+        }
+    }
+
+    pub const fn doorbell_value(self) -> u32 {
+        match self {
+            Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_DOORBELL_VALUE,
+        }
+    }
+
+    pub const fn completion_acknowledgement_port(self) -> u16 {
+        match self {
+            Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+        }
+    }
+
+    pub const fn completion_acknowledgement_value(self) -> u32 {
+        match self {
+            Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        }
+    }
+}
+
 impl VirtualBlockQueueLayout {
     pub fn new(
         request_base: u64,
@@ -346,6 +381,7 @@ pub struct VirtualBlockConfiguration {
     negotiated_features: u64,
     queue: VirtualBlockQueueLayout,
     interrupt_vector: u8,
+    transport: VirtualBlockTransport,
 }
 
 impl VirtualBlockConfiguration {
@@ -377,6 +413,10 @@ impl VirtualBlockConfiguration {
         self.interrupt_vector
     }
 
+    pub const fn transport(self) -> VirtualBlockTransport {
+        self.transport
+    }
+
     pub fn encode(self, output: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]) {
         output.fill(0);
         output[..4].copy_from_slice(&CONFIGURATION_MAGIC);
@@ -392,8 +432,13 @@ impl VirtualBlockConfiguration {
         output[56..64].copy_from_slice(&self.queue.pages_per_queue().to_le_bytes());
         output[64..66].copy_from_slice(&self.queue.slots().to_le_bytes());
         output[66] = self.interrupt_vector;
-        output[68..70].copy_from_slice(&VIRTUAL_BLOCK_DOORBELL_PORT.to_le_bytes());
-        output[70..72].copy_from_slice(&VIRTUAL_BLOCK_COMPLETION_ACK_PORT.to_le_bytes());
+        output[68..70].copy_from_slice(&self.transport.doorbell_port().to_le_bytes());
+        output[70..72].copy_from_slice(
+            &self
+                .transport
+                .completion_acknowledgement_port()
+                .to_le_bytes(),
+        );
         output[72..76].copy_from_slice(&MAX_VIRTUAL_BLOCK_TRANSFER_BYTES.to_le_bytes());
         output[76..78].copy_from_slice(&(VIRTUAL_BLOCK_REQUEST_BYTES as u16).to_le_bytes());
         output[78..80].copy_from_slice(&(VIRTUAL_BLOCK_COMPLETION_BYTES as u16).to_le_bytes());
@@ -454,6 +499,7 @@ impl VirtualBlockConfiguration {
             negotiated_features,
             queue,
             interrupt_vector,
+            transport: VirtualBlockTransport::MrmlSpecificScalarIo,
         })
     }
 }
@@ -1239,8 +1285,8 @@ impl VirtualBlockGuestDriver {
                 &encoded,
                 configuration.queue().request_base(),
                 submission.producer,
-                VIRTUAL_BLOCK_DOORBELL_PORT,
-                VIRTUAL_BLOCK_DOORBELL_VALUE,
+                configuration.transport().doorbell_port(),
+                configuration.transport().doorbell_value(),
             )
             .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         self.finish_submission(submission, slot, pending_count);
@@ -1409,8 +1455,12 @@ impl VirtualBlockGuestDriver {
             .acknowledge_completion(
                 consumer_address,
                 acknowledgement,
-                VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
-                VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+                self.configuration
+                    .transport()
+                    .completion_acknowledgement_port(),
+                self.configuration
+                    .transport()
+                    .completion_acknowledgement_value(),
             )
             .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         Ok(self.finish_completion(slot, pending_count, acknowledgement, ticket.completion))
@@ -1689,6 +1739,7 @@ pub struct VirtualBlockDevice<const N: usize> {
     block_size: u32,
     block_count: u64,
     supported_features: u64,
+    transport: VirtualBlockTransport,
     negotiated_features: u64,
     generation: u32,
     state: VirtualBlockDeviceState,
@@ -1706,6 +1757,20 @@ impl<const N: usize> VirtualBlockDevice<N> {
         block_count: u64,
         supported_features: u64,
     ) -> Result<Self, VirtualBlockError> {
+        Self::new_with_transport(
+            block_size,
+            block_count,
+            supported_features,
+            VirtualBlockTransport::MrmlSpecificScalarIo,
+        )
+    }
+
+    pub fn new_with_transport(
+        block_size: u32,
+        block_count: u64,
+        supported_features: u64,
+        transport: VirtualBlockTransport,
+    ) -> Result<Self, VirtualBlockError> {
         if N == 0
             || N > MAX_VIRTUAL_BLOCK_QUEUE_SLOTS
             || !(4096..=65_536).contains(&block_size)
@@ -1719,6 +1784,7 @@ impl<const N: usize> VirtualBlockDevice<N> {
             block_size,
             block_count,
             supported_features,
+            transport,
             negotiated_features: 0,
             generation: 1,
             state: VirtualBlockDeviceState::Created,
@@ -1745,6 +1811,10 @@ impl<const N: usize> VirtualBlockDevice<N> {
 
     pub const fn supported_features(&self) -> u64 {
         self.supported_features
+    }
+
+    pub const fn transport(&self) -> VirtualBlockTransport {
+        self.transport
     }
 
     pub const fn block_size(&self) -> u32 {
@@ -1791,6 +1861,7 @@ impl<const N: usize> VirtualBlockDevice<N> {
             interrupt_vector: self
                 .interrupt_vector
                 .ok_or(VirtualBlockError::InvalidState)?,
+            transport: self.transport,
         })
     }
 
@@ -3058,12 +3129,13 @@ where
     M: VirtualBlockVmmMemory,
     D: VirtualBlockBackend,
 {
+    let transport = device.transport();
     if disposition
         != (ExitDisposition::Io {
-            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            port: transport.doorbell_port(),
             size: 4,
             write: true,
-            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            value: transport.doorbell_value(),
         })
     {
         return Err(VirtualBlockDoorbellError::InvalidExit);
@@ -3085,12 +3157,13 @@ pub fn process_virtual_block_completion_ack<const N: usize, M>(
 where
     M: VirtualBlockVmmMemory,
 {
+    let transport = device.transport();
     if disposition
         != (ExitDisposition::Io {
-            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            port: transport.completion_acknowledgement_port(),
             size: 4,
             write: true,
-            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            value: transport.completion_acknowledgement_value(),
         })
     {
         return Err(VirtualBlockCompletionAckError::InvalidExit);
@@ -3315,13 +3388,14 @@ where
         io_policy,
     )
     .map_err(VirtualBlockTransactionRunError::Exit)?;
+    let transport = device.transport();
 
     if disposition
         == (ExitDisposition::Io {
-            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            port: transport.doorbell_port(),
             size: 4,
             write: true,
-            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            value: transport.doorbell_value(),
         })
     {
         let outcome = process_virtual_block_doorbell(
@@ -3358,10 +3432,10 @@ where
 
     if disposition
         == (ExitDisposition::Io {
-            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            port: transport.completion_acknowledgement_port(),
             size: 4,
             write: true,
-            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            value: transport.completion_acknowledgement_value(),
         })
     {
         return process_virtual_block_completion_ack(disposition, device, bridge, memory)
@@ -3477,6 +3551,18 @@ mod tests {
         );
         assert_eq!(configuration.queue(), layout::<2>());
         assert_eq!(configuration.interrupt_vector(), 48);
+        assert_eq!(
+            configuration.transport(),
+            VirtualBlockTransport::MrmlSpecificScalarIo
+        );
+        assert_eq!(
+            configuration.transport().doorbell_port(),
+            VIRTUAL_BLOCK_DOORBELL_PORT
+        );
+        assert_eq!(
+            configuration.transport().completion_acknowledgement_port(),
+            VIRTUAL_BLOCK_COMPLETION_ACK_PORT
+        );
 
         let mut encoded = [0xa5; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
         configuration.encode(&mut encoded);
