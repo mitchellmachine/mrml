@@ -556,6 +556,11 @@ two-write/two-read queue cycle with protected MMIO acknowledgement. Do not
 recover that narrow result as production BAR lifecycle/revocation, durable
 block I/O, native PCI interrupts, MSI/MSI-X, DMA, VirtIO, physical evidence, or
 an assigned production PCI identity.
+The test-only legacy completion path now reads the exact current router state:
+interrupt-disable retains a pending completion without injection, and explicit
+unmask of the same function generation permits the separately capability-
+authorized vector. Recover this only as bounded hosted KVM/WHP evidence, not a
+production PCI interrupt implementation.
 
 For every future device, recover and update its classification, exact feature
 bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU

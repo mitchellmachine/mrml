@@ -2525,7 +2525,8 @@ unsafe fn run_pci_configuration_probe() -> ! {
         asm!(
             "out dx, ax",
             in("dx") 0xcfcu16,
-            in("ax") mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
+            in("ax") mrml_kernel::PCI_COMMAND_MEMORY_SPACE
+                | mrml_kernel::PCI_COMMAND_INTERRUPT_DISABLE,
             options(nomem, nostack)
         );
     }
@@ -2579,6 +2580,18 @@ unsafe fn run_pci_configuration_probe() -> ! {
         driver
             .publish_submission(&mut queue_transport, submission)
             .unwrap_or_else(|_| halt());
+        if block == 0 {
+            // Exercise conventional PCI interrupt masking: the completed
+            // request remains pending until this exact function is unmasked.
+            unsafe {
+                asm!(
+                    "out dx, ax",
+                    in("dx") 0xcfcu16,
+                    in("ax") mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
+                    options(nomem, nostack)
+                )
+            };
+        }
     }
     for _ in 0..2 {
         let completion = driver

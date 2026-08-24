@@ -2055,3 +2055,15 @@ compatibility protocol, host-share mechanism, accessibility interface, browser
 semantic interface, JavaScript/WebAssembly runtime, media mechanism, or other
 patent-candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Attachment-bound legacy PCI completion masking
+
+**Result: NOT_TRIGGERED.** The change conventionally reads the current PCI
+command state for the exact routed function generation, retains a pending legacy
+completion while interrupt-disable is set, and permits the existing separately
+capability-authorized injection after explicit unmask. It introduces no VirtIO
+compatibility, host-share protocol, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, media mechanism, production PCI
+identity, MSI/MSI-X, DMA protocol, or new authority model. The previously
+recorded planned scopes remain `TRIGGERED`; this agent review does not replace
+independent human dual review.

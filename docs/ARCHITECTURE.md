@@ -743,6 +743,11 @@ backend, existing legacy interrupt injection, and protected MMIO retirement. It
 is not a production native PCI interrupt adapter, durable block backend,
 MSI/MSI-X, DMA, VirtIO, production identity, physical device, or host-resistant
 isolation.
+The legacy completion path now binds delivery to the exact live routed PCI
+generation and command state. Interrupt-disable masks injection while retaining
+the pending latch; explicit unmask of the same generation permits the separately
+capability-authorized vector delivery. The signed KVM/WHP probe exercises this
+sequence within an exact seventeen-exit budget.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector

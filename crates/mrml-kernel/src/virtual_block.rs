@@ -1,8 +1,9 @@
 use crate::{
     Capability, CapabilityError, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter,
     InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, MmioWriteCompleter, ObjectId,
-    PAGE_SIZE, Rights, VirtualBlockInterruptError, VirtualPciAttachedFunction,
-    VirtualPciAttachedResources, VirtualPciFunctionRevoker, VirtualPciMemoryMapper,
+    PAGE_SIZE, PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE, Rights,
+    VirtualBlockInterruptError, VirtualPciAttachedFunction, VirtualPciAttachedResources,
+    VirtualPciConfigurationRouter, VirtualPciFunctionRevoker, VirtualPciMemoryMapper,
     VirtualPciMmioWindow, VirtualPciNativeResourceError, VmBackend, VmError, VmId, VmRunError,
     VmTable, inject_virtual_block_interrupt, run_vm_once, run_vm_once_for_mmio,
 };
@@ -2502,6 +2503,12 @@ pub struct VirtualBlockPciAttachment {
     invalidated_requests: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VirtualBlockPciInterruptState {
+    Enabled,
+    Masked,
+}
+
 impl VirtualBlockPciAttachment {
     pub fn new<const N: usize>(
         pci: VirtualPciAttachedFunction,
@@ -2588,6 +2595,31 @@ impl VirtualBlockPciAttachment {
             return Err(VirtualBlockPciError::InvalidState);
         }
         self.mapped_window.ok_or(VirtualBlockPciError::InvalidState)
+    }
+
+    /// Revalidates the exact live PCI generation and command state before
+    /// legacy completion delivery. PCI state remains routing data; the
+    /// separately checked interrupt capability is still the authority.
+    fn validate_interrupt_state<const N: usize>(
+        &self,
+        pci: VirtualPciAttachedResources,
+        device: &VirtualBlockDevice<N>,
+        bridge: &VirtualBlockQueueBridge<N>,
+    ) -> Result<VirtualBlockPciInterruptState, VirtualBlockPciError> {
+        let window = self.validate_mmio_window(device, bridge)?;
+        if pci.attachment() != self.pci.attachment()
+            || pci.location() != self.pci.location()
+            || pci.function_generation() != self.pci.function_generation()
+            || pci.mmio_window() != Some(window)
+            || pci.command() & PCI_COMMAND_MEMORY_SPACE == 0
+        {
+            return Err(VirtualBlockPciError::StalePciGeneration);
+        }
+        Ok(if pci.command() & PCI_COMMAND_INTERRUPT_DISABLE == 0 {
+            VirtualBlockPciInterruptState::Enabled
+        } else {
+            VirtualBlockPciInterruptState::Masked
+        })
     }
 
     fn cleanup_record<const N: usize>(
@@ -4262,6 +4294,7 @@ pub fn run_virtual_block_mmio_transaction_once<
     interrupt_policy: &InterruptPolicy,
     interrupt_capability: Capability,
     interrupt_object: ObjectId,
+    pci_router: &VirtualPciConfigurationRouter,
     attachment: &VirtualBlockPciAttachment,
     device: &mut VirtualBlockDevice<N>,
     bridge: &mut VirtualBlockQueueBridge<N>,
@@ -4271,16 +4304,26 @@ where
     M: VirtualBlockVmmMemory + MmioWriteCompleter,
     D: VirtualBlockBackend,
 {
+    let interrupt_state = pci_router
+        .describe_attachment(attachment.pci().attachment())
+        .map_err(|_| ())
+        .and_then(|pci| {
+            attachment
+                .validate_interrupt_state(pci.resources(), device, bridge)
+                .map_err(|_| ())
+        });
     if block_authority != attachment.backend()
         || block_authority.exposed_block_count() != device.block_count()
-        || attachment.validate_mmio_window(device, bridge).is_err()
+        || interrupt_state.is_err()
     {
         let _ = vms.fail(vm);
         return Err(VirtualBlockTransactionRunError::Authority(
             VirtualBlockAuthorityError::GeometryMismatch,
         ));
     }
-    if device.pending_interrupt_vector().is_some() {
+    if device.pending_interrupt_vector().is_some()
+        && interrupt_state == Ok(VirtualBlockPciInterruptState::Enabled)
+    {
         inject_virtual_block_interrupt(
             device,
             memory,
@@ -4388,7 +4431,8 @@ where
     if matches!(
         &outcome,
         VirtualBlockTransactionOutcome::Doorbell(VirtualBlockProcessOutcome::Completed(_))
-    ) {
+    ) && interrupt_state == Ok(VirtualBlockPciInterruptState::Enabled)
+    {
         inject_virtual_block_interrupt(
             device,
             memory,
@@ -6735,6 +6779,27 @@ mod tests {
                 )
                 .unwrap();
         }
+        router
+            .write(
+                location,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_INTERRUPT_DISABLE),
+            )
+            .unwrap();
+        let masked = router.describe_attachment(pci_id).unwrap().resources();
+        assert_eq!(
+            attachment.validate_interrupt_state(masked, &device, &bridge),
+            Ok(VirtualBlockPciInterruptState::Masked)
+        );
+        router
+            .write(location, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .unwrap();
+        let unmasked = router.describe_attachment(pci_id).unwrap().resources();
+        assert_eq!(
+            attachment.validate_interrupt_state(unmasked, &device, &bridge),
+            Ok(VirtualBlockPciInterruptState::Enabled)
+        );
 
         let exact = ExitDisposition::Mmio {
             guest_address: 0x20_0000,
@@ -7520,7 +7585,7 @@ mod tests {
         device: &VirtualBlockDevice<1>,
         bridge: &VirtualBlockQueueBridge<1>,
         authority: VirtualBlockBackendAuthority,
-    ) -> VirtualBlockPciAttachment {
+    ) -> (VirtualBlockPciAttachment, VirtualPciConfigurationRouter) {
         let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
         let mut router = crate::VirtualPciConfigurationRouter::new();
         let pci_id = router.attach(location, block_pci_function(1)).unwrap();
@@ -7553,7 +7618,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(backend.maps, 1);
-        attachment
+        (attachment, router)
     }
 
     #[test]
@@ -7582,7 +7647,7 @@ mod tests {
         let io = IoPortPolicy::<0>::deny_all();
         let mut device = active_mmio::<1>();
         let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
-        let attachment = mapped_mmio_attachment(&device, &bridge, authority);
+        let (attachment, pci_router) = mapped_mmio_attachment(&device, &bridge, authority);
         let mut vmm = MockVmm::new();
         vmm.next_exit = Some(VmExit::Mmio {
             guest_address: 0x20_0000,
@@ -7608,6 +7673,7 @@ mod tests {
                 &interrupts,
                 interrupt_capability,
                 interrupt_object,
+                &pci_router,
                 &attachment,
                 &mut device,
                 &mut bridge,
@@ -7643,7 +7709,7 @@ mod tests {
         let io = IoPortPolicy::<0>::deny_all();
         let mut device = active_mmio::<1>();
         let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
-        let attachment = mapped_mmio_attachment(&device, &bridge, authority);
+        let (attachment, pci_router) = mapped_mmio_attachment(&device, &bridge, authority);
         let mut vmm = MockVmm::new();
         let mut backend = MockBlock::new();
         let mut scratch = [0; 4096];
@@ -7674,6 +7740,7 @@ mod tests {
                 &interrupts,
                 interrupt_capability,
                 interrupt_object,
+                &pci_router,
                 &attachment,
                 &mut device,
                 &mut bridge,
@@ -7709,6 +7776,7 @@ mod tests {
                 &interrupts,
                 interrupt_capability,
                 interrupt_object,
+                &pci_router,
                 &attachment,
                 &mut device,
                 &mut bridge,
@@ -7741,7 +7809,7 @@ mod tests {
         let io = IoPortPolicy::<0>::deny_all();
         let mut device = active_mmio::<1>();
         let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
-        let attachment = mapped_mmio_attachment(&device, &bridge, authority);
+        let (attachment, pci_router) = mapped_mmio_attachment(&device, &bridge, authority);
         let mut vmm = MockVmm::new();
         vmm.fail_mmio_completion = true;
         vmm.next_exit = Some(VmExit::Mmio {
@@ -7768,6 +7836,7 @@ mod tests {
                 &interrupts,
                 interrupt_capability,
                 interrupt_object,
+                &pci_router,
                 &attachment,
                 &mut device,
                 &mut bridge,

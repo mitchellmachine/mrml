@@ -371,6 +371,10 @@ identity, BDF, BAR, and request data remain non-authorizing; the backend object,
 operation rights, mapping, and legacy interrupt delivery remain separately
 capability checked. This assigns no production identity, MSI/MSI-X, DMA, or
 durable backend authority.
+Legacy completion injection additionally requires the exact current routed
+function generation and BAR window with memory decode enabled. PCI interrupt-
+disable retains the pending completion latch and performs no injection; a later
+exact unmask permits the ordinary separately capability-authorized delivery.
 The common block/PCI attachment now exact-matches PCI and block generations,
 queue layout, interrupt vector, backend object/range, and confirmed BAR-mapping
 state. Its unsafe cleanup contract covers every mapping, interrupt, DMA binding,

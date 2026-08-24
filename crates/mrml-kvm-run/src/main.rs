@@ -128,7 +128,7 @@ const PCI_TEST_MMIO_BASE: u64 = 0x00c0_0000;
 #[cfg(target_os = "linux")]
 const PCI_BLOCK_PROBE_OPERATIONS: u32 = 4;
 #[cfg(target_os = "linux")]
-const PCI_PROBE_POLICY_EXITS: u64 = 16;
+const PCI_PROBE_POLICY_EXITS: u64 = 17;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -747,7 +747,7 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
     .map_err(|error| anyhow!("KVM PCI memory enable failed: {:?}", error))?;
     if command
         != VirtualPciIoOutcome::Write(mrml_kernel::VirtualPciWriteOutcome::Command(
-            mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
+            mrml_kernel::PCI_COMMAND_MEMORY_SPACE | mrml_kernel::PCI_COMMAND_INTERRUPT_DISABLE,
         ))
         || !window_backend.mapped
     {
@@ -777,6 +777,7 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
             &interrupt_policy,
             interrupt_capability,
             interrupt_object,
+            &router,
             &attachment,
             &mut device,
             &mut bridge,
@@ -806,6 +807,35 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
                 transaction + 1,
                 mmio
             ));
+        }
+        if transaction == 0 {
+            if device.pending_interrupt_vector() != Some(48) {
+                return Err(anyhow!("masked PCI completion was not retained exactly"));
+            }
+            let unmask = {
+                let mut mapper =
+                    VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+                run_pci_configuration_once_with_mapper(
+                    &mut guest,
+                    0,
+                    &mut vms,
+                    vm,
+                    &mut hypercalls,
+                    &capabilities,
+                    &memory,
+                    &mut transport,
+                    &mut router,
+                    &mut mapper,
+                )
+            }
+            .map_err(|error| anyhow!("KVM PCI interrupt unmask failed: {:?}", error))?;
+            if unmask
+                != VirtualPciIoOutcome::Write(mrml_kernel::VirtualPciWriteOutcome::Command(
+                    mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
+                ))
+            {
+                return Err(anyhow!("KVM PCI interrupt unmask mismatch: {:?}", unmask));
+            }
         }
     }
     if backend.0[..4096] != [0x5a; 4096] || backend.0[4096..] != [0xa5; 4096] {
@@ -2421,7 +2451,7 @@ mod tests {
         assert_eq!(PCI_BLOCK_PROBE_OPERATIONS, 4);
         assert_eq!(
             PCI_PROBE_POLICY_EXITS,
-            8 + 2 * u64::from(PCI_BLOCK_PROBE_OPERATIONS)
+            9 + 2 * u64::from(PCI_BLOCK_PROBE_OPERATIONS)
         );
     }
 

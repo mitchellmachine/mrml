@@ -922,6 +922,12 @@ payload comparison now pass on KVM and WHP. Production native PCI interrupt
 routing, MSI/MSI-X, DMA, durable block I/O, QEMU comparison, and a production
 PCI identity remain pending, so the broader PCI attachment/transport gate is
 still partial.
+Legacy completion notification now also revalidates the exact live router
+generation, BAR, memory-decode, and interrupt-disable state. The first signed
+completion is retained while masked, the guest explicitly unmasks the same
+function, and the next common entry performs the existing independently
+capability-authorized injection. This remains test-only legacy delivery, not a
+production native interrupt adapter.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

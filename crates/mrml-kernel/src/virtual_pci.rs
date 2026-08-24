@@ -94,6 +94,7 @@ pub struct VirtualPciAttachedResources {
     location: VirtualPciLocation,
     function_generation: u32,
     mmio_window: Option<VirtualPciMmioWindow>,
+    command: u16,
 }
 
 /// Read-only description of one exact routed function generation. This is
@@ -130,6 +131,12 @@ impl VirtualPciAttachedResources {
 
     pub const fn mmio_window(self) -> Option<VirtualPciMmioWindow> {
         self.mmio_window
+    }
+
+    /// Current command-register data for this exact routed generation. This
+    /// describes decode and interrupt masking; it grants neither authority.
+    pub const fn command(self) -> u16 {
+        self.command
     }
 }
 
@@ -699,6 +706,7 @@ impl VirtualPciConfigurationRouter {
                 location: entry.location,
                 function_generation: entry.function.generation(),
                 mmio_window: entry.function.assigned_mmio_window(),
+                command: entry.function.command(),
             },
             identity: entry.function.identity(),
         })
@@ -775,6 +783,7 @@ impl VirtualPciConfigurationRouter {
                 location,
                 function_generation: entry.function.generation,
                 mmio_window: entry.function.assigned_mmio_window(),
+                command: entry.function.command(),
             };
             let result = if new_decode {
                 mapper.map_window(resources)
@@ -812,6 +821,7 @@ impl VirtualPciConfigurationRouter {
             location: entry.location,
             function_generation: entry.function.generation(),
             mmio_window,
+            command: entry.function.command(),
         };
         revoker
             .revoke_function(resources)
@@ -850,6 +860,7 @@ impl VirtualPciConfigurationRouter {
             location: entry.location,
             function_generation: entry.function.generation(),
             mmio_window: entry.function.assigned_mmio_window(),
+            command: entry.function.command(),
         };
         revoker
             .revoke_function(resources)
@@ -1431,6 +1442,7 @@ mod tests {
                 location: routed,
                 function_generation: 1,
                 mmio_window: Some(window),
+                command: PCI_COMMAND_MEMORY_SPACE,
             })
         );
 

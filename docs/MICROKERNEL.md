@@ -6024,7 +6024,7 @@ ordinary allocation-free block driver for `MrmlSpecificPciMmio`. It fills two
 separate 4 KiB payloads, publishes both write requests before retirement, drains
 and acknowledges both protected completions through BAR offset `4`, clears both
 payload pages, reuses the two slots for reads, drains and acknowledges those
-completions, and compares every returned byte. The host admits exactly eight PCI
+completions, and compares every returned byte. The host admits exactly nine PCI
 configuration exits plus eight MMIO writes. Each doorbell reauthorizes the exact
 backend object and operation right, processes at most one request, publishes one
 protected completion, retires the exact native write, and uses the existing
@@ -6079,7 +6079,7 @@ accessibility restriction, or persistence. Owner policy still selects the exact
 volatile backend through independently revocable object and operation
 capabilities; PCI identity, BAR, queue records, and payloads never authorize it.
 
-HOSTILE SECURITY REVIEW: signed admission, the exact sixteen-exit budget,
+HOSTILE SECURITY REVIEW: signed admission, the exact seventeen-exit budget,
 configuration selectors, BDF, identity/class, command and BAR state, transport
 descriptor, BAR bounds, MMIO GPA/width/direction/value/instruction encoding,
 function/block/queue generations, request counters/slots/IDs, payload ranges,
@@ -6096,6 +6096,66 @@ compatibility, host-share, accessibility-device, browser, JavaScript/Wasm, or
 media scopes. Those planned scopes remain `TRIGGERED` in
 [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md). Agent review does not replace
 independent human dual review.
+
+### Attachment-bound legacy PCI completion masking
+
+The PCI-MMIO runner now reads the current backend-neutral configuration router
+on every invocation and exact-matches attachment, BDF, function generation, BAR
+window, and memory-decode state before legacy completion delivery. PCI command
+state remains non-authorizing data; the existing exact `SIGNAL` capability and
+vector allowlist remain mandatory.
+
+With conventional interrupt-disable set, a completed request keeps its pending
+notification and no injection occurs. Backend work is neither replayed nor
+acknowledged. The signed guest starts masked, publishes its first write, then
+explicitly unmasks the same selected function. The host proves the latch stayed
+pending, processes that ninth configuration exit, and delivers the retained
+vector before the next guest entry. The complete two-write/two-read protected-
+acknowledgement sequence remains unchanged.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features virtual_pci
+  PASS: 28
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features virtual_block
+  PASS: 69
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kvm-run -p mrml-whp-run --release --no-default-features
+  PASS: KVM-run 4; WHP-run 6
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel -p mrml-kvm -p mrml-whp -p mrml-kvm-run -p mrml-whp-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel-image --target x86_64-unknown-uefi --release --no-default-features --features pci-configuration-probe -- -D warnings -A clippy::result_unit_err
+  PASS
+wsl.exe -d archlinux --cd /mnt/c/Users/Mitch/Documents/mrml -- bash -lc 'CARGO_TARGET_DIR=target/pci-interrupt-linux cargo test -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --no-default-features && CARGO_TARGET_DIR=target/pci-interrupt-linux cargo clippy -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --all-targets --no-default-features --no-deps -- -D warnings'
+  PASS: kernel 436; KVM 18 passed/1 ignored; KVM-run 7; strict Clippy passed
+target/pci-interrupt-kvm/release/mrml-kvm-run target/pci-interrupt-evidence/artifacts/kernel.signed target/pci-interrupt-evidence/artifacts/release.public 1 pci-configuration-probe
+  PASS: verify=17280us prepare=2128us execute=49138us total=90367us
+target/pci-interrupt-evidence/release/mrml-whp-run.exe target/pci-interrupt-evidence/artifacts/kernel.signed target/pci-interrupt-evidence/artifacts/release.public 1 pci-configuration-probe
+  PASS: verify=18051us prepare=3996us execute=2506us total=28437us
+```
+
+The two native runners used the identical fresh UEFI image and one-use Lamport
+signature; the private key was consumed. This is unit/simulation and hosted
+controlled KVM/WHP evidence, not production native interrupt routing, MSI/MSI-X,
+DMA/IOMMU, durable storage, VirtIO, physical hardware, bare metal, or host-
+resistant isolation.
+
+DIGITAL-RIGHTS REVIEW: no telemetry, retention, remote disclosure, host path,
+attestation, DRM, publisher/vendor authority, first-party bypass, secret export,
+AI-only interface, accessibility restriction, or persistence is added. Owner
+policy retains independently revocable backend and interrupt authority.
+
+HOSTILE SECURITY REVIEW: command bits, attachment/function generations, BAR,
+decode state, vector, pending latch, queue, backend rights, exit tuple, and
+native completion are hostile. The runner obtains current router state rather
+than accepting a caller snapshot. Masking cannot clear or replay completion;
+stale/substituted state and uncertain mutation fail closed. Reset/removal cleanup
+remains exact and generation-bound.
+
+Patent review: `NOT_TRIGGERED` — conventional PCI command-register interrupt
+masking applied to the already reviewed MRML-native legacy completion bridge.
+The planned compatibility, host-share, accessibility-device, browser,
+JavaScript/Wasm, and media scopes remain `TRIGGERED`. Agent review does not
+replace independent human dual review.
 
 ## Milestones
 

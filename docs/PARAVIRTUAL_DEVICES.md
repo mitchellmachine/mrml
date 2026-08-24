@@ -202,6 +202,13 @@ acknowledgement. It is not production block I/O or evidence for durability,
 native PCI interrupt routing, MSI/MSI-X, DMA, VirtIO, QEMU comparison,
 production PCI identity, physical devices, or host-resistant isolation.
 
+Legacy completion delivery also re-reads the exact live routed function state.
+Conventional PCI interrupt-disable masks injection without clearing the pending
+device notification; delivery resumes only after that same attachment
+generation is unmasked. The signed KVM/WHP guest exercises this sequence. PCI
+command state remains data, while the separate `SIGNAL` capability authorizes
+delivery.
+
 Sector, offset, and length are checked request data. They cannot select another
 object. Bounded-region capabilities may expose a whole disk, partition, image,
 snapshot, ephemeral volume, or capability-native object.
