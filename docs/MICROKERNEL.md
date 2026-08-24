@@ -3532,19 +3532,34 @@ backend writes. Proof issuance occurs only after that authorized read succeeds,
 so an I/O failure leaves the admission available for a serialized retry and
 cannot advance the recovery guard.
 
+Accepted rollback state now has a canonical 32-byte record containing the exact
+nonzero epoch and handle-generation pair plus strict zero reserved bytes. A
+backend-neutral store contract requires authenticated reads and power-loss-
+atomic compare-and-store. Integrated stable recovery keeps the reconstructed
+table local until the store advances from the exact state it loaded; conflict
+or backend uncertainty returns no capabilities. An ordinary file is explicitly
+not a conforming store. No TPM NV or equivalent backend or physical durability
+evidence exists yet.
+
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
-each pass all 106 `mrml-storage` tests and scoped strict Clippy. Focused tests
+each pass all 107 `mrml-storage` tests and scoped strict Clippy. Focused tests
 cover fresh attenuated lineage, descendant revocation, and cross-recovery stale-
 token rejection; corruption and root-generation substitution; replay without
 guard advancement; rights
 amplification, forward lineage, hidden reserved data even with a recomputed
 digest, and capacity mismatch. This is unit/simulation evidence only. Stable-
-Platform authentication of owner-approved policy, an owner-facing durable-grant
-UI, boot orchestration, and rollback-resistant persistence of the accepted
-epoch/generation remain unimplemented, so complete reboot reconstruction is not
+platform authentication of owner-approved policy, an owner-facing durable-grant
+UI, boot orchestration, and a conforming physical monotonic-store backend remain
+unimplemented, so complete reboot reconstruction and rollback resistance are not
 claimed.
-This agent review is not
-independent human audit.
+The `DIGITAL-RIGHTS REVIEW` found no new collection, disclosure, stable remote
+identity, vendor veto, DRM, deletion, or persistence authority: the record holds
+only the two local anti-replay counters, and owner-approved grant policy remains
+a separate explicit boundary. The `HOSTILE SECURITY REVIEW` treats checkpoint
+bytes, state bytes, counters, reserved fields, storage reads, and concurrent
+updates as hostile; malformed state, stale values, compare-and-store conflict,
+and backend uncertainty release no reconstructed capability. This agent review
+does not replace the required independent human dual review.
 
 The next boundary layer now decodes buffered send and receive operations without
 dereferencing their addresses. Payloads remain capped by the kernel's 4096-byte

@@ -571,8 +571,13 @@ authority; unrelated domains continue.
    requires an unsafe authenticated rollback-state token instead of caller-
    chosen counters. Stable recovery issues only after successful authorized
    I/O, so pre-acceptance I/O failure remains retryable, while duplicate issue
-   fails closed. The platform owner-policy authenticator/UI, boot orchestration,
-   and rollback-resistant persistence of the accepted epoch/generation remain pending, so
+   fails closed. A canonical 32-byte accepted-state record and backend-neutral
+   authenticated monotonic-store contract now bind the accepted epoch and
+   handle-generation pair. Integrated stable recovery releases no rebuilt
+   authority table unless exact compare-and-store atomically advances both
+   values; corrupt state, stale conflicts, and backend uncertainty fail closed.
+   A conforming TPM NV or equivalent power-loss-atomic backend remains pending.
+   The platform owner-policy authenticator/UI and boot orchestration remain pending, so
    reboot-time capability reconstruction is still partial. A hosted/physical
    device backend and physical
    power-loss evidence remain pending. A focused signed KVM/WHP controlled

@@ -37,12 +37,13 @@ pub use authority::{
 };
 pub use authority_checkpoint::{
     AUTHORITY_CHECKPOINT_GRANT_BYTES, AUTHORITY_CHECKPOINT_HEADER_BYTES,
-    AuthenticatedAuthorityCheckpoint, AuthenticatedAuthorityRecoveryState, AuthorityCheckpoint,
-    AuthorityCheckpointError, AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard,
-    AuthorityStorageError, OwnerApprovedAuthorityCheckpoint, PreparedStableAuthorities,
-    RecoveredStorageAuthorities, StableAuthorities, StorageRecoveryGrant,
-    authority_checkpoint_digest, encode_authority_checkpoint, prepare_stable_authorities,
-    recover_stable_authorities,
+    AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityCheckpoint,
+    AuthenticatedAuthorityRecoveryState, AuthorityCheckpoint, AuthorityCheckpointError,
+    AuthorityCheckpointProofIssuer, AuthorityRecoveryCommitError, AuthorityRecoveryGuard,
+    AuthorityRecoveryStateStore, AuthorityStorageError, OwnerApprovedAuthorityCheckpoint,
+    PreparedStableAuthorities, RecoveredStorageAuthorities, StableAuthorities,
+    StorageRecoveryGrant, authority_checkpoint_digest, encode_authority_checkpoint,
+    prepare_stable_authorities, recover_stable_authorities, recover_stable_authorities_and_commit,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{

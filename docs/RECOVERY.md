@@ -292,9 +292,13 @@ explicitly and downgrade the status rather than guessing.
   unforgeable recovery proof. The replay guard can be initialized only from an
   unsafe authenticated rollback-state token. Stable recovery issues after a
   successful authorized read, so I/O failure does not consume admission;
-  duplicate issue fails closed. Platform owner-policy authentication/UI, boot
-  orchestration, and rollback-resistant persistence of the accepted epoch/
-  generation remain pending, so
+  duplicate issue fails closed. A canonical accepted-state record now binds the
+  epoch and handle-generation pair behind an authenticated monotonic-store
+  contract. Integrated recovery releases no fresh authority table unless exact
+  compare-and-store advances both values; corruption, conflict, and backend
+  uncertainty fail closed. A conforming TPM NV or equivalent power-loss-atomic
+  backend, platform owner-policy authentication/UI, and boot orchestration
+  remain pending, so
   reboot-time capability reconstruction and concrete block durability remain
   partial.
   Configuration checkpoints can now participate in this same exact stable-file

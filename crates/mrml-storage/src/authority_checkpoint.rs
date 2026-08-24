@@ -9,10 +9,31 @@ use mrml_crypto::Sha3_256;
 
 pub const AUTHORITY_CHECKPOINT_HEADER_BYTES: usize = 80;
 pub const AUTHORITY_CHECKPOINT_GRANT_BYTES: usize = 48;
+pub const AUTHORITY_RECOVERY_STATE_BYTES: usize = 32;
 const DIGEST_OFFSET: usize = 48;
 const DIGEST_BYTES: usize = 32;
 const MAGIC: [u8; 4] = *b"MRAC";
 const VERSION: u8 = 1;
+const RECOVERY_STATE_MAGIC: [u8; 16] = *b"MRML-AUTHSTATE1\0";
+
+/// Backend contract for authenticated, monotonic storage-authority recovery
+/// state. Implementations must authenticate reads and make compare-and-store
+/// atomic across power loss. Ordinary files do not satisfy this contract.
+pub trait AuthorityRecoveryStateStore {
+    type Error;
+
+    fn load_authenticated(
+        &self,
+        output: &mut [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error>;
+
+    fn compare_and_store(
+        &mut self,
+        expected_epoch: u64,
+        expected_handle_generation: u32,
+        replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error>;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthorityCheckpoint {
@@ -110,6 +131,31 @@ impl AuthenticatedAuthorityRecoveryState {
             accepted_epoch,
             accepted_handle_generation,
         }
+    }
+
+    fn decode_authenticated(
+        input: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<Self, AuthorityCheckpointError> {
+        if input[..16] != RECOVERY_STATE_MAGIC || input[28..].iter().any(|byte| *byte != 0) {
+            return Err(AuthorityCheckpointError::MalformedRecoveryState);
+        }
+        let accepted_epoch = u64::from_le_bytes(input[16..24].try_into().unwrap());
+        let accepted_handle_generation = u32::from_le_bytes(input[24..28].try_into().unwrap());
+        if accepted_epoch == 0 || accepted_handle_generation == 0 {
+            return Err(AuthorityCheckpointError::MalformedRecoveryState);
+        }
+        Ok(Self {
+            accepted_epoch,
+            accepted_handle_generation,
+        })
+    }
+
+    fn encode(&self) -> [u8; AUTHORITY_RECOVERY_STATE_BYTES] {
+        let mut output = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+        output[..16].copy_from_slice(&RECOVERY_STATE_MAGIC);
+        output[16..24].copy_from_slice(&self.accepted_epoch.to_le_bytes());
+        output[24..28].copy_from_slice(&self.accepted_handle_generation.to_le_bytes());
+        output
     }
 }
 
@@ -574,12 +620,72 @@ pub fn recover_stable_authorities<
     result
 }
 
+/// Recovers durable grants only after loading authenticated rollback state and
+/// atomically advancing it to the accepted checkpoint. Reconstructed handles
+/// are not released if the monotonic store reports conflict or uncertainty.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_stable_authorities_and_commit<
+    const GRANTS: usize,
+    const EXTENTS: usize,
+    const BOOTSTRAP_AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: AuthorityRecoveryStateStore,
+>(
+    file_state: &FileState<EXTENTS>,
+    bootstrap_authority: &StorageAuthorityTable<BOOTSTRAP_AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    expected_file_generation: u64,
+    issuer: &mut AuthorityCheckpointProofIssuer,
+    input: &mut [u8],
+    backend: &mut B,
+    state_store: &mut S,
+) -> Result<RecoveredStorageAuthorities<GRANTS>, AuthorityRecoveryCommitError<B::Error, S::Error>> {
+    let mut encoded_state = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+    state_store
+        .load_authenticated(&mut encoded_state)
+        .map_err(AuthorityRecoveryCommitError::State)?;
+    let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(&encoded_state)
+        .map_err(AuthorityRecoveryCommitError::Checkpoint)?;
+    let expected_epoch = state.accepted_epoch;
+    let expected_handle_generation = state.accepted_handle_generation;
+    let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
+    let recovered = recover_stable_authorities(
+        file_state,
+        bootstrap_authority,
+        file,
+        principal,
+        expected_file_generation,
+        &mut guard,
+        issuer,
+        input,
+        backend,
+    )
+    .map_err(AuthorityRecoveryCommitError::Storage)?;
+    let replacement = AuthenticatedAuthorityRecoveryState {
+        accepted_epoch: guard.accepted_epoch,
+        accepted_handle_generation: guard.accepted_handle_generation,
+    }
+    .encode();
+    state_store
+        .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
+        .map_err(AuthorityRecoveryCommitError::State)?;
+    Ok(recovered)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorityStorageError<E> {
     Checkpoint(AuthorityCheckpointError),
     InvalidBinding,
     Read(FileReadError<E>),
     Write(FileWriteError<E>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityRecoveryCommitError<StorageError, StateError> {
+    Checkpoint(AuthorityCheckpointError),
+    State(StateError),
+    Storage(AuthorityStorageError<StorageError>),
 }
 
 struct Decoded<const N: usize> {
@@ -759,6 +865,7 @@ pub enum AuthorityCheckpointError {
     AuthenticationMismatch,
     PolicyMismatch,
     ProofAlreadyIssued,
+    MalformedRecoveryState,
     InvalidLineage,
     AuthorityAmplification,
     Authority(StorageAuthorityError),
@@ -903,6 +1010,59 @@ mod tests {
             (block == 2).then_some(()).ok_or(())
         }
         fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    struct RecoveryStateBackend {
+        state: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        fail_load: bool,
+        force_conflict: bool,
+    }
+
+    impl RecoveryStateBackend {
+        fn new(epoch: u64, handle_generation: u32) -> Self {
+            Self {
+                state: AuthenticatedAuthorityRecoveryState {
+                    accepted_epoch: epoch,
+                    accepted_handle_generation: handle_generation,
+                }
+                .encode(),
+                fail_load: false,
+                force_conflict: false,
+            }
+        }
+    }
+
+    impl AuthorityRecoveryStateStore for RecoveryStateBackend {
+        type Error = u8;
+
+        fn load_authenticated(
+            &self,
+            output: &mut [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        ) -> Result<(), Self::Error> {
+            if self.fail_load {
+                return Err(1);
+            }
+            output.copy_from_slice(&self.state);
+            Ok(())
+        }
+
+        fn compare_and_store(
+            &mut self,
+            expected_epoch: u64,
+            expected_handle_generation: u32,
+            replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        ) -> Result<(), Self::Error> {
+            let current = AuthenticatedAuthorityRecoveryState::decode_authenticated(&self.state)
+                .map_err(|_| 2)?;
+            if self.force_conflict
+                || current.accepted_epoch != expected_epoch
+                || current.accepted_handle_generation != expected_handle_generation
+            {
+                return Err(3);
+            }
+            self.state.copy_from_slice(replacement);
             Ok(())
         }
     }
@@ -1167,18 +1327,76 @@ mod tests {
         assert_eq!(guard.accepted_epoch(), 8);
         assert!(recovered_bytes.iter().all(|byte| *byte == 0));
         backend.fail_read = false;
-        let recovered = recover_stable_authorities::<2, _, _, _>(
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                9,
+                volume(),
+                14,
+                2,
+                authority_checkpoint_digest(&expected).unwrap(),
+            )
+        };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        let mut recovery_state = RecoveryStateBackend::new(8, 1);
+        recovery_state.force_conflict = true;
+        assert!(matches!(
+            recover_stable_authorities_and_commit::<2, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                principal(7),
+                2,
+                &mut issuer,
+                &mut recovered_bytes,
+                &mut backend,
+                &mut recovery_state,
+            ),
+            Err(AuthorityRecoveryCommitError::State(3))
+        ));
+        let unchanged =
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
+                .unwrap();
+        assert_eq!(
+            (
+                unchanged.accepted_epoch,
+                unchanged.accepted_handle_generation
+            ),
+            (8, 1)
+        );
+
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                9,
+                volume(),
+                14,
+                2,
+                authority_checkpoint_digest(&expected).unwrap(),
+            )
+        };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        recovery_state.force_conflict = false;
+        let recovered = recover_stable_authorities_and_commit::<2, _, _, _, _>(
             stable.file(),
             &authority,
             file,
             principal(7),
             2,
-            &mut guard,
             &mut issuer,
             &mut recovered_bytes,
             &mut backend,
+            &mut recovery_state,
         )
         .unwrap();
+        let committed =
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
+                .unwrap();
+        assert_eq!(
+            (
+                committed.accepted_epoch,
+                committed.accepted_handle_generation
+            ),
+            (9, 2)
+        );
         let (table, handles, count, _) = recovered.into_parts();
         assert!(recovered_bytes.iter().all(|byte| *byte == 0));
         assert_eq!(count, 1);
@@ -1190,6 +1408,37 @@ mod tests {
                 StorageRights::OPEN_CHILD,
             ),
             Ok(object(7))
+        );
+    }
+
+    #[test]
+    fn authenticated_recovery_state_rejects_corruption_and_store_conflict() {
+        let mut malformed = RecoveryStateBackend::new(8, 1).state;
+        malformed[28] = 1;
+        assert!(matches!(
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&malformed),
+            Err(AuthorityCheckpointError::MalformedRecoveryState)
+        ));
+        malformed = RecoveryStateBackend::new(8, 1).state;
+        malformed[16..24].fill(0);
+        assert!(matches!(
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&malformed),
+            Err(AuthorityCheckpointError::MalformedRecoveryState)
+        ));
+
+        let mut store = RecoveryStateBackend::new(8, 1);
+        store.force_conflict = true;
+        let replacement = AuthenticatedAuthorityRecoveryState {
+            accepted_epoch: 9,
+            accepted_handle_generation: 2,
+        }
+        .encode();
+        assert_eq!(store.compare_and_store(8, 1, &replacement), Err(3));
+        let current =
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&store.state).unwrap();
+        assert_eq!(
+            (current.accepted_epoch, current.accepted_handle_generation),
+            (8, 1)
         );
     }
 

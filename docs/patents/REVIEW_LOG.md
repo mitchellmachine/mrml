@@ -1367,6 +1367,16 @@ exit handling, canonical responses, and byte comparisons are defensive systems
 integration. No new patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — Atomic storage authority rollback-state transition
+
+**Result: NOT_TRIGGERED.** The change conventionally encodes two monotonic
+recovery counters and requires an authenticated power-loss-atomic
+compare-and-store before reconstructed capabilities are released. Canonical
+encoding, reserved-byte rejection, exact expected-state comparison, and
+fail-closed backend error handling are standard defensive recovery techniques.
+No patent-candidate mechanism was identified. This agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Storage durable-grant checkpoint foundation
 
 **Result: NOT_TRIGGERED.** The change uses a conventional fixed-record,

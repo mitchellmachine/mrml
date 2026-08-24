@@ -440,8 +440,13 @@ tokens carry authenticated rollback state and exact owner-approved checkpoint
 admission; a one-use issuer redecodes canonical bytes, matches every bound field,
 and alone constructs the consumed proof. Stable recovery invokes it only after
 authorized file I/O, permitting retry before acceptance but rejecting duplicate
-issue. The platform owner-policy authenticator/UI, boot orchestration, and
-rollback-resistant accepted-epoch/generation persistence are not implemented.
+issue. A canonical fixed accepted-state record and backend-neutral authenticated
+monotonic-store compare-and-store contract now cover the epoch/generation
+transition. Integrated recovery releases no reconstructed capabilities until
+that exact transition commits, and corrupt, conflicting, or uncertain state
+fails closed. No TPM NV or equivalent power-loss-atomic backend has been
+implemented or physically tested. The platform owner-policy authenticator/UI
+and boot orchestration are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.
