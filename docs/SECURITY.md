@@ -176,8 +176,13 @@ owner-policy recovery layout: one monotonic counter and two full-write ordinary
 slots under a shared nonzero policy digest, with every SHA-256 TPM Name
 recomputed from its complete public area. This prevents numeric-index, type,
 size, attribute, policy, and returned-Name substitution during admission. It
-does not execute policy sessions or provide authenticated slot I/O, and is not a
-TPM state backend or rollback-resistance evidence.
+now feeds bounded TPM NV read/write/increment commands. Each operation consumes
+a fresh one-use authorization from an unsafe owner-policy provider bound to the
+exact Name, shared policy digest, and operation; safe code cannot construct that
+session. Full slot writes are read-verified and counter advancement rechecks the
+exact predecessor and successor. The provider contract does not itself establish
+the owner policy, provisioning, firmware transport, or physical durability, so
+this remains protocol evidence rather than rollback-resistance evidence.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

@@ -1,11 +1,13 @@
 use mrml_crypto::Sha256;
+use mrml_storage::{RECOVERY_JOURNAL_SLOT_BYTES, RecoveryJournalBackend};
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_ST_SESSIONS: u16 = 0x8002;
 const TPM_RS_PW: u32 = 0x4000_0009;
-const TPM_CC_NV_INCREMENT: u32 = 0x0000_0137;
+const TPM_CC_NV_INCREMENT: u32 = 0x0000_0134;
 const TPM_CC_NV_READ: u32 = 0x0000_014e;
 const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
+const TPM_CC_NV_WRITE: u32 = 0x0000_0137;
 const TPM_RC_SUCCESS: u32 = 0;
 const TPM_ALG_SHA256: u16 = 0x000b;
 const TPMA_NV_POLICYWRITE: u32 = 1 << 3;
@@ -15,7 +17,6 @@ const TPMA_NV_WRITEALL: u32 = 1 << 12;
 const TPMA_NV_POLICYREAD: u32 = 1 << 19;
 const TPMA_NV_NO_DA: u32 = 1 << 25;
 const TPMA_NV_WRITTEN: u32 = 1 << 29;
-const RECOVERY_SLOT_BYTES: u16 = 112;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NvCounterError {
@@ -24,11 +25,53 @@ pub enum NvCounterError {
     AdvanceLimit,
     Transport,
     MalformedResponse,
+    Conflict,
+    InvalidSession,
     Tpm(u32),
 }
 
 pub trait TpmTransport {
     fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NvPolicyOperation {
+    Read,
+    Write,
+    Increment,
+}
+
+/// One-use TPM policy session already satisfied for one exact NV operation.
+pub struct AuthorizedNvSession {
+    handle: u32,
+}
+
+impl AuthorizedNvSession {
+    /// # Safety
+    ///
+    /// `handle` must name a live, freshly satisfied policy session bound to the
+    /// exact Name, policy digest, and operation supplied to the provider. The
+    /// session must be consumed by the immediately following TPM command and
+    /// must not be returned twice.
+    pub const unsafe fn from_satisfied_policy(handle: u32) -> Self {
+        Self { handle }
+    }
+}
+
+/// Owner-policy boundary that creates fresh one-use TPM policy sessions.
+///
+/// # Safety
+///
+/// Implementations must authenticate the owner-approved policy, bind the
+/// session to `name`, `policy_digest`, and `operation`, serialize the NV domain,
+/// and never return the same live session twice.
+pub unsafe trait NvPolicySessionProvider: TpmTransport {
+    fn authorize_nv(
+        &mut self,
+        name: [u8; 34],
+        policy_digest: [u8; 32],
+        operation: NvPolicyOperation,
+    ) -> Result<AuthorizedNvSession, NvCounterError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,7 +145,7 @@ pub fn verify_recovery_layout<T: TpmTransport>(
         first,
         layout.slots[0],
         0,
-        RECOVERY_SLOT_BYTES,
+        RECOVERY_JOURNAL_SLOT_BYTES as u16,
         layout.policy_digest,
     )?;
     let second = read_public(transport, layout.slots[1])?;
@@ -110,7 +153,7 @@ pub fn verify_recovery_layout<T: TpmTransport>(
         second,
         layout.slots[1],
         0,
-        RECOVERY_SLOT_BYTES,
+        RECOVERY_JOURNAL_SLOT_BYTES as u16,
         layout.policy_digest,
     )?;
     if counter.name == first.name || counter.name == second.name || first.name == second.name {
@@ -120,6 +163,216 @@ pub fn verify_recovery_layout<T: TpmTransport>(
         counter_name: counter.name,
         slot_names: [first.name, second.name],
     })
+}
+
+pub struct TpmRecoveryJournalBackend<T> {
+    transport: T,
+    layout: NvRecoveryLayout,
+    verified: VerifiedNvRecoveryLayout,
+}
+
+impl<T: NvPolicySessionProvider> TpmRecoveryJournalBackend<T> {
+    pub fn new(mut transport: T, layout: NvRecoveryLayout) -> Result<Self, NvCounterError> {
+        let verified = verify_recovery_layout(&mut transport, layout)?;
+        Ok(Self {
+            transport,
+            layout,
+            verified,
+        })
+    }
+
+    pub fn into_transport(self) -> T {
+        self.transport
+    }
+
+    fn read_exact<const N: usize>(
+        &mut self,
+        index: u32,
+        name: [u8; 34],
+    ) -> Result<[u8; N], NvCounterError> {
+        let session = self.transport.authorize_nv(
+            name,
+            self.layout.policy_digest,
+            NvPolicyOperation::Read,
+        )?;
+        policy_read(&mut self.transport, index, session)
+    }
+}
+
+// SAFETY: construction validates the exact counter/slot public identities and
+// shared owner policy. Every operation obtains a fresh exact-operation session;
+// writes are read-verified before return, and counter advancement is checked
+// against both the expected predecessor and exact successor.
+unsafe impl<T: NvPolicySessionProvider> RecoveryJournalBackend for TpmRecoveryJournalBackend<T> {
+    type Error = NvCounterError;
+
+    fn read_counter(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::from_be_bytes(self.read_exact::<8>(
+            self.layout.counter,
+            self.verified.counter_name,
+        )?))
+    }
+
+    fn read_slot(
+        &mut self,
+        slot: u8,
+        output: &mut [u8; RECOVERY_JOURNAL_SLOT_BYTES],
+    ) -> Result<(), Self::Error> {
+        let index = usize::from(slot);
+        let handle = *self
+            .layout
+            .slots
+            .get(index)
+            .ok_or(NvCounterError::InvalidIndex)?;
+        *output = self.read_exact(handle, self.verified.slot_names[index])?;
+        Ok(())
+    }
+
+    fn write_and_verify_slot(
+        &mut self,
+        slot: u8,
+        input: &[u8; RECOVERY_JOURNAL_SLOT_BYTES],
+    ) -> Result<(), Self::Error> {
+        let index = usize::from(slot);
+        let handle = *self
+            .layout
+            .slots
+            .get(index)
+            .ok_or(NvCounterError::InvalidIndex)?;
+        let name = self.verified.slot_names[index];
+        let session = self.transport.authorize_nv(
+            name,
+            self.layout.policy_digest,
+            NvPolicyOperation::Write,
+        )?;
+        policy_write(&mut self.transport, handle, session, input)?;
+        if self.read_exact::<RECOVERY_JOURNAL_SLOT_BYTES>(handle, name)? != *input {
+            return Err(NvCounterError::Conflict);
+        }
+        Ok(())
+    }
+
+    fn increment_counter(&mut self, expected: u64) -> Result<u64, Self::Error> {
+        if self.read_counter()? != expected {
+            return Err(NvCounterError::Conflict);
+        }
+        let session = self.transport.authorize_nv(
+            self.verified.counter_name,
+            self.layout.policy_digest,
+            NvPolicyOperation::Increment,
+        )?;
+        policy_increment(&mut self.transport, self.layout.counter, session)?;
+        let advanced = self.read_counter()?;
+        if expected.checked_add(1) != Some(advanced) {
+            return Err(NvCounterError::Conflict);
+        }
+        Ok(advanced)
+    }
+}
+
+fn policy_read<T: TpmTransport, const N: usize>(
+    transport: &mut T,
+    index: u32,
+    session: AuthorizedNvSession,
+) -> Result<[u8; N], NvCounterError> {
+    if N == 0 || N > RECOVERY_JOURNAL_SLOT_BYTES {
+        return Err(NvCounterError::InvalidIndex);
+    }
+    let mut command = [0; 35];
+    sessions_header(&mut command, TPM_CC_NV_READ);
+    command[10..14].copy_from_slice(&index.to_be_bytes());
+    command[14..18].copy_from_slice(&index.to_be_bytes());
+    encode_policy_authorization(&mut command[18..31], session)?;
+    command[31..33].copy_from_slice(&(N as u16).to_be_bytes());
+    let mut response = [0; 192];
+    let length = transport.submit(&command, &mut response)?;
+    let parameters = parse_policy_response(&response[..length])?;
+    if parameters.len() != N + 2
+        || u16::from_be_bytes(parameters[..2].try_into().unwrap()) as usize != N
+    {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    parameters[2..]
+        .try_into()
+        .map_err(|_| NvCounterError::MalformedResponse)
+}
+
+fn policy_write<T: TpmTransport>(
+    transport: &mut T,
+    index: u32,
+    session: AuthorizedNvSession,
+    input: &[u8; RECOVERY_JOURNAL_SLOT_BYTES],
+) -> Result<(), NvCounterError> {
+    let mut command = [0; 35 + RECOVERY_JOURNAL_SLOT_BYTES];
+    sessions_header(&mut command, TPM_CC_NV_WRITE);
+    command[10..14].copy_from_slice(&index.to_be_bytes());
+    command[14..18].copy_from_slice(&index.to_be_bytes());
+    encode_policy_authorization(&mut command[18..31], session)?;
+    command[31..33].copy_from_slice(&(RECOVERY_JOURNAL_SLOT_BYTES as u16).to_be_bytes());
+    command[33..33 + RECOVERY_JOURNAL_SLOT_BYTES].copy_from_slice(input);
+    let mut response = [0; 96];
+    let length = transport.submit(&command, &mut response)?;
+    if !parse_policy_response(&response[..length])?.is_empty() {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    Ok(())
+}
+
+fn policy_increment<T: TpmTransport>(
+    transport: &mut T,
+    index: u32,
+    session: AuthorizedNvSession,
+) -> Result<(), NvCounterError> {
+    let mut command = [0; 31];
+    sessions_header(&mut command, TPM_CC_NV_INCREMENT);
+    command[10..14].copy_from_slice(&index.to_be_bytes());
+    command[14..18].copy_from_slice(&index.to_be_bytes());
+    encode_policy_authorization(&mut command[18..31], session)?;
+    let mut response = [0; 96];
+    let length = transport.submit(&command, &mut response)?;
+    if !parse_policy_response(&response[..length])?.is_empty() {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    Ok(())
+}
+
+fn encode_policy_authorization(
+    output: &mut [u8],
+    session: AuthorizedNvSession,
+) -> Result<(), NvCounterError> {
+    if output.len() != 13 || !(0x0300_0000..=0x03ff_ffff).contains(&session.handle) {
+        return Err(NvCounterError::InvalidSession);
+    }
+    output.fill(0);
+    output[..4].copy_from_slice(&9u32.to_be_bytes());
+    output[4..8].copy_from_slice(&session.handle.to_be_bytes());
+    Ok(())
+}
+
+fn parse_policy_response(response: &[u8]) -> Result<&[u8], NvCounterError> {
+    let (tag, _) = response_header(response)?;
+    if tag != TPM_ST_SESSIONS || response.len() < 19 {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    let parameter_size = u32::from_be_bytes(response[10..14].try_into().unwrap()) as usize;
+    let parameter_end = 14usize
+        .checked_add(parameter_size)
+        .ok_or(NvCounterError::MalformedResponse)?;
+    if parameter_end + 5 > response.len() {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    let auth = &response[parameter_end..];
+    let nonce_size = u16::from_be_bytes(auth[..2].try_into().unwrap()) as usize;
+    let attributes_at = 2usize
+        .checked_add(nonce_size)
+        .ok_or(NvCounterError::MalformedResponse)?;
+    if nonce_size > 32 || attributes_at + 3 != auth.len() || auth[attributes_at] != 0 {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    if u16::from_be_bytes(auth[attributes_at + 1..].try_into().unwrap()) != 0 {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    Ok(&response[14..parameter_end])
 }
 
 pub fn enforce_version<T: TpmTransport>(
@@ -400,6 +653,16 @@ mod tests {
         length
     }
 
+    fn policy_response(response: &mut [u8], parameters: &[u8]) -> usize {
+        let length = 14 + parameters.len() + 5;
+        response[..length].fill(0);
+        response[..2].copy_from_slice(&TPM_ST_SESSIONS.to_be_bytes());
+        response[2..6].copy_from_slice(&(length as u32).to_be_bytes());
+        response[10..14].copy_from_slice(&(parameters.len() as u32).to_be_bytes());
+        response[14..14 + parameters.len()].copy_from_slice(parameters);
+        length
+    }
+
     impl TpmTransport for Counter {
         fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
             self.calls += 1;
@@ -510,7 +773,7 @@ mod tests {
                 } else if self.wrong_slot_size {
                     111
                 } else {
-                    RECOVERY_SLOT_BYTES
+                    RECOVERY_JOURNAL_SLOT_BYTES as u16
                 },
                 self.corrupt_name,
             ))
@@ -585,6 +848,165 @@ mod tests {
         assert_eq!(
             validate_recovery_public(public, 0x0180_0010, TPMA_NV_COUNTER, 8, padded_policy,),
             Err(NvCounterError::InvalidIndex)
+        );
+    }
+
+    struct JournalTransport {
+        policy: [u8; 32],
+        counter: u64,
+        slots: [[u8; RECOVERY_JOURNAL_SLOT_BYTES]; 2],
+        next_session: u32,
+        pending: Option<(u32, NvPolicyOperation)>,
+        authorizations: usize,
+        corrupt_readback: bool,
+    }
+
+    impl JournalTransport {
+        fn new(policy: [u8; 32]) -> Self {
+            Self {
+                policy,
+                counter: 0,
+                slots: [[0; RECOVERY_JOURNAL_SLOT_BYTES]; 2],
+                next_session: 0x0300_0001,
+                pending: None,
+                authorizations: 0,
+                corrupt_readback: false,
+            }
+        }
+
+        fn index_kind(index: u32) -> Option<(u32, u16)> {
+            match index {
+                0x0180_0010 => Some((TPMA_NV_COUNTER, 8)),
+                0x0180_0011 | 0x0180_0012 => {
+                    Some((TPMA_NV_WRITEALL, RECOVERY_JOURNAL_SLOT_BYTES as u16))
+                }
+                _ => None,
+            }
+        }
+
+        fn consume_session(
+            &mut self,
+            command: &[u8],
+            operation: NvPolicyOperation,
+        ) -> Result<(), NvCounterError> {
+            let handle = u32::from_be_bytes(command[22..26].try_into().unwrap());
+            if self.pending.take() != Some((handle, operation)) {
+                return Err(NvCounterError::InvalidSession);
+            }
+            Ok(())
+        }
+    }
+
+    impl TpmTransport for JournalTransport {
+        fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
+            let code = u32::from_be_bytes(command[6..10].try_into().unwrap());
+            let index = u32::from_be_bytes(command[10..14].try_into().unwrap());
+            if code == TPM_CC_NV_READ_PUBLIC {
+                let (kind, size) = Self::index_kind(index).ok_or(NvCounterError::InvalidIndex)?;
+                return Ok(public_response(
+                    response,
+                    index,
+                    TPMA_NV_POLICYWRITE | TPMA_NV_POLICYREAD | TPMA_NV_NO_DA | kind,
+                    &self.policy,
+                    size,
+                    false,
+                ));
+            }
+            match code {
+                TPM_CC_NV_READ => {
+                    self.consume_session(command, NvPolicyOperation::Read)?;
+                    let size = u16::from_be_bytes(command[31..33].try_into().unwrap()) as usize;
+                    let mut parameters = [0; 2 + RECOVERY_JOURNAL_SLOT_BYTES];
+                    parameters[..2].copy_from_slice(&(size as u16).to_be_bytes());
+                    if index == 0x0180_0010 {
+                        parameters[2..10].copy_from_slice(&self.counter.to_be_bytes());
+                    } else {
+                        let slot = usize::from(index == 0x0180_0012);
+                        parameters[2..2 + size].copy_from_slice(&self.slots[slot][..size]);
+                        if self.corrupt_readback {
+                            parameters[2] ^= 1;
+                        }
+                    }
+                    Ok(policy_response(response, &parameters[..2 + size]))
+                }
+                TPM_CC_NV_WRITE => {
+                    self.consume_session(command, NvPolicyOperation::Write)?;
+                    let slot = usize::from(index == 0x0180_0012);
+                    self.slots[slot]
+                        .copy_from_slice(&command[33..33 + RECOVERY_JOURNAL_SLOT_BYTES]);
+                    Ok(policy_response(response, &[]))
+                }
+                TPM_CC_NV_INCREMENT => {
+                    self.consume_session(command, NvPolicyOperation::Increment)?;
+                    self.counter = self
+                        .counter
+                        .checked_add(1)
+                        .ok_or(NvCounterError::Conflict)?;
+                    Ok(policy_response(response, &[]))
+                }
+                _ => Err(NvCounterError::Transport),
+            }
+        }
+    }
+
+    // SAFETY: the mock issues a unique one-use session and checks that the next
+    // exact command consumes it with the requested operation.
+    unsafe impl NvPolicySessionProvider for JournalTransport {
+        fn authorize_nv(
+            &mut self,
+            _name: [u8; 34],
+            policy_digest: [u8; 32],
+            operation: NvPolicyOperation,
+        ) -> Result<AuthorizedNvSession, NvCounterError> {
+            if policy_digest != self.policy || self.pending.is_some() {
+                return Err(NvCounterError::InvalidSession);
+            }
+            let handle = self.next_session;
+            self.next_session += 1;
+            self.pending = Some((handle, operation));
+            self.authorizations += 1;
+            Ok(unsafe { AuthorizedNvSession::from_satisfied_policy(handle) })
+        }
+    }
+
+    #[test]
+    fn policy_backend_uses_fresh_exact_sessions_and_read_verifies_writes() {
+        let policy = [0x7c; 32];
+        let mut backend =
+            TpmRecoveryJournalBackend::new(JournalTransport::new(policy), layout(policy)).unwrap();
+        assert_eq!(backend.read_counter(), Ok(0));
+        let successor = [0xa5; RECOVERY_JOURNAL_SLOT_BYTES];
+        assert_eq!(backend.write_and_verify_slot(1, &successor), Ok(()));
+        assert_eq!(backend.increment_counter(0), Ok(1));
+        let transport = backend.into_transport();
+        assert_eq!(transport.slots[1], successor);
+        assert_eq!(transport.authorizations, 6);
+        assert!(transport.pending.is_none());
+
+        let mut transport = JournalTransport::new(policy);
+        transport.corrupt_readback = true;
+        let mut backend = TpmRecoveryJournalBackend::new(transport, layout(policy)).unwrap();
+        assert_eq!(
+            backend.write_and_verify_slot(0, &successor),
+            Err(NvCounterError::Conflict)
+        );
+        assert_eq!(backend.increment_counter(1), Err(NvCounterError::Conflict));
+    }
+
+    #[test]
+    fn policy_commands_reject_forged_sessions_and_malformed_auth_responses() {
+        let invalid = unsafe { AuthorizedNvSession::from_satisfied_policy(1) };
+        let mut transport = JournalTransport::new([1; 32]);
+        assert_eq!(
+            policy_read::<_, 8>(&mut transport, 0x0180_0010, invalid),
+            Err(NvCounterError::InvalidSession)
+        );
+        let mut malformed = [0; 19];
+        policy_response(&mut malformed, &[]);
+        malformed[16] = 1;
+        assert_eq!(
+            parse_policy_response(&malformed),
+            Err(NvCounterError::MalformedResponse)
         );
     }
 }

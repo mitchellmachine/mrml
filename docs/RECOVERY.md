@@ -320,12 +320,19 @@ explicitly and downgrade the status rather than guessing.
   complete public area, one exact 8-byte counter, two exact 112-byte ordinary
   slots, one shared nonzero 32-byte authorization policy, policy-only read/write,
   no-DA, and full-slot writes. Alias, type, size, policy, Name, and attribute
-  substitution fail closed. This does not implement TPM policy sessions, slot
-  reads/writes, counter/journal composition, provisioning, or physical evidence.
-  No complete TPM backend is claimed. Dependent recovery
-  can run before that commit: one consumed transaction keeps the rebuilt table
-  private while a narrowly
-  unsafe side-effect-free validator reads the exact selected configuration file,
+  substitution fail closed. A TPM recovery backend now uses that admitted
+  layout for bounded exact `NV_Read`, full-slot `NV_Write`, and `NV_Increment`.
+  Each operation consumes a fresh one-use session from an unsafe owner-policy
+  provider bound to the exact TPM Name, shared policy digest, and operation.
+  Response parameters and authorization framing are exact; writes are read-
+  verified and increments recheck predecessor and successor. Hosted tests reject
+  forged session handles, malformed response authorization, readback mismatch,
+  and stale expected counters. This does not establish the policy sessions,
+  provision indices, execute linked firmware, compose a real journal instance,
+  or provide physical evidence. No complete TPM backend is claimed. Dependent
+  recovery can run before that commit: one consumed transaction keeps the
+  rebuilt table private while a narrowly unsafe side-effect-free validator
+  reads the exact selected configuration file,
   reconstructs canonical configuration, and binds its exact service restart
   policy. Only after all validation succeeds does compare-and-store advance and
   release both results. Validation failure leaves accepted state unchanged;

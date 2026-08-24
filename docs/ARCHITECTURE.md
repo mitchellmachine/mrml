@@ -471,8 +471,17 @@ slots, all bound to the exact same nonzero 32-byte policy digest. Only the exact
 policy-read/policy-write/no-DA attributes are accepted; slots additionally
 require full-object writes, and dynamic `WRITTEN` is the sole tolerated extra
 bit. Returned TPM Names are recomputed from the complete public areas. This
-validates provisioning identity only; policy sessions, slot I/O, journal
-composition, and physical evidence remain pending. A consumed dependent-
+validates provisioning identity before use. A TPM journal adapter now composes
+those verified identities with the backend-neutral journal. Every exact read,
+full-slot write, or counter increment consumes a fresh one-use policy session
+issued by an unsafe owner-policy provider for the exact TPM Name, shared policy
+digest, and operation. Commands use bounded TPM session framing; responses must
+have exact parameters, bounded nonce, zero session attributes, and no trailing
+authorization bytes. Slot writes are read-verified, and counter increment
+rechecks both predecessor and exact successor. The existing rollback helper's
+incorrect `NV_Write` command code was corrected to `NV_Increment`. Actual policy-
+session establishment, owner provisioning/recovery, linked firmware execution,
+journal composition, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

@@ -641,10 +641,18 @@ authority; unrelated domains continue.
    policy digest, an exact 8-byte counter, two exact 112-byte ordinary slots,
    policy-only read/write/no-DA attributes, and full-slot writes. Hostile tests
    reject aliases, shortened or substituted policy, extra authority, wrong type
-   or size, and forged Names. Policy sessions, TPM slot I/O, journal composition,
-   actual provisioning/recovery, and physical testing remain pending.
+   or size, and forged Names. The verified layout now feeds a concrete
+   `RecoveryJournalBackend`: bounded policy-session `NV_Read`, full-slot
+   `NV_Write`, and `NV_Increment` commands consume fresh one-use authorization
+   from an unsafe provider bound to exact Name, policy digest, and operation.
+   Exact response framing is enforced, writes are read-verified, and increments
+   recheck predecessor and successor. The pre-existing rollback helper's command
+   code was corrected from `NV_Write` to the actual `NV_Increment`. Owner-policy
+   session establishment, actual provisioning/recovery, linked UEFI execution,
+   complete journal composition, and physical testing remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 8 `mrml-uefi` library tests and strict crate-local Clippy. An
+   each pass all 10 `mrml-uefi` library tests, all 115 storage tests, and strict
+   crate-local Clippy. An
    `x86_64-unknown-uefi` image check was attempted but failed in unrelated
    existing `mrml-runtime` target-cfg code before checking the loader; therefore
    this milestone has no linked UEFI-image or firmware execution evidence.

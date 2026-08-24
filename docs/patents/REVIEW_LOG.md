@@ -2324,6 +2324,18 @@ JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
 review does not replace independent human dual review.
 
+# 2026-08-24 — Policy-authorized TPM NV recovery journal adapter
+
+**Result: NOT_TRIGGERED.** The change conventionally encodes standard TPM
+`NV_Read`, `NV_Write`, and `NV_Increment` commands, consumes a fresh policy
+session supplied by an existing owner-policy boundary, validates standard
+response framing, and adapts those operations to the existing two-slot journal.
+It grants no new authority and implements no attestation or remote identity. It
+adds no compatibility transport, host-share protocol, accessibility device,
+browser semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, or other patent-candidate mechanism. Existing planned scopes remain
+`TRIGGERED`; this agent review does not replace independent human dual review.
+
 # 2026-08-24 — Monotonic two-slot recovery-state journal
 
 **Result: NOT_TRIGGERED.** The change conventionally composes two fixed
