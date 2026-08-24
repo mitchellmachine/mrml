@@ -2625,3 +2625,15 @@ optimization, authority model, compatibility protocol, host-share mechanism,
 accessibility or browser-semantic interface, JavaScript/WebAssembly runtime, AI
 mechanism, media mechanism, or other patent-candidate mechanism. This agent
 review does not replace the required independent human dual review.
+
+# 2026-08-24 — Return coercion-site reference reborrows
+
+**Result: NOT_TRIGGERED.** The compiler conventionally applies a function's
+declared reference result type while classifying direct, projected, or
+conditional places at parser-represented return sites. Inferred non-`Copy`
+bindings and unsupported indirect shapes retain consuming, fail-closed
+classification. It adds no optimization, authority model, compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
