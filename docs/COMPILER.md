@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit direct mutable-reborrow ancestry and parent suspension, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, and direct shared/mutable-loan conflict checks across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General shared-child access classification, indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
+| Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -556,11 +556,13 @@ alone never proves provenance interchangeability.
 The current bounded ownership foundation derives direct loan identities from
 existing borrow and initialization facts. It records dereference and projection
 uses only for reference locals with a derived direct loan. Across reachable
-paths in the validated bounded CFG, live shared loans reject later exact-place
-mutable borrows, while live mutable loans reject later copies, moves, borrows,
-writes, or read-modify-writes of the exact borrowed path. This is direct-loan
-liveness and invalidation, not indirect alias tracking, implicit reborrows,
-regions, reborrow completion, or a complete borrow checker.
+paths in the validated bounded CFG, live shared loans reject later exact-owner
+moves, mutable borrows, writes, or read-modify-writes, while live mutable loans
+reject later copies, moves, borrows, writes, or read-modify-writes of the exact
+borrowed path. Mutation-through-reference and mutable call reborrows additionally
+inspect bounded intermediate ancestry. This is bounded loan liveness and
+invalidation, not unrestricted alias tracking, regions, reborrow completion, or
+a complete borrow checker.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
@@ -650,11 +652,12 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is return coercion-site
-reborrowing before region reasoning. Bounded, shadow-aware straight-line local
-aliases, direct/conditional top-level loop returns, action-free conditional
-loop-block terminals, and action-free nested-loop returns are implemented; this
-does not imply branch-local or loop-local mutation dataflow or general regions.
+Return coercion-site reborrowing and bounded direct/intermediate reborrow
+invalidation are implemented for the documented subset. The highest-value next
+major implementation task is extending indirect alias identity and then staging
+flow-sensitive region/outlives reasoning without collapsing generation or CFG
+path distinctions. Existing loop-result origin proofs do not imply branch-local
+or loop-local mutation dataflow or general regions.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

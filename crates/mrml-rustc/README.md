@@ -3618,3 +3618,15 @@ followed by ancestor mutation. The pinned future-edition oracle rejected both
 live mutable/shared grandchild cases with E0503 and accepted both post-last-use
 controls. This does not claim unrestricted regions or arbitrary alias analysis.
 The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The call-reborrow ancestor-invalidation milestone passed all 746 compiler and
+driver tests on Windows gnullvm and all 746 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
+rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. A mutable
+call-scoped reborrow through a local reference now checks intermediate ancestry,
+so it conflicts with a live shared child of that ancestor. The existing
+ultimate-owner relation remains separate for destination replacement, preserving
+the legal old-pointee generation cycle. The pinned future-edition oracle rejected
+the live call reborrow with E0502 and accepted the post-last-use control. This
+does not claim arbitrary interprocedural effects or unrestricted regions. The
+`no_std`/allocation/unsafe hygiene scan remained empty.
