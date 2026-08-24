@@ -3539,6 +3539,43 @@ is stale; reset advances the generation and invalidates the old snapshot, while
 suspend or another non-active state rejects validation. The record does not
 create block-backend, mapping, interrupt, PCI, or capability authority.
 
+The first common reusable guest-driver state is now allocation-free and
+backend-neutral. `discover` runs the canonical configuration decoder and accepts
+only four zero queue counters: a nonzero idle snapshot is intentionally rejected
+because queue counts alone cannot reconstruct the last monotonic request ID.
+Read/write preparation bounds block arithmetic, exact configured byte length,
+the 1 MiB limit, and guest buffer wrap; flush additionally requires the
+negotiated feature. Preparation is non-mutating and returns the canonical
+request, derived slot, and next producer counter. Commit accepts only that exact
+fresh ticket and permits one in-flight request. Completion acceptance preserves
+pending state on every malformed, stale, misordered, wrong-generation,
+wrong-request, or wrong-length record, then advances its local acknowledgement
+position only after exact validation. Reset/removal and request-ID exhaustion
+make the driver terminal.
+
+Windows gnullvm and Arch Linux/WSL2 each passed all 379 release kernel tests and
+scoped strict Clippy. Three focused tests cover strict fresh-queue discovery,
+corrupt configuration and counter disagreement, non-mutating preparation,
+canonical request encoding, stale/replayed publication tickets, forged and
+misordered completions without state loss, slot progression, geometry/buffer
+arithmetic, feature denial, and terminal reset handling. This is
+unit/simulation evidence only. The signed KVM/WHP producer still uses its
+bounded fixed mechanics; mapped-image use of the common state, nonzero resume,
+multi-in-flight or unbounded progress, reset rediscovery, PCI, native boot, and
+physical hardware remain unverified.
+
+The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
+retention, correlation, attestation, DRM, disclosure, vendor preference,
+accessibility restriction, or persistent owner-state change. The `HOSTILE
+SECURITY REVIEW` treats configuration bytes, every queue counter, geometry,
+feature, buffer range, arithmetic result, request ID, slot, copied ticket,
+completion record, replay, terminal status, and exhaustion as hostile. Data
+does not grant device or backend authority, preparation cannot silently commit,
+and invalid completion data cannot release pending ownership. Existing
+capability, revocation, rollback-resistance, accessibility, and evidence gates
+are unchanged. This agent review does not replace the required independent
+human dual review.
+
 The canonical record now has one backend-neutral guest-page binding. Its
 constructor requires a nonzero page-aligned GPA, checked page-end arithmetic,
 and complete disjointness from both exact queue extents. The KVM and WHP block

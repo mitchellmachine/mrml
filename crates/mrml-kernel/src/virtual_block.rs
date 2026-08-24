@@ -512,6 +512,281 @@ impl VirtualBlockConfigurationPage {
     }
 }
 
+/// A prepared single-slot publication. Encoding the request and publishing the
+/// returned producer counter must complete before this ticket is committed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockGuestSubmission {
+    request: VirtualBlockRequest,
+    producer: u64,
+    slot: u16,
+    expected_transferred: u32,
+}
+
+impl VirtualBlockGuestSubmission {
+    pub const fn request(self) -> VirtualBlockRequest {
+        self.request
+    }
+
+    pub const fn producer(self) -> u64 {
+        self.producer
+    }
+
+    pub const fn slot(self) -> u16 {
+        self.slot
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockGuestCompletion {
+    status: VirtualBlockCompletionStatus,
+    transferred: u32,
+    acknowledgement: u64,
+}
+
+impl VirtualBlockGuestCompletion {
+    pub const fn status(self) -> VirtualBlockCompletionStatus {
+        self.status
+    }
+
+    pub const fn transferred(self) -> u32 {
+        self.transferred
+    }
+
+    pub const fn acknowledgement(self) -> u64 {
+        self.acknowledgement
+    }
+}
+
+/// Allocation-free initial guest-driver state discovered from canonical device
+/// data and an idle queue snapshot. The state carries no backend authority and
+/// supports one exact in-flight request so ownership and replay are explicit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockGuestDriver {
+    configuration: VirtualBlockConfiguration,
+    next_request_id: u64,
+    request_producer: u64,
+    completion_consumer: u64,
+    pending: Option<VirtualBlockGuestSubmission>,
+    terminal: bool,
+}
+
+impl VirtualBlockGuestDriver {
+    pub fn discover(
+        encoded_configuration: &[u8],
+        request_producer: u64,
+        request_consumed: u64,
+        completion_published: u64,
+        completion_consumer: u64,
+    ) -> Result<Self, VirtualBlockError> {
+        let configuration = VirtualBlockConfiguration::decode(encoded_configuration)?;
+        if request_producer != 0
+            || request_producer != request_consumed
+            || request_producer != completion_published
+            || request_producer != completion_consumer
+        {
+            return Err(VirtualBlockError::InvalidQueue);
+        }
+        Ok(Self {
+            configuration,
+            next_request_id: 1,
+            request_producer,
+            completion_consumer,
+            pending: None,
+            terminal: false,
+        })
+    }
+
+    pub const fn configuration(self) -> VirtualBlockConfiguration {
+        self.configuration
+    }
+
+    pub const fn request_producer(self) -> u64 {
+        self.request_producer
+    }
+
+    pub const fn completion_consumer(self) -> u64 {
+        self.completion_consumer
+    }
+
+    pub const fn has_pending(self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        self.terminal
+    }
+
+    pub fn prepare_read(
+        &self,
+        block: u64,
+        block_count: u32,
+        buffer_address: u64,
+        buffer_length: u32,
+    ) -> Result<VirtualBlockGuestSubmission, VirtualBlockError> {
+        self.prepare_data(
+            VirtualBlockOperation::Read,
+            block,
+            block_count,
+            buffer_address,
+            buffer_length,
+        )
+    }
+
+    pub fn prepare_write(
+        &self,
+        block: u64,
+        block_count: u32,
+        buffer_address: u64,
+        buffer_length: u32,
+    ) -> Result<VirtualBlockGuestSubmission, VirtualBlockError> {
+        self.prepare_data(
+            VirtualBlockOperation::Write,
+            block,
+            block_count,
+            buffer_address,
+            buffer_length,
+        )
+    }
+
+    pub fn prepare_flush(&self) -> Result<VirtualBlockGuestSubmission, VirtualBlockError> {
+        self.prepare_ready()?;
+        if self.configuration.negotiated_features() & VIRTUAL_BLOCK_FEATURE_FLUSH == 0 {
+            return Err(VirtualBlockError::InvalidFeatures);
+        }
+        self.submission(
+            VirtualBlockRequest::flush(self.configuration.generation(), self.next_request_id),
+            0,
+        )
+    }
+
+    pub fn commit_submission(
+        &mut self,
+        submission: VirtualBlockGuestSubmission,
+    ) -> Result<(), VirtualBlockError> {
+        self.prepare_ready()?;
+        let expected_producer = self
+            .request_producer
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
+        if submission.request.generation() != self.configuration.generation()
+            || submission.request.request_id() != self.next_request_id
+            || submission.producer != expected_producer
+            || submission.slot
+                != (self.request_producer % u64::from(self.configuration.queue().slots())) as u16
+        {
+            return Err(VirtualBlockError::StaleTicket);
+        }
+        self.request_producer = submission.producer;
+        self.pending = Some(submission);
+        Ok(())
+    }
+
+    pub fn accept_completion(
+        &mut self,
+        published: u64,
+        encoded_completion: &[u8],
+    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
+        let pending = self.pending.ok_or(VirtualBlockError::InvalidState)?;
+        let expected_published = self
+            .completion_consumer
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
+        let completion = VirtualBlockCompletion::decode(encoded_completion)?;
+        if published != expected_published
+            || published > self.request_producer
+            || completion.generation() != self.configuration.generation()
+            || completion.request_id() != pending.request.request_id()
+            || (completion.status() == VirtualBlockCompletionStatus::Ok
+                && completion.transferred() != pending.expected_transferred)
+        {
+            return Err(VirtualBlockError::InvalidCompletion);
+        }
+        let exhausted = self.next_request_id == u64::MAX;
+        self.completion_consumer = published;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        self.pending = None;
+        self.terminal = exhausted
+            || matches!(
+                completion.status(),
+                VirtualBlockCompletionStatus::Reset | VirtualBlockCompletionStatus::Removed
+            );
+        Ok(VirtualBlockGuestCompletion {
+            status: completion.status(),
+            transferred: completion.transferred(),
+            acknowledgement: published,
+        })
+    }
+
+    fn prepare_ready(&self) -> Result<(), VirtualBlockError> {
+        if self.terminal || self.pending.is_some() {
+            Err(VirtualBlockError::InvalidState)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn prepare_data(
+        &self,
+        operation: VirtualBlockOperation,
+        block: u64,
+        block_count: u32,
+        buffer_address: u64,
+        buffer_length: u32,
+    ) -> Result<VirtualBlockGuestSubmission, VirtualBlockError> {
+        self.prepare_ready()?;
+        if block_count == 0 || buffer_address == 0 {
+            return Err(VirtualBlockError::InvalidBuffer);
+        }
+        let block_end = block
+            .checked_add(u64::from(block_count))
+            .ok_or(VirtualBlockError::InvalidRange)?;
+        if block_end > self.configuration.block_count() {
+            return Err(VirtualBlockError::InvalidRange);
+        }
+        let expected = self
+            .configuration
+            .block_size()
+            .checked_mul(block_count)
+            .ok_or(VirtualBlockError::InvalidBuffer)?;
+        if expected != buffer_length || expected > MAX_VIRTUAL_BLOCK_TRANSFER_BYTES {
+            return Err(VirtualBlockError::InvalidBuffer);
+        }
+        buffer_address
+            .checked_add(u64::from(buffer_length))
+            .ok_or(VirtualBlockError::InvalidBuffer)?;
+        let request = match operation {
+            VirtualBlockOperation::Read => VirtualBlockRequest::read,
+            VirtualBlockOperation::Write => VirtualBlockRequest::write,
+            VirtualBlockOperation::Flush => return Err(VirtualBlockError::InvalidState),
+        }(
+            self.configuration.generation(),
+            self.next_request_id,
+            block,
+            block_count,
+            buffer_address,
+            buffer_length,
+        );
+        self.submission(request, expected)
+    }
+
+    fn submission(
+        &self,
+        request: VirtualBlockRequest,
+        expected_transferred: u32,
+    ) -> Result<VirtualBlockGuestSubmission, VirtualBlockError> {
+        let producer = self
+            .request_producer
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
+        Ok(VirtualBlockGuestSubmission {
+            request,
+            producer,
+            slot: (self.request_producer % u64::from(self.configuration.queue().slots())) as u16,
+            expected_transferred,
+        })
+    }
+}
+
 fn queue_bytes(slots: usize, slot_bytes: usize) -> Result<u64, VirtualBlockError> {
     (slots as u64)
         .checked_mul(slot_bytes as u64)
@@ -1994,6 +2269,171 @@ mod tests {
                 Err(VirtualBlockError::InvalidConfiguration)
             );
         }
+    }
+
+    fn discovered_driver<const N: usize>(
+        device: &VirtualBlockDevice<N>,
+    ) -> VirtualBlockGuestDriver {
+        let mut encoded = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        device.configuration().unwrap().encode(&mut encoded);
+        VirtualBlockGuestDriver::discover(&encoded, 0, 0, 0, 0).unwrap()
+    }
+
+    fn completion_bytes(
+        generation: u32,
+        request_id: u64,
+        status: VirtualBlockCompletionStatus,
+        transferred: u32,
+    ) -> [u8; VIRTUAL_BLOCK_COMPLETION_BYTES] {
+        let mut encoded = [0; VIRTUAL_BLOCK_COMPLETION_BYTES];
+        VirtualBlockCompletion {
+            generation,
+            request_id,
+            status,
+            transferred,
+        }
+        .encode(&mut encoded);
+        encoded
+    }
+
+    #[test]
+    fn guest_driver_discovery_requires_one_exact_idle_queue_snapshot() {
+        let configuration = active::<2>().configuration().unwrap();
+        let mut encoded = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        configuration.encode(&mut encoded);
+        let driver = VirtualBlockGuestDriver::discover(&encoded, 0, 0, 0, 0).unwrap();
+        assert_eq!(driver.configuration(), configuration);
+        assert_eq!(driver.request_producer(), 0);
+        assert_eq!(driver.completion_consumer(), 0);
+        assert!(!driver.has_pending());
+        assert!(!driver.is_terminal());
+
+        for counters in [(1, 0, 0, 0), (1, 1, 0, 0), (1, 1, 1, 0), (1, 1, 1, 1)] {
+            assert_eq!(
+                VirtualBlockGuestDriver::discover(
+                    &encoded, counters.0, counters.1, counters.2, counters.3,
+                ),
+                Err(VirtualBlockError::InvalidQueue)
+            );
+        }
+        encoded[0] ^= 1;
+        assert_eq!(
+            VirtualBlockGuestDriver::discover(&encoded, 0, 0, 0, 0),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn guest_driver_submission_and_completion_are_exact_two_phase_state() {
+        let device = active::<2>();
+        let mut driver = discovered_driver(&device);
+        let first = driver.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
+        assert_eq!(first.producer(), 1);
+        assert_eq!(first.slot(), 0);
+        assert_eq!(first.request().generation(), 1);
+        assert_eq!(first.request().request_id(), 1);
+        assert_eq!(driver.request_producer(), 0);
+        assert!(!driver.has_pending());
+        let mut request = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
+        first.request().encode(&mut request);
+        assert_eq!(VirtualBlockRequest::decode(&request), Ok(first.request()));
+
+        driver.commit_submission(first).unwrap();
+        assert_eq!(driver.request_producer(), 1);
+        assert!(driver.has_pending());
+        assert_eq!(
+            driver.prepare_read(0, 1, 0x80_0000, 4096),
+            Err(VirtualBlockError::InvalidState)
+        );
+        assert_eq!(
+            driver.commit_submission(first),
+            Err(VirtualBlockError::InvalidState)
+        );
+
+        let forged = completion_bytes(1, 2, VirtualBlockCompletionStatus::Ok, 4096);
+        assert_eq!(
+            driver.accept_completion(1, &forged),
+            Err(VirtualBlockError::InvalidCompletion)
+        );
+        assert!(driver.has_pending());
+        assert_eq!(driver.completion_consumer(), 0);
+        let completed = completion_bytes(1, 1, VirtualBlockCompletionStatus::Ok, 4096);
+        assert_eq!(
+            driver.accept_completion(0, &completed),
+            Err(VirtualBlockError::InvalidCompletion)
+        );
+        let outcome = driver.accept_completion(1, &completed).unwrap();
+        assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Ok);
+        assert_eq!(outcome.transferred(), 4096);
+        assert_eq!(outcome.acknowledgement(), 1);
+        assert!(!driver.has_pending());
+
+        let second = driver.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
+        assert_eq!(second.producer(), 2);
+        assert_eq!(second.slot(), 1);
+        assert_eq!(second.request().request_id(), 2);
+        assert_eq!(
+            driver.commit_submission(first),
+            Err(VirtualBlockError::StaleTicket)
+        );
+        driver.commit_submission(second).unwrap();
+    }
+
+    #[test]
+    fn guest_driver_bounds_features_errors_and_terminal_completions() {
+        let mut no_flush =
+            VirtualBlockDevice::<1>::new(4096, 2, VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
+        no_flush.negotiate(0).unwrap();
+        no_flush.activate(layout::<1>(), 48).unwrap();
+        let mut driver = discovered_driver(&no_flush);
+        assert_eq!(
+            driver.prepare_flush(),
+            Err(VirtualBlockError::InvalidFeatures)
+        );
+        for result in [
+            driver.prepare_read(0, 0, 0x80_0000, 0),
+            driver.prepare_read(2, 1, 0x80_0000, 4096),
+            driver.prepare_read(0, 1, 0, 4096),
+            driver.prepare_read(0, 1, u64::MAX - 1024, 4096),
+            driver.prepare_read(0, 1, 0x80_0000, 2048),
+        ] {
+            assert!(matches!(
+                result,
+                Err(VirtualBlockError::InvalidRange | VirtualBlockError::InvalidBuffer)
+            ));
+        }
+        let submission = driver.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
+        driver.commit_submission(submission).unwrap();
+        let reset = completion_bytes(1, 1, VirtualBlockCompletionStatus::Reset, 0);
+        let outcome = driver.accept_completion(1, &reset).unwrap();
+        assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Reset);
+        assert!(driver.is_terminal());
+        assert_eq!(
+            driver.prepare_write(0, 1, 0x80_0000, 4096),
+            Err(VirtualBlockError::InvalidState)
+        );
+
+        let configuration = no_flush.configuration().unwrap();
+        let mut exhausted = VirtualBlockGuestDriver {
+            configuration,
+            next_request_id: u64::MAX,
+            request_producer: u64::MAX - 1,
+            completion_consumer: u64::MAX - 1,
+            pending: None,
+            terminal: false,
+        };
+        let last = exhausted.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
+        assert_eq!(last.request().request_id(), u64::MAX);
+        assert_eq!(last.producer(), u64::MAX);
+        exhausted.commit_submission(last).unwrap();
+        let completed = completion_bytes(
+            configuration.generation(),
+            u64::MAX,
+            VirtualBlockCompletionStatus::Ok,
+            4096,
+        );
+        exhausted.accept_completion(u64::MAX, &completed).unwrap();
+        assert!(exhausted.is_terminal());
     }
 
     #[test]

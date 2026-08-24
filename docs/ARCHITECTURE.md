@@ -679,8 +679,17 @@ Dedicated KVM and WHP block launch builders now require a typed page binding,
 reject queue substitution and all configuration-page overlap, publish the
 complete zero-padded page through the host/device path, and identity-map it
 read-only/NX to the guest. Both KVM and WHP paths have live controlled-probe
-evidence. There is still no reusable guest discovery/driver state, PCI
-presentation, or other transport.
+evidence. Signed-guest integration, PCI presentation, and any other transport
+remain pending.
+A backend-neutral allocation-free initial guest-driver state now strictly
+decodes that record only against a completely fresh idle queue snapshot. It
+derives slots and request geometry from the configuration, prepares requests
+without mutation, commits only the exact fresh publication ticket, permits one
+in-flight request, and accepts a completion only when counter, generation,
+request ID, status, and transferred length match. Reset/removal completions and
+request-ID exhaustion make the state terminal. Arbitrary nonzero-queue resume,
+mapped signed-guest consumption of this state, unbounded progress, and PCI
+discovery remain pending.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

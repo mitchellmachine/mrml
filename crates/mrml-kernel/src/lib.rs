@@ -136,6 +136,7 @@ pub use virtual_block::{
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState,
     VirtualBlockDoorbellError, VirtualBlockDoorbellResult, VirtualBlockError,
     VirtualBlockExecutionError, VirtualBlockExecutionOutcome, VirtualBlockExecutionResult,
+    VirtualBlockGuestCompletion, VirtualBlockGuestDriver, VirtualBlockGuestSubmission,
     VirtualBlockMutationError, VirtualBlockOperation, VirtualBlockProcessError,
     VirtualBlockProcessOutcome, VirtualBlockProcessResult, VirtualBlockQueueBridge,
     VirtualBlockQueueError, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockRunError,

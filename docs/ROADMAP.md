@@ -692,8 +692,20 @@ carries no authority. A typed page binding now additionally requires one
 page-aligned, queue-disjoint GPA and the exact configuration/queue pair. The KVM
 and WHP block launch builders publish the fully zeroed page through their
 host/device-only paths and identity-map it read-only/NX. Both KVM and WHP have
-live controlled-probe evidence. Reusable guest discovery state and PCI or
-another transport remain pending.
+live controlled-probe evidence. Signed-guest integration and PCI or another
+transport remain pending.
+
+The first reusable guest-driver state is now implemented as allocation-free
+backend-neutral policy. Discovery requires the canonical record plus four exact
+zero queue counters; nonzero restart state is rejected because the current
+record cannot reconstruct prior request-ID history safely. Request preparation
+is non-mutating, exact publication tickets commit one in-flight request, queue
+slots derive from the configured slot count, and completion acceptance binds
+the next published counter, generation, request ID, status, and expected byte
+count before returning an acknowledgement. Geometry, buffer arithmetic, flush
+features, replay, stale tickets, terminal reset/removal, and exhaustion fail
+closed. Integration into the signed guest image, multi-in-flight/unbounded
+progress, reset rediscovery, and PCI transport remain pending.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

@@ -378,8 +378,14 @@ explicitly and downgrade the status rather than guessing.
   it is not authority. Typed queue-bound page presentation is now implemented
   by both hosted launch builders: the page is disjoint, completely zero-padded,
   and guest-read-only/NX. Both KVM and WHP have live controlled-probe evidence.
-  Reusable guest discovery and PCI presentation remain pending. A
-  canonical fixed-capacity allocation index now supplies exact object-generation
+  Signed-guest discovery and PCI presentation remain pending. A
+  backend-neutral allocation-free initial guest-driver state now discovers only
+  a canonical configuration with a completely fresh idle queue, uses two-phase
+  exact publication tickets, permits one in-flight request, and binds completion
+  acceptance to the exact counter/generation/request/status/length. Nonzero
+  restart history, signed-image integration, reset rediscovery, unbounded
+  progress, and PCI transport remain pending. The canonical fixed-capacity
+  allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned
   image binds volume, publication generation, record geometry, full-image
