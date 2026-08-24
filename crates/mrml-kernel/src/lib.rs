@@ -144,8 +144,8 @@ pub use virtual_gpu::{
     submit_gpu_control_batch, verify_gpu_kernel_bundle,
 };
 pub use vm::{
-    GuestAccess, GuestMappingId, GuestMemory, GuestRegion, HYPERCALL_BYTES, Hypercall,
-    HypercallOperation, HypercallRouter, MAX_GUEST_REGIONS, MappingRevocationError,
+    GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,
+    Hypercall, HypercallOperation, HypercallRouter, MAX_GUEST_REGIONS, MappingRevocationError,
     RevocableVmBackend, RoutedHypercall, VmBackend, VmError, VmExit, VmId, VmRunError, VmState,
     VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
 };

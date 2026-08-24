@@ -1,7 +1,7 @@
 use crate::{
-    Capability, CapabilityError, CapabilitySpace, GuestMappingId, GuestMemory,
-    MappingRevocationError, ObjectId, RevocableVmBackend, Rights, ServiceAddressSpaceEraser,
-    TaskId, VmId, revoke_mapping_before_resume,
+    Capability, CapabilityError, CapabilitySpace, GuestMappingId, GuestMappingRevoker, GuestMemory,
+    MappingRevocationError, ObjectId, Rights, ServiceAddressSpaceEraser, TaskId, VmId,
+    revoke_mapping_before_resume,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -551,7 +551,7 @@ impl<const N: usize> SharedCleanupReport<N> {
 /// the backend's revocation contract prevents subsequent vCPU execution when
 /// hardware state is uncertain.
 pub fn revoke_task_shared_bindings_before_resume<
-    B: RevocableVmBackend,
+    B: GuestMappingRevoker,
     const BINDINGS: usize,
     const MAPPINGS: usize,
 >(
@@ -637,7 +637,7 @@ impl<E, R, B, const BINDINGS: usize, const MAPPINGS: usize> ServiceAddressSpaceE
 where
     E: ServiceAddressSpaceEraser,
     R: HostResourceRetirer,
-    B: RevocableVmBackend,
+    B: GuestMappingRevoker,
 {
     type Error = ServiceResourceCleanupError<B::Error, E::Error, R::Error>;
 
@@ -705,8 +705,8 @@ mod tests {
     use crate::arch::x86_64::{TrapDisposition, UserContext};
     use crate::{
         GuestRegion, IpcSharedBufferBackend, IpcSharedBufferError, IpcSharedBufferIoError,
-        KernelScheduler, Message, PhysAddr, Priority, ScheduleOutcome, ServiceSupervisor,
-        TaskRuntime, VmBackend, VmExit, VmTable,
+        KernelScheduler, Message, PhysAddr, Priority, RevocableVmBackend, ScheduleOutcome,
+        ServiceSupervisor, TaskRuntime, VmBackend, VmExit, VmTable,
     };
 
     struct BufferBackend {

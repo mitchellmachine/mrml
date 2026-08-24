@@ -300,8 +300,12 @@ through the existing cleanup hook, and preserves backend uncertainty. Its
 supervisor-memory adapter keeps raw addresses behind an unsafe boundary. The x86-64
 active-page user-copy adapter is implemented: it binds validation to expected
 CR3 and task plus exact address, length, and direction in a one-use ticket;
-executor failure cancels an unconsumed ticket. Bounded in-memory directory state
-now requires exact
+executor failure cancels an unconsumed ticket. Shared cleanup now depends only
+on a narrow native-mapping revoker rather than full VMM authority. An active
+x86-64 service adapter exact-matches CR3, virtual and physical extent, and old
+permissions before removing all leaves and invalidating their local TLB entries.
+This is the revocation prerequisite for kernel-image resource wiring. Bounded
+in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke

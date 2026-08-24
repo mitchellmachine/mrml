@@ -623,6 +623,22 @@ pub trait RevocableVmBackend: VmBackend {
     fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error>;
 }
 
+/// Minimal native mapping-retirement contract shared by hosted VMMs and
+/// in-kernel service address spaces.
+pub trait GuestMappingRevoker {
+    type Error;
+
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error>;
+}
+
+impl<B: RevocableVmBackend> GuestMappingRevoker for B {
+    type Error = B::Error;
+
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
+        RevocableVmBackend::revoke_guest_mapping(self, guest_address, bytes)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MappingRevocationError<E> {
     Backend(E),
@@ -633,7 +649,7 @@ pub enum MappingRevocationError<E> {
 /// backend failure deliberately leaves the policy mapping live so callers can
 /// observe that revocation did not complete; the backend is responsible for
 /// poisoning further execution when native state may be uncertain.
-pub fn revoke_mapping_before_resume<B: RevocableVmBackend, const N: usize>(
+pub fn revoke_mapping_before_resume<B: GuestMappingRevoker, const N: usize>(
     backend: &mut B,
     memory: &mut GuestMemory<N>,
     id: GuestMappingId,
@@ -839,6 +855,17 @@ mod tests {
         }
     }
 
+    struct ServiceMappingRevoker(Option<(u64, u64)>);
+
+    impl GuestMappingRevoker for ServiceMappingRevoker {
+        type Error = ();
+
+        fn revoke_guest_mapping(&mut self, address: u64, bytes: u64) -> Result<(), Self::Error> {
+            self.0 = Some((address, bytes));
+            Ok(())
+        }
+    }
+
     #[test]
     fn guest_memory_rejects_aliases_crossings_and_wx() {
         assert_eq!(
@@ -922,6 +949,18 @@ mod tests {
         );
         assert_eq!(backend.request, Some((0x7000, PAGE_SIZE)));
         assert_eq!(memory.region(id).unwrap().guest_start(), 0x7000);
+    }
+
+    #[test]
+    fn policy_retirement_accepts_a_service_mapping_revoker_without_vmm_access() {
+        let mut memory = GuestMemory::<1>::new();
+        let id = memory
+            .map(GuestRegion::new(0x9000, PhysAddr::new(0xc000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let mut revoker = ServiceMappingRevoker(None);
+        assert!(revoke_mapping_before_resume(&mut revoker, &mut memory, id).is_ok());
+        assert_eq!(revoker.0, Some((0x9000, PAGE_SIZE)));
+        assert_eq!(memory.region(id), Err(VmError::StaleMapping));
     }
 
     #[test]

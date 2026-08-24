@@ -4,7 +4,7 @@ use super::{
     ADDRESS_MASK, Mapping, PageError, PagePermissions, PageTableEntry, UserBufferAccess,
     UserBufferError, VirtAddr,
 };
-use crate::{PAGE_SIZE, PhysAddr};
+use crate::{GuestMappingRevoker, PAGE_SIZE, PhysAddr};
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
 
@@ -457,6 +457,74 @@ pub struct ActivePageTables {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActiveMappingRevocationError {
+    WrongRoot,
+    WrongMapping,
+    AlreadyRevoked,
+    PageTable(PageTableBuildError),
+}
+
+/// One exact active service mapping authorized for native retirement.
+pub struct ActiveServiceMappingRevoker<'a> {
+    tables: &'a mut ActivePageTables,
+    expected_root: PhysAddr,
+    expected: Mapping,
+    retired: bool,
+}
+
+impl<'a> ActiveServiceMappingRevoker<'a> {
+    /// Creates a one-use exact active-mapping retirement adapter.
+    ///
+    /// # Safety
+    ///
+    /// The caller must exclusively own the expected leaf entries, keep the
+    /// active hierarchy identity-mapped, and exclude interrupts and concurrent
+    /// page-table mutation until this adapter is dropped.
+    pub unsafe fn new(
+        tables: &'a mut ActivePageTables,
+        expected_root: PhysAddr,
+        expected: Mapping,
+    ) -> Result<Self, ActiveMappingRevocationError> {
+        if tables.root() != expected_root {
+            return Err(ActiveMappingRevocationError::WrongRoot);
+        }
+        Ok(Self {
+            tables,
+            expected_root,
+            expected,
+            retired: false,
+        })
+    }
+}
+
+impl GuestMappingRevoker for ActiveServiceMappingRevoker<'_> {
+    type Error = ActiveMappingRevocationError;
+
+    fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
+        if self.retired {
+            return Err(ActiveMappingRevocationError::AlreadyRevoked);
+        }
+        let expected_bytes = self
+            .expected
+            .pages()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(ActiveMappingRevocationError::WrongMapping)?;
+        if self.tables.root() != self.expected_root {
+            return Err(ActiveMappingRevocationError::WrongRoot);
+        }
+        if guest_address != self.expected.virtual_start().get() || bytes != expected_bytes {
+            return Err(ActiveMappingRevocationError::WrongMapping);
+        }
+        // SAFETY: established by the constructor contract; unmap_exact
+        // preflights the complete physical/permission identity before writes.
+        unsafe { self.tables.unmap_exact(self.expected) }
+            .map_err(ActiveMappingRevocationError::PageTable)?;
+        self.retired = true;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActiveUserBuffer {
     virtual_address: u64,
     length: usize,
@@ -887,6 +955,53 @@ mod tests {
         assert_eq!(
             builder.unmap_exact(mapping),
             Err(PageTableBuildError::NotMapped)
+        );
+    }
+
+    #[test]
+    fn active_service_revoker_rejects_wrong_root_before_mutation() {
+        let mut active = ActivePageTables {
+            root: PhysAddr::new(0x1000).unwrap(),
+        };
+        let mapping = Mapping::new(
+            VirtAddr::new(0x4000).unwrap(),
+            PhysAddr::new(0x8000).unwrap(),
+            1,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        assert!(matches!(
+            unsafe {
+                ActiveServiceMappingRevoker::new(
+                    &mut active,
+                    PhysAddr::new(0x2000).unwrap(),
+                    mapping,
+                )
+            },
+            Err(ActiveMappingRevocationError::WrongRoot)
+        ));
+    }
+
+    #[test]
+    fn active_service_revoker_requires_the_exact_virtual_extent() {
+        let root = PhysAddr::new(0x1000).unwrap();
+        let mut active = ActivePageTables { root };
+        let mapping = Mapping::new(
+            VirtAddr::new(0x4000).unwrap(),
+            PhysAddr::new(0x8000).unwrap(),
+            2,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        let mut revoker =
+            unsafe { ActiveServiceMappingRevoker::new(&mut active, root, mapping) }.unwrap();
+        assert_eq!(
+            revoker.revoke_guest_mapping(0x5000, 2 * PAGE_SIZE),
+            Err(ActiveMappingRevocationError::WrongMapping)
+        );
+        assert_eq!(
+            revoker.revoke_guest_mapping(0x4000, PAGE_SIZE),
+            Err(ActiveMappingRevocationError::WrongMapping)
         );
     }
 }

@@ -161,7 +161,10 @@ explicitly and downgrade the status rather than guessing.
   resource table now issues fresh monotonic handles, bounds every operation,
   rejects live aliases and stale handles, and retires through the existing
   cleanup path while preserving backend failures. Its address-backed adapter is
-  an unsafe supervisor-only boundary. Concrete kernel-image wiring is still
+  an unsafe supervisor-only boundary. Shared cleanup now uses a minimal native-
+  mapping revoker; its active x86-64 service implementation requires exact CR3,
+  virtual/physical extent, and permissions before all-or-nothing leaf removal
+  and local TLB invalidation. Concrete kernel-image lifecycle wiring is still
   absent, so the hosted service probe halts on those operations.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its

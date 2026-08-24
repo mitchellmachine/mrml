@@ -1195,3 +1195,16 @@ adapter. This adds no novel handle-table, bounds-checking, revocation, or memory
 copy technique.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded resource indirection.
+
+## 2026-08-23 — active service mapping revocation adapter
+
+MRML source: `crates/mrml-kernel/src/{vm,shared_memory}.rs` and
+`crates/mrml-kernel/src/arch/x86_64/page_table.rs`.
+
+Shared cleanup conventionally consumes a narrow native mapping-removal
+interface. The x86-64 service adapter binds one active root and exact mapping,
+preflights the complete old leaf identity and permissions, clears the leaves,
+and invalidates local translations. This adds no novel page-table, revocation,
+capability, or service-lifecycle technique.
+
+Patent review: `NOT_TRIGGERED` — conventional exact mapping teardown.
