@@ -314,11 +314,13 @@ action blocks now carry distinct condition, branch-action, else-action, and join
 blocks, including final-return termination and unreachable top-level successors.
 Top-level `while` and unconditional loops now add explicit header, operation-
 range, exit, return, and backedge facts for ordered simple and conditional
-break/continue/return controls. Action lists containing statements after a
-return, nested or conditional loop blocks, labeled cross-loop targets, and
-post-terminal loop-operation suffixes remain explicitly incomplete. This
-runtime place/CFG foundation is therefore an incremental prerequisite, not a
-claim of ownership checking.
+break/continue/return controls. Conditional loop blocks additionally represent
+primary, `else if`, and final `else` condition/action provenance, joins, and
+arm-specific terminals, including structurally proven exhaustive termination.
+Action lists containing statements after a return, nested loop blocks, labeled
+cross-loop targets, and post-terminal loop-operation suffixes remain explicitly
+incomplete. This runtime place/CFG foundation is therefore an incremental
+prerequisite, not a claim of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 
