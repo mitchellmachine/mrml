@@ -3066,12 +3066,88 @@ fn preanalyze_runtime_expression_at_reads<
             }
             ExprKind::ArrayRepeat { element, .. } => visit!(element)?,
             ExprKind::Call {
+                callee,
                 arguments,
                 argument_count,
-                ..
             } => {
-                for argument in arguments[..argument_count].iter().flatten() {
-                    visit!(*argument)?;
+                if !runtime_call_arguments_preanalysis_supported(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    id,
+                    depth + 1,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: assignment_span,
+                })? {
+                    return Ok(());
+                }
+                let target = resolver
+                    .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+                    .ok_or(CodegenError {
+                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                        span: assignment_span,
+                    })?;
+                for (parameter, argument) in target.parameters[..target.parameter_count]
+                    .iter()
+                    .zip(arguments[..argument_count].iter())
+                {
+                    let parameter = parameter.ok_or(CodegenError {
+                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                        span: assignment_span,
+                    })?;
+                    let argument = argument.ok_or(CodegenError {
+                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                        span: assignment_span,
+                    })?;
+                    let expected = runtime_type_from_scalar(parameter.ty);
+                    if matches!(
+                        expected,
+                        RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
+                    ) && let Some(ExprKind::Identifier(name)) =
+                        tree.expression(argument).map(|expression| expression.kind)
+                    {
+                        let span = tree
+                            .expression(argument)
+                            .ok_or(CodegenError {
+                                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                span: assignment_span,
+                            })?
+                            .span;
+                        let (projection, count) = match expected {
+                            RuntimeExpressionType::Array { count, .. } => {
+                                (RuntimePlaceProjection::Index, count)
+                            }
+                            RuntimeExpressionType::Tuple { element_count, .. } => {
+                                (RuntimePlaceProjection::TupleField(0), element_count)
+                            }
+                            _ => unreachable!(),
+                        };
+                        for field in 0..count {
+                            push_read(
+                                facts,
+                                locals,
+                                function,
+                                RuntimeReadPlace {
+                                    name,
+                                    span,
+                                    projections: RuntimePlaceProjections::single(
+                                        match projection {
+                                            RuntimePlaceProjection::TupleField(_) => {
+                                                RuntimePlaceProjection::TupleField(field)
+                                            }
+                                            other => other,
+                                        },
+                                    ),
+                                },
+                                assignment_span,
+                            )?;
+                        }
+                    } else {
+                        visit!(argument)?;
+                    }
                 }
             }
             // Inline const operands cannot capture runtime locals. Other compound
@@ -4258,46 +4334,14 @@ fn runtime_fat_reference_call_preanalysis_supported<
         return Ok(false);
     }
     match tree.expression(id).map(|expression| expression.kind) {
-        Some(ExprKind::Call {
-            callee,
-            arguments,
-            argument_count,
-        }) => {
-            if resolver
-                .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
-                .is_none()
-                || arguments[..argument_count].iter().any(Option::is_none)
-            {
-                return Ok(false);
-            }
-            for argument in arguments[..argument_count].iter().flatten().copied() {
-                let ty = runtime_expression_type_with_locals(
-                    function,
-                    resolver,
-                    locals,
-                    tree,
-                    argument,
-                    depth + 1,
-                )?;
-                if runtime_type_stack_slots(ty) == 1 {
-                    continue;
-                }
-                if !runtime_type_is_fat_reference(ty)
-                    || !(runtime_fat_reference_preanalysis_supported(tree, argument, depth + 1)
-                        || runtime_fat_reference_call_preanalysis_supported(
-                            function,
-                            resolver,
-                            locals,
-                            tree,
-                            argument,
-                            depth + 1,
-                        )?)
-                {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        }
+        Some(ExprKind::Call { .. }) => runtime_call_arguments_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            id,
+            depth + 1,
+        ),
         Some(
             ExprKind::If {
                 then_branch,
@@ -4346,6 +4390,85 @@ fn runtime_fat_reference_call_preanalysis_supported<
         ),
         _ => Ok(false),
     }
+}
+
+fn runtime_call_arguments_preanalysis_supported<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'_>>],
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    depth: usize,
+) -> Result<bool, CodegenErrorKind> {
+    if depth == 64 {
+        return Ok(false);
+    }
+    let Some(ExprKind::Call {
+        callee,
+        arguments,
+        argument_count,
+    }) = tree.expression(id).map(|expression| expression.kind)
+    else {
+        return Ok(false);
+    };
+    let Some(target) = resolver.resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+    else {
+        return Ok(false);
+    };
+    if target.parameter_count != argument_count {
+        return Ok(false);
+    }
+    for (parameter, argument) in target.parameters[..target.parameter_count]
+        .iter()
+        .zip(arguments[..argument_count].iter())
+    {
+        let (Some(parameter), Some(argument)) = (parameter, argument) else {
+            return Ok(false);
+        };
+        let expected = runtime_type_from_scalar(parameter.ty);
+        let actual = runtime_expression_type_with_locals(
+            function,
+            resolver,
+            locals,
+            tree,
+            *argument,
+            depth + 1,
+        )?;
+        if !runtime_types_compatible(actual, expected) {
+            return Ok(false);
+        }
+        if runtime_type_stack_slots(expected) == 1 {
+            continue;
+        }
+        if runtime_type_is_fat_reference(expected)
+            && (runtime_fat_reference_preanalysis_supported(tree, *argument, depth + 1)
+                || runtime_fat_reference_call_preanalysis_supported(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    *argument,
+                    depth + 1,
+                )?)
+        {
+            continue;
+        }
+        if matches!(
+            expected,
+            RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
+        ) && matches!(
+            tree.expression(*argument).map(|expression| expression.kind),
+            Some(ExprKind::Identifier(_))
+        ) {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn runtime_fat_reference_return_preanalysis_supported<const MAX_NODES: usize>(
@@ -18278,13 +18401,43 @@ mod tests {
             name: &str,
             argument_count: usize,
         ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
-            if name != "choose" || argument_count != 4 || MAX_PARAMETERS < 4 {
-                return None;
-            }
             let slice = ScalarType::SliceReference {
                 element: CallArrayElement::Integer(crate::IntegerType::Usize),
                 mutable: false,
             };
+            if name == "choose_aggregate" && argument_count == 3 && MAX_PARAMETERS >= 3 {
+                let element = CallArrayElement::Integer(crate::IntegerType::Usize);
+                let mut tuple_elements = [None; 4];
+                tuple_elements[0] = Some(element);
+                tuple_elements[1] = Some(element);
+                let mut parameters = [None; MAX_PARAMETERS];
+                parameters[0] = Some(RuntimeCallParameter {
+                    name: "values",
+                    ty: ScalarType::Array { element, count: 3 },
+                });
+                parameters[1] = Some(RuntimeCallParameter {
+                    name: "pair",
+                    ty: ScalarType::Tuple {
+                        elements: tuple_elements,
+                        element_count: 2,
+                    },
+                });
+                parameters[2] = Some(RuntimeCallParameter {
+                    name: "bias",
+                    ty: ScalarType::Integer(crate::IntegerType::Usize),
+                });
+                return Some(RuntimeCallTarget {
+                    name: "choose_aggregate",
+                    parameters,
+                    parameter_count: 3,
+                    return_type: slice,
+                    return_type_name: "&[usize]",
+                    body_expression: "{ pair.0; if bias == 0 { &values[..] } else { &values[1..] } }",
+                });
+            }
+            if name != "choose" || argument_count != 4 || MAX_PARAMETERS < 4 {
+                return None;
+            }
             let mut parameters = [None; MAX_PARAMETERS];
             parameters[0] = Some(RuntimeCallParameter {
                 name: "values",
@@ -19500,6 +19653,62 @@ mod tests {
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_identifier_aggregate_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize) -> usize { let values = [first, second, third]; let pair = (left, right); let selected: &[usize] = { prefix; choose_aggregate(values, pair, bias) }; selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(facts.assignment_read_count, 12);
+        for (index, fact) in facts.assignment_reads[..12].iter().enumerate() {
+            let fact = fact.unwrap();
+            let (base, projections) = match index {
+                0..=4 => (
+                    RuntimePlaceIdentity::Parameter(index),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                5 => (
+                    RuntimePlaceIdentity::Parameter(5),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                6..=8 => (
+                    RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                ),
+                9 | 10 => (
+                    RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(index - 9)),
+                ),
+                11 => (
+                    RuntimePlaceIdentity::Parameter(6),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                _ => unreachable!(),
+            };
+            assert_eq!(fact.base, base);
+            assert_eq!(fact.projections, projections);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
