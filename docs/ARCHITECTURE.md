@@ -434,9 +434,14 @@ digest/extents, and an exact one-use COW transaction receipt activates it.
 Recovery accepts only the caller-supplied file generation already selected by
 authenticated reachable recovery, uses separate bootstrap file READ authority,
 does not search older generations, preserves I/O uncertainty, and erases the
-policy buffer after parsing. The proof issuer, owner policy UI, boot
-orchestration, and rollback-resistant accepted-epoch/generation persistence are
-not implemented.
+policy buffer after parsing. Safe code can no longer initialize the replay guard
+from arbitrary counters or construct a recovery proof directly. Unsafe boundary
+tokens carry authenticated rollback state and exact owner-approved checkpoint
+admission; a one-use issuer redecodes canonical bytes, matches every bound field,
+and alone constructs the consumed proof. Stable recovery invokes it only after
+authorized file I/O, permitting retry before acceptance but rejecting duplicate
+issue. The platform owner-policy authenticator/UI, boot orchestration, and
+rollback-resistant accepted-epoch/generation persistence are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

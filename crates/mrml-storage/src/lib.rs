@@ -37,8 +37,9 @@ pub use authority::{
 };
 pub use authority_checkpoint::{
     AUTHORITY_CHECKPOINT_GRANT_BYTES, AUTHORITY_CHECKPOINT_HEADER_BYTES,
-    AuthenticatedAuthorityCheckpoint, AuthorityCheckpoint, AuthorityCheckpointError,
-    AuthorityRecoveryGuard, AuthorityStorageError, PreparedStableAuthorities,
+    AuthenticatedAuthorityCheckpoint, AuthenticatedAuthorityRecoveryState, AuthorityCheckpoint,
+    AuthorityCheckpointError, AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard,
+    AuthorityStorageError, OwnerApprovedAuthorityCheckpoint, PreparedStableAuthorities,
     RecoveredStorageAuthorities, StableAuthorities, StorageRecoveryGrant,
     authority_checkpoint_digest, encode_authority_checkpoint, prepare_stable_authorities,
     recover_stable_authorities,

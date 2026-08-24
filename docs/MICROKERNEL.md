@@ -3505,10 +3505,14 @@ strictly above every slot it has issued, so a stale token retained outside the
 checkpoint cannot collide after reboot. The caller receives nothing and the
 guards do not advance if any record fails. Parent revocation remains transitive
 after reconstruction.
-The proof constructor is an explicit unsafe recovery boundary: a raw file,
-digest, object ID, principal number, or signature alone cannot authorize a
-grant. Its caller must authenticate owner-approved policy and enforce one-use
-proof issuance. The codec intentionally does not export the current live table,
+Safe code no longer constructs the proof or initializes rollback counters
+directly. `OwnerApprovedAuthorityCheckpoint` and
+`AuthenticatedAuthorityRecoveryState` are explicit unsafe recovery boundaries:
+a raw file, digest, object ID, principal number, signature, or caller-chosen
+counter cannot authorize a grant or weaken rollback state. A one-use issuer
+redecodes the complete canonical bytes and matches digest, volume, selected
+root, epoch, and handle generation before it alone creates the consumed proof.
+Duplicate issue fails closed. The codec intentionally does not export the current live table,
 because doing so would silently convert transient or time-bounded authority into
 persistent authority.
 
@@ -3524,7 +3528,9 @@ generation already selected by authenticated reachable recovery. It performs
 no older-generation search, preserves backend uncertainty, and erases the
 caller policy buffer after every parsed success or rejection. Wrong file
 generation fails before I/O; denied preparation produces no checkpoint bytes or
-backend writes.
+backend writes. Proof issuance occurs only after that authorized read succeeds,
+so an I/O failure leaves the admission available for a serialized retry and
+cannot advance the recovery guard.
 
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
 each pass all 106 `mrml-storage` tests and scoped strict Clippy. Focused tests
@@ -3533,9 +3539,10 @@ token rejection; corruption and root-generation substitution; replay without
 guard advancement; rights
 amplification, forward lineage, hidden reserved data even with a recomputed
 digest, and capacity mismatch. This is unit/simulation evidence only. Stable-
-Trusted proof issuance, owner-facing durable-grant policy, boot orchestration,
-and rollback-resistant persistence of the accepted epoch/generation remain
-unimplemented, so complete reboot reconstruction is not claimed.
+Platform authentication of owner-approved policy, an owner-facing durable-grant
+UI, boot orchestration, and rollback-resistant persistence of the accepted
+epoch/generation remain unimplemented, so complete reboot reconstruction is not
+claimed.
 This agent review is not
 independent human audit.
 

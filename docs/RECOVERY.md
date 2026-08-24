@@ -287,9 +287,14 @@ explicitly and downgrade the status rather than guessing.
   receipt. Recovery requires separate bootstrap file READ authority and the
   exact file generation already selected by authenticated reachable recovery;
   it never searches older generations, preserves I/O errors, and erases policy
-  bytes after parsing. Owner-policy admission, authenticated boot/recovery proof
-  issuance and orchestration, and rollback-resistant persistence of the
-  accepted epoch/generation remain pending, so
+  bytes after parsing. A one-use issuer now matches canonical bytes to an exact
+  unsafe owner-approved admission before constructing the otherwise
+  unforgeable recovery proof. The replay guard can be initialized only from an
+  unsafe authenticated rollback-state token. Stable recovery issues after a
+  successful authorized read, so I/O failure does not consume admission;
+  duplicate issue fails closed. Platform owner-policy authentication/UI, boot
+  orchestration, and rollback-resistant persistence of the accepted epoch/
+  generation remain pending, so
   reboot-time capability reconstruction and concrete block durability remain
   partial.
   Configuration checkpoints can now participate in this same exact stable-file

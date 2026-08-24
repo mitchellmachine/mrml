@@ -1387,3 +1387,13 @@ one-use publication receipt. Exact-generation recovery through separately
 authorized reads and post-parse buffer erasure are standard defensive storage
 integration. No patent-candidate mechanism was identified. This agent review
 does not replace the required independent human dual review.
+
+# 2026-08-24 — One-use authority recovery proof issuance
+
+**Result: NOT_TRIGGERED.** The change conventionally narrows unsafe trust input
+to authenticated rollback state and exact owner-approved policy tokens, then
+uses a one-use validator to issue an opaque proof only for matching canonical
+bytes. Issuance after successful I/O, duplicate rejection, and safe-constructor
+removal are standard defensive recovery techniques. No patent-candidate
+mechanism was identified. This agent review does not replace the required
+independent human dual review.

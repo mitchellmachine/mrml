@@ -92,10 +92,31 @@ impl StorageRecoveryGrant {
     }
 }
 
-/// Exact authenticated recovery authorization supplied by the boot/recovery
-/// policy boundary. Checkpoint bytes and their digest are data, not authority.
-/// This proof is consumed by reconstruction and is intentionally not clonable.
-pub struct AuthenticatedAuthorityCheckpoint {
+/// Authenticated rollback state supplied by the platform recovery boundary.
+/// Safe code cannot choose a lower accepted epoch or handle generation.
+pub struct AuthenticatedAuthorityRecoveryState {
+    accepted_epoch: u64,
+    accepted_handle_generation: u32,
+}
+
+impl AuthenticatedAuthorityRecoveryState {
+    /// # Safety
+    ///
+    /// Both values must come from authenticated rollback-resistant state for
+    /// the same storage authority domain. Missing state must fail closed rather
+    /// than being represented as zero by convenience.
+    pub const unsafe fn new(accepted_epoch: u64, accepted_handle_generation: u32) -> Self {
+        Self {
+            accepted_epoch,
+            accepted_handle_generation,
+        }
+    }
+}
+
+/// Exact owner-approved durable-grant policy admitted by trusted recovery.
+/// Names, identities, signatures, and checkpoint bytes remain data until this
+/// boundary has authenticated the complete policy and selected storage root.
+pub struct OwnerApprovedAuthorityCheckpoint {
     epoch: u64,
     volume: VolumeId,
     root_generation: u64,
@@ -103,19 +124,12 @@ pub struct AuthenticatedAuthorityCheckpoint {
     digest: [u8; DIGEST_BYTES],
 }
 
-impl AuthenticatedAuthorityCheckpoint {
-    /// Creates a proof only after external trusted recovery has authenticated
-    /// the exact checkpoint, owner-approved grant policy, selected volume root,
-    /// and monotonic epoch.
-    ///
+impl OwnerApprovedAuthorityCheckpoint {
     /// # Safety
     ///
-    /// The caller must bind all fields to authenticated recovery evidence and
-    /// serialize attempts against one authenticated recovery guard and ensure
-    /// no duplicate proof can outlive successful acceptance. Reissuing the
-    /// exact proof after a pre-acceptance I/O failure is permitted. A raw digest,
-    /// object name, principal number, or checkpoint file is never sufficient
-    /// evidence.
+    /// The caller must authenticate explicit owner approval for the complete
+    /// durable-grant policy, bind it to the selected reachable volume root and
+    /// rollback state, and serialize issuance for this authority domain.
     pub const unsafe fn new(
         epoch: u64,
         volume: VolumeId,
@@ -131,6 +145,79 @@ impl AuthenticatedAuthorityCheckpoint {
             digest,
         }
     }
+}
+
+/// One-use issuer that converts exact canonical bytes plus an owner-approved
+/// admission into the non-forgeable proof consumed by reconstruction.
+pub struct AuthorityCheckpointProofIssuer {
+    admission: Option<OwnerApprovedAuthorityCheckpoint>,
+}
+
+impl AuthorityCheckpointProofIssuer {
+    pub const fn new(admission: OwnerApprovedAuthorityCheckpoint) -> Self {
+        Self {
+            admission: Some(admission),
+        }
+    }
+
+    pub fn issue<const N: usize>(
+        &mut self,
+        input: &[u8],
+    ) -> Result<AuthenticatedAuthorityCheckpoint, AuthorityCheckpointError> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or(AuthorityCheckpointError::ProofAlreadyIssued)?;
+        let decoded = decode::<N>(input)?;
+        if decoded.epoch != admission.epoch
+            || decoded.volume != admission.volume
+            || decoded.root_generation != admission.root_generation
+            || decoded.handle_generation != admission.handle_generation
+            || decoded.digest != admission.digest
+        {
+            return Err(AuthorityCheckpointError::PolicyMismatch);
+        }
+        let admission = self
+            .admission
+            .take()
+            .ok_or(AuthorityCheckpointError::ProofAlreadyIssued)?;
+        Ok(AuthenticatedAuthorityCheckpoint {
+            epoch: admission.epoch,
+            volume: admission.volume,
+            root_generation: admission.root_generation,
+            handle_generation: admission.handle_generation,
+            digest: admission.digest,
+        })
+    }
+
+    fn preflight_guard(
+        &self,
+        guard: &AuthorityRecoveryGuard,
+    ) -> Result<(), AuthorityCheckpointError> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or(AuthorityCheckpointError::ProofAlreadyIssued)?;
+        if admission.epoch == 0
+            || admission.handle_generation == 0
+            || admission.epoch <= guard.accepted_epoch
+            || admission.handle_generation <= guard.accepted_handle_generation
+        {
+            return Err(AuthorityCheckpointError::AuthenticationMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Exact authenticated recovery authorization. Checkpoint bytes and their
+/// digest are data, not authority. Only `AuthorityCheckpointProofIssuer` can
+/// construct this consumed, non-clonable proof.
+pub struct AuthenticatedAuthorityCheckpoint {
+    epoch: u64,
+    volume: VolumeId,
+    root_generation: u64,
+    handle_generation: u32,
+    digest: [u8; DIGEST_BYTES],
 }
 
 pub struct RecoveredStorageAuthorities<const N: usize> {
@@ -208,10 +295,10 @@ pub struct AuthorityRecoveryGuard {
 }
 
 impl AuthorityRecoveryGuard {
-    pub const fn new(accepted_epoch: u64, accepted_handle_generation: u32) -> Self {
+    pub const fn from_authenticated_state(state: AuthenticatedAuthorityRecoveryState) -> Self {
         Self {
-            accepted_epoch,
-            accepted_handle_generation,
+            accepted_epoch: state.accepted_epoch,
+            accepted_handle_generation: state.accepted_handle_generation,
         }
     }
 
@@ -449,11 +536,14 @@ pub fn recover_stable_authorities<
     principal: StoragePrincipal,
     expected_file_generation: u64,
     guard: &mut AuthorityRecoveryGuard,
-    proof: AuthenticatedAuthorityCheckpoint,
+    issuer: &mut AuthorityCheckpointProofIssuer,
     input: &mut [u8],
     backend: &mut B,
 ) -> Result<RecoveredStorageAuthorities<GRANTS>, AuthorityStorageError<B::Error>> {
     input.fill(0);
+    issuer
+        .preflight_guard(guard)
+        .map_err(AuthorityStorageError::Checkpoint)?;
     if expected_file_generation == 0 || file_state.generation() != expected_file_generation {
         return Err(AuthorityStorageError::InvalidBinding);
     }
@@ -476,8 +566,9 @@ pub fn recover_stable_authorities<
             backend,
         )
         .map_err(AuthorityStorageError::Read)?;
-    let result = guard
-        .recover::<GRANTS>(&input[..length], proof)
+    let result = issuer
+        .issue::<GRANTS>(&input[..length])
+        .and_then(|proof| guard.recover::<GRANTS>(&input[..length], proof))
         .map_err(AuthorityStorageError::Checkpoint);
     input.fill(0);
     result
@@ -666,6 +757,8 @@ pub enum AuthorityCheckpointError {
     CapacityMismatch,
     DigestMismatch,
     AuthenticationMismatch,
+    PolicyMismatch,
+    ProofAlreadyIssued,
     InvalidLineage,
     AuthorityAmplification,
     Authority(StorageAuthorityError),
@@ -911,15 +1004,23 @@ mod tests {
         handle_generation: u32,
     ) -> AuthenticatedAuthorityCheckpoint {
         let digest = authority_checkpoint_digest(bytes).unwrap();
-        unsafe {
-            AuthenticatedAuthorityCheckpoint::new(
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
                 epoch,
                 volume(),
                 root_generation,
                 handle_generation,
                 digest,
             )
-        }
+        };
+        AuthorityCheckpointProofIssuer::new(admission)
+            .issue::<16>(bytes)
+            .unwrap()
+    }
+
+    fn guard(epoch: u64, handle_generation: u32) -> AuthorityRecoveryGuard {
+        let state = unsafe { AuthenticatedAuthorityRecoveryState::new(epoch, handle_generation) };
+        AuthorityRecoveryGuard::from_authenticated_state(state)
     }
 
     #[test]
@@ -1018,7 +1119,17 @@ mod tests {
         assert_eq!(stable.file().generation(), 2);
         assert_eq!(stable.checkpoint().epoch(), 9);
 
-        let mut guard = AuthorityRecoveryGuard::new(8, 1);
+        let mut guard = guard(8, 1);
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                9,
+                volume(),
+                14,
+                2,
+                authority_checkpoint_digest(&expected).unwrap(),
+            )
+        };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
         let mut recovered_bytes = [0xa5; 256];
         assert_eq!(
             recover_stable_authorities::<2, _, _, _>(
@@ -1028,7 +1139,7 @@ mod tests {
                 principal(7),
                 1,
                 &mut guard,
-                proof(&expected, 9, 14, 2),
+                &mut issuer,
                 &mut recovered_bytes,
                 &mut backend,
             )
@@ -1047,7 +1158,7 @@ mod tests {
                 principal(7),
                 2,
                 &mut guard,
-                proof(&expected, 9, 14, 2),
+                &mut issuer,
                 &mut recovered_bytes,
                 &mut backend,
             ),
@@ -1063,7 +1174,7 @@ mod tests {
             principal(7),
             2,
             &mut guard,
-            proof(&expected, 9, 14, 2),
+            &mut issuer,
             &mut recovered_bytes,
             &mut backend,
         )
@@ -1114,7 +1225,7 @@ mod tests {
         let length =
             encode_authority_checkpoint(9, volume(), 14, 20, &grants, &mut encoded).unwrap();
         assert_eq!(length, encoded.len());
-        let mut guard = AuthorityRecoveryGuard::new(8, 19);
+        let mut guard = guard(8, 19);
         let recovered = guard
             .recover::<4>(&encoded, proof(&encoded, 9, 14, 20))
             .unwrap();
@@ -1173,25 +1284,33 @@ mod tests {
         let digest = authority_checkpoint_digest(&encoded).unwrap();
         let mut corrupt = encoded;
         corrupt[AUTHORITY_CHECKPOINT_HEADER_BYTES + 8] ^= 1;
-        let mut guard = AuthorityRecoveryGuard::new(4, 29);
-        let corrupt_proof =
-            unsafe { AuthenticatedAuthorityCheckpoint::new(5, volume(), 6, 30, digest) };
+        let mut guard = guard(4, 29);
+        let admission =
+            unsafe { OwnerApprovedAuthorityCheckpoint::new(5, volume(), 6, 30, digest) };
+        let mut corrupt_issuer = AuthorityCheckpointProofIssuer::new(admission);
         assert_eq!(
-            guard.recover::<2>(&corrupt, corrupt_proof).map(|_| ()),
+            corrupt_issuer.issue::<2>(&corrupt).map(|_| ()),
             Err(AuthorityCheckpointError::DigestMismatch)
         );
         assert_eq!(guard.accepted_epoch(), 4);
 
         let wrong_root =
-            unsafe { AuthenticatedAuthorityCheckpoint::new(5, volume(), 7, 30, digest) };
+            unsafe { OwnerApprovedAuthorityCheckpoint::new(5, volume(), 7, 30, digest) };
+        let mut wrong_root_issuer = AuthorityCheckpointProofIssuer::new(wrong_root);
         assert_eq!(
-            guard.recover::<2>(&encoded, wrong_root).map(|_| ()),
-            Err(AuthorityCheckpointError::AuthenticationMismatch)
+            wrong_root_issuer.issue::<2>(&encoded).map(|_| ()),
+            Err(AuthorityCheckpointError::PolicyMismatch)
         );
         assert_eq!(guard.accepted_epoch(), 4);
-        guard
-            .recover::<2>(&encoded, proof(&encoded, 5, 6, 30))
-            .unwrap();
+        let admission =
+            unsafe { OwnerApprovedAuthorityCheckpoint::new(5, volume(), 6, 30, digest) };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        let issued = issuer.issue::<2>(&encoded).unwrap();
+        assert_eq!(
+            issuer.issue::<2>(&encoded).map(|_| ()),
+            Err(AuthorityCheckpointError::ProofAlreadyIssued)
+        );
+        guard.recover::<2>(&encoded, issued).unwrap();
         assert_eq!(guard.accepted_epoch(), 5);
         assert_eq!(
             guard
@@ -1246,18 +1365,27 @@ mod tests {
         canonical[AUTHORITY_CHECKPOINT_HEADER_BYTES + 24] = 1;
         let digest = checkpoint_digest(&canonical);
         canonical[DIGEST_OFFSET..DIGEST_OFFSET + DIGEST_BYTES].copy_from_slice(&digest);
-        let mut guard = AuthorityRecoveryGuard::new(1, 39);
+        let guard = guard(1, 39);
+        let hidden_admission =
+            unsafe { OwnerApprovedAuthorityCheckpoint::new(2, volume(), 2, 40, digest) };
+        let mut hidden_issuer = AuthorityCheckpointProofIssuer::new(hidden_admission);
         assert_eq!(
-            guard
-                .recover::<1>(&canonical, proof(&canonical, 2, 2, 40))
-                .map(|_| ()),
+            hidden_issuer.issue::<1>(&canonical).map(|_| ()),
             Err(AuthorityCheckpointError::Malformed)
         );
         assert_eq!(guard.accepted_epoch(), 1);
+        let capacity_admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                2,
+                volume(),
+                2,
+                40,
+                authority_checkpoint_digest(&encoded[..128]).unwrap(),
+            )
+        };
+        let mut capacity_issuer = AuthorityCheckpointProofIssuer::new(capacity_admission);
         assert_eq!(
-            guard
-                .recover::<0>(&encoded[..128], proof(&encoded[..128], 2, 2, 40),)
-                .map(|_| ()),
+            capacity_issuer.issue::<0>(&encoded[..128]).map(|_| ()),
             Err(AuthorityCheckpointError::CapacityMismatch)
         );
     }

@@ -564,9 +564,15 @@ authority; unrelated domains continue.
    and activation requires the matching COW transaction's one-use receipt.
    Recovery reads only the exact file generation selected by authenticated
    reachable recovery through separate bootstrap READ authority, preserves I/O
-   uncertainty, and erases policy bytes after parsing. Trusted proof issuance,
-   owner-policy admission, boot orchestration, and rollback-resistant
-   persistence of the accepted epoch/generation remain pending, so
+   uncertainty, and erases policy bytes after parsing. A one-use proof issuer
+   now accepts only canonical bytes matching an exact unsafe owner-approved
+   admission across digest, volume, selected root, epoch, and handle generation;
+   no other safe API can construct the proof. The recovery guard likewise
+   requires an unsafe authenticated rollback-state token instead of caller-
+   chosen counters. Stable recovery issues only after successful authorized
+   I/O, so pre-acceptance I/O failure remains retryable, while duplicate issue
+   fails closed. The platform owner-policy authenticator/UI, boot orchestration,
+   and rollback-resistant persistence of the accepted epoch/generation remain pending, so
    reboot-time capability reconstruction is still partial. A hosted/physical
    device backend and physical
    power-loss evidence remain pending. A focused signed KVM/WHP controlled
