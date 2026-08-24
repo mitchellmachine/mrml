@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, and bounded mutability checks exist, but there is no ownership, move, loan, region, outlives, or control-flow borrow analysis. |
+| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, and initial bounded ownership/place/effect facts exist, but there is no flow-sensitive move enforcement, loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -212,9 +212,12 @@ effect; an exhausted effect table cannot leave a read without its paired effect.
 Validation rejects incompatible types, projected moves in this direct-only
 slice, invalid paths, holes, corrupt counts, malformed spans, and capacity
 overflow. Calls, returns, dereferences, summary indexes, non-`Copy` reads, and
-reborrows remain unclassified rather than guessed. The facts do not yet compute
-flow-sensitive initializedness, reject use after move, or claim that unreachable
-or divergent declarations execute.
+indirect borrow shapes remain unclassified rather than guessed. Direct shared
+and mutable borrows of exact roots, including reborrows through a direct
+reference root, now record distinct `SharedBorrow` or `MutableBorrow` effects;
+they do not yet claim loan lifetime or conflict enforcement. The facts do not
+yet compute flow-sensitive initializedness, reject use after move, or claim that
+unreachable or divergent declarations execute.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root

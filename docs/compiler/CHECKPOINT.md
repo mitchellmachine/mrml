@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `97b275d`
-  (`compiler: classify exact Copy effects`)
+- Compiler checkpoint commit: `3b8599e`
+  (`compiler: distinguish borrow place effects`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `147e15a` (`compiler: classify direct move and
+- Preceding compiler commits: `97b275d` (`compiler: classify exact Copy
+  effects`), `147e15a` (`compiler: classify direct move and
   write effects`), `fbb7c27` (`compiler: project tuple move paths`), `1139f96`
   (`compiler: establish initialized move path roots`), `4879955` (`Preanalyze
   runtime assignment accesses`), `996ac72` (`Preanalyze runtime loop
@@ -80,7 +81,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   that resolve to an exact root or tuple-field move path of a proven `Copy`
   type transactionally record `Copy`; capacity failure cannot retain the read
   without its effect. Summary indexes, dereferences, and non-`Copy` reads remain
-  unclassified. Moves of `Copy` types, projected moves in this direct-only
+  unclassified. Direct shared and mutable borrows of an exact root, plus shared
+  or mutable reborrows through a direct reference root, record `SharedBorrow` or
+  `MutableBorrow` instead of being mislabeled as copies or moves. Reference
+  indexing and summary projections remain unclassified. Moves of `Copy` types,
+  projected moves in this direct-only
   slice, read-modify-write on non-`Copy` paths, invalid IDs, holes, malformed
   spans, corrupt counts, incompatible `Copy` effects, and capacity exhaustion
   fail closed; and
@@ -223,7 +228,7 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Array-element move paths, remaining copy/move/reborrow classification,
+Array-element move paths, remaining copy/move and indirect-borrow classification,
 flow-sensitive initializedness and use-after-move enforcement, unsupported
 parser/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
@@ -235,15 +240,16 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. extend contextual effects through calls, returns, and reborrows without
+1. extend contextual move effects through calls and returns without
    treating ambiguous mutable-reference or pointee reads as moves;
 2. compute bounded flow-sensitive initializedness and use-after-move rejection
    over the existing CFG and
    precise tuple paths;
 3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
-4. then stage shared loans, mutable loans/invalidation, reborrows, and
-   flow-sensitive outlives reasoning with independent accepted/rejected probes.
+4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
+   and flow-sensitive outlives reasoning with independent accepted/rejected
+   probes.
 
 Modern trait solving, naked functions/`naked_asm!`, inline assembly, security
 profiles, and compiler-derived executable metadata remain important later
@@ -266,8 +272,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 675 tests on each host: 371
-library tests, 10 conformance tests, 292 replacement tests, and 2 driver tests.
+The checkpoint source passed 677 tests on each host: 372
+library tests, 10 conformance tests, 293 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
