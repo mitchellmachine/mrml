@@ -3797,7 +3797,25 @@ impl<'source> RuntimeBodyFacts<'source> {
         let RuntimePlaceIdentity::Local(borrower) = root.base else {
             return None;
         };
-        self.locals.get(borrower.0).and_then(|local| *local)?;
+        let local = self.locals.get(borrower.0).and_then(|local| *local)?;
+        if local.mutable
+            && self.effects[..self.effect_count].iter().flatten().any(|effect| {
+                self.move_paths
+                    .get(effect.path.0)
+                    .and_then(|path| *path)
+                    .is_some_and(|path| {
+                        path.base == RuntimePlaceIdentity::Local(borrower)
+                            && path.projections.count == 0
+                            && effect.kind == RuntimePlaceEffectKind::Write
+                            && (!matches!(
+                                effect.location,
+                                RuntimeOwnershipEventLocation::TopLevelStatement(_)
+                            ) || effect.expression_conditional.is_some())
+                    })
+            })
+        {
+            return None;
+        }
         let RuntimeExpressionType::Reference { mutable, .. } = root.ty else {
             return None;
         };
@@ -3831,6 +3849,13 @@ impl<'source> RuntimeBodyFacts<'source> {
     fn direct_assigned_loan_fact(&self, effect_index: usize) -> Option<RuntimeLoanFact> {
         let generation = self.effects.get(effect_index).and_then(|effect| *effect)?;
         if generation.kind != RuntimePlaceEffectKind::Write {
+            return None;
+        }
+        if !matches!(
+            generation.location,
+            RuntimeOwnershipEventLocation::TopLevelStatement(_)
+        ) || generation.expression_conditional.is_some()
+        {
             return None;
         }
         let root = self
