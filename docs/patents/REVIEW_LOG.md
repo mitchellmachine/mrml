@@ -2312,6 +2312,17 @@ interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
 
+# 2026-08-24 — Non-escaping call-argument reborrows
+
+**Result: NOT_TRIGGERED.** The compiler conventionally applies a resolved
+reference parameter type to direct call-argument places only when the call result
+cannot carry a reference, retaining conservative move treatment otherwise. It
+adds no new arena, optimization, authority model, device or compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required independent
+human dual review.
+
 # 2026-08-24 — TPM NV recovery-layout identity admission
 
 **Result: NOT_TRIGGERED.** The change conventionally decodes TPM NV public

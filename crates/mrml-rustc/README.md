@@ -3476,3 +3476,17 @@ E0499 behavior, and restore access after the child's last use. Inferred projecte
 reference bindings remain moves and the existing partial-move gate remains green.
 This does not claim call-argument, return, indirect-destination, or general region
 coverage. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The non-escaping call-argument reborrow milestone passed all 725 compiler and
+driver tests on Windows gnullvm and all 725 in release mode on native Arch Linux
+WSL, plus warnings-denied compiler-only Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Direct, projected, sequence-tail,
+and conditional place arguments use the callee parameter's expected shared or
+mutable reference context when the call result cannot carry a reference. The
+pinned future-edition oracle accepted parent reuse after a unit-returning call
+and rejected a call competing with a still-live mutable child with E0499. Calls
+whose result may carry a reference deliberately retain consuming classification:
+their result must first acquire an argument-derived loan origin so analysis does
+not unsoundly end the borrow at call completion. Return coercions and general
+regions remain unimplemented. The `no_std`/allocation/unsafe hygiene scan remained
+empty.

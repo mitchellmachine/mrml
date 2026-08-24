@@ -603,6 +603,12 @@ Direct projected reference places, including numeric tuple fields, now receive
 the same expected-reference treatment at explicit typed local initialization and
 direct assignment sites. Inferred projected reference bindings remain consuming
 moves, preserving partial-move initializedness.
+Direct and conditional place arguments passed to a shared or mutable reference
+parameter now use that expected reference context when the call result cannot
+carry a reference. This models a call-scoped reborrow, rejects conflicts with a
+live child, and restores the parent after the call. Calls returning references
+remain conservatively move-classified until their result loan can be linked to
+the originating argument without shortening its lifetime.
 Non-direct conditional destinations and indirect reference-value moves remain
 unclassified loan origins.
 A plain assignment of a direct reference identifier into an existing typed
@@ -631,8 +637,8 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is the remaining call-argument
-and return coercion-site reborrowing before region reasoning.
+The highest-value next major implementation task is reference-carrying call-result
+loan origins followed by return coercion-site reborrowing before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,
