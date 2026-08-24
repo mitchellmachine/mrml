@@ -2573,6 +2573,7 @@ enum RuntimePlaceEffectKind {
     SharedBorrow,
     MutableBorrow,
     LoanUse,
+    LoanMutation,
     Write,
     ReadModifyWrite,
 }
@@ -3795,6 +3796,14 @@ impl<'source> RuntimeBodyFacts<'source> {
         let RuntimePlaceIdentity::Local(borrower) = root.base else {
             return None;
         };
+        if self
+            .locals
+            .get(borrower.0)
+            .and_then(|local| *local)
+            .is_none_or(|local| local.mutable)
+        {
+            return None;
+        }
         let RuntimeExpressionType::Reference { mutable, .. } = root.ty else {
             return None;
         };
@@ -6762,6 +6771,19 @@ fn preanalyze_runtime_assignment_access<
                 kind,
                 span: assignment.name_span,
             })?;
+    } else if projections.count != 0
+        && let Some(path) = facts.find_move_path(base, RuntimePlaceProjections::EMPTY)
+        && let Some(root) = facts.move_paths.get(path.0).and_then(|path| *path)
+        && matches!(root.ty, RuntimeExpressionType::Reference { .. })
+        && let RuntimePlaceIdentity::Local(borrower) = root.base
+        && facts.direct_loan_for_borrower(borrower).is_some()
+    {
+        facts
+            .push_place_effect(path, RuntimePlaceEffectKind::LoanMutation, assignment.name_span)
+            .map_err(|kind| CodegenError {
+                kind,
+                span: assignment.name_span,
+            })?;
     }
     Ok(())
 }
@@ -8971,6 +8993,7 @@ fn validate_runtime_initializedness(
                     | RuntimePlaceEffectKind::SharedBorrow
                     | RuntimePlaceEffectKind::MutableBorrow
                     | RuntimePlaceEffectKind::LoanUse
+                    | RuntimePlaceEffectKind::LoanMutation
                     | RuntimePlaceEffectKind::ReadModifyWrite
             )
             && !is_initialized
@@ -9001,6 +9024,7 @@ fn validate_runtime_initializedness(
             | RuntimePlaceEffectKind::SharedBorrow
             | RuntimePlaceEffectKind::MutableBorrow
             | RuntimePlaceEffectKind::LoanUse
+            | RuntimePlaceEffectKind::LoanMutation
             | RuntimePlaceEffectKind::ReadModifyWrite => {}
         }
         Ok(())
@@ -9640,6 +9664,13 @@ fn runtime_ownership_event_precedes(
     runtime_ownership_point_reaches(facts, earlier_point, later_point)
 }
 
+fn runtime_effect_uses_loan(kind: RuntimePlaceEffectKind) -> bool {
+    matches!(
+        kind,
+        RuntimePlaceEffectKind::LoanUse | RuntimePlaceEffectKind::LoanMutation
+    )
+}
+
 fn validate_runtime_bounded_direct_loan_liveness(
     facts: &RuntimeBodyFacts<'_>,
     fallback_span: Span,
@@ -9674,8 +9705,7 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: fallback_span,
             })?;
-        if loan.kind == RuntimePlaceEffectKind::MutableBorrow
-            && let Some(parent) = facts.direct_parent_loan(loan)
+        if let Some(parent) = facts.direct_parent_loan(loan)
             && parent.kind == RuntimePlaceEffectKind::MutableBorrow
         {
             let parent_path = facts
@@ -9692,7 +9722,20 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 .flatten()
                 .filter(|effect| {
                     effect.path == parent_path
-                        && effect.kind == RuntimePlaceEffectKind::LoanUse
+                        && match loan.kind {
+                            RuntimePlaceEffectKind::MutableBorrow => {
+                                runtime_effect_uses_loan(effect.kind)
+                            }
+                            RuntimePlaceEffectKind::SharedBorrow => {
+                                effect.kind == RuntimePlaceEffectKind::LoanMutation
+                            }
+                            RuntimePlaceEffectKind::Copy
+                            | RuntimePlaceEffectKind::Move
+                            | RuntimePlaceEffectKind::LoanUse
+                            | RuntimePlaceEffectKind::LoanMutation
+                            | RuntimePlaceEffectKind::Write
+                            | RuntimePlaceEffectKind::ReadModifyWrite => false,
+                        }
                         && runtime_ownership_event_precedes(facts, issue, **effect)
                 })
             {
@@ -9701,7 +9744,7 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     .flatten()
                     .any(|effect| {
                         effect.path == borrower_path
-                            && effect.kind == RuntimePlaceEffectKind::LoanUse
+                            && runtime_effect_uses_loan(effect.kind)
                             && runtime_ownership_event_precedes(facts, *parent_use, *effect)
                     });
                 if child_used_later {
@@ -9734,6 +9777,7 @@ fn validate_runtime_bounded_direct_loan_liveness(
                         RuntimePlaceEffectKind::Copy
                         | RuntimePlaceEffectKind::Move
                         | RuntimePlaceEffectKind::LoanUse
+                        | RuntimePlaceEffectKind::LoanMutation
                         | RuntimePlaceEffectKind::Write
                         | RuntimePlaceEffectKind::ReadModifyWrite => false,
                     }
@@ -9746,7 +9790,7 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     .flatten()
                     .any(|effect| {
                         effect.path == borrower_path
-                            && effect.kind == RuntimePlaceEffectKind::LoanUse
+                            && runtime_effect_uses_loan(effect.kind)
                             && runtime_ownership_event_precedes(facts, *conflict, *effect)
                     });
             if used_after_conflict {
@@ -16148,6 +16192,16 @@ impl<
                     | RuntimePlaceEffectKind::MutableBorrow => false,
                     RuntimePlaceEffectKind::LoanUse => {
                         !matches!(path.ty, RuntimeExpressionType::Reference { .. })
+                            || match path.base {
+                                RuntimePlaceIdentity::Local(borrower) => self
+                                    .body_facts
+                                    .direct_loan_for_borrower(borrower)
+                                    .is_none(),
+                                RuntimePlaceIdentity::Parameter(_) => true,
+                            }
+                    }
+                    RuntimePlaceEffectKind::LoanMutation => {
+                        !matches!(path.ty, RuntimeExpressionType::Reference { mutable: true, .. })
                             || match path.base {
                                 RuntimePlaceIdentity::Local(borrower) => self
                                     .body_facts
@@ -26743,6 +26797,51 @@ mod tests {
             .kind,
             CodegenErrorKind::RuntimeUseAfterMove
         );
+    }
+
+    #[test]
+    fn runtime_shared_child_blocks_only_live_parent_mutation() {
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; *parent += 1; *child }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        for accepted in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; *parent += 1; copied + *parent }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }",
+        ] {
+            let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap();
+        }
     }
 
     #[test]
