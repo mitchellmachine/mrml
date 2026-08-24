@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and fixed-point definite-initialization enforcement across supported statement/loop CFGs exist. Conditional expressions now retain bounded root, condition, then, else, join, and branch-exit program points with nested/sequential composition, but those expression-local points are not yet connected to the statement/loop CFG; there is no loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
+| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and fixed-point definite-initialization enforcement across supported statement/loop CFGs exist. Conditional expressions now retain bounded root, condition, then, else, join, and branch-exit program points plus canonical nested/sequential edges, and every point is anchored to an existing statement/loop control point through its ownership location. Initializedness does not yet consume that expression graph; there is no loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -274,10 +274,17 @@ arm point, while a nested arm exits from the nested join. A sequential
 conditional enters from the preceding join. Capacity is preflighted before any
 conditional fact mutates, and validation rejects holes, non-dense IDs, wrong
 kinds or locations, malformed occurrence references, missing exits, forged
-event points, and capacity exhaustion. These expression-local points are not
-yet connected by edges to the statement/loop CFG, so any conditional-expression
-path still disables initializedness enforcement instead of being assigned an
-invented statement control point.
+event points, and capacity exhaustion. A second derived fixed 6,400-entry table
+records exactly five edges per occurrence: entry to condition, condition to
+both arms, and both actual branch exits to the join. Nested joins therefore feed
+their enclosing join, while sequential conditionals enter from the preceding
+join. Construction preflights the complete edge budget, and validation rejects
+holes, count mismatches, substitution, reordering, invalid endpoints, or edges
+that disagree with the occurrence facts. Every point's ownership location must
+also resolve to an existing statement/loop block, edge, or explicit unreachable
+point. The initializedness fixed point does not yet consume this expression
+subgraph, so conditional-expression paths remain gated rather than being
+treated as linear.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root

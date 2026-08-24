@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `cbc6cc5`
-  (`compiler: map conditional expression program points`)
+- Compiler checkpoint commit: `daf9fb9`
+  (`compiler: connect conditional expression flow`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `7003640` (`compiler: identify conditional
+- Preceding compiler commits: `cbc6cc5` (`compiler: map conditional expression
+  program points`), `7003640` (`compiler: identify conditional
   expression occurrences`), `8ddd42f` (`compiler: refine conditional event
   origins`), `df01b9b` (`compiler: retain ownership event
   origins`), `40d7544` (`compiler: reject linear use after
@@ -141,9 +142,17 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   enter from the prior join. Conditional construction preflights all required
   capacity before mutation. Validation rejects table holes, non-dense IDs,
   wrong point kinds or locations, missing/malformed exits, forged occurrence
-  references, forged event points, and exhaustion. These are expression-local
-  points, not yet edges composed into the statement/loop CFG, so
-  conditional-expression initializedness remains gated;
+  references, forged event points, and exhaustion. A second derived fixed
+  6,400-entry table records exactly five canonical edges per occurrence: entry
+  to condition, condition to both arms, and each actual branch exit to join.
+  This composes nested joins into enclosing joins and sequences a later
+  conditional from the prior join. Construction preflights the complete edge
+  budget. Validation rejects holes, count mismatches, edge substitution or
+  reordering, invalid endpoints, and disagreement with occurrence facts. Every
+  expression point's ownership location must resolve to an existing
+  statement/loop block, edge, or explicit unreachable point. The initializedness
+  pass does not yet consume this expression subgraph, so conditional-expression
+  initializedness remains gated;
   and
 - parser-shape-validated conditional program points. Conditional-return events
   distinguish each branch condition from its true-return value and final else
@@ -342,9 +351,10 @@ compatibility gaps:
 1. extend contextual effects for implicit coercions and remaining indirect
    call/return and aggregate-materialization shapes without treating ambiguous
    pointee or projected reads as moves;
-2. compose the retained expression roots, conditions, arms, exits, and joins
-   into the enclosing statement/loop CFG with bounded edges, then enable the
-   existing fixed-point initializedness pass for those expression paths;
+2. execute bounded initializedness transfer and intersection over the retained
+   expression roots, conditions, arms, exits, and joins, compose the resulting
+   state with the enclosing statement/loop control point, and remove the
+   conditional-expression gate only after accepted/rejected probes pass;
 3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
 4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
