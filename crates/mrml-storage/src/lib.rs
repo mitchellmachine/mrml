@@ -43,6 +43,7 @@ pub use authority_checkpoint::{
     AuthorityCheckpointProofIssuer, AuthorityRecoveryCommitError, AuthorityRecoveryGuard,
     AuthorityRecoveryStateStore, AuthorityRecoveryValidationError,
     AuthorityRecoveryValidationResult, AuthorityRecoveryValidator, AuthorityStorageError,
+    BootBoundRecoveryStateStore, BootRecoveryAdmission, BootRecoveryStateError,
     CanonicalAuthorityRecoveryState, CommittedRecoveredStorageAuthorities,
     OwnerApprovedAuthorityCheckpoint, PreparedStableAuthorities, RecoveredStorageAuthorities,
     StableAuthorities, StorageRecoveryGrant, authority_checkpoint_digest,

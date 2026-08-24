@@ -495,13 +495,21 @@ handoff decoding reconstructs typed metadata only after exact length, reserved-
 byte, nonzero-generation, and all-or-none volume/root checks. Presence is
 independent of the artifact rollback flag, and no capability or authenticated
 recovery token is created.
+The storage-service recovery boundary now consumes that metadata into a one-use
+wrapper around the independently authenticated state store. Its sole load must
+decode to the exact handed-off epoch, handle generation, volume, and root; its
+sole compare-and-store must use the exact bytes returned by that load. Replay,
+substitution, malformed state, store error, or reentrant use erases caller
+output and releases nothing. Handoff data still does not authenticate itself:
+the existing owner-approved checkpoint proof, capability-authorized exact file
+selection, dependent validation, and monotonic commit remain mandatory.
 Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, native UEFI-target linkage, authority-consuming boot
-recovery, and physical evidence remain pending. A consumed dependent-
+provisioning/recovery, native UEFI-target linkage, delivery into a live storage
+service recovery path, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

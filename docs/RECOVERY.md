@@ -345,7 +345,15 @@ explicitly and downgrade the status rather than guessing.
   volume/root pair are revalidated before region emission. This remains typed
   metadata, independent of artifact rollback evidence; it does not construct a
   recovery token, capability, or authority table. No complete durable TPM
-  backend is claimed. Dependent
+  backend is claimed. A consumed storage-service wrapper now binds this metadata
+  to one exact transaction on the independently authenticated state store: one
+  load must match every field, and one compare-and-store must reuse the exact
+  loaded bytes. Replay, mismatch, malformed state, or backend error erases
+  output and cannot release authority. A full configuration recovery simulation
+  proves this wrapper composes with owner-approved checkpoint proof,
+  capability-authorized checkpoint I/O, dependent validation, monotonic commit,
+  and final service registration. This remains hosted deterministic composition,
+  not delivery to a live booted storage service. Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator
   reads the exact selected configuration file,

@@ -206,6 +206,14 @@ epoch and handle generation, zero reserved bytes, and an all-or-none nonzero
 volume/root pair. Its flag is independent of rollback-protected boot evidence,
 and the decoded value is explicitly data: it cannot authorize storage recovery
 or manufacture a capability.
+Storage recovery can now consume that data only by wrapping the independently
+authenticated state store for one transaction. The authenticated load must
+match all handed fields, and compare-and-store must reuse the exact loaded
+record. Duplicate load, duplicate commit, handoff/store substitution, malformed
+state, and backend uncertainty fail closed and erase exposed state bytes. This
+binding does not bypass owner-approved checkpoint proof, exact capability-
+authorized file selection, attenuation checks, dependent validation, or the
+monotonic publication gate.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

@@ -2062,6 +2062,17 @@ semantic interface, JavaScript/WebAssembly runtime, media mechanism, authority
 model, or other patent-candidate mechanism. This agent review does not replace
 the required independent human dual review.
 
+# 2026-08-24 — Conditional-return call-result loan origins
+
+**Result: NOT_TRIGGERED.** The compiler conventionally merges bounded explicit
+and conditional callee return expressions only when every result resolves to one
+compatible reference parameter, otherwise retaining conservative treatment. It
+adds no new arena, optimization, authority model, device or compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required independent
+human dual review.
+
 # 2026-08-24 — Capability-bound virtual-block backend regions
 
 **Result: NOT_TRIGGERED.** The change conventionally binds an existing exact
@@ -2459,3 +2470,15 @@ protocol, accessibility device, browser semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
 review does not replace independent human dual review.
+
+# 2026-08-24 — One-use boot recovery-state binding
+
+**Result: NOT_TRIGGERED.** The change conventionally compares typed boot
+metadata with an independently authenticated state-store record and restricts
+that binding to one load and one exact compare-and-store transaction. It grants
+no authority without the existing capability and owner-policy recovery gates
+and adds no attestation, compatibility transport, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
+Existing planned scopes remain `TRIGGERED`; this agent review does not replace
+independent human dual review.

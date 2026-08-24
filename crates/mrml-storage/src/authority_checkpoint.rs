@@ -5,8 +5,12 @@ use crate::{
     StorageObjectKind, StoragePrincipal, StorageRights, StorageTransaction, TransactionError,
     TransactionReceipt, VolumeId,
 };
-use core::array;
+use core::{
+    array,
+    cell::{Cell, RefCell},
+};
 use mrml_crypto::Sha3_256;
+use mrml_kernel::RecoveryStateMetadata;
 
 pub const AUTHORITY_CHECKPOINT_HEADER_BYTES: usize = 80;
 pub const AUTHORITY_CHECKPOINT_GRANT_BYTES: usize = 48;
@@ -252,6 +256,128 @@ pub fn decode_canonical_authority_recovery_state(
         accepted_volume: state.accepted_volume,
         accepted_root_generation: state.accepted_root_generation,
     })
+}
+
+/// One-use binding between loader handoff metadata and the independently
+/// authenticated recovery-state store. The handoff remains data: equality with
+/// the authenticated store is required before recovery may proceed.
+pub struct BootRecoveryAdmission {
+    expected: CanonicalAuthorityRecoveryState,
+}
+
+impl BootRecoveryAdmission {
+    pub fn new(metadata: RecoveryStateMetadata) -> Result<Self, AuthorityCheckpointError> {
+        let accepted_volume = metadata
+            .accepted_volume()
+            .map(VolumeId::new)
+            .transpose()
+            .map_err(|_| AuthorityCheckpointError::MalformedRecoveryState)?;
+        Ok(Self {
+            expected: CanonicalAuthorityRecoveryState {
+                accepted_epoch: metadata.accepted_epoch(),
+                accepted_handle_generation: metadata.accepted_handle_generation(),
+                accepted_volume,
+                accepted_root_generation: metadata.accepted_root_generation(),
+            },
+        })
+    }
+
+    pub fn bind<S: AuthorityRecoveryStateStore>(
+        self,
+        store: &mut S,
+    ) -> BootBoundRecoveryStateStore<'_, S> {
+        BootBoundRecoveryStateStore {
+            store: RefCell::new(store),
+            expected: self.expected,
+            attempted: Cell::new(false),
+            loaded: RefCell::new(None),
+        }
+    }
+}
+
+pub struct BootBoundRecoveryStateStore<'a, S> {
+    store: RefCell<&'a mut S>,
+    expected: CanonicalAuthorityRecoveryState,
+    attempted: Cell<bool>,
+    loaded: RefCell<Option<[u8; AUTHORITY_RECOVERY_STATE_BYTES]>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootRecoveryStateError<E> {
+    Store(E),
+    HandoffMismatch,
+    AlreadyConsumed,
+}
+
+impl<S: AuthorityRecoveryStateStore> AuthorityRecoveryStateStore
+    for BootBoundRecoveryStateStore<'_, S>
+{
+    type Error = BootRecoveryStateError<S::Error>;
+
+    fn load_authenticated(
+        &self,
+        output: &mut [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        if self.attempted.replace(true) {
+            if let Ok(mut loaded) = self.loaded.try_borrow_mut() {
+                loaded.take();
+            }
+            output.fill(0);
+            return Err(BootRecoveryStateError::AlreadyConsumed);
+        }
+        let store = match self.store.try_borrow_mut() {
+            Ok(store) => store,
+            Err(_) => {
+                output.fill(0);
+                return Err(BootRecoveryStateError::AlreadyConsumed);
+            }
+        };
+        let load = store.load_authenticated(output);
+        drop(store);
+        if let Err(error) = load {
+            output.fill(0);
+            return Err(BootRecoveryStateError::Store(error));
+        }
+        let canonical = match decode_canonical_authority_recovery_state(output) {
+            Ok(canonical) => canonical,
+            Err(_) => {
+                output.fill(0);
+                return Err(BootRecoveryStateError::HandoffMismatch);
+            }
+        };
+        if canonical != self.expected {
+            output.fill(0);
+            return Err(BootRecoveryStateError::HandoffMismatch);
+        }
+        let mut loaded = match self.loaded.try_borrow_mut() {
+            Ok(loaded) => loaded,
+            Err(_) => {
+                output.fill(0);
+                return Err(BootRecoveryStateError::AlreadyConsumed);
+            }
+        };
+        *loaded = Some(*output);
+        Ok(())
+    }
+
+    fn compare_and_store(
+        &mut self,
+        expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        let loaded = self
+            .loaded
+            .get_mut()
+            .take()
+            .ok_or(BootRecoveryStateError::AlreadyConsumed)?;
+        if loaded != *expected {
+            return Err(BootRecoveryStateError::HandoffMismatch);
+        }
+        self.store
+            .get_mut()
+            .compare_and_store(expected, replacement)
+            .map_err(BootRecoveryStateError::Store)
+    }
 }
 
 /// Exact owner-approved durable-grant policy admitted by trusted recovery.
@@ -1996,6 +2122,67 @@ mod tests {
         assert_eq!(
             (current.accepted_epoch, current.accepted_handle_generation),
             (8, 1)
+        );
+    }
+
+    #[test]
+    fn boot_recovery_admission_binds_one_exact_authenticated_store_transaction() {
+        let metadata = RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+        let mut backend = RecoveryStateBackend::new(8, 1);
+        let original = backend.state;
+        let mut bound = BootRecoveryAdmission::new(metadata)
+            .unwrap()
+            .bind(&mut backend);
+        let mut loaded = [0xa5; AUTHORITY_RECOVERY_STATE_BYTES];
+        assert_eq!(bound.load_authenticated(&mut loaded), Ok(()));
+        assert_eq!(loaded, original);
+
+        let replacement = AuthenticatedAuthorityRecoveryState {
+            accepted_epoch: 9,
+            accepted_handle_generation: 2,
+            accepted_volume: Some(volume()),
+            accepted_root_generation: 14,
+        }
+        .encode();
+        assert_eq!(bound.compare_and_store(&original, &replacement), Ok(()));
+        assert_eq!(
+            bound.compare_and_store(&original, &replacement),
+            Err(BootRecoveryStateError::AlreadyConsumed)
+        );
+        drop(bound);
+        assert_eq!(backend.state, replacement);
+
+        let mut backend = RecoveryStateBackend::new(8, 1);
+        let mut bound = BootRecoveryAdmission::new(metadata)
+            .unwrap()
+            .bind(&mut backend);
+        let mut output = [0xa5; AUTHORITY_RECOVERY_STATE_BYTES];
+        assert_eq!(bound.load_authenticated(&mut output), Ok(()));
+        output.fill(0xa5);
+        assert_eq!(
+            bound.load_authenticated(&mut output),
+            Err(BootRecoveryStateError::AlreadyConsumed)
+        );
+        assert!(output.iter().all(|byte| *byte == 0));
+        assert_eq!(
+            bound.compare_and_store(&original, &replacement),
+            Err(BootRecoveryStateError::AlreadyConsumed)
+        );
+
+        let mismatched = RecoveryStateMetadata::new(7, 1, None, 0).unwrap();
+        let mut backend = RecoveryStateBackend::new(8, 1);
+        let mut bound = BootRecoveryAdmission::new(mismatched)
+            .unwrap()
+            .bind(&mut backend);
+        let mut output = [0xa5; AUTHORITY_RECOVERY_STATE_BYTES];
+        assert_eq!(
+            bound.load_authenticated(&mut output),
+            Err(BootRecoveryStateError::HandoffMismatch)
+        );
+        assert!(output.iter().all(|byte| *byte == 0));
+        assert_eq!(
+            bound.compare_and_store(&original, &replacement),
+            Err(BootRecoveryStateError::AlreadyConsumed)
         );
     }
 

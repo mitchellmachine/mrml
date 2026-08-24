@@ -2738,8 +2738,8 @@ mod tests {
         AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-        BlockServiceError, BlockVolume, CowMetadataImage, CowMetadataWrite, CowPublicationBackend,
-        CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
+        BlockServiceError, BlockVolume, BootRecoveryAdmission, CowMetadataImage, CowMetadataWrite,
+        CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
         OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
         StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
         VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
@@ -4575,6 +4575,10 @@ mod tests {
                 )
                 .unwrap();
             let mut state_store = RecoveryStateStore::new(8, 1);
+            let recovery_metadata = mrml_kernel::RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+            let mut boot_store = BootRecoveryAdmission::new(recovery_metadata)
+                .unwrap()
+                .bind(&mut state_store);
             let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
             let task = runtime
                 .create(
@@ -4616,10 +4620,11 @@ mod tests {
                     &mut issuer,
                     &mut authority_scratch,
                     &mut authority_backend,
-                    &mut state_store,
+                    &mut boot_store,
                     &mut validator,
                 )
                 .unwrap();
+            drop(boot_store);
             assert!(
                 supervisor
                     .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
