@@ -194,6 +194,14 @@ current authenticated manifest-signing root. This prevents one Lamport key from
 being authorized for a second statement or a different artifact role. The
 check is local key-lifecycle enforcement, not proof that external backups were
 destroyed or independently controlled.
+Release-state compare-and-store now binds all 88 authenticated predecessor
+bytes, closing same-floor current-root substitution. A separate 136-byte
+two-slot journal writes and verifies the inactive successor before advancing
+its authenticated monotonic counter, then reloads the selected state. Corrupt
+slots, stale predecessors, failed writes, pre-commit failures, uncertain
+committed advances, read failure, and sequence exhaustion fail closed in
+deterministic tests. Its unsafe backend still requires fixed owner-provisioned
+objects and real power-loss-atomic behavior; no TPM or physical evidence exists.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

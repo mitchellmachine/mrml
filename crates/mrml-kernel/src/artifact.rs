@@ -353,7 +353,7 @@ pub trait MonotonicStateStore {
 
     fn compare_and_store(
         &mut self,
-        expected_minimum_release: u64,
+        expected: &[u8; BOOTSTRAP_STATE_BYTES],
         replacement: &[u8; BOOTSTRAP_STATE_BYTES],
     ) -> Result<(), ArtifactError>;
 }
@@ -440,7 +440,7 @@ impl BootstrapState {
         let current = Self::decode_authenticated(&encoded_state)?;
         let (release, next) =
             current.verify_release(encoded_manifest, root_public_key, signature)?;
-        store.compare_and_store(current.minimum_release, &next.encode())?;
+        store.compare_and_store(&encoded_state, &next.encode())?;
         Ok(release)
     }
 }
@@ -528,11 +528,10 @@ mod tests {
 
         fn compare_and_store(
             &mut self,
-            expected_minimum_release: u64,
+            expected: &[u8; BOOTSTRAP_STATE_BYTES],
             replacement: &[u8; BOOTSTRAP_STATE_BYTES],
         ) -> Result<(), ArtifactError> {
-            let current = BootstrapState::decode_authenticated(&self.state)?;
-            if self.force_conflict || current.minimum_release() != expected_minimum_release {
+            if self.force_conflict || self.state != *expected {
                 return Err(ArtifactError::StateConflict);
             }
             self.state.copy_from_slice(replacement);
@@ -703,7 +702,17 @@ mod tests {
             force_conflict: true,
         };
         assert_eq!(
-            store.compare_and_store(3, &BootstrapState::genesis([8; 64], 4).encode()),
+            store.compare_and_store(&encoded, &BootstrapState::genesis([8; 64], 4).encode()),
+            Err(ArtifactError::StateConflict)
+        );
+        assert_eq!(store.state, encoded);
+        store.force_conflict = false;
+        let substituted_root = BootstrapState::genesis([6; 64], 3).encode();
+        assert_eq!(
+            store.compare_and_store(
+                &substituted_root,
+                &BootstrapState::genesis([8; 64], 4).encode(),
+            ),
             Err(ArtifactError::StateConflict)
         );
         assert_eq!(store.state, encoded);

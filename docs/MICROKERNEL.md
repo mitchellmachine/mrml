@@ -1996,6 +1996,16 @@ that current root appearing in any next role. These checks prevent repository
 code from authorizing a one-time Lamport key for multiple statements; they do
 not attest external key deletion or independent human custody.
 
+The canonical 88-byte release bootstrap state now has its own backend-neutral
+authenticated journal. It is deliberately distinct from the 64-byte storage-
+authority recovery state. Each 136-byte slot contains a release-state-specific
+magic, exact journal sequence, complete state, and SHA3-256 digest. Publication
+writes the inactive slot before advancing one monotonic counter and verifies
+the newly selected state afterward. The store's CAS now compares the complete
+predecessor, so a different current root at the same minimum release conflicts.
+This is deterministic unit/simulation evidence pending a separately admitted
+TPM layout and physical power-loss validation.
+
 Each digest argument is the 128-character SHA3-512 public-key digest printed by
 `key-digest`. The kernel now decodes this exact representation, verifies it
 against the current root, exposes typed artifact trust roots, advances the next

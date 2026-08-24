@@ -79,6 +79,14 @@ all five kind-specific artifact roots to be pairwise distinct. Authenticated
 transition rejects reuse of the current manifest-signing root in any next or
 artifact role. This preserves the one-statement lifetime of every Lamport key
 before a release can expose per-kind admission.
+The 88-byte release `BootstrapState` now has a semantically distinct two-slot
+journal foundation rather than reusing storage-authority recovery state. Each
+136-byte slot binds a dedicated magic, monotonic journal sequence, complete
+bootstrap state, and SHA3-256 digest. Compare-and-store now matches the complete
+authenticated predecessor, including its current root, instead of only the
+release floor; the inactive slot is written before one exact counter advance.
+This is a backend-neutral deterministic model, not a TPM adapter or durability
+claim.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
 authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM

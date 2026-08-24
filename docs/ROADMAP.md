@@ -1338,6 +1338,20 @@ can count as trusted consent.
 
 1. Implement a TPM NV or equivalent authenticated, monotonic, power-loss-atomic
    release-state backend.
+   **PARTIALLY IMPLEMENTED:** release `BootstrapState` compare-and-store now
+   requires the complete authenticated 88-byte predecessor rather than only its
+   minimum-release scalar. A dedicated backend-neutral two-slot journal uses
+   136-byte records containing an independent magic, exact sequence, complete
+   state, and SHA3-256 digest. It writes the inactive successor before one exact
+   monotonic counter advance and reloads the selected result. Deterministic
+   tests cover same-floor root substitution, write and pre-commit failure,
+   committed-but-uncertain advance, corruption, read failure, and exhaustion.
+   Windows gnullvm passes all 5 focused journal tests and strict kernel/storage
+   Clippy; Arch Linux/WSL2 passes all 452 kernel and 121 storage tests; the
+   optimized native UEFI loader links. The Windows full storage run passes 118
+   tests while three known large tests overflow the Windows test-process stack.
+   No TPM layout/transport adapter, provisioning, reboot, physical power-loss,
+   or rollback-resistance evidence is claimed.
 2. Bind measured boot to the exact coherent signed artifact set.
    **PARTIALLY IMPLEMENTED:** after independently extending the authenticated
    kernel and service payloads into PCR 11, the UEFI loader now extends one
