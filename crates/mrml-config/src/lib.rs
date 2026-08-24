@@ -62,6 +62,14 @@ pub trait ServiceStateAuthorizer {
     ) -> Result<ServiceState, ConfigError>;
 }
 
+pub trait ServiceRestartAuthorizer {
+    fn restart_service(
+        &self,
+        capability: Capability,
+        service: ServiceId,
+    ) -> Result<ServiceId, ConfigError>;
+}
+
 impl<const CAPS: usize> CapabilityAuthorizer for CapabilitySpace<CAPS> {
     fn authorize_exact(
         &self,
@@ -1574,6 +1582,37 @@ pub fn dispatch_supervision_query_envelope<A: ServiceStateAuthorizer + ?Sized>(
     .encode(output)
 }
 
+pub fn dispatch_supervision_restart_envelope<A: ServiceRestartAuthorizer + ?Sized>(
+    authorizer: &A,
+    payload: &[u8],
+    capabilities: &[Capability],
+    output: &mut [u8; SUPERVISION_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let message =
+        Message::new(payload, capabilities).map_err(|_| ConfigError::InvalidAuthorityEnvelope)?;
+    let request = SupervisionRequest::decode_message(&message)?;
+    if request.operation != SupervisionOperation::Restart {
+        return Err(ConfigError::InvalidProtocol);
+    }
+    let (status, service, state) =
+        match authorizer.restart_service(request.capability, request.service) {
+            Ok(replacement) => (ResponseStatus::Ok, replacement, SupervisionState::Running),
+            Err(_) => (
+                ResponseStatus::Rejected,
+                request.service,
+                SupervisionState::Exited,
+            ),
+        };
+    SupervisionResponse {
+        request_id: request.request_id,
+        status,
+        service,
+        state,
+        detail: 0,
+    }
+    .encode(output)
+}
+
 /// Composes a kernel-derived management capability with the existing bounded
 /// supervisor. The caller supplies a trusted fresh launch context; no address,
 /// priority, or executable choice is accepted from the untrusted request.
@@ -2283,6 +2322,127 @@ mod tests {
         let mut response = [0; SUPERVISION_RESPONSE_BYTES];
         assert_eq!(
             dispatch_supervision_query_envelope(&RejectAll, &wire, &[capability], &mut response),
+            Err(ConfigError::InvalidProtocol)
+        );
+    }
+
+    #[test]
+    fn supervision_restart_envelope_uses_only_delivered_control_authority() {
+        struct RestartAuthorizer {
+            capability: Capability,
+            retired: ServiceId,
+            replacement: ServiceId,
+        }
+
+        impl ServiceRestartAuthorizer for RestartAuthorizer {
+            fn restart_service(
+                &self,
+                capability: Capability,
+                service: ServiceId,
+            ) -> Result<ServiceId, ConfigError> {
+                if capability == self.capability && service == self.retired {
+                    Ok(self.replacement)
+                } else {
+                    Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+                }
+            }
+        }
+
+        let capability = Capability::from_token((11u64 << 32) | 2);
+        let retired = ServiceId::from_token((7u64 << 32) | 1);
+        let replacement = ServiceId::from_token((7u64 << 32) | 2);
+        let authorizer = RestartAuthorizer {
+            capability,
+            retired,
+            replacement,
+        };
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::Restart,
+            request_id: 54,
+            service: retired,
+            capability: Capability::from_token(0),
+        };
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode(&mut wire).unwrap();
+        let mut response = [0; SUPERVISION_RESPONSE_BYTES];
+        dispatch_supervision_restart_envelope(&authorizer, &wire, &[capability], &mut response)
+            .unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response),
+            Ok(SupervisionResponse {
+                request_id: 54,
+                status: ResponseStatus::Ok,
+                service: replacement,
+                state: SupervisionState::Running,
+                detail: 0,
+            })
+        );
+
+        assert_eq!(
+            dispatch_supervision_restart_envelope(&authorizer, &wire, &[], &mut response),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        assert_eq!(
+            dispatch_supervision_restart_envelope(
+                &authorizer,
+                &wire,
+                &[capability, capability],
+                &mut response,
+            ),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        let mut forged = wire;
+        forged[32..40].copy_from_slice(&capability.token().to_le_bytes());
+        assert_eq!(
+            dispatch_supervision_restart_envelope(
+                &authorizer,
+                &forged,
+                &[capability],
+                &mut response,
+            ),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+
+        let wrong = Capability::from_token((12u64 << 32) | 2);
+        dispatch_supervision_restart_envelope(&authorizer, &wire, &[wrong], &mut response).unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response),
+            Ok(SupervisionResponse {
+                request_id: 54,
+                status: ResponseStatus::Rejected,
+                service: retired,
+                state: SupervisionState::Exited,
+                detail: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn restart_dispatch_refuses_query_before_calling_the_authorizer() {
+        struct RejectAll;
+        impl ServiceRestartAuthorizer for RejectAll {
+            fn restart_service(
+                &self,
+                _: Capability,
+                _: ServiceId,
+            ) -> Result<ServiceId, ConfigError> {
+                panic!("query must be rejected before requesting a restart")
+            }
+        }
+
+        let capability = Capability::from_token((13u64 << 32) | 1);
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        SupervisionRequest {
+            operation: SupervisionOperation::Query,
+            request_id: 55,
+            service: ServiceId::from_token((8u64 << 32) | 1),
+            capability: Capability::from_token(0),
+        }
+        .encode(&mut wire)
+        .unwrap();
+        let mut response = [0; SUPERVISION_RESPONSE_BYTES];
+        assert_eq!(
+            dispatch_supervision_restart_envelope(&RejectAll, &wire, &[capability], &mut response),
             Err(ConfigError::InvalidProtocol)
         );
     }

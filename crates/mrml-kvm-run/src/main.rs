@@ -90,6 +90,7 @@ enum LaunchMode {
     PreemptionProbe,
     UserProbe,
     ServiceProbe,
+    ServiceRestartRequestProbe,
     ServicePreemptionProbe,
     GpuBenchmark,
     SmpProbe,
@@ -109,6 +110,7 @@ impl LaunchMode {
             "preemption-probe" => Ok(Self::PreemptionProbe),
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
+            "service-restart-request-probe" => Ok(Self::ServiceRestartRequestProbe),
             "service-preemption-probe" => Ok(Self::ServicePreemptionProbe),
             "gpu-benchmark" => Ok(Self::GpuBenchmark),
             "smp-probe" => Ok(Self::SmpProbe),
@@ -117,7 +119,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -148,6 +150,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
+            | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
     ) != (arguments.len() == 8)
@@ -174,6 +177,7 @@ fn application_main() -> Result<()> {
     let service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
     );
@@ -311,12 +315,13 @@ fn application_main() -> Result<()> {
         | LaunchMode::SmpPeriodicBalanceProbe => {
             system.prepare_smp_kernel_guest::<16>(&executable, handoff.as_slice(), layout)
         }
-        LaunchMode::ServiceProbe => system.prepare_isolated_service_kernel_guest::<16>(
-            0,
-            &executable,
-            handoff.as_slice(),
-            layout,
-        ),
+        LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe => system
+            .prepare_isolated_service_kernel_guest::<16>(
+                0,
+                &executable,
+                handoff.as_slice(),
+                layout,
+            ),
         _ => system.prepare_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout),
     }
     .map_err(|error| anyhow!("verified kernel launch preparation failed: {:?}", error))?;
@@ -337,7 +342,7 @@ fn application_main() -> Result<()> {
                 SERVICE_VIRTUAL,
                 SERVICE_STACK_PHYSICAL,
                 SERVICE_STACK_VIRTUAL,
-                2,
+                8,
                 SERVICE_TABLE_PHYSICAL,
                 32,
                 local_apic,
@@ -355,13 +360,16 @@ fn application_main() -> Result<()> {
                 SERVICE_VIRTUAL,
                 SERVICE_B_STACK_PHYSICAL,
                 SERVICE_STACK_VIRTUAL,
-                2,
+                8,
                 SERVICE_B_TABLE_PHYSICAL,
                 32,
                 local_apic,
             )
             .map_err(|error| anyhow!("second isolated service preparation failed: {:?}", error))?;
-        if mode == LaunchMode::ServiceProbe {
+        if matches!(
+            mode,
+            LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
+        ) {
             guest = guest
                 .attach_isolated_service_at(
                     2,
@@ -374,7 +382,7 @@ fn application_main() -> Result<()> {
                     SERVICE_VIRTUAL,
                     SERVICE_C_STACK_PHYSICAL,
                     SERVICE_STACK_VIRTUAL,
-                    2,
+                    8,
                     SERVICE_C_TABLE_PHYSICAL,
                     32,
                     local_apic,
@@ -413,10 +421,12 @@ fn application_main() -> Result<()> {
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
-            || (mode == LaunchMode::ServiceProbe
-                && (guest.service_entry_at(2) != Some(service_entry)
-                    || guest.service_page_table_root_at(2)
-                        != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
+            || (matches!(
+                mode,
+                LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
+            ) && (guest.service_entry_at(2) != Some(service_entry)
+                || guest.service_page_table_root_at(2)
+                    != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
         {
             return Err(anyhow!(
                 "isolated service layout did not match the signed probe ABI"
@@ -676,7 +686,10 @@ fn application_main() -> Result<()> {
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution after user proof failed: {:?}", error))?;
-    } else if mode == LaunchMode::ServiceProbe {
+    } else if matches!(
+        mode,
+        LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
+    ) {
         if exit
             != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
@@ -689,6 +702,24 @@ fn application_main() -> Result<()> {
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution during service send failed: {:?}", error))?;
+        if mode == LaunchMode::ServiceRestartRequestProbe {
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1,
+                })
+            {
+                return Err(anyhow!(
+                    "isolated restart manager did not block: {:?}",
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!("KVM execution after manager block failed: {:?}", error)
+            })?;
+        }
         if exit
             != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
@@ -702,7 +733,8 @@ fn application_main() -> Result<()> {
         exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!("KVM execution entering sender cleanup failed: {:?}", error)
         })?;
-        for stage in [1u32, 2, 1, 2, 1, 2, 1, 2, 1, 2, 3] {
+        let configuration_stages: &[u32] = &[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 3];
+        for &stage in configuration_stages {
             if exit
                 != (VmExit::Io {
                     port: SERVICE_CALL_PORT,
@@ -752,6 +784,95 @@ fn application_main() -> Result<()> {
             })
         {
             return Err(anyhow!("KVM typed peer-death proof mismatch: {:?}", exit));
+        }
+        if mode == LaunchMode::ServiceRestartRequestProbe {
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM restart request execution failed: {:?}", error))?;
+            for stage in [3u32, 2, 1, 2, 1] {
+                if exit
+                    != (VmExit::Io {
+                        port: SERVICE_CALL_PORT,
+                        size: 4,
+                        write: true,
+                        value: stage,
+                    })
+                {
+                    return Err(anyhow!(
+                        "KVM restart IPC stage {} mismatch: {:?}",
+                        stage,
+                        exit
+                    ));
+                }
+                exit = VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("KVM restart IPC execution failed: {:?}", error))?;
+            }
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x24,
+                })
+            {
+                return Err(anyhow!(
+                    "KVM trusted restart-plan stage mismatch: {:?}",
+                    exit
+                ));
+            }
+            guest
+                .restore_service_shared_page(1)
+                .map_err(|error| anyhow!("failed to re-arm KVM sender page: {:?}", error))?;
+            for stage in [2u32, 3] {
+                exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                    anyhow!("KVM restart completion execution failed: {:?}", error)
+                })?;
+                if exit
+                    != (VmExit::Io {
+                        port: SERVICE_CALL_PORT,
+                        size: 4,
+                        write: true,
+                        value: stage,
+                    })
+                {
+                    return Err(anyhow!(
+                        "KVM restart completion stage {} mismatch: {:?}",
+                        stage,
+                        exit
+                    ));
+                }
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM manager completion fault failed: {:?}", error))?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_FRAME_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x001b_2303,
+                })
+            {
+                return Err(anyhow!("KVM manager frame mismatch: {:?}", exit));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM restart proof completion failed: {:?}", error))?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x25,
+                })
+            {
+                return Err(anyhow!("KVM restart proof mismatch: {:?}", exit));
+            }
+            println!(
+                "verified authorized CPL3 restart request under KVM: verify={}us prepare={}us execute={}us total={}us",
+                verification_micros,
+                preparation_micros,
+                execution_started.elapsed().as_micros(),
+                total_started.elapsed().as_micros()
+            );
+            return Ok(());
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution after typed peer death failed: {:?}", error))?;
@@ -1434,6 +1555,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("service-probe").unwrap(),
             LaunchMode::ServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("service-restart-request-probe").unwrap(),
+            LaunchMode::ServiceRestartRequestProbe
         );
         assert!(LaunchMode::parse("diagnostic").is_err());
         assert_eq!(

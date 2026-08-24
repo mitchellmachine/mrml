@@ -213,6 +213,8 @@ const SMP_PERIODIC_BOOTSTRAP_PORT: u16 = 0x4d64;
 const SERVICE_ROOT: u64 = 0x00c0_0000;
 #[cfg(feature = "service-probe")]
 const SERVICE_B_ROOT: u64 = 0x00d0_0000;
+#[cfg(feature = "service-restart-request-probe")]
+const SERVICE_C_ROOT: u64 = 0x0140_0000;
 #[cfg(any(
     feature = "smp-service-migration-probe",
     all(
@@ -235,7 +237,7 @@ const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
         not(feature = "uefi-service-preemption-probe")
     )
 ))]
-const SERVICE_STACK_TOP: u64 = 0x0070_2000;
+const SERVICE_STACK_TOP: u64 = 0x0070_8000;
 
 static mut CPU0_DESCRIPTORS: CpuDescriptorState = CpuDescriptorState::empty(0);
 struct ApDescriptorSlots([UnsafeCell<MaybeUninit<CpuDescriptorState>>; MAX_X86_64_CPUS]);
@@ -342,17 +344,19 @@ static mut USER_RUNTIME: Option<TaskRuntime<2, 1>> = None;
 #[cfg(feature = "user-probe")]
 static mut USER_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_RUNTIME: Option<TaskRuntime<2, 7>> = None;
+static mut SERVICE_RUNTIME: Option<TaskRuntime<3, 8>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_SUPERVISOR: Option<ServiceSupervisor<2>> = None;
+static mut SERVICE_SUPERVISOR: Option<ServiceSupervisor<3>> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_MANAGEMENT: Option<CapabilitySpace<2>> = None;
+static mut SERVICE_MANAGEMENT: Option<CapabilitySpace<3>> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_CONTROLS: Option<[Capability; 2]> = None;
+static mut SERVICE_CONTROLS: Option<[Capability; 3]> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_IDS: Option<[ServiceId; 2]> = None;
+static mut SERVICE_IDS: Option<[ServiceId; 3]> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RECEIVER_SIGNAL: Option<Capability> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESTARTED: bool = false;
 #[cfg(feature = "service-probe")]
@@ -380,7 +384,7 @@ struct PendingBufferReceive {
 }
 
 #[cfg(feature = "service-probe")]
-static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; 2] = [None; 2];
+static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; 3] = [None; 3];
 #[cfg(feature = "service-probe")]
 static mut SERVICE_SYSCALL_PAYLOAD: [u8; MAX_INLINE_PAYLOAD] = [0; MAX_INLINE_PAYLOAD];
 #[cfg(feature = "service-probe")]
@@ -929,11 +933,24 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         .ok(),
                 );
             }
-            SyscallRequest::RestartService { .. } => {
-                // A userspace request carries neither launch context nor time.
-                // Until an exact trusted reprovision plan is staged, restart
-                // remains unavailable rather than falling back to request data.
-                frame.complete_service_restart(None);
+            SyscallRequest::RestartService {
+                capability,
+                service,
+            } => {
+                #[cfg(feature = "service-restart-request-probe")]
+                {
+                    let replacement =
+                        restart_sender_from_request(runtime, current, capability, service);
+                    frame.complete_service_restart(replacement);
+                }
+                #[cfg(not(feature = "service-restart-request-probe"))]
+                {
+                    let _ = (capability, service);
+                    // A userspace request carries neither launch context nor time.
+                    // Until an exact trusted reprovision plan is staged, restart
+                    // remains unavailable rather than falling back to request data.
+                    frame.complete_service_restart(None);
+                }
             }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
@@ -1520,6 +1537,25 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
                 .as_mut()
                 .unwrap_or_else(|| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            {
+                let current = runtime.current().unwrap_or_else(|| halt());
+                let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
+                if supervisor.task(ids[2]) == Ok(Some(current)) {
+                    if supervisor.state(ids[1]) != Ok(mrml_kernel::ServiceState::Running)
+                        || ids[1].token() >> 32 <= 1
+                    {
+                        halt();
+                    }
+                    asm!(
+                        "out dx, eax",
+                        in("dx") SERVICE_PROBE_PORT,
+                        in("eax") 0x25u32,
+                        options(nomem, nostack)
+                    );
+                    halt();
+                }
+            }
             if core::ptr::addr_of!(SERVICE_RESTARTED).read() {
                 let fault = supervisor
                     .fault_current(runtime, _disposition)
@@ -2261,26 +2297,50 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         .unwrap_or_else(|_| halt());
         context_a.r12 = 1;
         context_b.r12 = 1;
-        let mut runtime = TaskRuntime::<2, 7>::new(1_000, 1).unwrap_or_else(|_| halt());
+        let runtime_pointer = core::ptr::addr_of_mut!(SERVICE_RUNTIME);
+        runtime_pointer.write(Some(
+            TaskRuntime::<3, 8>::new(1_000, 1).unwrap_or_else(|_| halt()),
+        ));
+        let runtime = (*runtime_pointer).as_mut().unwrap_or_else(|| halt());
         let receiver = runtime
             .create(Priority::NORMAL, context_a)
+            .unwrap_or_else(|_| halt());
+        #[cfg(feature = "service-restart-request-probe")]
+        let manager = runtime
+            .create(
+                Priority::RESPONSIVE,
+                UserContext::new(
+                    PhysAddr::new(SERVICE_C_ROOT).unwrap_or_else(|_| halt()),
+                    service_entry + 0x400,
+                    SERVICE_STACK_TOP,
+                )
+                .unwrap_or_else(|_| halt()),
+            )
             .unwrap_or_else(|_| halt());
         let sender = runtime
             .create(Priority::NORMAL, context_b)
             .unwrap_or_else(|_| halt());
-        let mut supervisor = ServiceSupervisor::<2>::new();
+        let mut supervisor = ServiceSupervisor::<3>::new();
         let service_a = supervisor
             .register_with_policy(ObjectId(0xa0), receiver, RestartPolicy::ONCE_IMMEDIATE)
             .unwrap_or_else(|_| halt());
         let service_b = supervisor
             .register_with_policy(ObjectId(0xa1), sender, RestartPolicy::ONCE_IMMEDIATE)
             .unwrap_or_else(|_| halt());
-        let mut management = CapabilitySpace::<2>::new();
+        #[cfg(feature = "service-restart-request-probe")]
+        let service_c = supervisor
+            .register_with_policy(ObjectId(0xa2), manager, RestartPolicy::ONCE_IMMEDIATE)
+            .unwrap_or_else(|_| halt());
+        let mut management = CapabilitySpace::<3>::new();
         let control_a = management
             .insert(ObjectId(0xa0), Rights::CONTROL)
             .unwrap_or_else(|_| halt());
         let control_b = management
             .insert(ObjectId(0xa1), Rights::CONTROL)
+            .unwrap_or_else(|_| halt());
+        #[cfg(feature = "service-restart-request-probe")]
+        let control_c = management
+            .insert(ObjectId(0xa2), Rights::CONTROL)
             .unwrap_or_else(|_| halt());
         let endpoint_object = ObjectId(0x91);
         let receiver_capability = runtime
@@ -2291,7 +2351,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
-        let resource_capabilities = provision_service_resource(&mut runtime, receiver);
+        let resource_capabilities = provision_service_resource(runtime, receiver);
         let supervision_capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2324,6 +2384,24 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        #[cfg(feature = "service-restart-request-probe")]
+        let manager_signal = runtime
+            .capabilities_mut(manager)
+            .and_then(|space| {
+                space
+                    .insert(endpoint_object, Rights::SIGNAL)
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
+        #[cfg(feature = "service-restart-request-probe")]
+        let manager_control = runtime
+            .capabilities_mut(manager)
+            .and_then(|space| {
+                space
+                    .insert(ObjectId(0xa1), Rights::CONTROL.union(Rights::DELEGATE))
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
         let endpoint = Endpoint::new(endpoint_object);
         runtime
             .connect_control_peers(receiver, sender, &endpoint, receiver_capability, capability)
@@ -2333,6 +2411,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         receiver_context.r14 = sender.token();
         receiver_context.r15 = resource_capabilities[0].token();
         receiver_context.rbx = resource_capabilities[1].token();
+        #[cfg(feature = "service-restart-request-probe")]
+        {
+            receiver_context.rbp = manager.token();
+        }
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
@@ -2340,6 +2422,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         sender_context.rbx = setting_capability.token();
         sender_context.rbp = supervision_capability.token();
         sender_context.r10 = service_b.token();
+        #[cfg(feature = "service-restart-request-probe")]
+        {
+            let manager_context = runtime.context_mut(manager).unwrap_or_else(|_| halt());
+            manager_context.r13 = manager_signal.token();
+            manager_context.r14 = receiver.token();
+            manager_context.r15 = manager_control.token();
+            manager_context.rbx = service_b.token();
+        }
         if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver)
         {
             halt();
@@ -2347,10 +2437,19 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(endpoint));
         core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
         core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
-        core::ptr::addr_of_mut!(SERVICE_CONTROLS).write(Some([control_a, control_b]));
-        core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b]));
-        let runtime_pointer = core::ptr::addr_of_mut!(SERVICE_RUNTIME);
-        runtime_pointer.write(Some(runtime));
+        #[cfg(feature = "service-restart-request-probe")]
+        {
+            core::ptr::addr_of_mut!(SERVICE_CONTROLS)
+                .write(Some([control_a, control_b, control_c]));
+            core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_c]));
+        }
+        #[cfg(not(feature = "service-restart-request-probe"))]
+        {
+            core::ptr::addr_of_mut!(SERVICE_CONTROLS)
+                .write(Some([control_a, control_b, control_a]));
+            core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_a]));
+        }
+        core::ptr::addr_of_mut!(SERVICE_RECEIVER_SIGNAL).write(Some(receiver_capability));
         let context = (*runtime_pointer)
             .as_ref()
             .and_then(|runtime| runtime.context(receiver).ok())
@@ -2781,7 +2880,7 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 
 #[cfg(feature = "service-probe")]
 unsafe fn provision_service_resource(
-    runtime: &mut TaskRuntime<2, 7>,
+    runtime: &mut TaskRuntime<3, 8>,
     task: mrml_kernel::TaskId,
 ) -> [Capability; 2] {
     let write = runtime
@@ -2864,7 +2963,7 @@ unsafe fn service_resource_mapping() -> Mapping {
 
 #[cfg(feature = "service-probe")]
 unsafe fn complete_service_cleanup(
-    supervisor: &mut ServiceSupervisor<2>,
+    supervisor: &mut ServiceSupervisor<3>,
     ticket: mrml_kernel::ServiceCleanupTicket,
 ) {
     if ticket.context().page_table().get() != SERVICE_ROOT {
@@ -2910,10 +3009,97 @@ unsafe fn complete_service_cleanup(
         .unwrap_or_else(|_| halt());
 }
 
+#[cfg(feature = "service-restart-request-probe")]
+unsafe fn restart_sender_from_request(
+    runtime: &mut TaskRuntime<3, 8>,
+    requester: mrml_kernel::TaskId,
+    capability: Capability,
+    service: ServiceId,
+) -> Option<ServiceId> {
+    let supervisor = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let mut context = UserContext::new(
+        PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
+        unsafe { hosted_service_entry() }
+            .checked_add(0x200)
+            .unwrap_or_else(|| halt()),
+        SERVICE_STACK_TOP,
+    )
+    .unwrap_or_else(|_| halt());
+    context.r12 = 2;
+    let ids = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_IDS))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    if ids[1] != service {
+        return None;
+    }
+    let plan = supervisor
+        .prepare_restart_at(
+            service,
+            runtime.capabilities(requester).unwrap_or_else(|_| halt()),
+            capability,
+            Priority::NORMAL,
+            context,
+            0,
+        )
+        .ok()?;
+    unsafe { service_restart_stage(0x24) };
+    let replacement = supervisor.commit_restart(plan, runtime).ok()?;
+    let sender = supervisor
+        .task(replacement)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| halt());
+    let endpoint = unsafe {
+        (*core::ptr::addr_of!(SERVICE_ENDPOINT))
+            .as_ref()
+            .unwrap_or_else(|| halt())
+    };
+    let receiver_signal =
+        unsafe { (*core::ptr::addr_of!(SERVICE_RECEIVER_SIGNAL)).unwrap_or_else(|| halt()) };
+    let signal = runtime
+        .capabilities_mut(sender)
+        .unwrap_or_else(|_| halt())
+        .insert(ObjectId(0x91), Rights::SIGNAL)
+        .unwrap_or_else(|_| halt());
+    let root = runtime
+        .capabilities_mut(sender)
+        .unwrap_or_else(|_| halt())
+        .insert(ObjectId(0x92), Rights::CONTROL.union(Rights::DELEGATE))
+        .unwrap_or_else(|_| halt());
+    let setting = runtime
+        .capabilities_mut(sender)
+        .unwrap_or_else(|_| halt())
+        .insert(ObjectId(0x93), Rights::WRITE.union(Rights::DELEGATE))
+        .unwrap_or_else(|_| halt());
+    let supervision = runtime
+        .capabilities_mut(sender)
+        .unwrap_or_else(|_| halt())
+        .insert(ObjectId(0xa1), Rights::READ.union(Rights::DELEGATE))
+        .unwrap_or_else(|_| halt());
+    runtime
+        .connect_control_peers(requester, sender, endpoint, receiver_signal, signal)
+        .unwrap_or_else(|_| halt());
+    let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
+    sender_context.r13 = signal.token();
+    sender_context.r14 = requester.token();
+    sender_context.r15 = root.token();
+    sender_context.rbx = setting.token();
+    sender_context.rbp = supervision.token();
+    sender_context.r10 = replacement.token();
+    ids[1] = replacement;
+    Some(replacement)
+}
+
 #[cfg(feature = "service-probe")]
 unsafe fn restart_service_pair(
-    runtime: &mut TaskRuntime<2, 7>,
-    supervisor: &mut ServiceSupervisor<2>,
+    runtime: &mut TaskRuntime<3, 8>,
+    supervisor: &mut ServiceSupervisor<3>,
     receiver_service: ServiceId,
 ) -> ! {
     let management = unsafe {
@@ -3039,7 +3225,14 @@ unsafe fn restart_service_pair(
         _ => halt(),
     }
     unsafe {
-        core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([receiver_service, sender_service]));
+        let manager_service = (*core::ptr::addr_of!(SERVICE_IDS))
+            .map(|ids| ids[2])
+            .unwrap_or(receiver_service);
+        core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([
+            receiver_service,
+            sender_service,
+            manager_service,
+        ]));
         core::ptr::addr_of_mut!(SERVICE_RESTARTED).write(true);
     }
     unsafe { service_restart_stage(0x33) };
@@ -3060,8 +3253,8 @@ unsafe fn service_restart_stage(stage: u32) {
 
 #[cfg(feature = "service-probe")]
 unsafe fn verify_restart_budget_exhausted(
-    runtime: &mut TaskRuntime<2, 7>,
-    supervisor: &mut ServiceSupervisor<2>,
+    runtime: &mut TaskRuntime<3, 8>,
+    supervisor: &mut ServiceSupervisor<3>,
 ) {
     let management = unsafe {
         (*core::ptr::addr_of!(SERVICE_MANAGEMENT))
@@ -3218,7 +3411,7 @@ unsafe fn complete_buffer_current(
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<2, 7>, task: mrml_kernel::TaskId) {
+unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 8>, task: mrml_kernel::TaskId) {
     let Some((slot, pending)) = (unsafe { pending_buffer(task) }) else {
         return;
     };
@@ -3274,7 +3467,7 @@ unsafe fn insert_pending_buffer(pending: PendingBufferReceive) {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn enter_service_task(runtime: &mut TaskRuntime<2, 7>, task: mrml_kernel::TaskId) -> ! {
+unsafe fn enter_service_task(runtime: &mut TaskRuntime<3, 8>, task: mrml_kernel::TaskId) -> ! {
     unsafe { complete_pending_buffer(runtime, task) };
     let context = runtime
         .context(task)

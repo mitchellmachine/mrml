@@ -173,23 +173,30 @@ authority; unrelated domains continue.
    the real buffered IPC path with one sender-derived READ capability, and the
    userspace service invokes operation 9 before returning a canonical 48-byte
    detail-free response. Fresh signed KVM and WHP probes repeat that exchange in
-   both generations. Restart-message dispatch through trusted host
-   reprovisioning remains pending.
+   both generations.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
-   Syscall operation 10 now decodes only an exact generational capability and
+   Syscall operation 10 decodes only an exact generational capability and
    service token, rejects every other register, and returns only a replacement
    generation or detail-free denial. The live image always denies it until an
    exact trusted reprovision plan exists. Split-phase restart planning now
    authorizes CONTROL and snapshots trusted priority/context/time without
    mutation, then revalidates generation, object, cleanup, backoff, budget, and
    one-use state after the reprovisioning boundary before task creation.
-   Both hosted backends now admit a third independently rooted verified service
-   image for the future management client. Its image, stack, and page tables use
+   Both hosted backends admit a third independently rooted verified service
+   image for a management client. Its image, stack, and page tables use
    disjoint checked physical ranges, while the common shared page and per-service
    resource remain deliberately confined to slots 0 and 1. Signed KVM and WHP
-   regression runs verify construction; the kernel does not yet create or run a
-   task in slot 2, so this is only the isolation prerequisite for restart IPC.
+   regression runs verify construction. The focused restart-request image now
+   creates that task without shared or resource mappings. After the old sender
+   is retired and cleaned, the manager transfers exactly CONTROL in a canonical
+   restart envelope. Trusted kernel code supplies the fixed launch context,
+   stages host shared-leaf re-arm, commits only after revalidation, provisions a
+   fresh generation, and returns a detail-free response that the manager checks.
+   Fresh signed KVM and WHP probes exercise this path. They stop before the new
+   task executes; the separate ordinary service probe remains the evidence for
+   replacement re-entry. Persistent supervision policy and physical-hardware
+   execution remain pending.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-

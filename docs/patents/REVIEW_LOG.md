@@ -1318,3 +1318,18 @@ address-space, artifact-loading, isolation, or device-sharing technique.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-capacity isolated service
 mapping.
+
+## 2026-08-24 — capability-authorized hosted restart request
+
+MRML source: `crates/mrml-config/src/lib.rs`,
+`crates/mrml-service-image/src/main.rs`,
+`crates/mrml-kernel-image/src/main.rs`, and the KVM/WHP hosted runners.
+
+An isolated manager conventionally transfers an attenuated control capability
+with a fixed restart record. Trusted kernel code supplies launch state, performs
+commit-time lifecycle revalidation, provisions a fresh task, and returns a fixed
+status response. This adds no novel IPC, capability, restart, scheduling, or
+virtual-machine technique.
+
+Patent review: `NOT_TRIGGERED` — conventional capability-authorized service
+restart with trusted reprovisioning and commit-time revalidation.

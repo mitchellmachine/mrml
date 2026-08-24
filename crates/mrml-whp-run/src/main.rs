@@ -97,12 +97,16 @@ fn application_main() -> Result<()> {
         ));
     }
     let service_mode = arguments.len() == 8 && arguments[4] == "service-probe";
+    let service_restart_request_mode =
+        arguments.len() == 8 && arguments[4] == "service-restart-request-probe";
     let service_preemption_mode =
         arguments.len() == 8 && arguments[4] == "service-preemption-probe";
     let smp_service_migration_mode =
         arguments.len() == 8 && arguments[4] == "smp-service-migration-probe";
-    let service_artifact_mode =
-        service_mode || service_preemption_mode || smp_service_migration_mode;
+    let service_artifact_mode = service_mode
+        || service_restart_request_mode
+        || service_preemption_mode
+        || smp_service_migration_mode;
     let timer_mode = arguments.len() == 5 && arguments[4] == "timer-probe";
     let preemption_mode = arguments.len() == 5 && arguments[4] == "preemption-probe";
     let vmx_root_mode = arguments.len() == 5 && arguments[4] == "vmx-root-probe";
@@ -122,7 +126,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[3]
@@ -258,7 +262,7 @@ fn application_main() -> Result<()> {
     let system = WhpSystem::open()
         .map_err(|error| anyhow!("Windows Hypervisor Platform is unavailable: {:?}", error))?;
     let preparation_started = Instant::now();
-    let mut guest = if service_mode {
+    let mut guest = if service_mode || service_restart_request_mode {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)
     } else if service_preemption_mode {
         system.prepare_preemption_kernel(&executable, handoff.as_slice(), layout)
@@ -286,7 +290,7 @@ fn application_main() -> Result<()> {
                 SERVICE_VIRTUAL,
                 SERVICE_STACK_PHYSICAL,
                 SERVICE_STACK_VIRTUAL,
-                2,
+                8,
                 SERVICE_TABLE_PHYSICAL,
                 32,
                 local_apic,
@@ -304,7 +308,7 @@ fn application_main() -> Result<()> {
                 SERVICE_VIRTUAL,
                 SERVICE_B_STACK_PHYSICAL,
                 SERVICE_STACK_VIRTUAL,
-                2,
+                8,
                 SERVICE_B_TABLE_PHYSICAL,
                 32,
                 local_apic,
@@ -315,7 +319,7 @@ fn application_main() -> Result<()> {
                     error
                 )
             })?;
-        if service_mode {
+        if service_mode || service_restart_request_mode {
             guest = guest
                 .attach_isolated_service_at(
                     2,
@@ -328,7 +332,7 @@ fn application_main() -> Result<()> {
                     SERVICE_VIRTUAL,
                     SERVICE_C_STACK_PHYSICAL,
                     SERVICE_STACK_VIRTUAL,
-                    2,
+                    8,
                     SERVICE_C_TABLE_PHYSICAL,
                     32,
                     local_apic,
@@ -367,7 +371,7 @@ fn application_main() -> Result<()> {
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
-            || (service_mode
+            || ((service_mode || service_restart_request_mode)
                 && (guest.service_entry_at(2) != Some(service_entry)
                     || guest.service_page_table_root_at(2)
                         != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
@@ -625,7 +629,7 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
-    if service_mode {
+    if service_mode || service_restart_request_mode {
         if exit
             != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
@@ -636,8 +640,26 @@ fn application_main() -> Result<()> {
         {
             return Err(anyhow!("isolated WHP receiver did not block: {:?}", exit));
         }
-        let exit = VmBackend::run(&mut guest, 0)
+        let mut exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("WHP execution during service send failed: {:?}", error))?;
+        if service_restart_request_mode {
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1,
+                })
+            {
+                return Err(anyhow!(
+                    "isolated WHP restart manager did not block: {:?}",
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                anyhow!("WHP execution after manager block failed: {:?}", error)
+            })?;
+        }
         if exit
             != (VmExit::Io {
                 port: SERVICE_CALL_PORT,
@@ -651,7 +673,8 @@ fn application_main() -> Result<()> {
         let mut exit = VmBackend::run(&mut guest, 0).map_err(|error| {
             anyhow!("WHP execution entering sender cleanup failed: {:?}", error)
         })?;
-        for stage in [1u32, 2, 1, 2, 1, 2, 1, 2, 1, 2, 3] {
+        let configuration_stages: &[u32] = &[1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 3];
+        for &stage in configuration_stages {
             if exit
                 != (VmExit::Io {
                     port: SERVICE_CALL_PORT,
@@ -701,6 +724,95 @@ fn application_main() -> Result<()> {
             })
         {
             return Err(anyhow!("WHP typed peer-death proof mismatch: {:?}", exit));
+        }
+        if service_restart_request_mode {
+            let mut exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP restart request execution failed: {:?}", error))?;
+            for stage in [3u32, 2, 1, 2, 1] {
+                if exit
+                    != (VmExit::Io {
+                        port: SERVICE_CALL_PORT,
+                        size: 4,
+                        write: true,
+                        value: stage,
+                    })
+                {
+                    return Err(anyhow!(
+                        "WHP restart IPC stage {} mismatch: {:?}",
+                        stage,
+                        exit
+                    ));
+                }
+                exit = VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("WHP restart IPC execution failed: {:?}", error))?;
+            }
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x24,
+                })
+            {
+                return Err(anyhow!(
+                    "WHP trusted restart-plan stage mismatch: {:?}",
+                    exit
+                ));
+            }
+            guest
+                .restore_service_shared_page(1)
+                .map_err(|error| anyhow!("failed to re-arm WHP sender page: {:?}", error))?;
+            for stage in [2u32, 3] {
+                let exit = VmBackend::run(&mut guest, 0).map_err(|error| {
+                    anyhow!("WHP restart completion execution failed: {:?}", error)
+                })?;
+                if exit
+                    != (VmExit::Io {
+                        port: SERVICE_CALL_PORT,
+                        size: 4,
+                        write: true,
+                        value: stage,
+                    })
+                {
+                    return Err(anyhow!(
+                        "WHP restart completion stage {} mismatch: {:?}",
+                        stage,
+                        exit
+                    ));
+                }
+            }
+            let exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP manager completion fault failed: {:?}", error))?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_FRAME_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x001b_2303,
+                })
+            {
+                return Err(anyhow!("WHP manager frame mismatch: {:?}", exit));
+            }
+            let exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP restart proof completion failed: {:?}", error))?;
+            if exit
+                != (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x25,
+                })
+            {
+                return Err(anyhow!("WHP restart proof mismatch: {:?}", exit));
+            }
+            println!(
+                "verified authorized CPL3 restart request under WHP: verify={}us prepare={}us execute={}us total={}us",
+                verification_micros,
+                preparation_micros,
+                execution_started.elapsed().as_micros(),
+                total_started.elapsed().as_micros()
+            );
+            return Ok(());
         }
         let exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("WHP execution after typed peer death failed: {:?}", error))?;

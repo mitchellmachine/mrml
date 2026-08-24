@@ -674,18 +674,25 @@ reserved registers must be zero, and the result is limited to Running, Exited,
 or Faulted. The canonical query envelope now crosses buffered IPC with exactly
 one sender-derived READ capability; the userspace service rejects missing,
 extra, or payload-forged authority, invokes the syscall, and returns only a
-fixed detail-free response. It cannot restart a service or supply execution
-context. Restart-message dispatch and trusted host reprovisioning remain
-pending. Restart request bytes no longer contain time, launch address, stack, or
-priority. Operation 10 admits only capability plus service identity and remains
-detail-free denied in the live image until trusted code stages a matching
+fixed detail-free response. Restart request bytes contain no time, launch
+address, stack, or priority. Operation 10 admits only capability plus service
+identity and remains detail-free denied unless trusted code stages a matching
 reprovision plan. Planning and commit are split around that boundary: commit
 rechecks the exact service generation, object, completed cleanup, policy budget,
 backoff, and plan freshness before creating a task. KVM and WHP can now construct
 a third independently rooted verified service image for the eventual management
 client. Its image, stack, and page tables are disjoint, and it receives neither
-the two-service shared page nor the receiver-only resource mapping. No kernel
-task enters that third image yet. The bounded CPL3 request-
+the two-service shared page nor the receiver-only resource mapping. In the
+focused restart-request image, an independent task enters that root, blocks,
+then sends one canonical restart request after old-generation cleanup. It
+transfers exact CONTROL; the receiver cannot supply launch context or time.
+Trusted kernel code stages the host shared-leaf re-arm, commits the one-use plan,
+provisions the fresh task and least required capabilities, and returns a fixed
+response verified by the manager. Signed KVM and WHP probes cover that exchange
+but stop before replacement execution; ordinary service-probe runs separately
+cover fresh-generation re-entry. This remains hosted controlled-probe evidence,
+not persistent policy, host-resistant isolation, or physical-hardware evidence.
+The bounded CPL3 request-
 buffer ABI decodes fixed payload/capability-
 buffer descriptors and validates every active user leaf before a directional
 copy. The signed service

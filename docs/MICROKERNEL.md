@@ -3485,18 +3485,38 @@ runs of the existing query/lifecycle path reported KVM `verify=21728us
 prepare=2851us execute=1414us total=49244us` and WHP `verify=18696us
 prepare=3778us execute=906us total=27136us`; operation 10 was not exercised.
 
-The hosted isolation prerequisite for an independent restart client is now
-present on both backends. The fixed service registry holds three verified image,
+The hosted isolation prerequisite for an independent restart client is present
+on both backends. The fixed service registry holds three verified image,
 root, and instance records, but shared-page and resource-page state remains a
 separate two-slot family. Service-probe runners attach slot 2 at disjoint checked
 image, stack, and page-table ranges and require its entry to match the verified
 service artifact and its root to match the requested table arena. Fresh signed
 runs completed with KVM `verify=20829us prepare=2351us execute=1257us
 total=44966us` and WHP `verify=18795us prepare=4089us execute=832us
-total=27297us`. The kernel did not create or execute a slot-2 task, so this is
-hosted construction evidence only, not restart-message execution.
+total=27297us`.
 
-For this query increment, the `DIGITAL-RIGHTS REVIEW` found no new collection,
+The focused `service-restart-request-probe` now enters a management task in that
+third root. The task has only endpoint SIGNAL and independently provisioned
+CONTROL|DELEGATE for the retired sender; it has no shared or resource mapping.
+After typed peer-death cleanup, the receiver signals readiness. The manager
+sends a canonical 48-byte Restart request with a zero capability placeholder
+and transfers exactly CONTROL. Userspace rejects the wrong operation, malformed
+payload, or any missing, extra, or payload-forged capability before operation
+10. The kernel accepts no caller time or launch context: it constructs the
+fixed signed sender context, prepares a one-use plan, emits a host re-arm
+boundary, revalidates and commits, provisions the fresh sender generation, and
+returns a canonical detail-free response. The manager verifies a distinct live
+generation and Running state before its checked breakpoint. Isolated service
+stacks are bounded at 32 KiB, and initial slot order ensures the already-blocked
+manager observes the response before the unprovisioned replacement can run.
+Fresh signed runs reported KVM `verify=21020us prepare=2547us execute=1489us
+total=47762us` and WHP `verify=17615us prepare=4632us execute=850us
+total=26729us`. These probes stop before replacement execution. Fresh ordinary
+service-probe regressions separately proved replacement re-entry under KVM and
+WHP; neither result is physical-hardware, crash, persistent-policy, bare-metal,
+or host-resistant evidence.
+
+For this supervision increment, the `DIGITAL-RIGHTS REVIEW` found no new collection,
 retention, correlation, remote disclosure, DRM or publisher veto,
 owner-attestation restriction, accessibility exclusion, AI authority, or
 persistence. The local authorized result is deliberately coarse and neither a
@@ -3504,18 +3524,19 @@ service name nor its token conveys authority. The `HOSTILE SECURITY REVIEW`
 treats request bytes, capability descriptors, counts, capability, service token,
 generation, response fields, and every reserved register as hostile. Missing,
 extra, payload-forged, stale, guessed, mismatched, attenuated, or malformed
-authority fails without state or distinguishing detail; restart is rejected at
-the userspace boundary. Only an exact live receiver-space READ capability for
-the exact live service reaches the query. Restart planning adds no user-selected
+authority fails without state or distinguishing detail. Query requires exact
+READ and restart requires exact independently transferred CONTROL for the exact
+live generation. Restart planning adds no user-selected
 clock or execution context, persists nothing, and creates no publisher or remote
-authority. Operation 10 rejects all unstaged requests, and plan commit treats
+authority. Operation 10 rejects unstaged or mismatched requests, and plan commit treats
 generation, object, cleanup, backoff, budget, context binding, runtime capacity,
-and replay as hostile state. The third hosted slot adds no communication,
-observation, retained data, or ambient authority; its ranges, slot index,
+and replay as hostile state. The third hosted slot adds only explicit endpoint
+and target CONTROL authority, no observation, retained data, shared/resource
+mapping, or ambient authority; its ranges, slot index,
 artifact digest, image length, entry, and page-table root are hostile and must
-exact-match, while shared/resource APIs continue to reject slot 2. The query
-operation accepts no restart context and
-cannot mutate lifecycle state. This agent review does not replace
+exact-match, while shared/resource APIs continue to reject slot 2. Post-commit
+provisioning failure is fail-stop, and the replacement does not execute before
+the authorized response is observed. This agent review does not replace
 the constitution's independent human dual review.
 
 Fresh one-time Lamport-signed runs on 2026-08-24 additionally completed exact
@@ -3532,13 +3553,14 @@ Focused verification after the live integration used:
 cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel -p mrml-config -p mrml-whp --release --no-default-features
 cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-config -p mrml-whp -p mrml-whp-run --release --no-default-features --no-deps -- -D warnings
 cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel-image --release --target x86_64-unknown-uefi --features service-probe --no-deps -- -D warnings
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel-image --release --target x86_64-unknown-uefi --features service-restart-request-probe --no-deps -- -D warnings
 cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-service-image --release --target x86_64-unknown-uefi --no-deps -- -D warnings
 cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-default-features
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 17 configuration, 337 kernel, and 19 WHP tests with one ignored;
-Linux passed 17 configuration, 337 kernel, and 16 KVM tests with one ignored.
+Windows passed 19 configuration, 337 kernel, and 19 WHP tests with one ignored;
+Linux passed 19 configuration, 337 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

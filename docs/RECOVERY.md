@@ -185,19 +185,24 @@ explicitly and downgrade the status rather than guessing.
   capability; the userspace service rejects authority in payload bytes or the
   wrong capability count before invoking the syscall and returns a fixed
   detail-free response. Fresh signed KVM and WHP runs exercised that exchange in
-  both generations. It neither mutates lifecycle state nor persists policy, and
-  it does not implement restart-message dispatch or trusted reprovisioning.
+  both generations. It neither mutates lifecycle state nor persists policy.
   Restart request bytes now reserve their former time field as canonical zero,
   and syscall operation 10 admits only capability and opaque service identity.
   The kernel image denies that operation until a trusted reprovision plan is
   staged. Restart planning is non-mutating and commit revalidates the exact
   generation, object, cleanup completion, backoff, budget, and one-use plan
-  after the host boundary. This is a prerequisite, not evidence that CPL3
-  restart dispatch or host reprovisioning is complete.
+  after the host boundary.
   KVM and WHP can additionally construct a third verified service slot with an
   independent page-table root, image, and stack. The shared and resource pages
-  remain limited to their original slots. Signed hosted runs verify layout and
-  non-overlap only; the kernel does not yet create a management task there.
+  remain limited to their original slots. The focused restart-request image
+  creates an independent management task there. After old-sender cleanup it
+  sends a canonical envelope with exact transferred CONTROL; trusted kernel
+  code stages shared-leaf re-arm, commits the revalidated plan, provisions a
+  fresh generation, and returns a detail-free response verified in CPL3. Fresh
+  signed KVM and WHP runs exercise this exchange. They stop before replacement
+  execution; separate ordinary service-probe runs retain the re-entry evidence.
+  These are hosted controlled probes, not persistent supervision policy,
+  host-resistant isolation, crash evidence, or physical-hardware evidence.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and
