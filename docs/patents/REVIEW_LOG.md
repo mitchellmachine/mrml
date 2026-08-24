@@ -2660,3 +2660,14 @@ mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Call-reborrow ancestor invalidation
+
+**Result: NOT_TRIGGERED.** The compiler conventionally applies its existing
+bounded intermediate-loan ancestry relation to mutable call-argument reborrows,
+while keeping reference-destination replacement on the ultimate-owner relation.
+It adds no optimization, authority model, compatibility protocol, host-share
+mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
