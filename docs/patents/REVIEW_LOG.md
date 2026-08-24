@@ -2505,3 +2505,15 @@ accessibility device, browser semantic interface, JavaScript/WebAssembly
 runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
 Existing planned scopes remain `TRIGGERED`; this agent review does not replace
 independent human dual review.
+
+# 2026-08-24 — Shadow-aware local call-result loan origins
+
+**Result: NOT_TRIGGERED.** The compiler conventionally carries an already
+validated reference-parameter origin through fixed-capacity ordered local
+bindings and resolves lexical shadows newest-first. Unsupported mutation,
+control flow, ambiguity, parsing, and capacity cases retain fail-closed
+classification. It adds no new optimization, authority model, compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
