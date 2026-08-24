@@ -1223,11 +1223,13 @@ Patent review: `NOT_TRIGGERED` — conventional absent-mapping verification.
 
 ## 2026-08-24 — per-service hosted resource-page lifecycle
 
-MRML source: `crates/mrml-{kvm,whp}/src/native/launch.rs`.
+MRML source: `crates/mrml-{kvm,whp}/src/native/launch.rs` and
+`crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 KVM and WHP conventionally install a separately backed page into one selected
 service root, reject address aliases with other recorded pages, track revoke and
 restore state, and erase backing before re-arm. This adds no novel page-table,
-memory-sharing, lifecycle, or zeroization technique.
+memory-sharing, lifecycle, or zeroization technique. The hosted runners
+conventionally schedule those transitions around receiver cleanup/restart.
 
 Patent review: `NOT_TRIGGERED` — conventional isolated page lifecycle.

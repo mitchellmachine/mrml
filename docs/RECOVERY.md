@@ -168,7 +168,9 @@ explicitly and downgrade the status rather than guessing.
   only after verifying the whole expected leaf range is absent; only then may
   that exact slot be re-armed. Matching KVM/WHP per-service resource slots are
   isolated from the common page and sibling slots and erase their backing page
-  before restore. Concrete kernel-image lifecycle wiring is still
+  before restore. Both hosted runners now schedule receiver-only attachment,
+  cleanup revocation, zeroed restore, and final revocation. Concrete kernel-
+  image lifecycle wiring is still
   absent, so the hosted service probe halts on those operations.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its

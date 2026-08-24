@@ -367,7 +367,9 @@ authority; unrelated domains continue.
    per-service resource-page lifecycles distinct from the common two-party
    diagnostic page. Admission rejects common-page or sibling virtual/physical
    aliases, maps only one service root, and zeroes backing before generation
-   re-arm. Signed hosted-probe exercise remains pending.
+   re-arm. KVM/WHP runners now attach the distinct receiver page and couple its
+   revoke/restore/final-revoke sequence to the existing service lifecycle.
+   Fresh matching signed hosted-probe evidence remains pending.
    Wiring user copy, active mapping cleanup, and opaque resources into the
    kernel-image syscall/lifecycle handlers remains pending.
    Service-side binding selection is implemented: the exact transferred

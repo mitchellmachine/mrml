@@ -69,6 +69,10 @@ const SERVICE_B_TABLE_PHYSICAL: u64 = 0x00d0_0000;
 const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
 #[cfg(target_os = "windows")]
 const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
+#[cfg(target_os = "windows")]
+const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
+#[cfg(target_os = "windows")]
+const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
 
 #[cfg(target_os = "windows")]
 fn application_main() -> Result<()> {
@@ -317,6 +321,18 @@ fn application_main() -> Result<()> {
         guest = guest
             .attach_service_shared_page(shared)
             .map_err(|error| anyhow!("WHP service shared-page attachment failed: {:?}", error))?;
+        let resource = Mapping::new(
+            VirtAddr::new(SERVICE_RESOURCE_VIRTUAL)
+                .map_err(|_| anyhow!("invalid WHP service resource virtual address"))?,
+            PhysAddr::new(SERVICE_RESOURCE_PHYSICAL)
+                .map_err(|_| anyhow!("invalid WHP service resource physical address"))?,
+            1,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .map_err(|_| anyhow!("invalid WHP service resource-page mapping"))?;
+        guest = guest
+            .attach_service_resource_page(0, resource)
+            .map_err(|error| anyhow!("WHP service resource-page attachment failed: {:?}", error))?;
         let service_entry = guest
             .service_entry()
             .ok_or_else(|| anyhow!("missing WHP service entry"))?;
@@ -744,6 +760,9 @@ fn application_main() -> Result<()> {
                     .restore_service_shared_page(0)
                     .and_then(|_| guest.restore_service_shared_page(1))
                     .map_err(|error| anyhow!("failed to re-arm WHP shared page: {:?}", error))?;
+                guest
+                    .restore_service_resource_page(0)
+                    .map_err(|error| anyhow!("failed to re-arm WHP resource page: {:?}", error))?;
             }
             exit = VmBackend::run(&mut guest, 0).map_err(|error| {
                 anyhow!("WHP execution during service restart failed: {:?}", error)
@@ -954,6 +973,11 @@ fn complete_whp_service_cleanup(
     wrong: &VerifiedExecutable<'_>,
     service: &VerifiedExecutable<'_>,
 ) -> Result<()> {
+    if slot == 0 {
+        guest
+            .revoke_service_resource_page(slot)
+            .map_err(|error| anyhow!("WHP resource-page revocation failed: {:?}", error))?;
+    }
     guest
         .revoke_service_shared_page(slot)
         .map_err(|error| anyhow!("WHP shared-page revocation failed: {:?}", error))?;

@@ -3105,7 +3105,13 @@ kernel-side revoke observation, and restore have state independent from the
 common page. Restore zeroes the entire backing while the resource remains non-
 live, then installs the exact leaf; reset failure cannot publish stale content.
 KVM/WHP unit and strict compile gates cover the changed backends, but no new
-signed hosted probe has yet attached or exercised these resource pages.
+matching signed hosted probe has yet completed this resource-page path. The KVM
+and WHP runners now attach an independently backed page only to receiver slot
+zero, revoke it on each receiver cleanup, restore it through the zero-before-
+publish backend transition for the replacement generation, and revoke it again
+at final retirement. Sender cleanup never operates on that resource slot. This
+is runner lifecycle composition, not kernel capability or shared-buffer syscall
+evidence.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for

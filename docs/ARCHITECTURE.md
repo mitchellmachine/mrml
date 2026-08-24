@@ -312,7 +312,10 @@ separate per-service resource slot: attachment targets exactly one service root,
 rejects virtual or physical overlap with the common page or sibling resources,
 and has independent revoke, observed-revoke, and restore state. Restore erases
 the complete backing page before reinstalling the leaf. These APIs are compile-
-tested but not yet exercised by the signed hosted probe. Bounded
+tested. Both hosted runners now prepare a distinct receiver-only page and drive
+its direct revoke/zeroed-restore/final-revoke sequence alongside service
+cleanup, but current repository artifacts do not provide fresh signed-probe
+evidence for that path. Bounded
 in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
