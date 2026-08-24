@@ -3490,3 +3490,18 @@ their result must first acquire an argument-derived loan origin so analysis does
 not unsoundly end the borrow at call completion. Return coercions and general
 regions remain unimplemented. The `no_std`/allocation/unsafe hygiene scan remained
 empty.
+
+The identity call-result loan-origin milestone passed all 727 compiler and driver
+tests on Windows gnullvm and all 727 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. The bounded callee-body audit
+accepts statement-free direct, transparent-wrapper, sequence-tail, and conditional
+reference results only when every result path resolves to one compatible reference
+parameter. That argument's borrow is tagged with the caller destination generation
+for direct initialization and assignment, so a live returned child rejects a
+competing owner borrow with the pinned oracle's E0499 behavior and the owner is
+restored after the child's last use. Unused children no longer manufacture old
+move failures across conditional joins or loop exits. Statement-bearing,
+ambiguous, unsupported, and locally derived result bodies retain conservative
+classification. This does not claim general interprocedural regions or return
+coercions. The `no_std`/allocation/unsafe hygiene scan remained empty.
