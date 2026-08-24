@@ -3830,6 +3830,43 @@ impl<'source> RuntimeBodyFacts<'source> {
             .find(|loan| loan.borrower == borrower)
     }
 
+    fn direct_parent_loan(&self, loan: RuntimeLoanFact) -> Option<RuntimeLoanFact> {
+        let borrowed = self
+            .move_paths
+            .get(loan.borrowed_path.0)
+            .and_then(|path| *path)?;
+        if borrowed.projections.count != 0 {
+            return None;
+        }
+        let RuntimePlaceIdentity::Local(parent_borrower) = borrowed.base else {
+            return None;
+        };
+        self.direct_loan_for_borrower(parent_borrower)
+    }
+
+    fn direct_loan_root_borrowed_path(
+        &self,
+        mut loan: RuntimeLoanFact,
+    ) -> Option<RuntimeMovePathId> {
+        for _ in 0..=self.initialization_count {
+            let path = self
+                .move_paths
+                .get(loan.borrowed_path.0)
+                .and_then(|path| *path)?;
+            if path.projections.count != 0 {
+                return Some(loan.borrowed_path);
+            }
+            let RuntimePlaceIdentity::Local(parent_borrower) = path.base else {
+                return Some(loan.borrowed_path);
+            };
+            let Some(parent) = self.direct_loan_for_borrower(parent_borrower) else {
+                return Some(loan.borrowed_path);
+            };
+            loan = parent;
+        }
+        None
+    }
+
     fn push_assignment_access(
         &mut self,
         fact: RuntimePlaceAccessFact,
@@ -9613,11 +9650,55 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: fallback_span,
             })?;
+        let borrowed_path = facts
+            .direct_loan_root_borrowed_path(loan)
+            .ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: fallback_span,
+            })?;
+        if loan.kind == RuntimePlaceEffectKind::MutableBorrow
+            && let Some(parent) = facts.direct_parent_loan(loan)
+            && parent.kind == RuntimePlaceEffectKind::MutableBorrow
+        {
+            let parent_path = facts
+                .find_move_path(
+                    RuntimePlaceIdentity::Local(parent.borrower),
+                    RuntimePlaceProjections::EMPTY,
+                )
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: fallback_span,
+                })?;
+            for parent_use in facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .filter(|effect| {
+                    effect.path == parent_path
+                        && effect.kind == RuntimePlaceEffectKind::LoanUse
+                        && runtime_ownership_event_precedes(facts, issue, **effect)
+                })
+            {
+                let child_used_later = facts.effects[..facts.effect_count]
+                    .iter()
+                    .flatten()
+                    .any(|effect| {
+                        effect.path == borrower_path
+                            && effect.kind == RuntimePlaceEffectKind::LoanUse
+                            && runtime_ownership_event_precedes(facts, *parent_use, *effect)
+                    });
+                if child_used_later {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeBorrowConflict,
+                        span: parent_use.span,
+                    });
+                }
+            }
+        }
         for conflict in facts.effects[..facts.effect_count]
             .iter()
             .flatten()
             .filter(|effect| {
-                effect.path == loan.borrowed_path
+                effect.path == borrowed_path
                     && effect.event != issue.event
                     && match loan.kind {
                         RuntimePlaceEffectKind::SharedBorrow => {
@@ -26433,6 +26514,7 @@ mod tests {
             &mut facts,
         )
         .unwrap();
+
     }
 
     #[test]
@@ -26460,6 +26542,102 @@ mod tests {
 
         let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let mutable: &mut u16 = &mut slot; *mutable += 1; let shared: &u16 = &slot; *shared }";
         let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runtime_mutable_reborrow_temporarily_suspends_its_parent() {
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let child_value = *child; let parent_value = *parent; parent_value + child_value }";
+        let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let rejected_root = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; slot += 1; *child }";
+        let module = Parser::new(rejected_root).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted_root = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let copied = *child; slot += 1; copied + slot }";
+        let module = Parser::new(accepted_root).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let shared = "fn value(input: u16) -> u16 { let slot = input; let parent: &u16 = &slot; let child: &u16 = &*parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
+        let module = Parser::new(shared).parse_module::<1, 8>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
