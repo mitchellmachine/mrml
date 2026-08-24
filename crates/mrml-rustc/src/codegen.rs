@@ -3969,6 +3969,75 @@ fn preanalyze_runtime_source_expression_reads<
         ) => repeat == count,
         _ => false,
     };
+    let conditional_array_literals = match (
+        ty,
+        tree.expression(tree.root())
+            .map(|expression| expression.kind),
+    ) {
+        (
+            RuntimeExpressionType::Array { count, .. },
+            Some(
+                ExprKind::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                }
+                | ExprKind::LoopBreakIf {
+                    condition,
+                    then_branch,
+                    else_branch,
+                },
+            ),
+        ) => match (
+            tree.expression(then_branch)
+                .map(|expression| expression.kind),
+            tree.expression(else_branch)
+                .map(|expression| expression.kind),
+        ) {
+            (
+                Some(ExprKind::Array {
+                    elements: then_elements,
+                    element_count: then_count,
+                }),
+                Some(ExprKind::Array {
+                    elements: else_elements,
+                    element_count: else_count,
+                }),
+            ) if then_count == count
+                && else_count == count
+                && then_elements[..then_count].iter().all(Option::is_some)
+                && else_elements[..else_count].iter().all(Option::is_some) =>
+            {
+                Some((condition, then_elements, else_elements, count))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some((condition, then_elements, else_elements, count)) = conditional_array_literals {
+        for index in 0..count {
+            let then_element = then_elements[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: expression_span,
+            })?;
+            let else_element = else_elements[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: expression_span,
+            })?;
+            for id in [condition, then_element, else_element] {
+                preanalyze_runtime_expression_at_reads(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    &tree,
+                    id,
+                    expression_span,
+                )?;
+            }
+        }
+        return Ok(());
+    }
     if let (RuntimeExpressionType::Array { count, .. }, Some(ExprKind::Identifier(name))) = (
         ty,
         tree.expression(tree.root())
@@ -3996,11 +4065,17 @@ fn preanalyze_runtime_source_expression_reads<
         }
         return Ok(());
     }
-    if runtime_type_stack_slots(ty) != 1
+    let aggregate = matches!(
+        ty,
+        RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
+    );
+    if aggregate && !direct_aggregate_call && !direct_array_value {
+        return Ok(());
+    }
+    if !aggregate
+        && runtime_type_stack_slots(ty) != 1
         && !(runtime_type_is_fat_reference(ty)
             && runtime_fat_reference_return_preanalysis_supported(&tree, tree.root(), 0))
-        && !direct_aggregate_call
-        && !direct_array_value
     {
         return Ok(());
     }
@@ -21650,6 +21725,75 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 16384, 2, 32>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_conditional_array_returns_per_element() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, fourth: usize, prefix: usize, bias: usize, choose: bool) -> [usize; 2] { prefix; if bias == 0 { return if choose { [first, second] } else { [third, fourth] }; } if choose { [fourth, third] } else { [second, first] } }";
+        let module = Parser::new(source).parse_module::<1, 7>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<7>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 7, 64>(
+            &function,
+            &resolver,
+            &body,
+            "[usize; 2]",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(facts.assignment_read_count, 14);
+        for (fact, parameter) in facts.assignment_reads[..14]
+            .iter()
+            .zip([4, 5, 6, 0, 2, 6, 1, 3, 6, 3, 1, 6, 2, 0])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 7, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_skip_unmapped_packed_conditional_array_returns() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: [u16; 3], right: [u16; 3], prefix: usize, bias: bool, choose: bool) -> [u16; 3] { prefix; if bias { return if choose { left } else { right }; } if choose { right } else { left } }";
+        let module = Parser::new(source).parse_module::<1, 5>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<5>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 5, 64>(
+            &function,
+            &resolver,
+            &body,
+            "[u16; 3]",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(facts.assignment_read_count, 2);
+        for (fact, parameter) in facts.assignment_reads[..2].iter().zip([2, 3]) {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 5, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
