@@ -2119,6 +2119,17 @@ JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Explicit mutable-reborrow suspension
+
+**Result: NOT_TRIGGERED.** The compiler conventionally follows direct reference
+reborrow ancestry through existing bounded loan facts, resolves the original
+borrowed path, and applies standard last-use ordering to temporary mutable-
+parent suspension. It adds no new arena, optimization, authority model, device
+or compatibility protocol, host-share mechanism, accessibility interface,
+browser semantic interface, JavaScript/WebAssembly runtime, media mechanism,
+or other patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.
+
 # 2026-08-24 — Attachment-bound legacy PCI completion masking
 
 **Result: NOT_TRIGGERED.** The change conventionally reads the current PCI
@@ -2130,6 +2141,17 @@ interface, JavaScript/WebAssembly runtime, media mechanism, production PCI
 identity, MSI/MSI-X, DMA protocol, or new authority model. The previously
 recorded planned scopes remain `TRIGGERED`; this agent review does not replace
 independent human dual review.
+
+# 2026-08-24 — Expected-type implicit reborrows
+
+**Result: NOT_TRIGGERED.** The compiler conventionally distinguishes an
+expected-reference coercion from inferred mutable-reference move semantics and
+feeds the former into its existing bounded direct-loan ancestry checks. It adds
+no new arena, optimization, authority model, device or compatibility protocol,
+host-share mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
 
 # 2026-08-24 — MRML-native block pending-reset isolation test
 

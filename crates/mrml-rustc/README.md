@@ -3331,3 +3331,28 @@ access is accepted after the mutable borrower’s last reachable use. A forged
 loan-use effect on an unrelated reference parameter fails structural
 validation. This does not claim implicit reborrows, indirect alias identity,
 regions, or a complete borrow checker. The hygiene scan remained empty.
+
+The explicit mutable-reborrow suspension milestone passed all 705 compiler and
+driver tests on Windows gnullvm and all 705 in release mode on native Arch
+Linux WSL, plus warnings-denied Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Direct reborrow ancestry is
+followed with an initialization-count bound to the original owner path. A
+mutable parent is rejected before a later child use and restored after the
+child’s last use; owner-path mutation follows the same child liveness, while
+shared/shared parent reads remain compatible. The pinned oracle independently
+confirmed all accepted/rejected pairs. This does not claim implicit coercion
+reborrows, general shared-child mutation classification, regions, or complete
+Polonius semantics. The hygiene scan remained empty.
+
+The expected-type implicit mutable-reborrow milestone passed all 707 compiler
+and driver tests on Windows gnullvm and all 707 in release mode on native Arch
+Linux WSL, plus warnings-denied Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. A direct identifier used to
+initialize an explicitly typed reference binding records a shared or mutable
+borrow rather than a move; an inferred `&mut` binding remains a consuming move.
+The existing ancestry analysis then enforces temporary mutable-parent
+suspension and last-use restoration. The pinned oracle confirmed E0503 for a
+premature parent use, acceptance after the child’s last use, and E0382 for the
+inferred move. This does not claim general coercion sites, access-sensitive
+shared-child mutation, regions, or complete Polonius semantics. The hygiene
+scan remained empty.

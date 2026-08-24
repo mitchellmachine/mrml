@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **PARTIAL** | References, explicit reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, and direct shared/mutable-loan conflict checks across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. Implicit reborrows, indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
+| Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit direct mutable-reborrow ancestry and parent suspension, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, and direct shared/mutable-loan conflict checks across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General shared-child access classification, indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -562,6 +562,15 @@ writes, or read-modify-writes of the exact borrowed path. This is direct-loan
 liveness and invalidation, not indirect alias tracking, implicit reborrows,
 regions, reborrow completion, or a complete borrow checker.
 
+Explicit direct mutable reborrows additionally derive their parent loan and
+bounded ultimate owner path. A mutable parent is suspended when it is used
+before a later child use, restored after the child’s last reachable use, and
+owner-path conflicts are checked through the ancestry chain. Shared-to-shared
+reborrows preserve compatible shared parent reads. An explicitly typed expected
+reference binding from a direct reference identifier creates the corresponding
+implicit reborrow, while an inferred mutable-reference binding remains a move.
+This does not yet classify every shared-child mutation or general coercion site.
+
 ## Roadmap selection
 
 Score candidate work by MRML usefulness, modern Rust relevance, security
@@ -581,8 +590,9 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is connecting explicit and
-implicit reborrows to the underlying loan identity before region reasoning.
+The highest-value next major implementation task is adding access-sensitive
+shared-child parent conflicts and broader coercion-site reborrows before region
+reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,
