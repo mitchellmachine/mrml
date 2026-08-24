@@ -543,6 +543,13 @@ pub struct VirtualBlockGuestCompletion {
     acknowledgement: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockGuestTerminalReason {
+    Reset,
+    Removed,
+    SequenceExhausted,
+}
+
 impl VirtualBlockGuestCompletion {
     pub const fn status(self) -> VirtualBlockCompletionStatus {
         self.status
@@ -567,7 +574,7 @@ pub struct VirtualBlockGuestDriver {
     request_producer: u64,
     completion_consumer: u64,
     pending: Option<VirtualBlockGuestSubmission>,
-    terminal: bool,
+    terminal: Option<VirtualBlockGuestTerminalReason>,
 }
 
 impl VirtualBlockGuestDriver {
@@ -578,22 +585,61 @@ impl VirtualBlockGuestDriver {
         completion_published: u64,
         completion_consumer: u64,
     ) -> Result<Self, VirtualBlockError> {
-        let configuration = VirtualBlockConfiguration::decode(encoded_configuration)?;
-        if request_producer != 0
-            || request_producer != request_consumed
-            || request_producer != completion_published
-            || request_producer != completion_consumer
-        {
-            return Err(VirtualBlockError::InvalidQueue);
-        }
+        let configuration = Self::decode_fresh(
+            encoded_configuration,
+            request_producer,
+            request_consumed,
+            completion_published,
+            completion_consumer,
+        )?;
         Ok(Self {
             configuration,
             next_request_id: 1,
             request_producer,
             completion_consumer,
             pending: None,
-            terminal: false,
+            terminal: None,
         })
+    }
+
+    /// Reinitializes state only after an exact reset completion and only from
+    /// the canonical successor generation with completely fresh queue state.
+    /// Removal and sequence exhaustion are permanently terminal.
+    pub fn rediscover_after_reset(
+        &mut self,
+        encoded_configuration: &[u8],
+        request_producer: u64,
+        request_consumed: u64,
+        completion_published: u64,
+        completion_consumer: u64,
+    ) -> Result<(), VirtualBlockError> {
+        if self.terminal != Some(VirtualBlockGuestTerminalReason::Reset) {
+            return Err(VirtualBlockError::InvalidState);
+        }
+        let expected_generation = self
+            .configuration
+            .generation()
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
+        let configuration = Self::decode_fresh(
+            encoded_configuration,
+            request_producer,
+            request_consumed,
+            completion_published,
+            completion_consumer,
+        )?;
+        if configuration.generation() != expected_generation {
+            return Err(VirtualBlockError::StaleGeneration);
+        }
+        *self = Self {
+            configuration,
+            next_request_id: 1,
+            request_producer: 0,
+            completion_consumer: 0,
+            pending: None,
+            terminal: None,
+        };
+        Ok(())
     }
 
     pub const fn configuration(self) -> VirtualBlockConfiguration {
@@ -613,6 +659,10 @@ impl VirtualBlockGuestDriver {
     }
 
     pub const fn is_terminal(self) -> bool {
+        self.terminal.is_some()
+    }
+
+    pub const fn terminal_reason(self) -> Option<VirtualBlockGuestTerminalReason> {
         self.terminal
     }
 
@@ -705,11 +755,17 @@ impl VirtualBlockGuestDriver {
         self.completion_consumer = published;
         self.next_request_id = self.next_request_id.saturating_add(1);
         self.pending = None;
-        self.terminal = exhausted
-            || matches!(
-                completion.status(),
-                VirtualBlockCompletionStatus::Reset | VirtualBlockCompletionStatus::Removed
-            );
+        self.terminal = if exhausted {
+            Some(VirtualBlockGuestTerminalReason::SequenceExhausted)
+        } else {
+            match completion.status() {
+                VirtualBlockCompletionStatus::Reset => Some(VirtualBlockGuestTerminalReason::Reset),
+                VirtualBlockCompletionStatus::Removed => {
+                    Some(VirtualBlockGuestTerminalReason::Removed)
+                }
+                _ => None,
+            }
+        };
         Ok(VirtualBlockGuestCompletion {
             status: completion.status(),
             transferred: completion.transferred(),
@@ -718,7 +774,7 @@ impl VirtualBlockGuestDriver {
     }
 
     fn prepare_ready(&self) -> Result<(), VirtualBlockError> {
-        if self.terminal || self.pending.is_some() {
+        if self.terminal.is_some() || self.pending.is_some() {
             Err(VirtualBlockError::InvalidState)
         } else {
             Ok(())
@@ -784,6 +840,24 @@ impl VirtualBlockGuestDriver {
             slot: (self.request_producer % u64::from(self.configuration.queue().slots())) as u16,
             expected_transferred,
         })
+    }
+
+    fn decode_fresh(
+        encoded_configuration: &[u8],
+        request_producer: u64,
+        request_consumed: u64,
+        completion_published: u64,
+        completion_consumer: u64,
+    ) -> Result<VirtualBlockConfiguration, VirtualBlockError> {
+        let configuration = VirtualBlockConfiguration::decode(encoded_configuration)?;
+        if request_producer != 0
+            || request_consumed != 0
+            || completion_published != 0
+            || completion_consumer != 0
+        {
+            return Err(VirtualBlockError::InvalidQueue);
+        }
+        Ok(configuration)
     }
 }
 
@@ -2409,9 +2483,68 @@ mod tests {
         assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Reset);
         assert!(driver.is_terminal());
         assert_eq!(
+            driver.terminal_reason(),
+            Some(VirtualBlockGuestTerminalReason::Reset)
+        );
+        assert_eq!(
             driver.prepare_write(0, 1, 0x80_0000, 4096),
             Err(VirtualBlockError::InvalidState)
         );
+
+        let reset_state = driver;
+        let mut stale_configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        no_flush
+            .configuration()
+            .unwrap()
+            .encode(&mut stale_configuration);
+        assert_eq!(
+            driver.rediscover_after_reset(&stale_configuration, 0, 0, 0, 0),
+            Err(VirtualBlockError::StaleGeneration)
+        );
+        assert_eq!(driver, reset_state);
+
+        no_flush.reset().unwrap();
+        no_flush.negotiate(0).unwrap();
+        no_flush.activate(layout::<1>(), 49).unwrap();
+        let replacement = no_flush.configuration().unwrap();
+        let mut encoded_replacement = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        replacement.encode(&mut encoded_replacement);
+        let mut skipped_generation = encoded_replacement;
+        skipped_generation[8..12].copy_from_slice(&3_u32.to_le_bytes());
+        assert_eq!(
+            driver.rediscover_after_reset(&skipped_generation, 0, 0, 0, 0),
+            Err(VirtualBlockError::StaleGeneration)
+        );
+        assert_eq!(driver, reset_state);
+        for counters in [(1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)] {
+            assert_eq!(
+                driver.rediscover_after_reset(
+                    &encoded_replacement,
+                    counters.0,
+                    counters.1,
+                    counters.2,
+                    counters.3,
+                ),
+                Err(VirtualBlockError::InvalidQueue)
+            );
+            assert_eq!(driver, reset_state);
+        }
+        let mut corrupt = encoded_replacement;
+        corrupt[127] = 1;
+        assert_eq!(
+            driver.rediscover_after_reset(&corrupt, 0, 0, 0, 0),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
+        assert_eq!(driver, reset_state);
+        driver
+            .rediscover_after_reset(&encoded_replacement, 0, 0, 0, 0)
+            .unwrap();
+        assert_eq!(driver.configuration(), replacement);
+        assert_eq!(driver.terminal_reason(), None);
+        let rediscovered = driver.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
+        assert_eq!(rediscovered.request().generation(), 2);
+        assert_eq!(rediscovered.request().request_id(), 1);
+        assert_eq!(rediscovered.producer(), 1);
 
         let configuration = no_flush.configuration().unwrap();
         let mut exhausted = VirtualBlockGuestDriver {
@@ -2420,7 +2553,7 @@ mod tests {
             request_producer: u64::MAX - 1,
             completion_consumer: u64::MAX - 1,
             pending: None,
-            terminal: false,
+            terminal: None,
         };
         let last = exhausted.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
         assert_eq!(last.request().request_id(), u64::MAX);
@@ -2434,6 +2567,28 @@ mod tests {
         );
         exhausted.accept_completion(u64::MAX, &completed).unwrap();
         assert!(exhausted.is_terminal());
+        assert_eq!(
+            exhausted.terminal_reason(),
+            Some(VirtualBlockGuestTerminalReason::SequenceExhausted)
+        );
+        assert_eq!(
+            exhausted.rediscover_after_reset(&encoded_replacement, 0, 0, 0, 0),
+            Err(VirtualBlockError::InvalidState)
+        );
+
+        let mut removed = discovered_driver(&no_flush);
+        let request = removed.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
+        removed.commit_submission(request).unwrap();
+        let completion = completion_bytes(2, 1, VirtualBlockCompletionStatus::Removed, 0);
+        removed.accept_completion(1, &completion).unwrap();
+        assert_eq!(
+            removed.terminal_reason(),
+            Some(VirtualBlockGuestTerminalReason::Removed)
+        );
+        assert_eq!(
+            removed.rediscover_after_reset(&encoded_replacement, 0, 0, 0, 0),
+            Err(VirtualBlockError::InvalidState)
+        );
     }
 
     #[test]

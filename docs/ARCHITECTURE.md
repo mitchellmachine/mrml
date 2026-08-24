@@ -687,9 +687,12 @@ derives slots and request geometry from the configuration, prepares requests
 without mutation, commits only the exact fresh publication ticket, permits one
 in-flight request, and accepts a completion only when counter, generation,
 request ID, status, and transferred length match. Reset/removal completions and
-request-ID exhaustion make the state terminal. Arbitrary nonzero-queue resume,
-mapped signed-guest consumption of this state, unbounded progress, and PCI
-discovery remain pending.
+request-ID exhaustion record an explicit terminal cause. Only reset may recover:
+rediscovery requires a canonical configuration at the exact successor
+generation and four zero queue counters, and failure preserves the old terminal
+state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
+queue resume, mapped signed-guest consumption of this state, unbounded progress,
+and PCI discovery remain pending.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

@@ -704,8 +704,11 @@ slots derive from the configured slot count, and completion acceptance binds
 the next published counter, generation, request ID, status, and expected byte
 count before returning an acknowledgement. Geometry, buffer arithmetic, flush
 features, replay, stale tickets, terminal reset/removal, and exhaustion fail
-closed. Integration into the signed guest image, multi-in-flight/unbounded
-progress, reset rediscovery, and PCI transport remain pending.
+closed. Reset rediscovery now records the exact terminal cause, accepts only a
+canonical exact-successor generation with four zero queue counters, and leaves
+all state unchanged on rejection. Removal and request-ID exhaustion cannot be
+rediscovered. Integration into the signed guest image, multi-in-flight or
+unbounded progress, nonzero-queue restart, and PCI transport remain pending.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

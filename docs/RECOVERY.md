@@ -382,9 +382,12 @@ explicitly and downgrade the status rather than guessing.
   backend-neutral allocation-free initial guest-driver state now discovers only
   a canonical configuration with a completely fresh idle queue, uses two-phase
   exact publication tickets, permits one in-flight request, and binds completion
-  acceptance to the exact counter/generation/request/status/length. Nonzero
-  restart history, signed-image integration, reset rediscovery, unbounded
-  progress, and PCI transport remain pending. The canonical fixed-capacity
+  acceptance to the exact counter/generation/request/status/length. An accepted
+  reset records its terminal cause and can rediscover only the exact canonical
+  successor generation with four zero counters; rejection changes nothing,
+  while removal and sequence exhaustion remain permanent. Nonzero restart
+  history, signed-image integration, unbounded progress, and PCI transport
+  remain pending. The canonical fixed-capacity
   allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

@@ -3551,18 +3551,22 @@ fresh ticket and permits one in-flight request. Completion acceptance preserves
 pending state on every malformed, stale, misordered, wrong-generation,
 wrong-request, or wrong-length record, then advances its local acknowledgement
 position only after exact validation. Reset/removal and request-ID exhaustion
-make the driver terminal.
+record an explicit terminal cause. Only reset is recoverable: rediscovery
+requires the canonical exact-successor generation and four zero queue counters.
+Every corrupt record, stale or skipped generation, nonzero counter, removal,
+and exhausted sequence rejects without changing the terminal state.
 
 Windows gnullvm and Arch Linux/WSL2 each passed all 379 release kernel tests and
 scoped strict Clippy. Three focused tests cover strict fresh-queue discovery,
 corrupt configuration and counter disagreement, non-mutating preparation,
 canonical request encoding, stale/replayed publication tickets, forged and
 misordered completions without state loss, slot progression, geometry/buffer
-arithmetic, feature denial, and terminal reset handling. This is
+arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
+and permanently terminal removal/exhaustion. This is
 unit/simulation evidence only. The signed KVM/WHP producer still uses its
 bounded fixed mechanics; mapped-image use of the common state, nonzero resume,
-multi-in-flight or unbounded progress, reset rediscovery, PCI, native boot, and
-physical hardware remain unverified.
+multi-in-flight or unbounded progress, PCI, native boot, and physical hardware
+remain unverified.
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
@@ -3571,7 +3575,8 @@ SECURITY REVIEW` treats configuration bytes, every queue counter, geometry,
 feature, buffer range, arithmetic result, request ID, slot, copied ticket,
 completion record, replay, terminal status, and exhaustion as hostile. Data
 does not grant device or backend authority, preparation cannot silently commit,
-and invalid completion data cannot release pending ownership. Existing
+invalid completion data cannot release pending ownership, and only an exact
+reset successor can clear reset-terminal state. Existing
 capability, revocation, rollback-resistance, accessibility, and evidence gates
 are unchanged. This agent review does not replace the required independent
 human dual review.

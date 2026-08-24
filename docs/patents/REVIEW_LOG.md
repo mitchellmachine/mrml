@@ -1404,6 +1404,16 @@ terminal reset handling are standard defensive queue techniques. No new
 patent-candidate mechanism was identified. This agent review does not replace
 the required independent human dual review.
 
+# 2026-08-24 — Exact virtual-block reset rediscovery
+
+**Result: NOT_TRIGGERED.** The change conventionally records a terminal reset
+cause and reinitializes bounded driver state only after canonical parsing, an
+exact successor generation, and empty queue counters. Permanent removal and
+counter-exhaustion states, transactional rejection, and stale-generation checks
+are standard defensive lifecycle techniques. No new patent-candidate mechanism
+was identified. This agent review does not replace the required independent
+human dual review.
+
 # 2026-08-24 — Bounded virtual-block single-slot reuse
 
 **Result: NOT_TRIGGERED.** The change conventionally performs one write and one
