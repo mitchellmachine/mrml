@@ -202,16 +202,19 @@ projections, and exact child ordering, parent, base, field projection, and type.
 Corruption, missing paired facts, or capacity exhaustion fails closed. These
 root sites are structural
 prerequisites: arrays remain root-only because the current summary `Index`
-projection does not identify a disjoint element. A separate fixed 512-entry
+projection does not identify a disjoint element. A separate fixed 768-entry
 effect ledger now records only contextually proven effects: direct identifier
 initialization of a mutable-reference binding is a `Move` on the source root,
 and direct root or precise tuple-field assignments become `Write` or
-`ReadModifyWrite` after RHS planning. Validation rejects incompatible types,
-projected moves in this direct-only slice, invalid paths, holes, corrupt counts,
-malformed spans, and capacity overflow. Calls, returns, dereferences, indexes,
-copies, and reborrows remain unclassified rather than guessed. The facts do not
-yet compute flow-sensitive initializedness, reject use after move, or claim that
-unreachable or divergent declarations execute.
+`ReadModifyWrite` after RHS planning. Assignment reads resolving to an exact
+root or tuple-field path of a proven `Copy` type transactionally add a `Copy`
+effect; an exhausted effect table cannot leave a read without its paired effect.
+Validation rejects incompatible types, projected moves in this direct-only
+slice, invalid paths, holes, corrupt counts, malformed spans, and capacity
+overflow. Calls, returns, dereferences, summary indexes, non-`Copy` reads, and
+reborrows remain unclassified rather than guessed. The facts do not yet compute
+flow-sensitive initializedness, reject use after move, or claim that unreachable
+or divergent declarations execute.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root
