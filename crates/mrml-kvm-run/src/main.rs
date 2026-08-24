@@ -1078,8 +1078,13 @@ fn complete_kvm_service_cleanup<const N: usize>(
 ) -> Result<()> {
     if slot == 0 {
         guest
-            .revoke_service_resource_page(slot)
-            .map_err(|error| anyhow!("KVM resource-page revocation failed: {:?}", error))?;
+            .observe_service_resource_page_revoked(slot)
+            .map_err(|error| {
+                anyhow!(
+                    "KVM resource-page revocation observation failed: {:?}",
+                    error
+                )
+            })?;
     }
     guest
         .revoke_service_shared_page(slot)

@@ -169,9 +169,13 @@ explicitly and downgrade the status rather than guessing.
   that exact slot be re-armed. Matching KVM/WHP per-service resource slots are
   isolated from the common page and sibling slots and erase their backing page
   before restore. Both hosted runners now schedule receiver-only attachment,
-  cleanup revocation, zeroed restore, and final revocation. Concrete kernel-
-  image lifecycle wiring is still
-  absent, so the hosted service probe halts on those operations.
+  kernel-side absent-leaf observation, zeroed restore, and final revocation.
+  The kernel image binds a receiver-only capability to one live mapping and
+  opaque resource, dispatches bounded shared-buffer copies through active user-
+  memory validation, and retires mapping, binding, and handle before re-arm.
+  The service source verifies zero state before each generation writes and reads
+  its value. Fresh signed hosted execution evidence for this composition is
+  still absent.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

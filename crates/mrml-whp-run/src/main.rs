@@ -975,8 +975,13 @@ fn complete_whp_service_cleanup(
 ) -> Result<()> {
     if slot == 0 {
         guest
-            .revoke_service_resource_page(slot)
-            .map_err(|error| anyhow!("WHP resource-page revocation failed: {:?}", error))?;
+            .observe_service_resource_page_revoked(slot)
+            .map_err(|error| {
+                anyhow!(
+                    "WHP resource-page revocation observation failed: {:?}",
+                    error
+                )
+            })?;
     }
     guest
         .revoke_service_shared_page(slot)

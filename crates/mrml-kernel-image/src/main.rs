@@ -57,8 +57,6 @@ use mrml_kernel::arch::x86_64::TimerDivide;
     feature = "service-preemption-probe"
 ))]
 use mrml_kernel::arch::x86_64::TrapDisposition;
-#[cfg(feature = "service-probe")]
-use mrml_kernel::arch::x86_64::UserBufferAccess;
 #[cfg(any(
     feature = "user-probe",
     feature = "service-probe",
@@ -80,6 +78,11 @@ use mrml_kernel::arch::x86_64::{
     ActiveApTrampolinePage, ActivePageTables, ApStartupTable, ApStartupTiming, ApTrampolineImage,
     ApTrampolinePage, ApicIpi, PerCpuPrivilegeStacks, X86CpuTopology,
 };
+#[cfg(feature = "service-probe")]
+use mrml_kernel::arch::x86_64::{
+    ActiveServiceMappingRevoker, ActiveTaskUserCopy, DirectActiveUserMemory, Mapping,
+    PagePermissions, UserBufferAccess, VirtAddr,
+};
 use mrml_kernel::arch::x86_64::{
     ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
     PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
@@ -96,9 +99,10 @@ use mrml_kernel::{
 #[cfg(feature = "service-probe")]
 use mrml_kernel::{
     CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, Capability, CapabilitySpace, ControlEvent,
-    MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy,
-    ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceSupervisor,
-    decode_capability_transfers,
+    DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable, MAX_CAPABILITIES,
+    MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy, ServiceAddressSpaceEraser, ServiceError,
+    ServiceId, ServiceResourceEraser, ServiceSupervisor, SharedAccess, SharedBufferSyscallExecutor,
+    SharedEndpoint, SharedMemoryBindings, VmId, VmTable, decode_capability_transfers,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -219,6 +223,10 @@ const SERVICE_B_ROOT: u64 = 0x00d0_0000;
 const SERVICE_ENTRY: u64 = 0x0000_0001_4000_1000;
 #[cfg(feature = "service-probe")]
 const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
+#[cfg(feature = "service-probe")]
+const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
+#[cfg(feature = "service-probe")]
+const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
 #[cfg(any(
     feature = "service-probe",
     feature = "smp-service-migration-probe",
@@ -347,6 +355,19 @@ static mut SERVICE_CONTROLS: Option<[Capability; 2]> = None;
 static mut SERVICE_IDS: Option<[ServiceId; 2]> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESTARTED: bool = false;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCE_VM_TABLE: Option<VmTable<1>> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCE_VM: Option<VmId> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCE_MEMORY: Option<GuestMemory<1>> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCE_BINDINGS: Option<SharedMemoryBindings<1>> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCES: Option<HostResourceTable<DirectHostResourceMemory, 1>> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCE_SCRATCH: [u8; mrml_kernel::PAGE_SIZE as usize] =
+    [0; mrml_kernel::PAGE_SIZE as usize];
 
 #[cfg(feature = "service-probe")]
 #[derive(Clone, Copy)]
@@ -866,8 +887,33 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .is_ok();
                 frame.complete_authorization(authorized);
             }
-            SyscallRequest::ReadSharedBuffer { .. } | SyscallRequest::WriteSharedBuffer { .. } => {
-                halt()
+            request @ (SyscallRequest::ReadSharedBuffer { .. }
+            | SyscallRequest::WriteSharedBuffer { .. }) => {
+                let active = ActivePageTables::current().unwrap_or_else(|_| halt());
+                if active.root() != root {
+                    halt();
+                }
+                let vm = (*core::ptr::addr_of!(SERVICE_RESOURCE_VM)).unwrap_or_else(|| halt());
+                let memory = (*core::ptr::addr_of!(SERVICE_RESOURCE_MEMORY))
+                    .as_ref()
+                    .unwrap_or_else(|| halt());
+                let bindings = (*core::ptr::addr_of!(SERVICE_RESOURCE_BINDINGS))
+                    .as_ref()
+                    .unwrap_or_else(|| halt());
+                let resources = (*core::ptr::addr_of_mut!(SERVICE_RESOURCES))
+                    .as_mut()
+                    .unwrap_or_else(|| halt());
+                let scratch = core::slice::from_raw_parts_mut(
+                    core::ptr::addr_of_mut!(SERVICE_RESOURCE_SCRATCH).cast::<u8>(),
+                    mrml_kernel::PAGE_SIZE as usize,
+                );
+                let mut user =
+                    ActiveTaskUserCopy::new(&active, root, current, DirectActiveUserMemory);
+                SharedBufferSyscallExecutor::execute(
+                    request, runtime, current, vm, bindings, memory, resources, &mut user, scratch,
+                )
+                .unwrap_or_else(|_| halt());
+                frame.complete(0);
             }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
@@ -896,9 +942,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 if terminated.task != current || runtime.context(current).is_ok() {
                     halt();
                 }
-                supervisor
-                    .complete_cleanup(terminated.cleanup, &mut HostedServiceEraser)
-                    .unwrap_or_else(|_| halt());
+                complete_service_cleanup(supervisor, terminated.cleanup);
                 match terminated.next {
                     ScheduleOutcome::Switch { to, .. } => {
                         let ControlEvent::PeerDied(death) =
@@ -1464,9 +1508,7 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
                     ScheduleOutcome::Switch { to, .. } => to,
                     _ => halt(),
                 };
-                supervisor
-                    .complete_cleanup(fault.cleanup, &mut HostedServiceEraser)
-                    .unwrap_or_else(|_| halt());
+                complete_service_cleanup(supervisor, fault.cleanup);
                 let ControlEvent::PeerDied(death) =
                     runtime.receive_control(peer).unwrap_or_else(|_| halt())
                 else {
@@ -1508,28 +1550,31 @@ unsafe extern "sysv64" fn mrml_exception_dispatch(frame: *const HardwareTrapFram
             )
             .unwrap_or_else(|_| halt());
             fresh_context.r12 = 2;
-            let recovery = supervisor
-                .recover_current_fault(
-                    runtime,
-                    _disposition,
-                    0,
-                    &mut HostedServiceEraser,
-                    management,
-                    controls[0],
-                    Priority::NORMAL,
-                    fresh_context,
-                )
+            let fault = supervisor
+                .fault_current_at(runtime, _disposition, 0)
                 .unwrap_or_else(|_| halt());
-            if !matches!(recovery.next, ScheduleOutcome::Idle) {
+            if !matches!(fault.retirement.next, ScheduleOutcome::Idle) {
                 halt();
             }
+            complete_service_cleanup(supervisor, fault.cleanup);
+            let replacement = supervisor
+                .restart_at(
+                    fault.service,
+                    management,
+                    controls[0],
+                    runtime,
+                    Priority::NORMAL,
+                    fresh_context,
+                    0,
+                )
+                .unwrap_or_else(|_| halt());
             asm!(
                 "out dx, eax",
                 in("dx") SERVICE_PROBE_PORT,
                 in("eax") 3u32,
                 options(nomem, nostack)
             );
-            restart_service_pair(runtime, supervisor, recovery.replacement);
+            restart_service_pair(runtime, supervisor, replacement);
         };
     }
     halt()
@@ -2226,6 +2271,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        let resource_capability = provision_service_resource(&mut runtime, receiver);
         let capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2257,6 +2303,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
         receiver_context.r13 = receiver_capability.token();
         receiver_context.r14 = sender.token();
+        receiver_context.r15 = resource_capability.token();
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
@@ -2702,6 +2749,129 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 }
 
 #[cfg(feature = "service-probe")]
+unsafe fn provision_service_resource(
+    runtime: &mut TaskRuntime<2, 4>,
+    task: mrml_kernel::TaskId,
+) -> Capability {
+    let capability = runtime
+        .capabilities_mut(task)
+        .and_then(|space| {
+            space
+                .insert(
+                    ObjectId(0x94),
+                    Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+                )
+                .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+        })
+        .unwrap_or_else(|_| halt());
+    let vm_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCE_VM);
+    if unsafe { (*vm_pointer).is_none() } {
+        let mut table = VmTable::<1>::new();
+        let vm = table.create(1).unwrap_or_else(|_| halt());
+        unsafe {
+            core::ptr::addr_of_mut!(SERVICE_RESOURCE_VM_TABLE).write(Some(table));
+            vm_pointer.write(Some(vm));
+        }
+    }
+    let vm = unsafe { (*vm_pointer).unwrap_or_else(|| halt()) };
+    let memory_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCE_MEMORY);
+    if unsafe { (*memory_pointer).is_none() } {
+        unsafe { memory_pointer.write(Some(GuestMemory::new())) };
+    }
+    let memory = unsafe { (*memory_pointer).as_mut().unwrap_or_else(|| halt()) };
+    let region = GuestRegion::new(
+        SERVICE_RESOURCE_VIRTUAL,
+        PhysAddr::new(SERVICE_RESOURCE_PHYSICAL).unwrap_or_else(|_| halt()),
+        1,
+        true,
+        false,
+    )
+    .unwrap_or_else(|_| halt());
+    let mapping = memory.map(region).unwrap_or_else(|_| halt());
+    let resources_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCES);
+    if unsafe { (*resources_pointer).is_none() } {
+        unsafe { resources_pointer.write(Some(HostResourceTable::new(DirectHostResourceMemory))) };
+    }
+    let resources = unsafe { (*resources_pointer).as_mut().unwrap_or_else(|| halt()) };
+    let handle = unsafe { resources.register(SERVICE_RESOURCE_PHYSICAL, mrml_kernel::PAGE_SIZE) }
+        .unwrap_or_else(|_| halt());
+    let bindings_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCE_BINDINGS);
+    if unsafe { (*bindings_pointer).is_none() } {
+        unsafe { bindings_pointer.write(Some(SharedMemoryBindings::new())) };
+    }
+    let bindings = unsafe { (*bindings_pointer).as_mut().unwrap_or_else(|| halt()) };
+    bindings
+        .bind(
+            runtime.capabilities(task).unwrap_or_else(|_| halt()),
+            capability,
+            memory,
+            SharedEndpoint::for_task(vm, task, mapping, SharedAccess::ReadWrite),
+            handle,
+        )
+        .unwrap_or_else(|_| halt());
+    capability
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn service_resource_mapping() -> Mapping {
+    Mapping::new(
+        VirtAddr::new(SERVICE_RESOURCE_VIRTUAL).unwrap_or_else(|_| halt()),
+        PhysAddr::new(SERVICE_RESOURCE_PHYSICAL).unwrap_or_else(|_| halt()),
+        1,
+        PagePermissions::USER_READ_WRITE,
+    )
+    .unwrap_or_else(|_| halt())
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn complete_service_cleanup(
+    supervisor: &mut ServiceSupervisor<2>,
+    ticket: mrml_kernel::ServiceCleanupTicket,
+) {
+    if ticket.context().page_table().get() != SERVICE_ROOT {
+        supervisor
+            .complete_cleanup(ticket, &mut HostedServiceEraser)
+            .unwrap_or_else(|_| halt());
+        return;
+    }
+    let mut active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    let mut revoker = unsafe {
+        ActiveServiceMappingRevoker::new(
+            &mut active,
+            PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
+            service_resource_mapping(),
+        )
+    }
+    .unwrap_or_else(|_| halt());
+    let resources = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_RESOURCES))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let memory = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_RESOURCE_MEMORY))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let bindings = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_RESOURCE_BINDINGS))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let mut address_space = HostedServiceEraser;
+    let mut eraser = ServiceResourceEraser::new(
+        &mut address_space,
+        resources,
+        &mut revoker,
+        memory,
+        bindings,
+    );
+    supervisor
+        .complete_cleanup(ticket, &mut eraser)
+        .unwrap_or_else(|_| halt());
+}
+
+#[cfg(feature = "service-probe")]
 unsafe fn restart_service_pair(
     runtime: &mut TaskRuntime<2, 4>,
     supervisor: &mut ServiceSupervisor<2>,
@@ -2769,6 +2939,7 @@ unsafe fn restart_service_pair(
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
+    let resource_capability = unsafe { provision_service_resource(runtime, receiver) };
     let capability = runtime
         .capabilities_mut(sender)
         .and_then(|space| {
@@ -2800,6 +2971,7 @@ unsafe fn restart_service_pair(
     let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
     receiver_context.r13 = receiver_capability.token();
     receiver_context.r14 = sender.token();
+    receiver_context.r15 = resource_capability.token();
     let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
     sender_context.r13 = capability.token();
     sender_context.r14 = receiver.token();

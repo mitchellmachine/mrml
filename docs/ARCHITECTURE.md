@@ -312,10 +312,15 @@ separate per-service resource slot: attachment targets exactly one service root,
 rejects virtual or physical overlap with the common page or sibling resources,
 and has independent revoke, observed-revoke, and restore state. Restore erases
 the complete backing page before reinstalling the leaf. These APIs are compile-
-tested. Both hosted runners now prepare a distinct receiver-only page and drive
-its direct revoke/zeroed-restore/final-revoke sequence alongside service
-cleanup, but current repository artifacts do not provide fresh signed-probe
-evidence for that path. Bounded
+tested. Both hosted runners prepare a distinct receiver-only page. The kernel-
+image service path now gives only that receiver an exact non-delegable resource
+capability, resolves bounded shared-buffer syscalls through kernel-owned VM,
+binding, and opaque-resource state, and composes receiver cleanup with exact
+active-leaf removal, binding retirement, and final handle retirement. The host
+accepts cleanup only by observing the absent leaf before zeroed restore; sender
+cleanup remains resource-free. The service source checks zero-before-use and
+bounded write/read behavior in each generation. These source and compile gates
+do not constitute fresh signed hosted-probe evidence. Bounded
 in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to

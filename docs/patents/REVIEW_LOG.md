@@ -1233,3 +1233,18 @@ memory-sharing, lifecycle, or zeroization technique. The hosted runners
 conventionally schedule those transitions around receiver cleanup/restart.
 
 Patent review: `NOT_TRIGGERED` — conventional isolated page lifecycle.
+
+## 2026-08-24 — kernel-image service-resource composition
+
+MRML source: `crates/mrml-kernel-image/src/main.rs`,
+`crates/mrml-service-image/src/main.rs`, and
+`crates/mrml-{kvm,whp}-run/src/main.rs`.
+
+The kernel conventionally provisions a task-local attenuated capability, binds
+one non-executable page to an opaque resource, dispatches bounded validated
+copies, and composes exact active-leaf, binding, and final-handle retirement
+before host observation and zeroed generation re-arm. The service source
+conventionally checks zero-before-use and bounded write/read behavior. This adds
+no novel capability, syscall, page-table, zeroization, or lifecycle technique.
+
+Patent review: `NOT_TRIGGERED` — conventional authorized resource lifecycle.

@@ -367,11 +367,15 @@ authority; unrelated domains continue.
    per-service resource-page lifecycles distinct from the common two-party
    diagnostic page. Admission rejects common-page or sibling virtual/physical
    aliases, maps only one service root, and zeroes backing before generation
-   re-arm. KVM/WHP runners now attach the distinct receiver page and couple its
-   revoke/restore/final-revoke sequence to the existing service lifecycle.
-   Fresh matching signed hosted-probe evidence remains pending.
-   Wiring user copy, active mapping cleanup, and opaque resources into the
-   kernel-image syscall/lifecycle handlers remains pending.
+   re-arm. KVM/WHP runners attach the distinct receiver page and couple host
+   observation, zeroed restore, and final revocation to the existing service
+   lifecycle. The kernel image now provisions receiver-only capability/binding/
+   resource state, executes bounded shared-buffer syscalls through validated
+   active user copy, and retires the exact active leaf, binding, and final opaque
+   handle before host re-arm. Service source checks zero-before-use and write/
+   read behavior in both generations. Fresh matching signed hosted-probe
+   evidence remains pending; compile and unit gates do not establish live
+   KVM/WHP execution.
    Service-side binding selection is implemented: the exact transferred
    capability and kernel-known VM/task identity must select exactly one live
    binding of the required access, while missing, ambiguous, and stale

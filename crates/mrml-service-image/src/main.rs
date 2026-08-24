@@ -29,6 +29,7 @@ global_asm!(
             mov rdi, r13
             mov rsi, r14
             mov rdx, r12
+            mov rcx, r15
             call mrml_configuration_receiver
             ud2
 
@@ -93,7 +94,9 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
     sender: u64,
     generation: u64,
+    shared_buffer: u64,
 ) -> ! {
+    unsafe { verify_shared_buffer_syscalls(shared_buffer, generation) };
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
     if unsafe { (*configuration).is_none() } {
@@ -121,6 +124,64 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     unsafe { dispatch_next_request(configuration, endpoint, sender, commit_request_id, 1, None) };
     unsafe { yield_now() };
     unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+unsafe fn verify_shared_buffer_syscalls(capability: u64, generation: u64) {
+    let mut output = [0xa5u8; 8];
+    let mut status = 7u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") capability,
+            in("rsi") 128u64,
+            in("rdx") output.as_mut_ptr() as u64,
+            in("r10") output.len() as u64,
+            in("r8") 0u64,
+            in("r9") 0u64,
+            options(nostack)
+        )
+    };
+    if status != 0 || output != [0; 8] {
+        halt();
+    }
+    let input = generation.to_le_bytes();
+    status = 8;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") capability,
+            in("rsi") 128u64,
+            in("rdx") input.as_ptr() as u64,
+            in("r10") input.len() as u64,
+            in("r8") 0u64,
+            in("r9") 0u64,
+            options(nostack)
+        )
+    };
+    if status != 0 {
+        halt();
+    }
+    output.fill(0);
+    status = 7;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") capability,
+            in("rsi") 128u64,
+            in("rdx") output.as_mut_ptr() as u64,
+            in("r10") output.len() as u64,
+            in("r8") 0u64,
+            in("r9") 0u64,
+            options(nostack)
+        )
+    };
+    if status != 0 || output != input {
+        halt();
+    }
 }
 
 #[cfg(not(feature = "preemption-probe"))]

@@ -3082,8 +3082,7 @@ the x86-64 service path. Its unsafe constructor binds one active CR3 and one
 exact mapping. Retirement rejects a different root, virtual base, or byte
 extent, while the existing page-table preflight verifies every physical leaf
 and permission before the first write; successful removal invalidates every
-local translation and is one-use. This prerequisite does not yet wire shared-
-buffer syscalls into the service-probe lifecycle.
+local translation and is one-use.
 
 Hosted KVM and WHP service state now has a distinct observation transition for
 kernel-side shared-leaf retirement. The host opens only the selected service's
@@ -3107,11 +3106,19 @@ live, then installs the exact leaf; reset failure cannot publish stale content.
 KVM/WHP unit and strict compile gates cover the changed backends, but no new
 matching signed hosted probe has yet completed this resource-page path. The KVM
 and WHP runners now attach an independently backed page only to receiver slot
-zero, revoke it on each receiver cleanup, restore it through the zero-before-
-publish backend transition for the replacement generation, and revoke it again
-at final retirement. Sender cleanup never operates on that resource slot. This
-is runner lifecycle composition, not kernel capability or shared-buffer syscall
-evidence.
+zero. The kernel image gives only that receiver an exact non-delegable
+`MAP|READ|WRITE` capability and retains the corresponding VM identity, mapping,
+binding, and opaque resource internally. Shared-buffer syscalls validate the
+current CR3, select the binding from current task authority and kernel-known VM
+identity, validate the user range before copying, bound scratch to one page, and
+return no handle or address. Receiver cleanup removes the exact active leaf,
+then the mapping record and binding, retires the final opaque handle, and only
+then emits the host cleanup transition. The runners therefore observe the
+already absent resource leaf rather than unmapping it twice, restore only after
+zeroing, and revoke again at final retirement. Sender cleanup never operates on
+that resource slot. Service source reads zero state before writing and reading a
+generation value. These paths pass source and compile gates, but no fresh
+matching signed hosted probe has completed them.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3283,9 +3290,18 @@ recorded leaf range to remain absent before changing one slot's re-arm state;
 live or partially removed ranges and repeated observations fail closed.
 Per-service resource admission additionally rejects common/sibling address
 aliases, and generation re-arm cannot expose retained bytes because reset
-precedes leaf installation. Registration and active page-table ownership remain
-explicit unsafe boundaries, and final-reference cleanup uses the existing
-revocation path. This agent review
+precedes leaf installation. Kernel-image dispatch rechecks the active root and
+task-bound capability, admits at most one page through erased scratch, and lets
+no user input select a binding, VM, host handle, or supervisor address. Cleanup
+must exact-match the receiver root and mapping before it removes any leaf;
+missing state, repeated retirement, host disagreement, or restore failure halts
+before replacement execution. The `DIGITAL-RIGHTS REVIEW` finds no new
+collection, retention, correlation, remote disclosure, DRM or publisher veto,
+owner-attestation restriction, accessibility exclusion, AI authority, or
+persistence: the page is local, receiver-confined, erased across generations,
+and carries no identity beyond non-authorizing internal state. Registration and
+active page-table ownership remain explicit unsafe boundaries, and final-
+reference cleanup uses the existing revocation path. This agent review
 does not replace the constitution's independent human dual review.
 
 The ancestry, successor-construction, and object-ID allocator increments also passed the two
