@@ -2312,6 +2312,18 @@ interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
 
+# 2026-08-24 — Authenticated recovery root-provenance state
+
+**Result: NOT_TRIGGERED.** The change conventionally extends the existing
+authenticated monotonic recovery record with exact volume and selected-root
+generation provenance, compares the complete prior record before replacement,
+and rejects cross-volume or regressing-root transitions. The record remains
+non-authorizing data and capability checks remain separate. It adds no
+compatibility transport, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, or other patent-candidate mechanism. Existing planned scopes remain
+`TRIGGERED`; this agent review does not replace independent human dual review.
+
 # 2026-08-24 — Conditional reference-identifier reborrows
 
 **Result: NOT_TRIGGERED.** The compiler conventionally propagates an explicit

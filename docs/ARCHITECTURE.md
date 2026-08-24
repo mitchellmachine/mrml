@@ -446,11 +446,15 @@ tokens carry authenticated rollback state and exact owner-approved checkpoint
 admission; a one-use issuer redecodes canonical bytes, matches every bound field,
 and alone constructs the consumed proof. Stable recovery invokes it only after
 authorized file I/O, permitting retry before acceptance but rejecting duplicate
-issue. A canonical fixed accepted-state record and backend-neutral authenticated
-monotonic-store compare-and-store contract now cover the epoch/generation
-transition. Integrated recovery releases no reconstructed capabilities until
-that exact transition commits, and corrupt, conflicting, or uncertain state
-fails closed. A consumed dependent-validation transaction now keeps the fresh
+issue. A canonical 64-byte accepted-state record binds the authority epoch,
+handle-generation high-water mark, exact volume, and accepted root generation.
+The backend-neutral authenticated monotonic store compares the entire prior
+record before replacing it. Genesis state has no volume/root binding; after the
+first accepted recovery, normal transitions reject cross-volume substitution
+and root-generation regression. Integrated recovery releases no reconstructed
+capabilities until that exact transition commits, and corrupt, conflicting, or
+uncertain state fails closed. A consumed dependent-validation transaction now
+keeps the fresh
 authority table private while an unsafe side-effect-free validator recovers an
 exact selected configuration-file generation and binds its service restart
 policy. Validation failure leaves authenticated monotonic state unchanged;

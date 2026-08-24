@@ -617,11 +617,14 @@ authority; unrelated domains continue.
    requires an unsafe authenticated rollback-state token instead of caller-
    chosen counters. Stable recovery issues only after successful authorized
    I/O, so pre-acceptance I/O failure remains retryable, while duplicate issue
-   fails closed. A canonical 32-byte accepted-state record and backend-neutral
-   authenticated monotonic-store contract now bind the accepted epoch and
-   handle-generation pair. Integrated stable recovery releases no rebuilt
-   authority table unless exact compare-and-store atomically advances both
-   values; corrupt state, stale conflicts, and backend uncertainty fail closed.
+   fails closed. A canonical 64-byte accepted-state record and backend-neutral
+   authenticated monotonic-store contract now bind the accepted epoch,
+   handle-generation pair, exact volume, and selected root generation. Genesis
+   is explicitly unbound; after first acceptance, cross-volume substitution and
+   root regression fail closed. Integrated stable recovery releases no rebuilt
+   authority table unless compare-and-store matches the entire prior canonical
+   record before replacement; corrupt state, stale conflicts, and backend
+   uncertainty fail closed.
    A generic consumed validation transaction now keeps that rebuilt table
    private while a dependent recovery validator uses one exact reconstructed
    file handle. The configuration adapter recovers only the selected file

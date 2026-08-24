@@ -10,7 +10,7 @@ use mrml_crypto::Sha3_256;
 
 pub const AUTHORITY_CHECKPOINT_HEADER_BYTES: usize = 80;
 pub const AUTHORITY_CHECKPOINT_GRANT_BYTES: usize = 48;
-pub const AUTHORITY_RECOVERY_STATE_BYTES: usize = 32;
+pub const AUTHORITY_RECOVERY_STATE_BYTES: usize = 64;
 const DIGEST_OFFSET: usize = 48;
 const DIGEST_BYTES: usize = 32;
 const MAGIC: [u8; 4] = *b"MRAC";
@@ -30,8 +30,7 @@ pub trait AuthorityRecoveryStateStore {
 
     fn compare_and_store(
         &mut self,
-        expected_epoch: u64,
-        expected_handle_generation: u32,
+        expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
         replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
     ) -> Result<(), Self::Error>;
 }
@@ -119,6 +118,8 @@ impl StorageRecoveryGrant {
 pub struct AuthenticatedAuthorityRecoveryState {
     accepted_epoch: u64,
     accepted_handle_generation: u32,
+    accepted_volume: Option<VolumeId>,
+    accepted_root_generation: u64,
 }
 
 impl AuthenticatedAuthorityRecoveryState {
@@ -131,23 +132,64 @@ impl AuthenticatedAuthorityRecoveryState {
         Self {
             accepted_epoch,
             accepted_handle_generation,
+            accepted_volume: None,
+            accepted_root_generation: 0,
+        }
+    }
+
+    /// # Safety
+    ///
+    /// Every value must come from one authenticated rollback-resistant record
+    /// for the same storage authority domain.
+    pub const unsafe fn new_bound(
+        accepted_epoch: u64,
+        accepted_handle_generation: u32,
+        accepted_volume: VolumeId,
+        accepted_root_generation: u64,
+    ) -> Self {
+        Self {
+            accepted_epoch,
+            accepted_handle_generation,
+            accepted_volume: Some(accepted_volume),
+            accepted_root_generation,
         }
     }
 
     fn decode_authenticated(
         input: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
     ) -> Result<Self, AuthorityCheckpointError> {
-        if input[..16] != RECOVERY_STATE_MAGIC || input[28..].iter().any(|byte| *byte != 0) {
+        if input[..16] != RECOVERY_STATE_MAGIC
+            || input[28..32].iter().any(|byte| *byte != 0)
+            || input[56..].iter().any(|byte| *byte != 0)
+        {
             return Err(AuthorityCheckpointError::MalformedRecoveryState);
         }
         let accepted_epoch = u64::from_le_bytes(input[16..24].try_into().unwrap());
         let accepted_handle_generation = u32::from_le_bytes(input[24..28].try_into().unwrap());
+        let volume_bytes: [u8; 16] = input[32..48].try_into().unwrap();
+        let accepted_root_generation = u64::from_le_bytes(input[48..56].try_into().unwrap());
         if accepted_epoch == 0 || accepted_handle_generation == 0 {
             return Err(AuthorityCheckpointError::MalformedRecoveryState);
         }
+        let accepted_volume = if volume_bytes.iter().all(|byte| *byte == 0) {
+            if accepted_root_generation != 0 {
+                return Err(AuthorityCheckpointError::MalformedRecoveryState);
+            }
+            None
+        } else {
+            if accepted_root_generation == 0 {
+                return Err(AuthorityCheckpointError::MalformedRecoveryState);
+            }
+            Some(
+                VolumeId::new(volume_bytes)
+                    .map_err(|_| AuthorityCheckpointError::MalformedRecoveryState)?,
+            )
+        };
         Ok(Self {
             accepted_epoch,
             accepted_handle_generation,
+            accepted_volume,
+            accepted_root_generation,
         })
     }
 
@@ -156,6 +198,10 @@ impl AuthenticatedAuthorityRecoveryState {
         output[..16].copy_from_slice(&RECOVERY_STATE_MAGIC);
         output[16..24].copy_from_slice(&self.accepted_epoch.to_le_bytes());
         output[24..28].copy_from_slice(&self.accepted_handle_generation.to_le_bytes());
+        if let Some(volume) = self.accepted_volume {
+            output[32..48].copy_from_slice(&volume.bytes());
+            output[48..56].copy_from_slice(&self.accepted_root_generation.to_le_bytes());
+        }
         output
     }
 }
@@ -470,6 +516,8 @@ impl<const N: usize> CommittedRecoveredStorageAuthorities<N> {
 pub struct AuthorityRecoveryGuard {
     accepted_epoch: u64,
     accepted_handle_generation: u32,
+    accepted_volume: Option<VolumeId>,
+    accepted_root_generation: u64,
 }
 
 impl AuthorityRecoveryGuard {
@@ -477,6 +525,8 @@ impl AuthorityRecoveryGuard {
         Self {
             accepted_epoch: state.accepted_epoch,
             accepted_handle_generation: state.accepted_handle_generation,
+            accepted_volume: state.accepted_volume,
+            accepted_root_generation: state.accepted_root_generation,
         }
     }
 
@@ -486,6 +536,14 @@ impl AuthorityRecoveryGuard {
 
     pub const fn accepted_handle_generation(&self) -> u32 {
         self.accepted_handle_generation
+    }
+
+    pub const fn accepted_volume(&self) -> Option<VolumeId> {
+        self.accepted_volume
+    }
+
+    pub const fn accepted_root_generation(&self) -> u64 {
+        self.accepted_root_generation
     }
 
     pub fn recover<const N: usize>(
@@ -504,6 +562,11 @@ impl AuthorityRecoveryGuard {
             || decoded.root_generation != proof.root_generation
             || decoded.handle_generation != proof.handle_generation
             || decoded.digest != proof.digest
+            || self
+                .accepted_volume
+                .is_some_and(|volume| volume != decoded.volume)
+            || (self.accepted_volume.is_some()
+                && decoded.root_generation < self.accepted_root_generation)
         {
             return Err(AuthorityCheckpointError::AuthenticationMismatch);
         }
@@ -533,6 +596,8 @@ impl AuthorityRecoveryGuard {
         }
         self.accepted_epoch = decoded.epoch;
         self.accepted_handle_generation = decoded.handle_generation;
+        self.accepted_volume = Some(decoded.volume);
+        self.accepted_root_generation = decoded.root_generation;
         Ok(RecoveredStorageAuthorities {
             table,
             handles,
@@ -818,8 +883,6 @@ pub fn recover_stable_authorities_and_commit<
         .map_err(AuthorityRecoveryCommitError::State)?;
     let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(&encoded_state)
         .map_err(AuthorityRecoveryCommitError::Checkpoint)?;
-    let expected_epoch = state.accepted_epoch;
-    let expected_handle_generation = state.accepted_handle_generation;
     let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
     let recovered = recover_stable_authorities(
         file_state,
@@ -836,10 +899,12 @@ pub fn recover_stable_authorities_and_commit<
     let replacement = AuthenticatedAuthorityRecoveryState {
         accepted_epoch: guard.accepted_epoch,
         accepted_handle_generation: guard.accepted_handle_generation,
+        accepted_volume: guard.accepted_volume,
+        accepted_root_generation: guard.accepted_root_generation,
     }
     .encode();
     state_store
-        .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
+        .compare_and_store(&encoded_state, &replacement)
         .map_err(AuthorityRecoveryCommitError::State)?;
     Ok(CommittedRecoveredStorageAuthorities { recovered })
 }
@@ -911,8 +976,6 @@ pub fn recover_validate_and_commit_stable_authorities<
         .map_err(AuthorityRecoveryValidationError::State)?;
     let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(&encoded_state)
         .map_err(AuthorityRecoveryValidationError::Checkpoint)?;
-    let expected_epoch = state.accepted_epoch;
-    let expected_handle_generation = state.accepted_handle_generation;
     let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
     let recovered = recover_stable_authorities(
         file_state,
@@ -932,10 +995,12 @@ pub fn recover_validate_and_commit_stable_authorities<
     let replacement = AuthenticatedAuthorityRecoveryState {
         accepted_epoch: guard.accepted_epoch,
         accepted_handle_generation: guard.accepted_handle_generation,
+        accepted_volume: guard.accepted_volume,
+        accepted_root_generation: guard.accepted_root_generation,
     }
     .encode();
     state_store
-        .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
+        .compare_and_store(&encoded_state, &replacement)
         .map_err(AuthorityRecoveryValidationError::State)?;
     Ok((
         CommittedRecoveredStorageAuthorities { recovered },
@@ -1371,6 +1436,8 @@ mod tests {
                 state: AuthenticatedAuthorityRecoveryState {
                     accepted_epoch: epoch,
                     accepted_handle_generation: handle_generation,
+                    accepted_volume: None,
+                    accepted_root_generation: 0,
                 }
                 .encode(),
                 fail_load: false,
@@ -1395,16 +1462,10 @@ mod tests {
 
         fn compare_and_store(
             &mut self,
-            expected_epoch: u64,
-            expected_handle_generation: u32,
+            expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
             replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
         ) -> Result<(), Self::Error> {
-            let current = AuthenticatedAuthorityRecoveryState::decode_authenticated(&self.state)
-                .map_err(|_| 2)?;
-            if self.force_conflict
-                || current.accepted_epoch != expected_epoch
-                || current.accepted_handle_generation != expected_handle_generation
-            {
+            if self.force_conflict || self.state != *expected {
                 return Err(3);
             }
             self.state.copy_from_slice(replacement);
@@ -1823,9 +1884,11 @@ mod tests {
         assert_eq!(
             (
                 committed.accepted_epoch,
-                committed.accepted_handle_generation
+                committed.accepted_handle_generation,
+                committed.accepted_volume,
+                committed.accepted_root_generation,
             ),
-            (9, 2)
+            (9, 2, Some(volume()), 14)
         );
         let (table, handles, count, _) = recovered.into_parts();
         assert!(recovered_bytes.iter().all(|byte| *byte == 0));
@@ -1850,6 +1913,12 @@ mod tests {
             Err(AuthorityCheckpointError::MalformedRecoveryState)
         ));
         malformed = RecoveryStateBackend::new(8, 1).state;
+        malformed[48..56].copy_from_slice(&7u64.to_le_bytes());
+        assert!(matches!(
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&malformed),
+            Err(AuthorityCheckpointError::MalformedRecoveryState)
+        ));
+        malformed = RecoveryStateBackend::new(8, 1).state;
         malformed[16..24].fill(0);
         assert!(matches!(
             AuthenticatedAuthorityRecoveryState::decode_authenticated(&malformed),
@@ -1861,9 +1930,12 @@ mod tests {
         let replacement = AuthenticatedAuthorityRecoveryState {
             accepted_epoch: 9,
             accepted_handle_generation: 2,
+            accepted_volume: Some(volume()),
+            accepted_root_generation: 14,
         }
         .encode();
-        assert_eq!(store.compare_and_store(8, 1, &replacement), Err(3));
+        let expected = RecoveryStateBackend::new(8, 1).state;
+        assert_eq!(store.compare_and_store(&expected, &replacement), Err(3));
         let current =
             AuthenticatedAuthorityRecoveryState::decode_authenticated(&store.state).unwrap();
         assert_eq!(
@@ -1950,6 +2022,41 @@ mod tests {
             ),
             Err(StorageAuthorityError::InvalidHandle)
         );
+    }
+
+    #[test]
+    fn authenticated_guard_rejects_root_regression_and_cross_volume_substitution() {
+        let state = unsafe { AuthenticatedAuthorityRecoveryState::new_bound(8, 19, volume(), 14) };
+        let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
+        let mut encoded = [0; AUTHORITY_CHECKPOINT_HEADER_BYTES];
+        encode_authority_checkpoint(9, volume(), 13, 20, &[], &mut encoded).unwrap();
+        assert!(matches!(
+            guard.recover::<1>(&encoded, proof(&encoded, 9, 13, 20)),
+            Err(AuthorityCheckpointError::AuthenticationMismatch)
+        ));
+
+        let other_volume = VolumeId::new([8; 16]).unwrap();
+        encode_authority_checkpoint(9, other_volume, 15, 20, &[], &mut encoded).unwrap();
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                9,
+                other_volume,
+                15,
+                20,
+                authority_checkpoint_digest(&encoded).unwrap(),
+            )
+        };
+        let proof = AuthorityCheckpointProofIssuer::new(admission)
+            .issue::<1>(&encoded)
+            .unwrap();
+        assert!(matches!(
+            guard.recover::<1>(&encoded, proof),
+            Err(AuthorityCheckpointError::AuthenticationMismatch)
+        ));
+        assert_eq!(guard.accepted_epoch(), 8);
+        assert_eq!(guard.accepted_handle_generation(), 19);
+        assert_eq!(guard.accepted_volume(), Some(volume()));
+        assert_eq!(guard.accepted_root_generation(), 14);
     }
 
     #[test]

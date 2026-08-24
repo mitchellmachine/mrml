@@ -3899,13 +3899,10 @@ mod tests {
 
         fn compare_and_store(
             &mut self,
-            expected_epoch: u64,
-            expected_handle_generation: u32,
+            expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
             replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
         ) -> Result<(), Self::Error> {
-            let epoch = u64::from_le_bytes(self.bytes[16..24].try_into().map_err(|_| 1)?);
-            let generation = u32::from_le_bytes(self.bytes[24..28].try_into().map_err(|_| 1)?);
-            if epoch != expected_epoch || generation != expected_handle_generation {
+            if self.bytes != *expected {
                 return Err(2);
             }
             self.bytes.copy_from_slice(replacement);

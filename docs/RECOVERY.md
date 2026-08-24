@@ -297,11 +297,15 @@ explicitly and downgrade the status rather than guessing.
   unforgeable recovery proof. The replay guard can be initialized only from an
   unsafe authenticated rollback-state token. Stable recovery issues after a
   successful authorized read, so I/O failure does not consume admission;
-  duplicate issue fails closed. A canonical accepted-state record now binds the
-  epoch and handle-generation pair behind an authenticated monotonic-store
-  contract. Integrated recovery releases no fresh authority table unless exact
-  compare-and-store advances both values; corruption, conflict, and backend
-  uncertainty fail closed. Dependent recovery can now run before that commit:
+  duplicate issue fails closed. A canonical 64-byte accepted-state record now
+  binds the epoch, handle-generation pair, exact volume, and selected root
+  generation behind an authenticated monotonic-store contract. Genesis is
+  explicitly unbound; after first acceptance, cross-volume substitution and
+  root regression fail closed. Compare-and-store matches the entire prior
+  canonical record before replacement. Integrated recovery releases no fresh
+  authority table unless that exact transition commits; corruption, conflict,
+  and backend uncertainty fail closed. Dependent recovery can now run before
+  that commit:
   one consumed transaction keeps the rebuilt table private while a narrowly
   unsafe side-effect-free validator reads the exact selected configuration file,
   reconstructs canonical configuration, and binds its exact service restart
