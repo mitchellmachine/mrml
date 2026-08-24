@@ -91,6 +91,15 @@ impl BlockRequest {
         }
     }
 
+    pub const fn byte_length(self) -> usize {
+        match self {
+            Self::Read { byte_length, .. } | Self::Write { byte_length, .. } => {
+                byte_length as usize
+            }
+            Self::Flush { .. } | Self::ReplaceSuperblock { .. } => 0,
+        }
+    }
+
     pub fn encode(self, output: &mut [u8; BLOCK_REQUEST_BYTES]) -> Result<(), BlockProtocolError> {
         *output = [0; BLOCK_REQUEST_BYTES];
         output[..8].copy_from_slice(&REQUEST_MAGIC);
@@ -359,6 +368,15 @@ pub struct BlockProtocolDispatcher<const SESSIONS: usize> {
     replay: [ReplaySlot; SESSIONS],
 }
 
+pub(crate) enum BlockAdmission {
+    Rejected(BlockResponse),
+    Admitted(AdmittedBlockRequest),
+}
+
+pub(crate) struct AdmittedBlockRequest {
+    request: BlockRequest,
+}
+
 impl<const SESSIONS: usize> Default for BlockProtocolDispatcher<SESSIONS> {
     fn default() -> Self {
         Self::new()
@@ -389,13 +407,28 @@ impl<const SESSIONS: usize> BlockProtocolDispatcher<SESSIONS> {
         buffer: BlockDispatchBuffer<'_>,
     ) -> Result<BlockResponse, BlockProtocolError> {
         let request = BlockRequest::decode(encoded)?;
-        let request_id = request.request_id();
         if !buffer_matches(request, &buffer) {
             return Err(BlockProtocolError::BufferMismatch);
         }
+        match self.admit(service, principal, request)? {
+            BlockAdmission::Rejected(response) => Ok(response),
+            BlockAdmission::Admitted(admitted) => {
+                self.dispatch_admitted(service, backend, principal, admitted, buffer)
+            }
+        }
+    }
+
+    pub(crate) fn admit<const DEVICES: usize>(
+        &mut self,
+        service: &BlockService<DEVICES, SESSIONS>,
+        principal: StoragePrincipal,
+        request: BlockRequest,
+    ) -> Result<BlockAdmission, BlockProtocolError> {
+        let request_id = request.request_id();
         if let Err(error) = service.validate_owner(request.session(), principal) {
-            return BlockResponse::new(request_id, status_for(error), 0)
-                .ok_or(BlockProtocolError::InvalidResponse);
+            let response = BlockResponse::new(request_id, status_for(error), 0)
+                .ok_or(BlockProtocolError::InvalidResponse)?;
+            return Ok(BlockAdmission::Rejected(response));
         }
         let replay = self
             .replay
@@ -407,15 +440,46 @@ impl<const SESSIONS: usize> BlockProtocolDispatcher<SESSIONS> {
             replay.poisoned = false;
         }
         if request_id <= replay.last_request_id {
-            return BlockResponse::new(request_id, BlockStatus::ReplayRejected, 0)
-                .ok_or(BlockProtocolError::InvalidResponse);
+            let response = BlockResponse::new(request_id, BlockStatus::ReplayRejected, 0)
+                .ok_or(BlockProtocolError::InvalidResponse)?;
+            return Ok(BlockAdmission::Rejected(response));
         }
         if replay.poisoned {
-            return BlockResponse::new(request_id, BlockStatus::BackendFailure, 0)
-                .ok_or(BlockProtocolError::InvalidResponse);
+            let response = BlockResponse::new(request_id, BlockStatus::BackendFailure, 0)
+                .ok_or(BlockProtocolError::InvalidResponse)?;
+            return Ok(BlockAdmission::Rejected(response));
         }
         replay.last_request_id = request_id;
+        Ok(BlockAdmission::Admitted(AdmittedBlockRequest { request }))
+    }
 
+    pub(crate) fn dispatch_admitted<B: BlockServiceBackend, const DEVICES: usize>(
+        &mut self,
+        service: &BlockService<DEVICES, SESSIONS>,
+        backend: &mut B,
+        principal: StoragePrincipal,
+        admitted: AdmittedBlockRequest,
+        buffer: BlockDispatchBuffer<'_>,
+    ) -> Result<BlockResponse, BlockProtocolError> {
+        let request = admitted.request;
+        if !buffer_matches(request, &buffer) {
+            return Err(BlockProtocolError::BufferMismatch);
+        }
+        let request_id = request.request_id();
+        if let Err(error) = service.validate_owner(request.session(), principal) {
+            return BlockResponse::new(request_id, status_for(error), 0)
+                .ok_or(BlockProtocolError::InvalidResponse);
+        }
+        let replay = self
+            .replay
+            .get_mut(request.session().slot() as usize)
+            .ok_or(BlockProtocolError::InvalidRequest)?;
+        if replay.generation != request.session().generation()
+            || replay.last_request_id != request_id
+            || replay.poisoned
+        {
+            return Err(BlockProtocolError::Replay);
+        }
         let mutating = matches!(
             request,
             BlockRequest::Write { .. }
@@ -551,6 +615,7 @@ pub enum BlockProtocolError {
     InvalidRequest,
     InvalidResponse,
     BufferMismatch,
+    Replay,
 }
 
 fn get_u16(input: &[u8], offset: usize) -> Result<u16, BlockProtocolError> {

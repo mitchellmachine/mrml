@@ -2977,9 +2977,8 @@ to retain exactly `MAP|READ`; a service-write buffer exactly
 Missing, multiple, insufficient, excessive, stale, and revoked capabilities all
 fail before object identity or mapping resolution; wrong object, VM/task,
 mapping, access, resource range, or executable state fails before the handle is
-returned. The block-specific receive loop, dispatcher connection, and syscall
-path remain pending, so this is kernel transfer authorization rather than
-end-to-end service execution.
+returned. The concrete receive loop and syscall path remain pending, so this is
+not yet end-to-end isolated service execution.
 
 The same generic gate now supports actual bounded buffer use without returning
 an address or a persistent mapping view. Each read or write repeats exact
@@ -2990,8 +2989,7 @@ overflowing, and out-of-range requests; writes additionally require the live
 binding to be read-write. Backend failures remain distinct, including uncertain
 outcomes. Safe callers cannot revoke the capability or mapping concurrently
 through the immutably borrowed authority state, and no authorization snapshot
-survives for later buffer use. Connecting the block dispatcher to these generic
-operations still requires the block-specific receive loop.
+survives for later buffer use.
 
 Service-side binding selection is now implemented as a generic kernel
 mechanism. After exact single-capability authorization, the kernel matches the
@@ -3001,8 +2999,24 @@ ambiguity fails before mapping resolution or backend use. The selected mapping
 then undergoes the same generation, physical-range, page-count, permission, and
 liveness validation immediately before each operation. Neither block request
 bytes nor other untrusted payload can nominate a binding ID, mapping ID, host
-handle, or address. The block-specific receive loop and its connection to the
-storage dispatcher remain pending.
+handle, or address.
+
+`mrml-storage` now supplies the block-specific transport composition without
+moving storage policy into the privileged kernel. It decodes an already-
+received kernel `Message`, validates its exact zero-or-one capability shape and
+selected live binding, and then performs replay/poison admission before any
+bulk copy or block backend call. An opaque admission is consumed exactly once
+by execution. Service-read requests copy only the declared bytes into bounded
+caller-owned scratch; service-write requests dispatch into that scratch and
+copy back only after a successful block read. Scratch is erased on every return
+path. Session denial, replay, poison, malformed protocol, revoked authority,
+binding failure, and buffer-shape failure reach neither bulk-buffer nor device
+I/O. Backend uncertainty retains the existing rule: uncertain mutating block
+operations poison the session generation, while transport copy failure is
+reported distinctly and cannot become corruption or rollback permission. This
+is still in-process transport simulation over an already-received message; a
+real isolated service image, concrete receive/syscall loop, device driver, and
+physical-device evidence remain pending.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3129,9 +3143,9 @@ This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-five focused storage tests and 315 focused kernel tests plus strict
+Ninety-nine focused storage tests and 315 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
-block-service process and block-specific receive/dispatcher integration, a
+block-service process and concrete receive/syscall integration, a
 concrete hosted/physical device backend,
 complete directory hierarchy/lifetime handling, reboot-time capability
 checkpoint/reconstruction, complete crash recovery, snapshots, and
@@ -3144,14 +3158,15 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 95 tests, both kernel runs pass 315 tests, and
+Both storage unit-test runs pass 99 tests, both kernel runs pass 315 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
-kernel capability-transfer state, and opaque-handle bounded buffer I/O, not
+kernel capability-transfer state, opaque-handle bounded buffer I/O, and
+in-process block transport composition, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
-Patent review: `NOT_TRIGGERED` — conventional bounded capability-indexed
-resource selection and exact binding revalidation; see
+Patent review: `NOT_TRIGGERED` — conventional admission-before-copy service
+dispatch over capability-authorized bounded buffers; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The ancestry, successor-construction, and object-ID allocator increments also passed the two

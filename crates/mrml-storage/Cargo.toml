@@ -7,3 +7,4 @@ license.workspace = true
 
 [dependencies]
 mrml-crypto = { path = "../mrml-crypto" }
+mrml-kernel = { path = "../mrml-kernel" }

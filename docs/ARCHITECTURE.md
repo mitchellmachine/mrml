@@ -286,8 +286,7 @@ passing no raw address across the interface. Service-side selection now derives
 the unique binding from the exact transferred capability plus kernel-known
 VM/task identity; absent, ambiguous, or stale candidates fail before I/O, and
 request bytes cannot nominate a binding. There is not yet an isolated service
-process, block-specific syscall/receive-loop and dispatcher-to-buffer wiring,
-or physical device
+process, block-specific syscall/receive loop, or physical device
 implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
@@ -444,7 +443,7 @@ successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The exact-block
 metadata and file-data adapters plus the bounded block-service core are
-implemented, but the isolated service process and block-specific receive/dispatcher wiring, physical
+implemented, but the isolated service process and concrete receive/syscall loop, physical
 device backend, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

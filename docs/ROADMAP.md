@@ -334,9 +334,13 @@ authority; unrelated domains continue.
    non-executable state before returning only an opaque host resource handle.
    Generic bounded reads and writes repeat those checks at every use, reject
    empty/overflowing ranges and read-only writes before backend access, expose
-   no address, and preserve backend errors. An isolated service process,
-   block-specific receive/syscall and dispatcher-to-buffer wiring, concrete
-   hosted/physical backend, and
+   no address, and preserve backend errors. The storage-service transport now
+   composes decoded kernel messages, exact selected bindings, bounded erased
+   scratch, replay/poison admission, and the block dispatcher outside the
+   privileged kernel. It admits before touching bulk bytes, so denied, replayed,
+   poisoned, revoked, malformed, or wrongly shaped requests reach no block I/O.
+   An isolated service process, concrete receive/syscall loop, hosted/physical
+   backend, and
    physical durability evidence remain pending.
    Service-side binding selection is implemented: the exact transferred
    capability and kernel-known VM/task identity must select exactly one live
@@ -443,8 +447,8 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, the isolated block-service process and block-
-   specific receive/buffer-use integration, a concrete hosted/physical device backend, and physical
+   checkpoint/reconstruction, the isolated block-service process and concrete
+   receive/syscall loop, a hosted/physical device backend, and physical
    power-loss evidence remain pending. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.

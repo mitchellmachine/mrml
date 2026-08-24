@@ -1133,3 +1133,16 @@ or duplicate matches are rejected. This adds no novel capability, lookup,
 mapping, or resource-selection technique.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded authorized lookup.
+
+## 2026-08-23 — capability-bound block transport composition
+
+MRML source: `crates/mrml-storage/src/{block_protocol,kernel_transport}.rs`
+and `crates/mrml-kernel/src/ipc.rs`.
+
+The storage service conventionally separates replay/poison admission from
+execution, copies exact capability-authorized buffer ranges through bounded
+caller scratch, erases scratch after use, and dispatches an existing versioned
+block protocol. This adds no novel IPC, capability, admission, block-I/O, or
+buffer-copy technique.
+
+Patent review: `NOT_TRIGGERED` — conventional authorized service dispatch.

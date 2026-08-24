@@ -19,6 +19,7 @@ mod extent;
 mod file;
 mod format;
 mod identity;
+mod kernel_transport;
 mod object_id_allocator;
 mod recovery;
 mod transaction;
@@ -77,6 +78,7 @@ pub use format::{
     MetadataPointer, SUPERBLOCK_BYTES, StorageName, Superblock, VOLUME_HEADER_BYTES, VolumeHeader,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
+pub use kernel_transport::{BlockKernelTransport, BlockKernelTransportError};
 pub use object_id_allocator::{
     OBJECT_ID_ALLOCATOR_HEADER_BYTES, ObjectIdAllocatorError, ObjectIdAllocatorImage,
     ObjectIdAllocatorUpdateError, ObjectIdAllocatorWriteBackend, PreparedObjectIdReservation,

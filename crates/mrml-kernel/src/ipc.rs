@@ -313,6 +313,35 @@ impl Message {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn resolve_selected_shared_buffer<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+    ) -> Result<AuthorizedSharedIpcBuffer, IpcSharedBufferError> {
+        let (authority, binding, resource) = self.select_single_shared_resource(
+            receiver_space,
+            required,
+            bindings,
+            memory,
+            vm,
+            task,
+        )?;
+        Ok(AuthorizedSharedIpcBuffer {
+            authority,
+            binding,
+            handle: resource.handle(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn read_selected_shared_buffer<
         const CAPS: usize,
         const MAPPINGS: usize,
@@ -330,7 +359,7 @@ impl Message {
         output: &mut [u8],
         backend: &mut B,
     ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
-        let (_, resource) = self
+        let (_, _, resource) = self
             .select_single_shared_resource(receiver_space, required, bindings, memory, vm, task)
             .map_err(IpcSharedBufferIoError::Authorization)?;
         validate_buffer_range(resource.bytes(), offset, output.len())?;
@@ -357,7 +386,7 @@ impl Message {
         input: &[u8],
         backend: &mut B,
     ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
-        let (_, resource) = self
+        let (_, _, resource) = self
             .select_single_shared_resource(receiver_space, required, bindings, memory, vm, task)
             .map_err(IpcSharedBufferIoError::Authorization)?;
         if resource.access() != SharedAccess::ReadWrite {
@@ -419,14 +448,20 @@ impl Message {
         memory: &GuestMemory<MAPPINGS>,
         vm: VmId,
         task: TaskId,
-    ) -> Result<(SharedBindingId, crate::shared_memory::ResolvedSharedBinding), IpcSharedBufferError>
-    {
+    ) -> Result<
+        (
+            AuthorizedIpcCapability,
+            SharedBindingId,
+            crate::shared_memory::ResolvedSharedBinding,
+        ),
+        IpcSharedBufferError,
+    > {
         let access =
             SharedAccess::from_rights(required).ok_or(IpcSharedBufferError::AccessMismatch)?;
         let authority = self
             .authorize_single_capability(receiver_space, required)
             .map_err(IpcSharedBufferError::Ipc)?;
-        bindings
+        let (binding, resource) = bindings
             .select_resource(
                 receiver_space,
                 authority.capability(),
@@ -435,7 +470,8 @@ impl Message {
                 task,
                 access,
             )
-            .map_err(IpcSharedBufferError::Binding)
+            .map_err(IpcSharedBufferError::Binding)?;
+        Ok((authority, binding, resource))
     }
 
     /// Encodes without allocation. Tokens only have meaning in a
