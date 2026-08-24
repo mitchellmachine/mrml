@@ -4096,6 +4096,23 @@ fn rustc_reassigned_reference_loan_generations_match_the_oracle() {
 }
 
 #[test]
+fn rustc_expected_reference_assignment_reborrow_matches_the_oracle() {
+    let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let parent: &mut u16 = &mut *first; let mut child: &mut u16 = &mut *second; child = parent; let before = *parent; *child += 1; before }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(rejected, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeBorrowConflict
+            ))
+        );
+    }
+
+    let accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let parent: &mut u16 = &mut *first; let mut child: &mut u16 = &mut *second; child = parent; *child += 1; *parent }";
+    assert_eq!(compile_wide(accepted, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(accepted, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
     let source = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 2; *returned }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
@@ -4139,7 +4156,7 @@ fn rustc_tuple_field_partial_moves_and_restoration_reach_native_objects() {
 #[test]
 fn rustc_cfg_initializedness_rejects_branch_and_loop_exit_use_after_move() {
     let rejected = [
-        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = second; } second }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = identity(second); } second }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { loop { let moved: &mut u16 = identity(input); break; } input }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let moved: &mut u16 = if choose { input } else { &mut *input }; input }",
     ];
