@@ -617,6 +617,11 @@ direct assignment generations, suspends the argument while the returned child
 is live, and restores it afterward. Callees with statements, ambiguous result
 parameters, unsupported result expressions, or locally derived references remain
 conservative rather than receiving a guessed origin.
+The same proof now merges top-level explicit returns, conditional returns,
+bounded else-if return chains, exhaustive else values, and a continuing tail.
+Every retained result must resolve to the same compatible parameter. Any local,
+assignment, expression statement, loop, missing value, parse failure, or differing
+origin makes the call result conservative.
 Non-direct conditional destinations and indirect reference-value moves remain
 unclassified loan origins.
 A plain assignment of a direct reference identifier into an existing typed
@@ -645,8 +650,9 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is broader validated call-result
-loan origins followed by return coercion-site reborrowing before region reasoning.
+The highest-value next major implementation task is validated local/loop
+call-result origins followed by return coercion-site reborrowing before region
+reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

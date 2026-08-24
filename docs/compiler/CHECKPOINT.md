@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `83ba56c`
-  (`compiler: trace identity call result loans`)
+- Compiler checkpoint commit: `533ede7`
+  (`compiler: trace conditional return call loans`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -423,9 +423,9 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. broaden reference-carrying call-result origins beyond statement-free
-   single-origin bodies, then add return coercion-site reborrows before region
-   reasoning; preserve the
+1. broaden reference-carrying call-result origins through validated local and
+   loop flow, then add return coercion-site reborrows before region reasoning;
+   preserve the
    distinction between an expected-reference reborrow, an explicit
    reassignment borrow, and an indirect consuming move;
 2. exact constant owned-array element identity is now retained. Add array move
@@ -457,8 +457,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 727 tests on each host: 399
-library tests, 10 conformance tests, 316 replacement tests, and 2 driver tests.
+The checkpoint source passed 729 tests on each host: 400
+library tests, 10 conformance tests, 317 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

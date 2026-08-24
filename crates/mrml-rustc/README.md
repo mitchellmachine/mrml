@@ -3505,3 +3505,17 @@ move failures across conditional joins or loop exits. Statement-bearing,
 ambiguous, unsupported, and locally derived result bodies retain conservative
 classification. This does not claim general interprocedural regions or return
 coercions. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The conditional-return call-result origin milestone passed all 729 compiler and
+driver tests on Windows gnullvm and all 729 in release mode on native Arch Linux
+WSL, plus warnings-denied compiler-only Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. The bounded callee proof now
+merges top-level explicit returns, conditional returns, else-if chains, exhaustive
+else values, and a continuing tail, requiring every retained result to name the
+same compatible reference parameter. Initializer and assignment probes preserve
+that argument origin across the call, match the pinned future-edition oracle's
+E0499 while the returned child is live, and restore the owner afterward. Locals,
+assignments, expression statements, loops, missing values, parse failures, and
+differing origins fail the proof closed. General local/loop interprocedural flow,
+regions, and return coercions remain unimplemented. The
+`no_std`/allocation/unsafe hygiene scan remained empty.
