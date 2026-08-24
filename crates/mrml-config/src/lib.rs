@@ -12,8 +12,8 @@ use core::array;
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, Rights, ServiceId,
-    ServiceState, ServiceSupervisor, TaskRuntime,
+    Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, RestartPolicy,
+    Rights, ServiceError, ServiceId, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
 };
 use mrml_storage::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
@@ -35,12 +35,14 @@ pub const SYSTEM_PROTOCOL_VERSION: u16 = 1;
 pub const CONFIG_CHECKPOINT_HEADER_BYTES: usize = 96;
 pub const CONFIG_CHECKPOINT_SETTING_BYTES: usize = 112;
 pub const CONFIG_CHECKPOINT_AUDIT_BYTES: usize = 24;
+pub const PERSISTED_RESTART_POLICY_BYTES: usize = 48;
 
 const CONFIG_REQUEST_MAGIC: [u8; 4] = *b"MRCQ";
 const CONFIG_RESPONSE_MAGIC: [u8; 4] = *b"MRCP";
 const SUPERVISION_REQUEST_MAGIC: [u8; 4] = *b"MRSQ";
 const SUPERVISION_RESPONSE_MAGIC: [u8; 4] = *b"MRSP";
 const CONFIG_CHECKPOINT_MAGIC: [u8; 4] = *b"MRCK";
+const PERSISTED_RESTART_POLICY_MAGIC: [u8; 4] = *b"MRRP";
 const CONFIG_CHECKPOINT_DIGEST_OFFSET: usize = 64;
 const CONFIG_CHECKPOINT_DIGEST_BYTES: usize = 32;
 
@@ -339,6 +341,200 @@ pub enum ConfigError {
 pub struct ConfigurationCheckpoint {
     pub length: usize,
     pub digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES],
+}
+
+/// Canonical persistent input to trusted service registration. This record is
+/// policy data, not authority: loading requires the setting's exact READ
+/// capability and every later restart still requires exact service CONTROL.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistedRestartPolicy {
+    service: ObjectId,
+    maximum_restarts: u32,
+    base_backoff_ticks: u64,
+    maximum_backoff_ticks: u64,
+}
+
+impl PersistedRestartPolicy {
+    pub fn new(
+        service: ObjectId,
+        maximum_restarts: u32,
+        base_backoff_ticks: u64,
+        maximum_backoff_ticks: u64,
+    ) -> Result<Self, PersistedRestartPolicyError> {
+        if service.0 == 0 {
+            return Err(PersistedRestartPolicyError::InvalidRecord);
+        }
+        RestartPolicy::new(maximum_restarts, base_backoff_ticks, maximum_backoff_ticks)
+            .map_err(PersistedRestartPolicyError::Service)?;
+        Ok(Self {
+            service,
+            maximum_restarts,
+            base_backoff_ticks,
+            maximum_backoff_ticks,
+        })
+    }
+
+    pub const fn service(self) -> ObjectId {
+        self.service
+    }
+
+    pub fn restart_policy(self) -> Result<RestartPolicy, PersistedRestartPolicyError> {
+        RestartPolicy::new(
+            self.maximum_restarts,
+            self.base_backoff_ticks,
+            self.maximum_backoff_ticks,
+        )
+        .map_err(PersistedRestartPolicyError::Service)
+    }
+
+    pub fn encode(self, output: &mut [u8; PERSISTED_RESTART_POLICY_BYTES]) {
+        output.fill(0);
+        output[..4].copy_from_slice(&PERSISTED_RESTART_POLICY_MAGIC);
+        output[4..6].copy_from_slice(&SYSTEM_PROTOCOL_VERSION.to_le_bytes());
+        output[6..8].copy_from_slice(&(PERSISTED_RESTART_POLICY_BYTES as u16).to_le_bytes());
+        output[8..16].copy_from_slice(&self.service.0.to_le_bytes());
+        output[16..20].copy_from_slice(&self.maximum_restarts.to_le_bytes());
+        output[24..32].copy_from_slice(&self.base_backoff_ticks.to_le_bytes());
+        output[32..40].copy_from_slice(&self.maximum_backoff_ticks.to_le_bytes());
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, PersistedRestartPolicyError> {
+        if input.len() != PERSISTED_RESTART_POLICY_BYTES
+            || input[..4] != PERSISTED_RESTART_POLICY_MAGIC
+            || u16::from_le_bytes(
+                input[4..6]
+                    .try_into()
+                    .map_err(|_| PersistedRestartPolicyError::InvalidRecord)?,
+            ) != SYSTEM_PROTOCOL_VERSION
+            || usize::from(u16::from_le_bytes(
+                input[6..8]
+                    .try_into()
+                    .map_err(|_| PersistedRestartPolicyError::InvalidRecord)?,
+            )) != PERSISTED_RESTART_POLICY_BYTES
+            || input[20..24].iter().any(|byte| *byte != 0)
+            || input[40..].iter().any(|byte| *byte != 0)
+        {
+            return Err(PersistedRestartPolicyError::InvalidRecord);
+        }
+        Self::new(
+            ObjectId(u64::from_le_bytes(
+                input[8..16]
+                    .try_into()
+                    .map_err(|_| PersistedRestartPolicyError::InvalidRecord)?,
+            )),
+            u32::from_le_bytes(
+                input[16..20]
+                    .try_into()
+                    .map_err(|_| PersistedRestartPolicyError::InvalidRecord)?,
+            ),
+            u64::from_le_bytes(
+                input[24..32]
+                    .try_into()
+                    .map_err(|_| PersistedRestartPolicyError::InvalidRecord)?,
+            ),
+            u64::from_le_bytes(
+                input[32..40]
+                    .try_into()
+                    .map_err(|_| PersistedRestartPolicyError::InvalidRecord)?,
+            ),
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistedRestartPolicyError {
+    Configuration(ConfigError),
+    InvalidRecord,
+    WrongService,
+    PolicyChanged,
+    Service(ServiceError),
+}
+
+/// A policy loaded from one exact configuration setting revision and bound to
+/// one service object. It carries no capability and cannot authorize restart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundRestartPolicy {
+    policy: PersistedRestartPolicy,
+    configuration_revision: u64,
+    setting_revision: u64,
+    setting: SettingId,
+    capability: Capability,
+}
+
+impl BoundRestartPolicy {
+    pub const fn service(self) -> ObjectId {
+        self.policy.service
+    }
+
+    pub const fn configuration_revision(self) -> u64 {
+        self.configuration_revision
+    }
+
+    pub const fn setting_revision(self) -> u64 {
+        self.setting_revision
+    }
+
+    pub fn register<
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
+        self,
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        supervisor: &mut ServiceSupervisor<SERVICES>,
+        task: TaskId,
+    ) -> Result<ServiceId, PersistedRestartPolicyError> {
+        let current = load_persisted_restart_policy(
+            configuration,
+            capabilities,
+            self.capability,
+            self.setting,
+            self.policy.service,
+        )?;
+        if current != self {
+            return Err(PersistedRestartPolicyError::PolicyChanged);
+        }
+        supervisor
+            .register_with_policy(self.policy.service, task, self.policy.restart_policy()?)
+            .map_err(PersistedRestartPolicyError::Service)
+    }
+}
+
+/// Loads a persisted restart policy through the ordinary exact setting READ
+/// gate and rejects service-object substitution before trusted registration.
+pub fn load_persisted_restart_policy<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    A: CapabilityAuthorizer + ?Sized,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    policy_capability: Capability,
+    setting: SettingId,
+    expected_service: ObjectId,
+) -> Result<BoundRestartPolicy, PersistedRestartPolicyError> {
+    if expected_service.0 == 0 {
+        return Err(PersistedRestartPolicyError::WrongService);
+    }
+    let record = configuration
+        .read(capabilities, policy_capability, setting)
+        .map_err(PersistedRestartPolicyError::Configuration)?;
+    let value = record
+        .value
+        .ok_or(PersistedRestartPolicyError::InvalidRecord)?;
+    let policy = PersistedRestartPolicy::decode(value.as_bytes())?;
+    if policy.service != expected_service {
+        return Err(PersistedRestartPolicyError::WrongService);
+    }
+    Ok(BoundRestartPolicy {
+        policy,
+        configuration_revision: configuration.revision(),
+        setting_revision: record.revision,
+        setting,
+        capability: policy_capability,
+    })
 }
 
 /// A checkpoint staged into a fresh stable-file generation. The successor
@@ -3424,5 +3620,222 @@ mod tests {
             Err(ConfigurationStorageError::Read(FileReadError::Backend(4)))
         ));
         assert!(recovered_bytes.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn persisted_restart_policy_is_canonical_and_service_bound() {
+        assert_eq!(
+            PersistedRestartPolicy::new(ObjectId(0), 1, 0, 0),
+            Err(PersistedRestartPolicyError::InvalidRecord)
+        );
+        assert_eq!(
+            PersistedRestartPolicy::new(ObjectId(70), 0, 0, 0),
+            Err(PersistedRestartPolicyError::Service(
+                ServiceError::InvalidRestartPolicy
+            ))
+        );
+        let policy = PersistedRestartPolicy::new(ObjectId(70), 3, 10, 40).unwrap();
+        let mut encoded = [0xa5; PERSISTED_RESTART_POLICY_BYTES];
+        policy.encode(&mut encoded);
+        assert_eq!(PersistedRestartPolicy::decode(&encoded), Ok(policy));
+
+        for offset in [4usize, 6, 20, 40, 47] {
+            let mut malformed = encoded;
+            malformed[offset] ^= 1;
+            assert_eq!(
+                PersistedRestartPolicy::decode(&malformed),
+                Err(PersistedRestartPolicyError::InvalidRecord)
+            );
+        }
+        assert_eq!(
+            PersistedRestartPolicy::decode(&encoded[..encoded.len() - 1]),
+            Err(PersistedRestartPolicyError::InvalidRecord)
+        );
+        let mut substituted = encoded;
+        substituted[8..16].copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            PersistedRestartPolicy::decode(&substituted),
+            Err(PersistedRestartPolicyError::InvalidRecord)
+        );
+    }
+
+    #[test]
+    fn recovered_restart_policy_requires_live_setting_read_and_trusted_registration() {
+        let setting = SettingId::new(9).unwrap();
+        let policy_object = ObjectId(80);
+        let service_object = ObjectId(70);
+        let schema =
+            SettingSchema::bytes(setting, policy_object, PERSISTED_RESTART_POLICY_BYTES as u8)
+                .unwrap();
+        let mut configuration = ConfigurationService::<1, 2>::new(ObjectId(79), &[schema]).unwrap();
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let root = capabilities
+            .insert(ObjectId(79), Rights::CONTROL.union(Rights::READ))
+            .unwrap();
+        let policy_capability = capabilities
+            .insert(policy_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let unrelated = capabilities.insert(ObjectId(81), Rights::READ).unwrap();
+        let policy = PersistedRestartPolicy::new(service_object, 1, 10, 10).unwrap();
+        let mut encoded = [0; PERSISTED_RESTART_POLICY_BYTES];
+        policy.encode(&mut encoded);
+        let mut transaction = ConfigTransaction::<1>::new(0);
+        transaction
+            .push(ConfigUpdate::new(
+                setting,
+                policy_capability,
+                ConfigValue::bytes(&encoded).unwrap(),
+            ))
+            .unwrap();
+        configuration
+            .commit(&capabilities, root, &transaction)
+            .unwrap();
+
+        assert!(matches!(
+            load_persisted_restart_policy(
+                &configuration,
+                &capabilities,
+                unrelated,
+                setting,
+                service_object,
+            ),
+            Err(PersistedRestartPolicyError::Configuration(
+                ConfigError::WrongObject
+            ))
+        ));
+        assert_eq!(
+            load_persisted_restart_policy(
+                &configuration,
+                &capabilities,
+                policy_capability,
+                setting,
+                ObjectId(71),
+            ),
+            Err(PersistedRestartPolicyError::WrongService)
+        );
+
+        let mut checkpoint_bytes = [0; 256];
+        let checkpoint = configuration
+            .export_checkpoint(&capabilities, root, &mut checkpoint_bytes)
+            .unwrap();
+        let recovered = ConfigurationService::<1, 2>::recover_checkpoint(
+            &capabilities,
+            root,
+            &checkpoint_bytes[..checkpoint.length],
+            checkpoint.digest,
+        )
+        .unwrap();
+        let bound = load_persisted_restart_policy(
+            &recovered,
+            &capabilities,
+            policy_capability,
+            setting,
+            service_object,
+        )
+        .unwrap();
+        assert_eq!(bound.service(), service_object);
+        assert_eq!(bound.configuration_revision(), 1);
+        assert_eq!(bound.setting_revision(), 1);
+
+        let context = UserContext::new(
+            mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+            0x40_0000,
+            0x7000_0000,
+        )
+        .unwrap();
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime.create(Priority::NORMAL, context).unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = bound
+            .register(&recovered, &capabilities, &mut supervisor, task)
+            .unwrap();
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Running));
+        assert!(matches!(
+            runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { .. }
+        ));
+        let retirement = supervisor.exit_current_at(&mut runtime, 0).unwrap();
+        struct Eraser;
+        impl mrml_kernel::ServiceAddressSpaceEraser for Eraser {
+            type Error = ();
+
+            fn erase(&mut self, _: TaskId, _: UserContext) -> Result<(), Self::Error> {
+                Ok(())
+            }
+        }
+        supervisor
+            .complete_cleanup(retirement.cleanup, &mut Eraser)
+            .unwrap();
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(service_object, Rights::CONTROL).unwrap();
+        let replacement_context = UserContext::new(
+            mrml_kernel::PhysAddr::new(0x30_0000).unwrap(),
+            0x50_0000,
+            0x7000_0000,
+        )
+        .unwrap();
+        assert_eq!(
+            supervisor.restart_at(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                replacement_context,
+                9,
+            ),
+            Err(ServiceError::RestartBackoff { eligible_at: 10 })
+        );
+        let replacement = supervisor
+            .restart_at(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                replacement_context,
+                10,
+            )
+            .unwrap();
+        assert!(matches!(
+            runtime.start(),
+            mrml_kernel::ScheduleOutcome::Switch { .. }
+        ));
+        let retirement = supervisor.exit_current_at(&mut runtime, 20).unwrap();
+        supervisor
+            .complete_cleanup(retirement.cleanup, &mut Eraser)
+            .unwrap();
+        assert_eq!(
+            supervisor.restart_at(
+                replacement,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                replacement_context,
+                30,
+            ),
+            Err(ServiceError::RestartLimit)
+        );
+
+        capabilities.revoke(policy_capability).unwrap();
+        assert!(matches!(
+            bound.register(&recovered, &capabilities, &mut supervisor, task),
+            Err(PersistedRestartPolicyError::Configuration(
+                ConfigError::Unauthorized(CapabilityError::Invalid)
+            ))
+        ));
+        assert!(matches!(
+            load_persisted_restart_policy(
+                &recovered,
+                &capabilities,
+                policy_capability,
+                setting,
+                service_object,
+            ),
+            Err(PersistedRestartPolicyError::Configuration(
+                ConfigError::Unauthorized(CapabilityError::Invalid)
+            ))
+        ));
     }
 }

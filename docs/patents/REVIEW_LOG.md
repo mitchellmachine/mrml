@@ -1340,3 +1340,11 @@ configuration checkpoint codec with the existing capability-bound stable-file
 copy-on-write and one-use transaction-receipt mechanisms. Exact authority,
 generation, digest, and fail-closed recovery checks are conventional defensive
 systems integration; no new patent-candidate mechanism was identified.
+# 2026-08-24 — Persistent supervision policy binding
+
+**Result: NOT_TRIGGERED.** The change uses a conventional canonical bounded
+configuration record to initialize the existing capability-controlled service
+restart policy after authenticated checkpoint recovery. Service binding,
+revision tracking, finite retry/backoff fields, reserved-byte validation, and
+fail-closed capability checks are defensive systems integration; no new patent-
+candidate mechanism was identified.

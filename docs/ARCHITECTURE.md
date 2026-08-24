@@ -725,6 +725,22 @@ not live block-device persistence, physical power-loss evidence, or reboot-time
 capability reconstruction. It is not a clone of the Windows Registry, and
 secrets remain separate.
 
+A canonical persistent restart-policy value now connects recovered
+configuration to trusted service registration without turning data into
+authority. The fixed record binds one service object, a nonzero finite restart
+budget, and bounded base/maximum backoff; version, length, and all reserved bytes
+are canonical. Loading rechecks exact READ authority for the schema-bound
+setting, requires the record's service to match the trusted expected object, and
+retains configuration and setting revisions. Applying it revalidates the live
+capability, exact value, service binding, and both revisions immediately before
+requiring mutable trusted supervisor access; revocation or configuration drift
+invalidates the bound value. Later restart remains independently gated by
+exact service CONTROL, cleanup, trusted time/context, backoff, and budget.
+Revoking configuration READ prevents future loads and use of an unapplied bound
+value but does not pretend to erase policy already installed into a live trusted
+supervisor. Dynamic replacement and reboot-time
+capability/policy orchestration remain pending.
+
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.
 Firewall policy remains a service and provides defense in depth; a firewall

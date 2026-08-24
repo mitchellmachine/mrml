@@ -195,8 +195,9 @@ authority; unrelated domains continue.
    fresh generation, and returns a detail-free response that the manager checks.
    Fresh signed KVM and WHP probes exercise this path. They stop before the new
    task executes; the separate ordinary service probe remains the evidence for
-   replacement re-entry. Persistent supervision policy and physical-hardware
-   execution remain pending.
+   replacement re-entry. The separate recovered-policy foundation described
+   below is not exercised by these probes; live persistent-policy restoration
+   and physical-hardware execution remain pending.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-
@@ -228,8 +229,23 @@ authority; unrelated domains continue.
    exact authenticated-recovery-selected file generation; corruption and I/O
    uncertainty fail rather than searching an older generation. This is focused
    in-memory simulation evidence. Live block-service/device integration,
-   physical power-loss evidence, persistent supervision policy, and reboot-time
-   capability reconstruction remain pending, so this item is not complete.
+   physical power-loss evidence, dynamic supervision-policy replacement, and
+   reboot-time capability reconstruction remain pending, so this item is not
+   complete. A
+   canonical persistent restart-policy record now binds one service object to a
+   finite restart budget and bounded exponential backoff. Loading it from fresh
+   or recovered configuration rechecks the exact setting READ capability,
+   rejects unset, malformed, noncanonical, or wrong-service data, and retains
+   both configuration and setting revisions. Application rechecks the exact
+   live capability, record, service binding, and both revisions immediately
+   before supervisor mutation, so revocation or configuration drift invalidates
+   the cached value. Only trusted code holding mutable supervisor state can
+   apply the result; the record carries no authority and
+   every restart still requires exact service CONTROL. Focused tests prove
+   checkpoint restoration, stale-capability denial, service substitution
+   rejection, backoff, and budget enforcement. Dynamic policy replacement,
+   live stable-storage/block-service restoration, and reboot-time capability
+   reconstruction remain pending, so this item remains partial.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
    **IMPLEMENTED:** `mrml-storage` supplies stable nonzero volume/object IDs,

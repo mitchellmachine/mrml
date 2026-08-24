@@ -2674,6 +2674,33 @@ additional Windows `--all-targets` Clippy attempt was not an acceptance pass:
 it stopped on the pre-existing `clippy::result-unit-err` diagnostic in
 `mrml-crypto::aes128_ctr_xor`; no claim is based on that failed command.
 
+Persistent supervision policy now has a narrow configuration-to-lifecycle
+binding. A canonical 48-byte record fixes magic, version, length, one nonzero
+service object, a nonzero finite restart budget, base and maximum backoff, and
+zero reserved fields. Exact setting READ authority is revalidated when loading
+the value from fresh or checkpoint-recovered configuration; unset state,
+service substitution, invalid policy bounds, hidden bytes, stale capability,
+and wrong record geometry fail closed. The bound result records both global and
+setting revisions. Registration revalidates the exact live capability, record,
+service binding, and both revisions immediately before trusted mutable
+`ServiceSupervisor` access; revocation or configuration drift invalidates the
+bound value. It can register only its exact service object, carries no authority, and cannot choose
+priority, launch context, time, capabilities, or cleanup state. Existing exact
+CONTROL, cleanup, backoff, budget, and fresh-context gates still govern every
+restart. Focused tests recover the record through the checkpoint codec, enforce
+capability revocation and service binding, then exercise its backoff and restart
+limit. This is service-library simulation, not live stable-device restoration,
+dynamic policy replacement, reboot-time capability reconstruction, or physical
+hardware evidence.
+
+Recorded verification for this gate on 2026-08-24: Windows gnullvm
+`cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-config --release --no-default-features --target x86_64-pc-windows-gnullvm`
+passed 23 tests, and the corresponding scoped `clippy --no-deps -- -D warnings`
+passed. Linux `cargo test -p mrml-config --release --no-default-features`
+passed the same 23 tests, and its corresponding scoped strict Clippy command
+passed. The release UEFI `mrml-service-image` build and scoped strict Clippy
+command also passed. These are unit/simulation and compile-time results only.
+
 The first native-storage dependency gate now lives in the separate `no_std`
 `mrml-storage` userspace-service crate, not in the privileged kernel. A stable
 object identity combines a nonzero 128-bit volume identity with a nonzero local
@@ -3493,7 +3520,7 @@ request identity, exact opaque service token, Running state, and zero detail.
 Fresh runs reported KVM `verify=21698us prepare=2585us execute=1695us
 total=46730us` and WHP `verify=18771us prepare=4102us execute=835us
 total=27424us`. This proves the hosted canonical query envelope, not authorized
-restart, persistent supervision policy, host-resistant isolation, or bare metal.
+restart, live recovered-policy restoration, host-resistant isolation, or bare metal.
 
 The next restart prerequisite removes the last request-controlled clock input.
 Bytes 40--47 of every supervision request are now canonical zero, and the

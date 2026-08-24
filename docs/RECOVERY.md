@@ -201,7 +201,7 @@ explicitly and downgrade the status rather than guessing.
   fresh generation, and returns a detail-free response verified in CPL3. Fresh
   signed KVM and WHP runs exercise this exchange. They stop before replacement
   execution; separate ordinary service-probe runs retain the re-entry evidence.
-  These are hosted controlled probes, not persistent supervision policy,
+  These are hosted controlled probes, not live persistent-policy restoration,
   host-resistant isolation, crash evidence, or physical-hardware evidence.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
@@ -279,6 +279,17 @@ explicitly and downgrade the status rather than guessing.
   generations, and I/O uncertainty is never converted into fallback. Current
   coverage is deterministic in-memory simulation, not physical power-loss or a
   live block-service result.
+  A recovered configuration can now yield one canonical service-bound restart
+  policy only through the exact live setting READ capability. Applying a bound
+  result repeats that capability check and requires the exact value and both
+  source revisions to remain unchanged. The record carries
+  a finite budget and bounded backoff but no capability, launch context, time,
+  priority, or automatic restart right. Trusted registration retains the source
+  configuration and setting revisions, while every later restart still passes
+  the ordinary CONTROL, cleanup, backoff, budget, and fresh-context checks.
+  Wrong-service substitution, stale capability, malformed state, and unset
+  policy fail closed. Dynamic policy replacement and reboot-time capability
+  reconstruction are not yet implemented.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
