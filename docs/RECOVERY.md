@@ -146,7 +146,7 @@ explicitly and downgrade the status rather than guessing.
   bounded file reads resolve the exact extent generation, synthesize holes, and require full-extent digest
   verification before copying a physical-data subrange. Bounded writes stage a
   complete disjoint successor image, flush it, and remain unpublished until a
-  matching canonical file-metadata digest and zero-padded extent-list digest are
+  matching canonical full-range zero-padded file-metadata digest and zero-padded extent-list digest are
   included in the COW root plan; the complete logical-file digest is verified
   before data flush. Fixed-capacity transactions group multiple prepared file
   successors under one independently generated COW root publication and return
@@ -189,13 +189,17 @@ explicitly and downgrade the status rather than guessing.
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned
   image binds volume, publication generation, record geometry, full-image
-  digest, and zero padding, and decode rebuilds the index. It is not yet read
-  through a block backend or traversed by the recovery validator. Allocation
+  digest, and zero padding, and decode rebuilds the index. It is traversed by
+  the immutable in-memory recovery backend but not yet a concrete block backend. Allocation
   image ownership is now distinct and exactly root/publication-generation bound.
   Canonical extent-list images bind file identity, object generation, logical
   length, record geometry, full-image digest, and zero padding, then rebuild
   exact extent coverage during decode. Canonical directory-entry images bind the
-  owner/generation and rebuild duplicate checks. A fixed-capacity validator now
+  owner/generation and rebuild duplicate checks. File and directory primary
+  metadata now use the same complete-range publication rule: the fixed record is
+  followed by zeros through its exact pointer extent before hashing. Recovery's
+  zero-tail requirement is therefore covered by the COW digest instead of an
+  unhashed backend convention. A fixed-capacity validator now
   walks the root directory and every referenced directory/file through one
   immutable-generation read contract, validates parent/generation links and
   purpose-specific metadata/data ownership, and rejects duplicate objects,

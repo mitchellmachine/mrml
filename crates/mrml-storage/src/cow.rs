@@ -1,4 +1,25 @@
+use mrml_crypto::Sha3_256;
+
 use crate::{MetadataPointer, StorageObjectId, Superblock, VolumeHeader};
+
+pub(crate) fn zero_padded_image_digest(
+    block_size: u32,
+    pointer: MetadataPointer,
+    prefix: &[u8],
+) -> Option<[u8; 32]> {
+    let length = u64::from(block_size).checked_mul(u64::from(pointer.blocks()))?;
+    let prefix_length = u64::try_from(prefix.len()).ok()?;
+    let mut padding = length.checked_sub(prefix_length)?;
+    let mut digest = Sha3_256::new();
+    digest.update(prefix);
+    const ZEROES: [u8; 256] = [0; 256];
+    while padding != 0 {
+        let count = usize::try_from(padding.min(ZEROES.len() as u64)).ok()?;
+        digest.update(&ZEROES[..count]);
+        padding -= count as u64;
+    }
+    Some(digest.finalize())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CowMetadataImage {
@@ -271,6 +292,22 @@ mod tests {
 
     fn active() -> Superblock {
         Superblock::new(header(), 4, 3, object(1), pointer(10, 1), pointer(20, 1)).unwrap()
+    }
+
+    #[test]
+    fn zero_padded_digest_binds_the_complete_pointer_extent() {
+        let prefix = [1_u8, 2, 3];
+        let digest = zero_padded_image_digest(4, pointer(10, 2), &prefix).unwrap();
+        let expected = [1_u8, 2, 3, 0, 0, 0, 0, 0];
+        let mut hasher = Sha3_256::new();
+        hasher.update(&expected);
+        assert_eq!(digest, hasher.finalize());
+        let mut hidden_tail = expected;
+        hidden_tail[7] = 1;
+        let mut hidden_tail_digest = Sha3_256::new();
+        hidden_tail_digest.update(&hidden_tail);
+        assert_ne!(digest, hidden_tail_digest.finalize());
+        assert!(zero_padded_image_digest(2, pointer(10, 1), &prefix).is_none());
     }
 
     fn plan() -> CowPublicationPlan<3> {

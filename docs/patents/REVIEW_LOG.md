@@ -966,6 +966,17 @@ technique.
 
 Patent review: `NOT_TRIGGERED` — conventional directory parent validation.
 
+## 2026-08-23 — full-range primary-metadata COW digests
+
+MRML source: `crates/mrml-storage/src/cow.rs`, `file.rs`, and `directory.rs`.
+
+The service conventionally hashes a fixed metadata record followed by zero
+padding through its exact block-aligned storage range. This makes the staged
+digest cover the same canonical bytes recovery reads. This adds no novel
+encoding, hashing, filesystem, transaction, or persistence technique.
+
+Patent review: `NOT_TRIGGERED` — conventional zero-padded image hashing.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

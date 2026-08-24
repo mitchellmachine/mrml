@@ -202,6 +202,9 @@ authority; unrelated domains continue.
    authenticity, atomic persistence, nor rollback resistance. Windows and
    Linux unit tests exercise malformed records, wrong volumes, stable identity
    across rename, rights confusion, stale handles, and descendant revocation.
+   Prepared file and directory primary-metadata COW digests cover the fixed
+   record followed by canonical zeros through the exact block-aligned pointer
+   extent; undersized ranges and hidden nonzero tails fail closed.
 3. Implement extent mapping, checksummed COW metadata, directory operations,
    file reads/writes, explicit transactions, and crash recovery in that order.
    **PARTIALLY IMPLEMENTED:** canonical extent records bind an exact file and
@@ -303,7 +306,8 @@ authority; unrelated domains continue.
    overlap active data or protected metadata. The backend stages and flushes
    complete digest-verified new extents before returning an unpublished state.
    That state commits only through a COW plan containing the internally derived
-   exact file-metadata and canonical zero-padded extent-list digests, while the
+   exact full-range zero-padded file-metadata and canonical zero-padded
+   extent-list digests, while the
    backend verifies the complete logical-file content digest before flush.
    Explicit fixed-capacity multi-file transactions are now implemented. Each
    admitted prepared write retains its exact object predecessor/successor while

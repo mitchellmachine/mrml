@@ -239,6 +239,11 @@ filesystem. The `mrml-storage` userspace-service foundation defines nonzero
 volume/object identities, principal-bound generational handles with attenuated
 derivation and transitive descendant revocation, and canonical checksummed
 volume, superblock, directory, directory-entry, and file metadata records.
+Prepared file and directory primary-metadata COW images hash the fixed canonical
+record followed by zeros through the exact block-aligned pointer extent; hidden
+tail bytes and an extent shorter than the record therefore cannot share the
+published digest. Unsafe staging backends must write and verify that complete
+canonical padded range.
 It also validates fixed extent records into exact logical coverage containing
 data or explicit holes, rejects intra-file physical overlap and reserved volume
 blocks, and provides bounded logical-to-physical lookup. A COW publication plan
@@ -331,7 +336,8 @@ and canonical file metadata for the next generation; reject reuse of active
 data or protected metadata blocks; stage and durably flush the complete new
 extent images; then return an unpublished state that can commit only through a
 matching COW metadata plan containing internally derived digests for both the
-canonical file record and zero-padded extent-list image. The backend also
+canonical file record plus its complete zero tail and the zero-padded
+extent-list image. The backend also
 verifies the complete logical-file digest before flush. The backend and
 allocation persistence remain simulated. A canonical fixed-capacity allocation
 index binds each data or metadata range to one exact object generation, requires

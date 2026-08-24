@@ -44,7 +44,15 @@ pub fn prepare_initial_file<B: InitialFileWriteBackend>(
     extent_image
         .encode(extents_output)
         .map_err(InitialFileError::Extent)?;
-    let file_metadata = CowMetadataImage::new(metadata_pointer, complete_digest(metadata_output));
+    let file_metadata = CowMetadataImage::new(
+        metadata_pointer,
+        crate::cow::zero_padded_image_digest(
+            header.block_size(),
+            metadata_pointer,
+            metadata_output,
+        )
+        .ok_or(InitialFileError::InvalidLayout)?,
+    );
     let extent_metadata = CowMetadataImage::new(extents_pointer, complete_digest(extents_output));
     backend
         .stage_initial_file_metadata(file_metadata, metadata_output)
@@ -115,10 +123,13 @@ impl PreparedInitialFile {
 ///
 /// # Safety
 ///
-/// Implementations must write and verify both complete supplied images at
-/// their exact ranges, keep them unreachable, and make both durable before
-/// `flush_initial_file` succeeds. They must not redirect, shorten, merge, or
-/// acknowledge stale or partially written images.
+/// Implementations must write the fixed file-metadata record as the exact
+/// prefix of its named range, zero every remaining byte in that range, and
+/// verify the complete padded range against the supplied digest. They must also
+/// write and verify the complete subordinate image at its exact range, keep
+/// both unreachable, and make both durable before `flush_initial_file`
+/// succeeds. They must not redirect, shorten, merge, or acknowledge stale or
+/// partially written images.
 pub unsafe trait InitialFileWriteBackend {
     type Error;
 
@@ -307,10 +318,15 @@ impl<const N: usize> FileState<N> {
         }
         let mut encoded_metadata = [0; crate::FILE_METADATA_BYTES];
         next_metadata.encode(&mut encoded_metadata);
-        let mut metadata_digest = mrml_crypto::Sha3_256::new();
-        metadata_digest.update(&encoded_metadata);
-        let file_metadata =
-            CowMetadataImage::new(file_metadata_pointer, metadata_digest.finalize());
+        let file_metadata = CowMetadataImage::new(
+            file_metadata_pointer,
+            crate::cow::zero_padded_image_digest(
+                next_extents.block_size(),
+                file_metadata_pointer,
+                &encoded_metadata,
+            )
+            .ok_or(FileWriteError::Arithmetic)?,
+        );
         let extent_capacity = u64::from(next_metadata.extents().blocks())
             .checked_mul(u64::from(next_extents.block_size()))
             .ok_or(FileWriteError::Arithmetic)?;
@@ -886,6 +902,13 @@ mod tests {
         );
         assert_eq!(prepared.state().length(), 0);
         assert_eq!((backend.staged, backend.flushed), (2, true));
+        let mut complete_metadata = [0; BLOCK_SIZE];
+        complete_metadata[..crate::FILE_METADATA_BYTES].copy_from_slice(&metadata);
+        assert_eq!(
+            prepared.metadata_image().digest(),
+            digest(&complete_metadata)
+        );
+        assert_ne!(prepared.metadata_image().digest(), digest(&metadata));
         assert_eq!(
             FileMetadata::decode(&metadata, header)
                 .unwrap()

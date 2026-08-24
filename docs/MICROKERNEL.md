@@ -2669,6 +2669,12 @@ storage, atomic publication, replay defense, or rollback protection. Ten
 focused unit tests and strict crate-local clippy pass on Windows gnullvm and
 Arch Linux under WSL2.
 
+Prepared directory and file primary metadata now has a full-range COW digest:
+the fixed canonical record is hashed with zeros through the exact block-aligned
+pointer extent. An undersized range fails construction, and any hidden nonzero
+tail changes the digest. Unsafe staging backends must materialize and verify
+that complete padded image.
+
 The next dependency adds one canonical 144-byte extent record. It binds the
 exact file object and metadata generation to a nonempty bounded logical range,
 then represents either a physical data range with a 32-byte content digest or
@@ -2839,8 +2845,8 @@ only to its new physical range, verifies its SHA3-256 digest, and durably flushe
 all new data. Any staging/flush failure returns no prepared state and leaves the
 old generation selected.
 
-The service derives both the canonical file-metadata SHA3-256 digest and the
-digest of the complete canonical extent-record sequence plus zero padding to its
+The service derives both the canonical full-range zero-padded file-metadata
+SHA3-256 digest and the digest of the complete canonical extent-record sequence plus zero padding to its
 metadata allocation; callers cannot substitute either digest. The data backend
 also verifies SHA3-256 over the exact logical file length against the content
 digest in `FileMetadata` before durable flush. The returned `PreparedFileWrite`
@@ -2891,8 +2897,9 @@ allocation image header binds the exact volume, publication generation, record
 width/count, and a SHA3-256 digest over its header, records, and zero-filled
 unused capacity. Decode requires the exact metadata allocation length, rejects
 nonzero padding even under a recomputed digest, parses every record, and rebuilds
-the index invariants. Allocation/free mutation, concrete durable publication,
-and full reachable-tree traversal remain unimplemented.
+the index invariants. Allocation/free mutation and full reachable-tree traversal
+are implemented in the bounded in-memory model; concrete block-backed durable
+publication remains unimplemented.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -2983,7 +2990,7 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-five focused unit tests and strict crate-local clippy pass on Windows
+Seventy-six focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
 complete directory hierarchy/lifetime handling, interrupted-create recovery,
 complete crash recovery, snapshots, a block-device service, and
@@ -2996,7 +3003,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 75 tests, and both strict crate-local clippy
+Both current unit-test runs pass 76 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3019,7 +3026,9 @@ bounded source/destination traversal, duplicate/cycle rejection, checked
 generation advance, exact parent-entry replacement, whole-plan layout preflight,
 pairwise range disjointness, exact allocation ownership, complete COW-plan
 membership, atomic batch receipt consumption, replay rejection, and fail-closed
-backend uncertainty. Allocator images additionally require canonical exhaustion,
+backend uncertainty. Primary file/directory metadata digests cover the exact
+record and complete canonical zero tail; undersized extents and hidden nonzero
+tail substitution fail before publication. Allocator images additionally require canonical exhaustion,
 checked identity/generation advance, zero padding, distinct embedded and
 complete-image digests, and one-use activation. Allocator metadata ownership
 additionally requires a distinct allocation purpose and exact root anchor,

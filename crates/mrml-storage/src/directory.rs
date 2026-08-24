@@ -1245,7 +1245,15 @@ impl<const N: usize> DirectoryState<N> {
         entries
             .encode(entries_output)
             .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
-        let metadata_image = CowMetadataImage::new(metadata_pointer, digest(metadata_output));
+        let metadata_image = CowMetadataImage::new(
+            metadata_pointer,
+            crate::cow::zero_padded_image_digest(
+                header.block_size(),
+                metadata_pointer,
+                metadata_output,
+            )
+            .ok_or(DirectoryUpdateError::InvalidSuccessor)?,
+        );
         let entries_image = CowMetadataImage::new(entries_pointer, digest(entries_output));
         backend
             .stage_directory_metadata(metadata_image, metadata_output)
@@ -1653,7 +1661,15 @@ pub fn prepare_initial_directory<B: DirectoryWriteBackend>(
     entries
         .encode(entries_output)
         .map_err(|_| DirectoryUpdateError::InvalidSuccessor)?;
-    let metadata = CowMetadataImage::new(metadata_pointer, digest(metadata_output));
+    let metadata = CowMetadataImage::new(
+        metadata_pointer,
+        crate::cow::zero_padded_image_digest(
+            header.block_size(),
+            metadata_pointer,
+            metadata_output,
+        )
+        .ok_or(DirectoryUpdateError::InvalidSuccessor)?,
+    );
     let entries = CowMetadataImage::new(entries_pointer, digest(entries_output));
     backend
         .stage_directory_metadata(metadata, metadata_output)
@@ -1927,9 +1943,11 @@ pub enum DirectoryMoveStageError<E> {
 ///
 /// # Safety
 ///
-/// Implementations must write each complete supplied image to its exact range,
-/// verify the complete bytes against the supplied digest, keep both ranges
-/// unreachable from the active root, and make both images durable before
+/// Implementations must write the fixed directory-metadata record as the exact
+/// prefix of its named range, zero every remaining byte in that range, and
+/// verify the complete padded range against the supplied digest. They must
+/// write and verify the complete entry image at its exact range, keep both
+/// ranges unreachable from the active root, and make both images durable before
 /// `flush_directory_update` succeeds. They must not redirect, shorten, merge,
 /// reorder, or acknowledge stale or partially written images.
 pub unsafe trait DirectoryWriteBackend {
@@ -2332,6 +2350,13 @@ mod tests {
             (object(8), 1)
         );
         assert!(prepared.state().is_empty());
+        let mut complete_metadata = [0; 4096];
+        complete_metadata[..crate::DIRECTORY_METADATA_BYTES].copy_from_slice(&metadata);
+        assert_eq!(
+            prepared.metadata_image().digest(),
+            digest(&complete_metadata)
+        );
+        assert_ne!(prepared.metadata_image().digest(), digest(&metadata));
         assert_eq!((backend.staged, backend.flushed), (2, true));
         let decoded_metadata = DirectoryMetadata::decode(&metadata, header).unwrap();
         assert_eq!(decoded_metadata.parent(), Some(object(1)));
