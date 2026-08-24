@@ -2940,11 +2940,13 @@ Range-derived slice and string initializers plan runtime start/end reads
 before the base read, retaining the exact `Subslice` projection for a local-
 array base. Recursion is capped at 64 levels. Call-derived fat-reference
 initializers additionally plan left-to-right call-argument reads when every
-argument is a one-slot scalar, another supported fat reference, or a direct
-identifier-backed array or tuple. Sequence prefixes remain ahead of those
-arguments. Identifier-backed arrays plan one `Index` read per element and
-tuples plan numbered `TupleField` reads. Other aggregate call arguments remain
-later work because their specialized materializers require separate facts.
+argument is a one-slot scalar, another supported fat reference, a direct
+identifier-backed array or tuple, an array literal or single-evaluation repeat,
+or a supported literal/conditional/wrapped tuple. Sequence prefixes remain
+ahead of those arguments. Identifier-backed arrays plan one `Index` read per
+element and tuples plan numbered `TupleField` reads. Conditional arrays and
+other aggregate call arguments remain later work because their specialized
+materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
 reads in exact emission order. Call-derived and unsupported wrapped return
@@ -2962,9 +2964,9 @@ blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
 Nested-loop blocks additionally mirror entry conditions and every stored control
 at its exact action boundary and control order before activating the following
 local or action.
-Method/call families beyond that bounded initializer slice, non-identifier
-aggregate call-argument materialization, unsupported fat-reference returns,
-aggregate tails,
+Method/call families beyond that bounded initializer slice, conditional-array
+and otherwise unsupported aggregate call-argument materialization, unsupported
+fat-reference returns, aggregate tails,
 remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
@@ -3099,6 +3101,14 @@ five initializer reads followed by a sequence prefix, three projected local-
 array reads, two distinctly numbered local-tuple-field reads, and the trailing
 scalar argument. Its original replacement emits both COFF and ELF64 objects
 through the same inlined helper call.
+
+The literal-aggregate call-argument milestone passed all 608 compiler and driver
+tests on Windows gnullvm and all 608 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves a
+sequence prefix, three array-literal operands, a single tuple condition and both
+literal branches, a trailing scalar argument, then a single-evaluation array
+repeat and literal tuple in exact materializer order. Its original replacement
+emits both COFF and ELF64 objects through the same two inlined calls.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

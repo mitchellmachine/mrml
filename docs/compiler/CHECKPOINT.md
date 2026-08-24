@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `950b249`
-  (`Preanalyze identifier aggregate call arguments`)
+- Compiler checkpoint commit: `5305f0e`
+  (`Preanalyze literal aggregate call arguments`)
 - Remote state when recorded: the named compiler checkpoint is committed
   locally on `main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -93,8 +93,10 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   recursively conditional fat-reference explicit-return and final-tail reads;
   plus sequence-prefix and left-to-right argument reads for call-derived fat-
   reference initializers whose arguments are one-slot scalars, supported fat
-  references, or direct identifier-backed arrays and tuples, with one `Index`
-  read per array element and numbered `TupleField` reads;
+  references, direct identifier-backed arrays and tuples, array literals or
+  single-evaluation repeats, or supported literal/conditional/wrapped tuples,
+  with one `Index` read per identifier-array element and numbered `TupleField`
+  reads for identifier tuples;
   and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
@@ -109,9 +111,10 @@ allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Other wrapped or non-literal conditional aggregates, non-
-identifier aggregate-argument call-derived fat-reference initializers, call-
-derived or otherwise unsupported wrapped fat-reference returns,
+borrow checker. Other wrapped or non-literal conditional aggregates,
+conditional-array and otherwise unsupported aggregate-argument call-derived
+fat-reference initializers, call-derived or otherwise unsupported wrapped fat-
+reference returns,
 compound array bases, method/call families, aggregate
 returns/tails, and other body reads remain emission-time facts. Names are still
 resolved during
@@ -153,8 +156,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 606 tests on each host: 333
-library tests, 10 conformance tests, 261 replacement tests, and 2 driver tests.
+The checkpoint source passed 608 tests on each host: 334
+library tests, 10 conformance tests, 262 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
