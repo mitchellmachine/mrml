@@ -1897,10 +1897,67 @@ mod tests {
         pe
     }
 
-    fn doorbell_pe() -> [u8; 1024] {
+    fn emit(code: &mut [u8; 256], at: &mut usize, bytes: &[u8]) {
+        let end = *at + bytes.len();
+        code[*at..end].copy_from_slice(bytes);
+        *at = end;
+    }
+
+    fn emit_mov(code: &mut [u8; 256], at: &mut usize, opcode: u8, value: u64) {
+        emit(code, at, &[0x48, opcode]);
+        emit(code, at, &value.to_le_bytes());
+    }
+
+    fn emit_store_rax(code: &mut [u8; 256], at: &mut usize, offset: u8) {
+        if offset == 0 {
+            emit(code, at, &[0x48, 0x89, 0x07]);
+        } else {
+            emit(code, at, &[0x48, 0x89, 0x47, offset]);
+        }
+    }
+
+    fn producer_pe() -> [u8; 1024] {
         let mut pe = valid_pe();
-        // mov dx, 0x4d42; mov eax, 1; out dx, eax; int3
-        pe[0x200..0x20b].copy_from_slice(&[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef, 0xcc]);
+        let mut code = [0; 256];
+        let mut at = 0;
+
+        emit_mov(&mut code, &mut at, 0xbf, 0xa0000);
+        emit_mov(&mut code, &mut at, 0xb8, 0x6d6d_6d6d_6d6d_6d6d);
+        emit(
+            &mut code,
+            &mut at,
+            &[0xb9, 0x00, 0x02, 0x00, 0x00, 0xf3, 0x48, 0xab],
+        );
+        emit_mov(&mut code, &mut at, 0xbf, 0x60_0080);
+        emit(
+            &mut code,
+            &mut at,
+            &[0x31, 0xc0, 0xb9, 0x08, 0x00, 0x00, 0x00, 0xf3, 0x48, 0xab],
+        );
+        emit_mov(&mut code, &mut at, 0xbf, 0x60_0080);
+        for (offset, value) in [
+            (0, 0x0000_0201_5142_524d),
+            (8, 1),
+            (16, 1),
+            (32, 1),
+            (40, 0xa0000),
+            (48, 4096),
+        ] {
+            emit_mov(&mut code, &mut at, 0xb8, value);
+            emit_store_rax(&mut code, &mut at, offset);
+        }
+        emit_mov(&mut code, &mut at, 0xbf, 0x60_0000);
+        emit_mov(&mut code, &mut at, 0xb8, 1);
+        emit_store_rax(&mut code, &mut at, 0);
+        emit(
+            &mut code,
+            &mut at,
+            &[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef, 0xcc],
+        );
+        pe[0x200..0x300].fill(0);
+        pe[0x200..0x200 + at].copy_from_slice(&code[..at]);
+        let section = 0x98 + 240;
+        pe[section + 8..section + 12].copy_from_slice(&0x100u32.to_le_bytes());
         pe
     }
 
@@ -2237,12 +2294,12 @@ mod tests {
     }
 
     #[test]
-    fn live_signed_guest_runs_one_virtual_block_doorbell_transaction() {
+    fn live_signed_guest_produces_one_virtual_block_transaction() {
         let system = WhpSystem::open().unwrap();
         if !system.hypervisor_present().unwrap() {
             return;
         }
-        let encoded = signed_payload(doorbell_pe());
+        let encoded = signed_payload(producer_pe());
         let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
         let public_end = public_at + LAMPORT_PUBLIC_KEY_BYTES;
         let root = TrustRoot::new(
@@ -2292,13 +2349,6 @@ mod tests {
         assert_eq!(completion_walk.entries()[3] & (1 << 1), 0);
         assert_ne!(completion_walk.entries()[3] & (1 << 63), 0);
 
-        let payload_address = 0x40_0000;
-        VmBackend::write_guest(&mut guest, payload_address, &[0x6d; 4096]).unwrap();
-        let mut request = [0; 64];
-        VirtualBlockRequest::write(1, 1, 0, 1, payload_address, 4096).encode(&mut request);
-        VmBackend::write_guest(&mut guest, layout.request_base() + 128, &request).unwrap();
-        VmBackend::write_guest(&mut guest, layout.request_base(), &1u64.to_le_bytes()).unwrap();
-
         let interrupt_object = ObjectId(0x211);
         let mut capabilities = CapabilitySpace::<1>::new();
         let interrupt_capability = capabilities
@@ -2344,6 +2394,16 @@ mod tests {
             Ok(VirtualBlockProcessOutcome::Completed(_))
         ));
         assert_eq!(storage.0, [0x6d; 4096]);
+        let mut encoded_request = [0; 64];
+        VmBackend::read_guest(&guest, layout.request_base() + 128, &mut encoded_request).unwrap();
+        assert_eq!(
+            VirtualBlockRequest::decode(&encoded_request).unwrap(),
+            VirtualBlockRequest::write(1, 1, 0, 1, 0xa0000, 4096)
+        );
+        let mut counters = [0; 72];
+        VmBackend::read_guest(&guest, layout.request_base(), &mut counters).unwrap();
+        assert_eq!(u64::from_le_bytes(counters[..8].try_into().unwrap()), 1);
+        assert_eq!(u64::from_le_bytes(counters[64..].try_into().unwrap()), 1);
         let mut encoded_completion = [0; VIRTUAL_BLOCK_COMPLETION_BYTES];
         VmBackend::read_guest(
             &guest,

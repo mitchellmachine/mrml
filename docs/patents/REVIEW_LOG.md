@@ -1396,6 +1396,15 @@ defensive virtual-device techniques. No patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Signed guest virtual-block request producer
+
+**Result: NOT_TRIGGERED.** The change conventionally uses a fixed signed test
+image to fill one payload, encode one canonical ring record, publish one producer
+counter after the record, and issue one scalar doorbell. Reading back counters,
+request bytes, backend bytes, and completion bytes is standard controlled
+integration testing. No patent-candidate mechanism was identified. This agent
+review does not replace the required independent human dual review.
+
 # 2026-08-24 — Initial guest virtual-block page mappings
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights disjoint native

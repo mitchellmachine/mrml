@@ -3346,8 +3346,8 @@ attempted before entering the vCPU again. Every exit, doorbell, transaction, or
 interrupt error fails the VM; failed interruption retains the device latch, so
 the guest is never resumed after uncertain delivery. Both prepared KVM and WHP
 guests implement the runner's memory contract. Controlled signed probes now
-execute this doorbell path, while host test code still seeds the request and
-payload; no guest queue producer or reusable block driver exists yet.
+produce one fixed request and payload before executing this doorbell path; no
+reusable block driver or completion consumer exists yet.
 
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
 each pass all 365 `mrml-kernel` release tests and scoped strict Clippy. The 28
@@ -3415,16 +3415,18 @@ partial attachment as hostile; validation and consuming construction prevent a
 partially attached guest from being resumed through this API. This agent review
 does not replace the required independent human dual review.
 
-The signed native doorbell probe replaces indirect composition evidence with one
+The signed native block probe replaces indirect composition evidence with one
 controlled end-to-end hosted path on each backend. Its verified VM image executes
-`out dx, eax` with the exact MRML port and value. Host test code preloads one
-canonical write request and its page payload into already validated guest
-memory; the backend-neutral runner decodes and accounts the native exit, applies
+bounded stores through the initial guest mappings to fill one 4 KiB payload,
+zero and encode one canonical write record, and publish producer value one only
+after those stores. It then executes `out dx, eax` with the exact MRML port and
+value. The backend-neutral runner decodes and accounts the native exit, applies
 the deny-by-default I/O rule, revalidates the doorbell, copies the exact page to
 a volatile in-process backend, publishes and decodes the bound completion, and
 injects the separately authorized vector. The probe intentionally stops after
-this transaction. It is not a guest queue producer, reusable guest driver,
-concrete hosted storage service, or PCI transport.
+this transaction. It is not a reusable guest driver, completion consumer,
+interrupt handler, multi-request implementation, concrete hosted storage
+service, or PCI transport.
 
 The dedicated `prepare_kernel_block_guest` launch path now makes those queues
 guest-addressable without post-launch page-table mutation. KVM and WHP perform
@@ -3439,7 +3441,7 @@ host-side queue-memory tests; it does not imply guest page-table visibility.
 
 Recorded verification on 2026-08-24: Windows gnullvm passes 20 active `mrml-whp`
 release tests with one manual mapping benchmark ignored, including the live WHP
-signed-doorbell transaction. Arch Linux under WSL2 passes 17 active `mrml-kvm`
+signed-producer transaction. Arch Linux under WSL2 passes 17 active `mrml-kvm`
 release tests with one manual benchmark ignored, including the equivalent live
 `/dev/kvm` transaction. Strict Clippy passes for both native packages on their
 host platforms; the opposite-platform ABI suites pass six KVM tests on Windows
@@ -3452,8 +3454,17 @@ initial block mappings by native page walk, including exact GPA identity,
 writable/NX request leaves, read-only/NX completion leaves, overlap rejection,
 and KVM slot undercapacity. Strict Clippy, the six-test Windows KVM ABI suite,
 and the ten-test Linux WHP ABI suite pass. This remains hosted controlled-probe
-evidence; the guest image still emits only the doorbell while host code seeds
-the queue and payload.
+evidence; the guest image produces exactly one fixed request and does not handle
+its completion or interrupt.
+
+The native tests read back and decode the exact guest-produced request, require
+both producer and consumed counters to equal one, verify the volatile backend's
+entire 4 KiB payload, decode the exact successful completion, and require the
+notification latch to be acknowledged. No host queue or payload write occurs
+before vCPU entry. This closes the queue-production proof for one fixed signed
+transaction while leaving reusable driver state, negotiated discovery,
+completion consumption, interrupt handling, and bounded multi-request progress
+pending.
 
 The native-doorbell `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
 retention, identity expansion, DRM, attestation, remote disclosure, vendor
@@ -3466,6 +3477,18 @@ policy, and injection as hostile; the common runner fails the VM on every
 uncertain stage. Existing capability, revocation, rollback-resistance,
 accessibility, and evidence gates remain unchanged. This agent review does not
 replace the required independent human dual review.
+
+The guest-producer `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
+retention, identity expansion, DRM, attestation, remote disclosure, vendor
+preference, accessibility restriction, or persistent owner-state change. The
+fixed payload is local test data and creates no authority. The `HOSTILE SECURITY
+REVIEW` treats signed code bytes, every guest store, publication order, ring
+header and record, payload range, native exit, backend copy, completion
+publication, and interrupt injection as hostile. Canonical decoding and the
+separate capability boundary revalidate all guest data; uncertainty fails the
+VM. Existing capability, revocation, rollback-resistance, accessibility, and
+evidence gates remain unchanged. This agent review does not replace the required
+independent human dual review.
 
 The guest-mapping `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
 retention, identity expansion, DRM, attestation, remote disclosure, vendor

@@ -362,9 +362,10 @@ explicitly and downgrade the status rather than guessing.
   the device-memory path can publish. Dedicated initial-launch builders also
   identity-map request pages RW/NX and completion pages R/NX in guest page
   tables, rejecting aliases and KVM native-slot undercapacity before launch.
-  Controlled signed probes emit the exact native doorbell and complete one
-  host-seeded write through the common runner on each backend. This is hosted
-  controlled-probe evidence, not a guest block driver, concrete device backend,
+  Controlled signed probes write one fixed payload, canonical request, and
+  producer counter, emit the exact native doorbell, and complete the write
+  through the common runner on each backend. This is hosted controlled-probe
+  evidence, not a reusable guest block driver, concrete device backend,
   durability result, or physical-device result. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
