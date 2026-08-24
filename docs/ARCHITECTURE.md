@@ -292,8 +292,9 @@ concrete native block I/O. The syscall decoder admits bounded capability-
 selected shared-buffer copy operations without binding IDs or shared addresses.
 A generic executor binds those requests to the current task capability space,
 kernel-known VM/task identity, exact live binding, direction-validated user-copy
-backend, opaque resource backend, and erased bounded scratch. Concrete kernel-
-image wiring remains unimplemented and fails closed. A fixed-capacity kernel-
+backend, opaque resource backend, and erased bounded scratch. The kernel-image
+service path composes that executor with active user copy and opaque resource
+state. A fixed-capacity kernel-
 owned opaque-resource table now issues monotonically increasing nonzero handles,
 rejects live aliases, independently bounds transfers, retires stale handles
 through the existing cleanup hook, and preserves backend uncertainty. Its
@@ -667,7 +668,13 @@ canonical zero placeholders, and extra, missing, or payload-forged authority
 fails closed. The supervision adapter composes query and restart with existing
 exact-object, cleanup, backoff, restart-limit, and trusted-context gates. Names,
 numeric setting IDs, and service handles never authorize. A bounded CPL3
-request-buffer ABI now decodes fixed payload/capability-buffer descriptors and
+service-state syscall now exposes only the adapter's query mechanism: an exact
+task-local READ capability authorizes one opaque generational service token,
+reserved registers must be zero, and the result is limited to Running, Exited,
+or Faulted. It cannot restart a service or supply execution context. Canonical
+supervision-message dispatch and trusted host reprovisioning remain pending.
+The bounded CPL3 request-buffer ABI decodes fixed payload/capability-buffer
+descriptors and
 validates every active user leaf before a directional copy. The signed service
 probe now executes real `mrml-config` schema admission and atomic commit
 dispatch under both WHP and KVM. Each generation begins with a trusted root

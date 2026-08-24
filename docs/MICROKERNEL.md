@@ -3419,9 +3419,10 @@ exact objects through separate kernel operations before state changes. It
 checks the admission response and atomic revision-1 commit response, each a
 canonical 112-byte record, and the sender independently decodes both before
 exiting or entering the generation-2 lifecycle proof. The service-probe runtime
-allows six bounded capabilities per task so the receiver's signal, exact read
+allows seven bounded capabilities per task so the receiver's signal, exact read
 and read/write resource authorities, schema root, commit root, and setting
-authority remain separate; derivation remains atomic and fail-closed. Pending
+authority plus peer-state READ remain separate; derivation remains atomic and
+fail-closed. Pending
 buffered receives are a two-slot task-keyed table rather than one global value,
 so the client and service can block simultaneously without one overwriting the
 other. Sender exit still transitively revokes its derived authority.
@@ -3442,8 +3443,33 @@ Nested KVM reported
 `verify=18059us prepare=2407us execute=1044us total=22746us`; WHP reported
 `verify=18086us prepare=4022us execute=780us total=26549us`. These are hosted
 controlled probes, not physical-hardware, host-resistant isolation, persistent
-configuration, or bare-metal evidence. Signed supervision requests have not yet
-executed through this CPL3 path.
+configuration, or bare-metal evidence. Canonical supervision messages and
+authorized restart have not yet executed through this CPL3 path.
+
+Syscall operation 9 now provides the narrow kernel mechanism for supervision
+query. The register ABI accepts one opaque generational service token and one
+exact task-local capability, requires every reserved register to be zero, and
+calls `ServiceSupervisor::state_authorized`; names identify, while exact READ
+authority authorizes. Success returns only Running, Exited, or Faulted, and
+rejection returns no state or distinguishing detail. It accepts no executable,
+entry point, stack, priority, time, restart policy, or host-reprovisioning input.
+The signed CPL3 receiver queries the current sender before configuration work in
+both generations. Fresh runs reported KVM `verify=21067us prepare=2475us
+execute=1365us total=48815us` and WHP `verify=18659us prepare=3851us
+execute=826us total=27070us`. This proves the hosted query mechanism, not the
+canonical supervision envelope or restart path.
+
+For this query increment, the `DIGITAL-RIGHTS REVIEW` found no new collection,
+retention, correlation, remote disclosure, DRM or publisher veto,
+owner-attestation restriction, accessibility exclusion, AI authority, or
+persistence. The local authorized result is deliberately coarse and neither a
+service name nor its token conveys authority. The `HOSTILE SECURITY REVIEW`
+treats the capability, service token, generation, and every reserved register as
+hostile: only an exact live task-local READ capability for the exact live
+service succeeds; stale, guessed, mismatched, attenuated, or malformed inputs
+fail without state or distinguishing detail. The operation accepts no restart
+context and cannot mutate lifecycle state. This agent review does not replace
+the constitution's independent human dual review.
 
 Fresh one-time Lamport-signed runs on 2026-08-24 additionally completed exact
 read-capability zero checks, exact read/write-capability writes, readback,
@@ -3464,8 +3490,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 15 configuration, 331 kernel, and 19 WHP tests with one ignored;
-Linux passed 15 configuration, 331 kernel, and 16 KVM tests with one ignored.
+Windows passed 15 configuration, 333 kernel, and 19 WHP tests with one ignored;
+Linux passed 15 configuration, 333 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

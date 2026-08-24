@@ -1262,3 +1262,17 @@ authorization still requires the exact per-operation capability shape. This
 adds no novel capability-attenuation, shared-memory, or syscall technique.
 
 Patent review: `NOT_TRIGGERED` — conventional least-authority separation.
+
+## 2026-08-24 — authorized service-state query syscall
+
+MRML source: `crates/mrml-kernel/src/syscall.rs`,
+`crates/mrml-kernel-image/src/main.rs`, and
+`crates/mrml-service-image/src/main.rs`.
+
+The kernel conventionally combines an exact task-local READ capability with an
+opaque generational service token and returns only a bounded detail-free
+lifecycle state. Reserved registers and malformed or stale authority fail
+closed. This adds no novel capability, lookup, syscall, or lifecycle technique.
+
+Patent review: `NOT_TRIGGERED` — conventional capability-gated generational
+lookup and bounded status enumeration.

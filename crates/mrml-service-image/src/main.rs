@@ -31,6 +31,9 @@ global_asm!(
             mov rdx, r12
             mov rcx, r15
             mov r8, rbx
+            mov r9, rbp
+            sub rsp, 16
+            mov [rsp], r10
             call mrml_configuration_receiver
             ud2
 
@@ -97,7 +100,10 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     generation: u64,
     shared_write: u64,
     shared_read: u64,
+    supervision_read: u64,
+    supervised_service: u64,
 ) -> ! {
+    unsafe { verify_service_query(supervision_read, supervised_service) };
     unsafe { verify_shared_buffer_syscalls(shared_write, shared_read, generation) };
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
@@ -126,6 +132,28 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     unsafe { dispatch_next_request(configuration, endpoint, sender, commit_request_id, 1, None) };
     unsafe { yield_now() };
     unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+unsafe fn verify_service_query(capability: u64, service: u64) {
+    let mut status = 9u64;
+    let state: u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") capability,
+            in("rsi") service,
+            inlateout("rdx") 0u64 => state,
+            inlateout("r10") 0u64 => _,
+            inlateout("r8") 0u64 => _,
+            inlateout("r9") 0u64 => _,
+            options(nostack)
+        )
+    };
+    if status != 0 || state != 1 {
+        halt();
+    }
 }
 
 #[cfg(not(feature = "preemption-probe"))]

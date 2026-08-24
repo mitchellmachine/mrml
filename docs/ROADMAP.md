@@ -166,6 +166,12 @@ authority; unrelated domains continue.
    sequencing with explicit overwrite gaps, and strict version-1
    configuration/supervision request and response codecs. Kernel service-state
    introspection now requires exact READ authority rather than a service token.
+   Syscall operation 9 now exposes only that authorized state query to CPL3: it
+   accepts an opaque generational service token plus an exact task-local READ
+   capability, rejects nonzero reserved registers, and returns only a detail-
+   free Running/Exited/Faulted code. Fresh signed KVM and WHP probes query the
+   live peer in both generations. Canonical supervision-message dispatch and
+   authorized restart through trusted host reprovisioning remain pending.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-

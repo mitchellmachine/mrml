@@ -158,6 +158,19 @@ impl UserCallFrame {
         self.r8 = 0;
         self.r9 = 0;
     }
+
+    pub fn complete_service_state(&mut self, state: Option<crate::ServiceState>) {
+        self.rax = u64::from(state.is_none());
+        self.rdx = match state {
+            Some(crate::ServiceState::Running) => 1,
+            Some(crate::ServiceState::Exited) => 2,
+            Some(crate::ServiceState::Faulted) => 3,
+            None => 0,
+        };
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
 }
 
 const fn user_address(address: u64) -> bool {
@@ -205,6 +218,10 @@ pub enum SyscallRequest {
         offset: u64,
         input_address: u64,
         length: u32,
+    },
+    QueryService {
+        capability: Capability,
+        service: crate::ServiceId,
     },
 }
 
@@ -359,6 +376,21 @@ impl SyscallRequest {
                     })
                 }
             }
+            9 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi == 0 || rsi >> 32 == 0 {
+                    return Err(SyscallError::InvalidObject);
+                }
+                if rdx | r10 | r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                Ok(Self::QueryService {
+                    capability: Capability::from_token(rdi),
+                    service: crate::ServiceId::from_token(rsi),
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -372,7 +404,8 @@ impl SyscallRequest {
             | Self::ReceiveBuffer { .. }
             | Self::AuthorizeCapability { .. }
             | Self::ReadSharedBuffer { .. }
-            | Self::WriteSharedBuffer { .. } => &[],
+            | Self::WriteSharedBuffer { .. }
+            | Self::QueryService { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
@@ -679,6 +712,49 @@ mod tests {
                 Err(SyscallError::ReservedArgument)
             );
         }
+    }
+
+    #[test]
+    fn service_query_binds_exact_capability_and_generation() {
+        let capability = (9u64 << 32) | 2;
+        let service = (7u64 << 32) | 1;
+        assert_eq!(
+            SyscallRequest::decode(9, capability, service, 0, 0, 0, 0),
+            Ok(SyscallRequest::QueryService {
+                capability: Capability::from_token(capability),
+                service: crate::ServiceId::from_token(service),
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(9, 2, service, 0, 0, 0, 0),
+            Err(SyscallError::InvalidCapability)
+        );
+        assert_eq!(
+            SyscallRequest::decode(9, capability, 1, 0, 0, 0, 0),
+            Err(SyscallError::InvalidObject)
+        );
+        assert_eq!(
+            SyscallRequest::decode(9, capability, service, 0, 1, 0, 0),
+            Err(SyscallError::ReservedArgument)
+        );
+    }
+
+    #[test]
+    fn service_state_completion_is_bounded_and_detail_free() {
+        let mut frame = valid_yield_frame();
+        frame.r10 = u64::MAX;
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_service_state(Some(crate::ServiceState::Faulted));
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (0, 3, 0, 0, 0)
+        );
+        frame.complete_service_state(None);
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (1, 0, 0, 0, 0)
+        );
     }
 
     #[test]

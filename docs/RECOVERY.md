@@ -178,6 +178,13 @@ explicitly and downgrade the status rather than guessing.
   writes and reads its value, kernel-side retirement before host observation,
   zeroed re-arm, and final retirement. This is hosted controlled-probe evidence,
   not crash, physical-hardware, or host-resistant evidence.
+  The kernel image also exposes service-state query operation 9: one exact
+  task-local READ capability authorizes one opaque generational service token,
+  reserved registers must be zero, and success reveals only Running, Exited, or
+  Faulted. Fresh signed KVM and WHP runs exercised the query in both generations.
+  It neither mutates lifecycle state nor persists policy, and it does not
+  implement canonical supervision-message dispatch or trusted restart
+  reprovisioning.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and
