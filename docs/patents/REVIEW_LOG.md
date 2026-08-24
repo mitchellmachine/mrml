@@ -2448,3 +2448,14 @@ host-share protocol, accessibility device, browser semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
 review does not replace independent human dual review.
+
+# 2026-08-24 — Typed recovery-state boot handoff
+
+**Result: NOT_TRIGGERED.** The change conventionally encodes and decodes four
+bounded canonical recovery-state metadata fields in a separately flagged fixed-
+size boot handoff record. The value remains data and grants no recovery
+authority. It adds no attestation, compatibility transport, host-share
+protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace independent human dual review.

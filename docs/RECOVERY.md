@@ -338,9 +338,14 @@ explicitly and downgrade the status rather than guessing.
   fresh firmware-RNG call per session, then authenticates the counter-selected
   slot before boot-services exit. Partial configuration and any backend
   uncertainty fail boot; temporary state is erased. This does not provision
-  indices or policy, pass recovered state into kernel authority, link the native
-  UEFI target, or provide physical evidence. No complete durable TPM backend is
-  claimed. Dependent
+  indices or policy, link the native UEFI target, or provide physical evidence.
+  The canonical epoch, handle generation, optional volume, and root generation
+  now cross into early kernel decoding through a separately flagged 40-byte
+  handoff record. Exact length, reserved bytes, nonzero generations, and the
+  volume/root pair are revalidated before region emission. This remains typed
+  metadata, independent of artifact rollback evidence; it does not construct a
+  recovery token, capability, or authority table. No complete durable TPM
+  backend is claimed. Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator
   reads the exact selected configuration file,

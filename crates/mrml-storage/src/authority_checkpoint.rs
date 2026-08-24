@@ -214,6 +214,46 @@ pub fn validate_authenticated_authority_recovery_state(
     AuthenticatedAuthorityRecoveryState::decode_authenticated(input).map(drop)
 }
 
+/// Canonical recovery-state fields parsed from bytes whose authentication is a
+/// separate caller obligation. This value is data and carries no authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalAuthorityRecoveryState {
+    accepted_epoch: u64,
+    accepted_handle_generation: u32,
+    accepted_volume: Option<VolumeId>,
+    accepted_root_generation: u64,
+}
+
+impl CanonicalAuthorityRecoveryState {
+    pub const fn accepted_epoch(self) -> u64 {
+        self.accepted_epoch
+    }
+
+    pub const fn accepted_handle_generation(self) -> u32 {
+        self.accepted_handle_generation
+    }
+
+    pub const fn accepted_volume(self) -> Option<VolumeId> {
+        self.accepted_volume
+    }
+
+    pub const fn accepted_root_generation(self) -> u64 {
+        self.accepted_root_generation
+    }
+}
+
+pub fn decode_canonical_authority_recovery_state(
+    input: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+) -> Result<CanonicalAuthorityRecoveryState, AuthorityCheckpointError> {
+    let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(input)?;
+    Ok(CanonicalAuthorityRecoveryState {
+        accepted_epoch: state.accepted_epoch,
+        accepted_handle_generation: state.accepted_handle_generation,
+        accepted_volume: state.accepted_volume,
+        accepted_root_generation: state.accepted_root_generation,
+    })
+}
+
 /// Exact owner-approved durable-grant policy admitted by trusted recovery.
 /// Names, identities, signatures, and checkpoint bytes remain data until this
 /// boundary has authenticated the complete policy and selected storage root.
@@ -1914,10 +1954,13 @@ mod tests {
 
     #[test]
     fn authenticated_recovery_state_rejects_corruption_and_store_conflict() {
-        assert_eq!(
-            validate_authenticated_authority_recovery_state(&RecoveryStateBackend::new(8, 1).state),
-            Ok(())
-        );
+        let canonical =
+            decode_canonical_authority_recovery_state(&RecoveryStateBackend::new(8, 1).state)
+                .unwrap();
+        assert_eq!(canonical.accepted_epoch(), 8);
+        assert_eq!(canonical.accepted_handle_generation(), 1);
+        assert_eq!(canonical.accepted_volume(), None);
+        assert_eq!(canonical.accepted_root_generation(), 0);
         let mut malformed = RecoveryStateBackend::new(8, 1).state;
         malformed[28] = 1;
         assert!(matches!(

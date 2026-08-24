@@ -660,12 +660,17 @@ authority; unrelated domains continue.
    composes the real TCG2 transport with one firmware-RNG call per session, and
    authenticates the selected journal record before `ExitBootServices`.
    Partial configuration, malformed state, or firmware uncertainty aborts;
-   temporary state is erased and is not yet promoted into kernel authority or
-   artifact rollback evidence. Actual owner-policy provisioning/recovery,
-   native UEFI-target linkage, typed handoff/boot consumption, and physical
-   testing remain pending.
+   temporary state is erased. Canonical epoch, handle generation, optional
+   volume, and root generation now cross a separately flagged 40-byte handoff
+   record and are revalidated by early-kernel decoding before any memory region
+   is emitted. Tests prove this metadata can exist while artifact rollback
+   evidence remains false. It creates no recovery token, capability, or
+   authority table. Actual owner-policy provisioning/recovery, native UEFI-
+   target linkage, authority-consuming boot recovery, and physical testing
+   remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 16 `mrml-uefi` library tests and all 115 storage tests. Strict
+   each pass all 445 kernel tests, all 16 `mrml-uefi` library tests, and all 115
+   storage tests. Strict
    Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
    enabled; strict Linux crate-local Clippy also passes. An
    `x86_64-unknown-uefi` image check was attempted but failed in unrelated

@@ -6,17 +6,18 @@ use core::cell::UnsafeCell;
 use mrml_kernel::{
     ArtifactKind, FramebufferInfo, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
     MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MemoryKind, MemoryRegion, PeImage, PhysAddr,
-    PixelFormat, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact, TrustRoot,
+    PixelFormat, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch,
+    SignedArtifact, TrustRoot,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
         copy_madt,
     },
-    encode_handoff_with_smp_and_service,
+    encode_handoff_with_smp_service_and_recovery,
 };
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore,
-    validate_authenticated_authority_recovery_state,
+    decode_canonical_authority_recovery_state,
 };
 use mrml_uefi::tpm::{
     NvCounterError, RecoveryJournalConfiguration, TpmNonceSource, TpmTransport, enforce_version,
@@ -497,7 +498,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     if require_rollback_counter() && !rollback_protected {
         return Err(LOAD_ERROR);
     }
-    admit_configured_recovery_journal(services, rng_pointer.cast())?;
+    let recovery_state = admit_configured_recovery_journal(services, rng_pointer.cast())?;
 
     loader_trace(0xa8);
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services) }?;
@@ -516,6 +517,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             acpi_root,
             framebuffer,
             prepared_service,
+            recovery_state,
         )
     }
 }
@@ -544,6 +546,7 @@ unsafe fn launch_after_exit(
     acpi_root: u64,
     framebuffer: Framebuffer,
     service: PreparedService,
+    recovery_state: Option<RecoveryStateMetadata>,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
     let regions = unsafe { &mut *REGIONS.0.get() };
@@ -584,6 +587,7 @@ unsafe fn launch_after_exit(
         &regions[..region_count],
         &madt_storage[..madt_length],
         service,
+        recovery_state,
     )
     .is_err()
     {
@@ -709,9 +713,9 @@ fn configured_recovery_journal() -> Result<Option<RecoveryJournalConfiguration>,
 fn admit_configured_recovery_journal(
     services: &BootServices,
     rng: *mut RngProtocol,
-) -> Result<(), Status> {
+) -> Result<Option<RecoveryStateMetadata>, Status> {
     let Some(configuration) = configured_recovery_journal()? else {
-        return Ok(());
+        return Ok(None);
     };
     if rng.is_null() {
         return Err(LOAD_ERROR);
@@ -736,7 +740,16 @@ fn admit_configured_recovery_journal(
         .load_authenticated(&mut state)
         .map_err(|_| LOAD_ERROR)
         .and_then(|()| {
-            validate_authenticated_authority_recovery_state(&state).map_err(|_| LOAD_ERROR)
+            let decoded =
+                decode_canonical_authority_recovery_state(&state).map_err(|_| LOAD_ERROR)?;
+            RecoveryStateMetadata::new(
+                decoded.accepted_epoch(),
+                decoded.accepted_handle_generation(),
+                decoded.accepted_volume().map(|volume| volume.bytes()),
+                decoded.accepted_root_generation(),
+            )
+            .map(Some)
+            .map_err(|_| LOAD_ERROR)
         });
     state.fill(0);
     result
@@ -947,6 +960,7 @@ fn enter_kernel(
     regions: &[NormalizedRegion],
     madt: &[u8],
     service: PreparedService,
+    recovery_state: Option<RecoveryStateMetadata>,
 ) -> Result<(), Status> {
     let placeholder = MemoryRegion::new(
         PhysAddr::new(0).map_err(|_| LOAD_ERROR)?,
@@ -988,7 +1002,7 @@ fn enter_kernel(
     let handoff_page = unsafe { &mut *HANDOFF.0.get() };
     handoff_page.fill(0);
     let handoff = &mut handoff_page[..HANDOFF_BYTES];
-    let handoff_length = encode_handoff_with_smp_and_service(
+    let handoff_length = encode_handoff_with_smp_service_and_recovery(
         kernel_version,
         entropy,
         kernel_measurement,
@@ -1001,6 +1015,7 @@ fn enter_kernel(
         transition.ap_trampoline,
         transition.ap_stack_arena,
         service.launch,
+        recovery_state,
         madt,
         handoff,
     )

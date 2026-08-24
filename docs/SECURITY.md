@@ -200,6 +200,12 @@ firmware RNG call, and authenticates only the counter-selected slot before
 closed; temporary recovery bytes are erased. This admission is not owner
 provisioning, authority reconstruction, artifact rollback evidence, remote
 attestation, native UEFI execution evidence, or physical durability evidence.
+Canonical recovery metadata crosses the loader/kernel boundary only in its own
+optional fixed-size handoff record. Both encoder and decoder require nonzero
+epoch and handle generation, zero reserved bytes, and an all-or-none nonzero
+volume/root pair. Its flag is independent of rollback-protected boot evidence,
+and the decoded value is explicitly data: it cannot authorize storage recovery
+or manufacture a capability.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

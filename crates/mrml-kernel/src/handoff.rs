@@ -8,11 +8,13 @@ pub const HANDOFF_REGION_BYTES: usize = 24;
 pub const MAX_HANDOFF_REGIONS: usize = 128;
 pub const MAX_HANDOFF_MADT_BYTES: usize = 8 * 1024;
 pub const HANDOFF_SERVICE_BYTES: usize = 160;
+pub const HANDOFF_RECOVERY_STATE_BYTES: usize = 40;
 pub const MAX_HANDOFF_BYTES: usize = HANDOFF_HEADER_BYTES
     + MAX_HANDOFF_REGIONS * HANDOFF_REGION_BYTES
     + MAX_HANDOFF_MADT_BYTES
     + 16
-    + HANDOFF_SERVICE_BYTES;
+    + HANDOFF_SERVICE_BYTES
+    + HANDOFF_RECOVERY_STATE_BYTES;
 
 const FLAG_SECURE_BOOT: u16 = 1;
 const FLAG_MEASURED_BOOT: u16 = 1 << 1;
@@ -20,12 +22,63 @@ const FLAG_ROLLBACK_PROTECTED: u16 = 1 << 2;
 const FLAG_MADT_SNAPSHOT: u16 = 1 << 3;
 const FLAG_AP_TRAMPOLINE: u16 = 1 << 4;
 const FLAG_SERVICE_IMAGE: u16 = 1 << 5;
+const FLAG_RECOVERY_STATE: u16 = 1 << 6;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
     | FLAG_MADT_SNAPSHOT
     | FLAG_AP_TRAMPOLINE
-    | FLAG_SERVICE_IMAGE;
+    | FLAG_SERVICE_IMAGE
+    | FLAG_RECOVERY_STATE;
+
+/// Canonical rollback-state metadata handed off by the authenticated loader.
+/// It is evidence data only and carries no recovery or storage authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecoveryStateMetadata {
+    accepted_epoch: u64,
+    accepted_handle_generation: u32,
+    accepted_volume: Option<[u8; 16]>,
+    accepted_root_generation: u64,
+}
+
+impl RecoveryStateMetadata {
+    pub fn new(
+        accepted_epoch: u64,
+        accepted_handle_generation: u32,
+        accepted_volume: Option<[u8; 16]>,
+        accepted_root_generation: u64,
+    ) -> Result<Self, HandoffError> {
+        if accepted_epoch == 0
+            || accepted_handle_generation == 0
+            || accepted_volume.is_some_and(|volume| volume.iter().all(|byte| *byte == 0))
+            || accepted_volume.is_some() != (accepted_root_generation != 0)
+        {
+            return Err(HandoffError::NonCanonical);
+        }
+        Ok(Self {
+            accepted_epoch,
+            accepted_handle_generation,
+            accepted_volume,
+            accepted_root_generation,
+        })
+    }
+
+    pub const fn accepted_epoch(self) -> u64 {
+        self.accepted_epoch
+    }
+
+    pub const fn accepted_handle_generation(self) -> u32 {
+        self.accepted_handle_generation
+    }
+
+    pub const fn accepted_volume(self) -> Option<[u8; 16]> {
+        self.accepted_volume
+    }
+
+    pub const fn accepted_root_generation(self) -> u64 {
+        self.accepted_root_generation
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServiceLaunch {
@@ -197,6 +250,7 @@ pub struct BootHandoff {
     ap_trampoline: Option<u64>,
     ap_stack_arena: Option<u64>,
     service: Option<ServiceLaunch>,
+    recovery_state: Option<RecoveryStateMetadata>,
 }
 
 impl BootHandoff {
@@ -231,6 +285,10 @@ impl BootHandoff {
 
     pub const fn service(&self) -> Option<ServiceLaunch> {
         self.service
+    }
+
+    pub const fn recovery_state(&self) -> Option<RecoveryStateMetadata> {
+        self.recovery_state
     }
 
     /// Parses a bounded canonical handoff and emits validated regions in
@@ -276,8 +334,13 @@ impl BootHandoff {
         // the base of the bounded per-CPU privilege-stack arena.
         let service_bytes = usize::from(flags & FLAG_SERVICE_IMAGE != 0) * HANDOFF_SERVICE_BYTES;
         let service_offset = regions_end;
-        let trampoline_offset = service_offset
+        let recovery_offset = service_offset
             .checked_add(service_bytes)
+            .ok_or(HandoffError::NonCanonical)?;
+        let recovery_bytes =
+            usize::from(flags & FLAG_RECOVERY_STATE != 0) * HANDOFF_RECOVERY_STATE_BYTES;
+        let trampoline_offset = recovery_offset
+            .checked_add(recovery_bytes)
             .ok_or(HandoffError::NonCanonical)?;
         let trampoline_bytes = usize::from(flags & FLAG_AP_TRAMPOLINE != 0) * 16;
         let madt_offset = trampoline_offset
@@ -324,6 +387,11 @@ impl BootHandoff {
         };
         let service = if service_bytes != 0 {
             Some(decode_service(input, service_offset)?)
+        } else {
+            None
+        };
+        let recovery_state = if recovery_bytes != 0 {
+            Some(decode_recovery_state(input, recovery_offset)?)
         } else {
             None
         };
@@ -416,6 +484,7 @@ impl BootHandoff {
             ap_trampoline,
             ap_stack_arena,
             service,
+            recovery_state,
         })
     }
 }
@@ -445,6 +514,7 @@ pub fn encode_handoff(
         acpi_root,
         framebuffer,
         regions,
+        None,
         None,
         None,
         None,
@@ -484,6 +554,7 @@ pub fn encode_handoff_with_madt(
         framebuffer,
         regions,
         Some(madt),
+        None,
         None,
         None,
         output,
@@ -531,6 +602,7 @@ pub fn encode_handoff_with_smp(
         Some(madt),
         Some((ap_trampoline, ap_stack_arena)),
         None,
+        None,
         output,
     )
 }
@@ -577,6 +649,55 @@ pub fn encode_handoff_with_smp_and_service(
         Some(madt),
         Some((ap_trampoline, ap_stack_arena)),
         Some(service),
+        None,
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_service_and_recovery(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    service: ServiceLaunch,
+    recovery_state: Option<RecoveryStateMetadata>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    if !(crate::PAGE_SIZE..0x10_0000).contains(&ap_trampoline)
+        || !ap_trampoline.is_multiple_of(crate::PAGE_SIZE)
+        || ap_stack_arena == 0
+        || !ap_stack_arena.is_multiple_of(crate::PAGE_SIZE)
+        || ap_stack_arena >> 52 != 0
+        || !(44..=MAX_HANDOFF_MADT_BYTES).contains(&madt.len())
+        || &madt[..4] != b"APIC"
+        || read_u32(madt, 4) as usize != madt.len()
+        || madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    encode_handoff_inner(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        acpi_root,
+        framebuffer,
+        regions,
+        Some(madt),
+        Some((ap_trampoline, ap_stack_arena)),
+        Some(service),
+        recovery_state,
         output,
     )
 }
@@ -595,6 +716,7 @@ fn encode_handoff_inner(
     madt: Option<&[u8]>,
     ap_resources: Option<(u64, u64)>,
     service: Option<ServiceLaunch>,
+    recovery_state: Option<RecoveryStateMetadata>,
     output: &mut [u8],
 ) -> Result<usize, HandoffError> {
     if regions.is_empty() || regions.len() > MAX_HANDOFF_REGIONS {
@@ -611,8 +733,12 @@ fn encode_handoff_inner(
     let madt_length = madt.map_or(0, <[u8]>::len);
     let service_bytes = usize::from(service.is_some()) * HANDOFF_SERVICE_BYTES;
     let service_offset = regions_end;
-    let trampoline_offset = service_offset
+    let recovery_offset = service_offset
         .checked_add(service_bytes)
+        .ok_or(HandoffError::NonCanonical)?;
+    let recovery_bytes = usize::from(recovery_state.is_some()) * HANDOFF_RECOVERY_STATE_BYTES;
+    let trampoline_offset = recovery_offset
+        .checked_add(recovery_bytes)
         .ok_or(HandoffError::NonCanonical)?;
     let madt_offset = trampoline_offset
         .checked_add(usize::from(ap_resources.is_some()) * 16)
@@ -652,7 +778,8 @@ fn encode_handoff_inner(
         | ((rollback_protected as u16) * FLAG_ROLLBACK_PROTECTED)
         | ((madt.is_some() as u16) * FLAG_MADT_SNAPSHOT)
         | ((ap_resources.is_some() as u16) * FLAG_AP_TRAMPOLINE)
-        | ((service.is_some() as u16) * FLAG_SERVICE_IMAGE);
+        | ((service.is_some() as u16) * FLAG_SERVICE_IMAGE)
+        | ((recovery_state.is_some() as u16) * FLAG_RECOVERY_STATE);
     output[22..24].copy_from_slice(&flags.to_le_bytes());
     output[24..32].copy_from_slice(&image_version.to_le_bytes());
     output[32..64].copy_from_slice(&entropy);
@@ -680,7 +807,13 @@ fn encode_handoff_inner(
             .copy_from_slice(&stack_arena.to_le_bytes());
     }
     if let Some(service) = service {
-        encode_service(service, &mut output[service_offset..trampoline_offset]);
+        encode_service(service, &mut output[service_offset..recovery_offset]);
+    }
+    if let Some(recovery_state) = recovery_state {
+        encode_recovery_state(
+            recovery_state,
+            &mut output[recovery_offset..trampoline_offset],
+        );
     }
     if let Some(madt) = madt {
         output[madt_offset..length].copy_from_slice(madt);
@@ -708,6 +841,34 @@ fn encode_service(service: ServiceLaunch, output: &mut [u8]) {
         output[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
     output[96..HANDOFF_SERVICE_BYTES].copy_from_slice(&service.measurement());
+}
+
+fn encode_recovery_state(state: RecoveryStateMetadata, output: &mut [u8]) {
+    output[..8].copy_from_slice(&state.accepted_epoch().to_le_bytes());
+    output[8..12].copy_from_slice(&state.accepted_handle_generation().to_le_bytes());
+    if let Some(volume) = state.accepted_volume() {
+        output[16..32].copy_from_slice(&volume);
+    }
+    output[32..40].copy_from_slice(&state.accepted_root_generation().to_le_bytes());
+}
+
+fn decode_recovery_state(
+    input: &[u8],
+    offset: usize,
+) -> Result<RecoveryStateMetadata, HandoffError> {
+    if input[offset + 12..offset + 16]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    let volume: [u8; 16] = input[offset + 16..offset + 32].try_into().unwrap();
+    RecoveryStateMetadata::new(
+        read_u64(input, offset),
+        read_u32(input, offset + 8),
+        (!volume.iter().all(|byte| *byte == 0)).then_some(volume),
+        read_u64(input, offset + 32),
+    )
 }
 
 fn decode_service(input: &[u8], offset: usize) -> Result<ServiceLaunch, HandoffError> {
@@ -838,7 +999,11 @@ mod tests {
         encoded[16..20].copy_from_slice(&(THREE_REGION_BYTES as u32).to_le_bytes());
         encoded[20..22].copy_from_slice(&3u16.to_le_bytes());
         encoded[22..24].copy_from_slice(
-            &(KNOWN_FLAGS & !(FLAG_MADT_SNAPSHOT | FLAG_AP_TRAMPOLINE | FLAG_SERVICE_IMAGE))
+            &(KNOWN_FLAGS
+                & !(FLAG_MADT_SNAPSHOT
+                    | FLAG_AP_TRAMPOLINE
+                    | FLAG_SERVICE_IMAGE
+                    | FLAG_RECOVERY_STATE))
                 .to_le_bytes(),
         );
         encoded[24..32].copy_from_slice(&7u64.to_le_bytes());
@@ -1079,5 +1244,57 @@ mod tests {
             Some(HandoffError::NonCanonical)
         );
         assert_eq!(emitted, 0);
+
+        const WITH_RECOVERY_LENGTH: usize = LENGTH + HANDOFF_RECOVERY_STATE_BYTES;
+        let recovery = RecoveryStateMetadata::new(12, 7, Some([0x6a; 16]), 19).unwrap();
+        let mut with_recovery = [0u8; WITH_RECOVERY_LENGTH];
+        assert_eq!(
+            encode_handoff_with_smp_service_and_recovery(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                service,
+                Some(recovery),
+                &madt,
+                &mut with_recovery,
+            ),
+            Ok(WITH_RECOVERY_LENGTH)
+        );
+        let decoded = BootHandoff::decode(&with_recovery, |_| {}).unwrap();
+        assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert!(!decoded.evidence().rollback_protected());
+
+        let recovery_offset =
+            HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + HANDOFF_SERVICE_BYTES;
+        with_recovery[recovery_offset + 12] = 1;
+        let mut emitted = 0;
+        assert_eq!(
+            BootHandoff::decode(&with_recovery, |_| emitted += 1).err(),
+            Some(HandoffError::NonCanonical)
+        );
+        assert_eq!(emitted, 0);
+        with_recovery[recovery_offset + 12] = 0;
+        with_recovery[recovery_offset + 32..recovery_offset + 40].fill(0);
+        assert_eq!(
+            BootHandoff::decode(&with_recovery, |_| {}).err(),
+            Some(HandoffError::NonCanonical)
+        );
+
+        assert_eq!(
+            RecoveryStateMetadata::new(1, 1, Some([0; 16]), 1),
+            Err(HandoffError::NonCanonical)
+        );
+        assert_eq!(
+            RecoveryStateMetadata::new(1, 1, None, 1),
+            Err(HandoffError::NonCanonical)
+        );
     }
 }

@@ -489,13 +489,19 @@ and authenticate the currently selected journal slot before
 `ExitBootServices`; partial configuration or any uncertainty aborts boot, and
 the temporary state bytes are erased. The loader does not yet consume that
 state into kernel authority or reinterpret it as artifact rollback evidence.
+It now decodes the canonical epoch, handle generation, optional volume, and
+root generation into a separately flagged 40-byte handoff record. Early-kernel
+handoff decoding reconstructs typed metadata only after exact length, reserved-
+byte, nonzero-generation, and all-or-none volume/root checks. Presence is
+independent of the artifact rollback flag, and no capability or authenticated
+recovery token is created.
 Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, native UEFI-target linkage, typed kernel handoff/boot
-consumption, and physical evidence remain pending. A consumed dependent-
+provisioning/recovery, native UEFI-target linkage, authority-consuming boot
+recovery, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an
