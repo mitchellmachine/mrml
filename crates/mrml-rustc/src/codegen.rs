@@ -5504,6 +5504,13 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         kind: CodegenErrorKind::RuntimeExpressionUnsupported,
                         span: assignment_span,
                     })?;
+                let result_may_carry_reference = matches!(
+                    target.return_type,
+                    crate::ScalarType::Reference { .. }
+                        | crate::ScalarType::ArrayReference { .. }
+                        | crate::ScalarType::SliceReference { .. }
+                        | crate::ScalarType::StrReference { .. }
+                );
                 for (parameter, argument) in target.parameters[..target.parameter_count]
                     .iter()
                     .zip(arguments[..argument_count].iter())
@@ -5748,11 +5755,29 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             )?;
                         }
                     } else {
-                        let argument_context = if runtime_type_is_copy(expected) {
-                            RuntimeReadEffectContext::Value
-                        } else {
-                            RuntimeReadEffectContext::Move
-                        };
+                        let coercion_root = discover_runtime_read_place(tree, argument)
+                            .map_err(|kind| CodegenError {
+                                kind,
+                                span: assignment_span,
+                            })?
+                            .is_some()
+                            || matches!(
+                                tree.expression(argument).map(|expression| expression.kind),
+                                Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+                            );
+                        let argument_context =
+                            match (coercion_root && !result_may_carry_reference, expected) {
+                                (true, RuntimeExpressionType::Reference { mutable: true, .. }) => {
+                                    RuntimeReadEffectContext::MutableBorrow
+                                }
+                                (true, RuntimeExpressionType::Reference { mutable: false, .. }) => {
+                                    RuntimeReadEffectContext::SharedBorrow
+                                }
+                                _ if runtime_type_is_copy(expected) => {
+                                    RuntimeReadEffectContext::Value
+                                }
+                                _ => RuntimeReadEffectContext::Move,
+                            };
                         visit_as!(argument, argument_context)?;
                     }
                 }
@@ -25885,7 +25910,7 @@ mod tests {
             name: &str,
             argument_count: usize,
         ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
-            if name != "identity" || argument_count != 1 || MAX_PARAMETERS == 0 {
+            if argument_count != 1 || MAX_PARAMETERS == 0 {
                 return None;
             }
             let reference = ScalarType::Reference {
@@ -25897,14 +25922,25 @@ mod tests {
                 name: "value",
                 ty: reference,
             });
-            Some(RuntimeCallTarget {
-                name: "identity",
-                parameters,
-                parameter_count: 1,
-                return_type: reference,
-                return_type_name: "&mut u16",
-                body_expression: "value",
-            })
+            match name {
+                "identity" => Some(RuntimeCallTarget {
+                    name: "identity",
+                    parameters,
+                    parameter_count: 1,
+                    return_type: reference,
+                    return_type_name: "&mut u16",
+                    body_expression: "value",
+                }),
+                "touch" => Some(RuntimeCallTarget {
+                    name: "touch",
+                    parameters,
+                    parameter_count: 1,
+                    return_type: ScalarType::Unit,
+                    return_type_name: "()",
+                    body_expression: "*value += 1",
+                }),
+                _ => None,
+            }
         }
     }
 
@@ -27773,6 +27809,43 @@ mod tests {
         for source in [
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (first, second); let child: &mut u16 = pair.0; *child += 1; let next: &mut u16 = pair.0; *next }",
             "fn value(first: &mut u16, second: &mut u16, third: &mut u16) -> u16 { let pair = (first, second); let mut child: &mut u16 = third; child = pair.0; *child += 1; let next: &mut u16 = pair.0; *next }",
+        ] {
+            analyze(source).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_non_reference_call_results_reborrow_reference_arguments() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> u16 { let child: &mut u16 = &mut *input; touch(input); *child }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let child: &mut u16 = &mut *first; touch(if choose { first } else { second }); *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> u16 { touch(input); *input }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { touch(if choose { first } else { second }); *first + *second }",
         ] {
             analyze(source).unwrap();
         }

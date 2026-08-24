@@ -4252,6 +4252,33 @@ fn rustc_projected_reference_place_reborrows_match_the_oracle() {
 }
 
 #[test]
+fn rustc_non_reference_call_results_reborrow_reference_arguments_like_the_oracle() {
+    let rejected = [
+        "fn touch(value: &mut u16) { *value += 1; } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let child: &mut u16 = &mut *input; touch(input); *child }",
+        "fn touch(value: &mut u16) { *value += 1; } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let child: &mut u16 = &mut *first; touch(if choose { first } else { second }); *child }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "fn touch(value: &mut u16) { *value += 1; } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { touch(input); *input }",
+        "fn touch(value: &mut u16) { *value += 1; } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> u16 { touch(if choose { first } else { second }); *first + *second }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
     let source = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 2; *returned }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
