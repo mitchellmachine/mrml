@@ -556,10 +556,10 @@ alone never proves provenance interchangeability.
 The current bounded ownership foundation derives direct loan identities from
 existing borrow and initialization facts. It also records dereference and
 projection uses of direct shared-reference borrowers and rejects a later exact-
-place mutable borrow when that borrower is subsequently used within the same
-validated ownership control point or its immediate exit edge. This is a narrow
-shared-loan liveness slice, not cross-block liveness, mutable-loan invalidation,
-regions, reborrow completion, or a complete borrow checker.
+place mutable borrow when that borrower is subsequently used along a reachable
+path in the validated bounded CFG. This is a bounded direct shared-loan
+liveness slice, not mutable-loan invalidation, regions, reborrow completion, or
+a complete borrow checker.
 
 ## Roadmap selection
 
@@ -580,8 +580,8 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is extending bounded shared-
-loan liveness across the validated CFG, followed by mutable-loan invalidation.
+The highest-value next major implementation task is adding bounded mutable-loan
+invalidation facts on top of the validated shared-loan CFG traversal.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

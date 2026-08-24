@@ -3309,3 +3309,13 @@ shared-reference borrower uses and rejects an exact mutable borrow followed by
 a later use in the same validated control segment or its immediate exit. It
 does not claim cross-block liveness, mutable-loan invalidation, regions, or a
 complete borrow checker. The hygiene scan remained empty.
+
+The bounded CFG shared-loan milestone passed all 701 compiler and driver tests
+on Windows gnullvm and all 701 in release mode on native Arch Linux WSL, plus
+warnings-denied Clippy on both hosts using rustc workspace commit
+`fb6531d550e0075b9eb9a51464f404805eec87d9`. A fixed-capacity traversal now
+orders loan issuance, exact mutable-borrow conflicts, and later shared borrower
+uses across reachable block and edge control points, including real cycles.
+Mutually unreachable control points do not manufacture conflicts. This remains
+direct shared-loan evidence, not mutable-loan invalidation, regions, reborrow
+completion, or a complete borrow checker. The hygiene scan remained empty.

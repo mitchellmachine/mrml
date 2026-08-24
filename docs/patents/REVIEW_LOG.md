@@ -2044,3 +2044,14 @@ mechanism, accessibility interface, browser semantic interface,
 JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
+
+# 2026-08-24 — Bounded CFG shared-loan liveness
+
+**Result: NOT_TRIGGERED.** The compiler conventionally traverses its existing
+fixed-capacity control-flow blocks and edges to order direct shared-loan
+issuance, exact mutable-borrow conflicts, and later shared borrower uses. This
+adds no unbounded graph structure, optimization, authority model, device or
+compatibility protocol, host-share mechanism, accessibility interface, browser
+semantic interface, JavaScript/WebAssembly runtime, media mechanism, or other
+patent-candidate mechanism. This agent review does not replace the required
+independent human dual review.

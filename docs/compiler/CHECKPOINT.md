@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `172eb93`
-  (`compiler: validate local shared loan liveness`)
+- Compiler checkpoint commit: `239c00c`
+  (`compiler: follow shared loans across control flow`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
@@ -114,10 +114,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   effect index. Shared-reference dereference and projection reads additionally
   record `LoanUse` on the borrower root. For a complete supported CFG, an exact
   mutable borrow after direct shared-loan issuance is rejected when the shared
-  borrower is used later in the same ownership control point or its immediate
-  exit edge. This is bounded direct issuance and local liveness evidence, not
-  cross-block loan liveness, mutable-loan invalidation, regions, reborrow
-  completion, or complete NLL enforcement.
+  borrower is used later along a reachable bounded-CFG path. A fixed-capacity
+  traversal covers entry, blocks, edges, returns, and genuine cycles without
+  treating mutually unreachable points as ordered. This is bounded direct
+  issuance and shared-loan liveness evidence, not mutable-loan invalidation,
+  regions, reborrow completion, or complete NLL enforcement.
   Supported call
   arguments are classified from the resolved parameter type: exact non-`Copy`
   roots record `Move`, while explicit borrow syntax retains its borrow effect.
@@ -365,8 +366,8 @@ resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths, implicit reborrow and remaining indirect move/borrow classification,
-unsupported expression/control-flow forms, complete loans, cross-block loan
-liveness, mutable-loan conflicts and invalidation, regions,
+unsupported expression/control-flow forms, complete loans, mutable-loan
+conflicts and invalidation, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -376,8 +377,7 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. expand the validated shared-loan liveness slice across bounded CFG edges,
-   then add mutable-loan invalidation facts before admitting
+1. add mutable-loan invalidation facts on the validated bounded CFG before admitting
    implicit coercion reborrows; do not mislabel an explicit expected-reference
    binding as an inferred move or accept overlapping aliases without loans;
 2. exact constant owned-array element identity is now retained. Add array move
@@ -409,8 +409,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 699 tests on each host: 385
-library tests, 10 conformance tests, 302 replacement tests, and 2 driver tests.
+The checkpoint source passed 701 tests on each host: 386
+library tests, 10 conformance tests, 303 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
