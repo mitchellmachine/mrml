@@ -433,6 +433,11 @@ explicitly and downgrade the status rather than guessing.
   their ordinary versus protected device-write paths. Native Windows
   `check --tests` and strict Clippy pass with CUDA excluded, but no linked or
   live WHP replacement evidence exists because `link.exe` is unavailable.
+  Both runners now own and destroy the old VM immediately after the exact five-
+  page snapshot, before preparing a replacement. No failure path can fall back
+  to old execution; preparation or restoration failure leaves the retained
+  device suspended. Fresh signed KVM execution covers this ordering, while WHP
+  remains compile/lint-only.
   Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
   and PCI transport remain pending. A common
   unsafe guest queue-transport boundary now derives

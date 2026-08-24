@@ -752,8 +752,12 @@ execution replacement, not crash recovery. The WHP runner now has the same
 consuming partition replacement and exact five-page restoration source path;
 native Windows `check --tests` and strict Clippy pass with CUDA excluded. A
 linked/live WHP replacement run remains pending because the available shell
-lacks `link.exe`. Unplanned crash orchestration, backend-in-flight recovery,
-unbounded progress, and PCI transport remain pending.
+lacks `link.exe`. Both runners now consume ownership of the old VM and destroy
+it immediately after the bounded snapshot, before replacement preparation.
+Failure therefore cannot fall back to old execution and leaves the retained
+device suspended. Fresh signed KVM execution covers this stronger ordering;
+WHP remains compile/lint-only. Unplanned crash orchestration, backend-in-flight
+recovery, unbounded progress, and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

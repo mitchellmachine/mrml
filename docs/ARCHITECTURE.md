@@ -731,9 +731,13 @@ and common VM policy identity remain live across replacement. The WHP runner
 now implements the same consuming partition replacement and exact five-page
 restoration through ordinary versus device-write boundaries; native Windows
 `check --tests` and strict Clippy pass with CUDA excluded. No linked or live WHP
-replacement evidence exists because `link.exe` remains unavailable. Unplanned
-crash orchestration, backend-in-flight recovery, unbounded progress, and PCI
-discovery remain pending. One freshly
+replacement evidence exists because `link.exe` remains unavailable.
+Both runners now take ownership of the old native VM, snapshot the five pages,
+and destroy the old VM before replacement preparation begins. There is no old-
+execution fallback if preparation or restoration fails; the retained device
+stays suspended. Fresh signed KVM execution covers this no-fallback ordering.
+Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
+and PCI discovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

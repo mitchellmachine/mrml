@@ -226,7 +226,7 @@ fn block_configuration(
 
 #[cfg(target_os = "linux")]
 fn run_block_guest_driver_probe(
-    guest: &mut PreparedKvmGuest<16>,
+    mut guest: PreparedKvmGuest<16>,
     system: &KvmSystem,
     executable: &VerifiedExecutable<'_>,
     handoff: &[u8],
@@ -281,7 +281,7 @@ fn run_block_guest_driver_probe(
         for offset in 0..2 {
             let operation = window * 2 + offset;
             let outcome = match run_virtual_block_doorbell_once(
-                guest,
+                &mut guest,
                 &mut storage,
                 0,
                 &mut vms,
@@ -327,7 +327,7 @@ fn run_block_guest_driver_probe(
         }
         if window == BLOCK_QUIESCE_WINDOW {
             let checkpoint = run_vm_once(
-                guest,
+                &mut guest,
                 0,
                 &mut vms,
                 vm,
@@ -359,7 +359,7 @@ fn run_block_guest_driver_probe(
                 .suspend()
                 .map_err(|_| anyhow!("block device did not quiesce exactly"))?;
             let published = bridge
-                .publish_resume_page(guest, &device, resume_page)
+                .publish_resume_page(&mut guest, &device, resume_page)
                 .map_err(|error| anyhow!("block resume publication failed: {:?}", error))?;
             let state = published.state();
             if state.request_producer() != u64::from(BLOCK_QUIESCE_REQUESTS)
@@ -375,15 +375,16 @@ fn run_block_guest_driver_probe(
             let mut completion_page = [0; 4096];
             let mut encoded_resume_page = [0; 4096];
             let mut payload_pages = [0; 8192];
-            VmBackend::read_guest(guest, layout.request_base(), &mut request_page)
+            VmBackend::read_guest(&guest, layout.request_base(), &mut request_page)
                 .and_then(|()| {
-                    VmBackend::read_guest(guest, layout.completion_base(), &mut completion_page)
+                    VmBackend::read_guest(&guest, layout.completion_base(), &mut completion_page)
                 })
                 .and_then(|()| {
-                    VmBackend::read_guest(guest, BLOCK_RESUME_BASE, &mut encoded_resume_page)
+                    VmBackend::read_guest(&guest, BLOCK_RESUME_BASE, &mut encoded_resume_page)
                 })
-                .and_then(|()| VmBackend::read_guest(guest, FRAMEBUFFER, &mut payload_pages))
+                .and_then(|()| VmBackend::read_guest(&guest, FRAMEBUFFER, &mut payload_pages))
                 .map_err(|_| anyhow!("block restart snapshot failed"))?;
+            drop(guest);
             let configuration_page =
                 VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
                     .map_err(|_| anyhow!("invalid replacement block configuration page"))?;
@@ -418,7 +419,7 @@ fn run_block_guest_driver_probe(
                     VmBackend::write_guest(&mut replacement, FRAMEBUFFER, &payload_pages)
                 })
                 .map_err(|_| anyhow!("replacement block VM state restoration failed"))?;
-            *guest = replacement;
+            guest = replacement;
             device
                 .resume()
                 .map_err(|_| anyhow!("block device did not resume exactly"))?;
@@ -426,7 +427,7 @@ fn run_block_guest_driver_probe(
         for offset in 0..2 {
             let operation = window * 2 + offset;
             let acknowledgement = match run_virtual_block_completion_ack_once(
-                guest,
+                &mut guest,
                 0,
                 &mut vms,
                 vm,
@@ -469,7 +470,7 @@ fn run_block_guest_driver_probe(
     {
         return Err(anyhow!("block backend payload mismatch"));
     }
-    let proof = VmBackend::run(guest, 0)
+    let proof = VmBackend::run(&mut guest, 0)
         .map_err(|error| anyhow!("block proof execution failed: {:?}", error))?;
     if proof
         != (VmExit::Io {
@@ -825,7 +826,7 @@ fn application_main() -> Result<()> {
     let execution_started = Instant::now();
     if mode == LaunchMode::BlockGuestDriverProbe {
         run_block_guest_driver_probe(
-            &mut guest,
+            guest,
             &system,
             &executable,
             handoff.as_slice(),

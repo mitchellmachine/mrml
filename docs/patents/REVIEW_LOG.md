@@ -1606,6 +1606,15 @@ write-direction boundaries. It adds no new authority model, persistent format,
 device protocol, or patent-candidate mechanism. This agent review does not
 replace the required independent human dual review.
 
+# 2026-08-24 — No-fallback virtual-block VM replacement
+
+**Result: NOT_TRIGGERED.** The change conventionally transfers ownership of a
+stopped VM into recovery, destroys it after a complete bounded snapshot and
+before replacement preparation, and retains no stale-execution fallback. It
+adds no new authority model, persistent format, device protocol, or patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
+
 # 2026-08-24 — Virtual-block queue transaction processor
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights producer/
