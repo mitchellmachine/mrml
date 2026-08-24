@@ -254,7 +254,13 @@ authority; unrelated domains continue.
    by service CONTROL. The service re-reads the canonical service-bound record,
    uses a trusted service-object mapping, and invokes operation 11 separately.
    Fresh identical signed artifacts completed this path and the subsequent
-   authorized restart on KVM and WHP. Live stable-storage/block-service
+   authorized restart on KVM and WHP. A reusable exact-block composition now
+   stages the checkpoint through `BlockFileSession` over `BlockVolume`, including
+   when its device is selected by a principal-bound MRML block-service session.
+   Deterministic integration publishes by one-use COW receipt, recovers the
+   exact selected file generation, reloads the service-bound policy, rejects a
+   derived read-only block session before writes, and proves parent revocation
+   stales its descendants. This is simulation evidence. Live CPL3 block-service
    restoration and reboot-time capability reconstruction remain pending, so
    this item remains partial.
    The next protocol dependency is now implemented at the kernel ABI boundary:

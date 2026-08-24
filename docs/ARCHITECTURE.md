@@ -1114,7 +1114,14 @@ Userspace re-reads the canonical record, checks a trusted service-object
 mapping, and only then invokes the kernel mechanism. Identical signed artifacts
 completed replacement and the subsequent authorized restart under hosted KVM
 and WHP. Live persistent restoration and reboot-time capability/policy
-orchestration remain pending.
+orchestration remain pending. The storage-neutral checkpoint now has a reusable
+exact-block composition over `BlockVolume` and its bounded `BlockFileSession`.
+A deterministic test supplies that volume through a principal-bound,
+capability-selected MRML block-service session, publishes with an exact one-use
+COW receipt, recovers only the selected file generation, and reloads the bound
+policy. Read-only attenuation and transitive session revocation fail before
+backend writes. This remains simulation evidence, not live service, reboot,
+power-loss, or physical-device evidence.
 The kernel ABI now has a pointer-free policy-replacement operation carrying only
 an opaque generational service token, one task-local capability, and bounded
 restart-count/base/maximum scalars. Decode rejects malformed capabilities,

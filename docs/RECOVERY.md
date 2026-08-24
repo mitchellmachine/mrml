@@ -337,6 +337,13 @@ explicitly and downgrade the status rather than guessing.
   capability. Identical signed artifacts completed under hosted KVM and WHP.
   Live persistent restoration and reboot-time capability reconstruction remain
   unimplemented.
+  A reusable exact-block composition now stages the configuration checkpoint
+  through `BlockFileSession` over `BlockVolume`, including a principal-bound
+  capability-selected MRML block-service device. Deterministic integration
+  publishes with one exact COW receipt, recovers only the selected file
+  generation, and reloads the service-bound policy. Read-only attenuation and
+  transitive block-session revocation fail before writes. This is simulation,
+  not live CPL3, reboot, power-loss, or physical-device evidence.
   A pointer-free kernel syscall foundation now admits bounded replacement
   mechanics only after exact service CONTROL authorization. Recover its ABI as
   operation 11 with service token, capability, finite restart count, base and

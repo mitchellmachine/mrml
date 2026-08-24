@@ -135,6 +135,15 @@ requires a second ordered IPC-derived exact service CONTROL capability before
 invoking this mechanism. Missing, extra, reordered, stale, or payload-forged
 authority fails closed.
 
+Configuration checkpoint storage can now use the exact-block volume through a
+principal-bound MRML block-service session. Configuration-root READ, stable-file
+WRITE/RESIZE, block-session operation rights, exact object/generation/extents,
+complete digests, publication generation, and one-use receipt remain distinct
+checks. Device identity and checkpoint bytes authorize none of them. A derived
+read-only block session fails before backend mutation, and revoking its parent
+stales the complete session lineage. This is deterministic simulation, not a
+durability or rollback-resistance claim.
+
 ## Persistent state and boot
 
 Signed images alone do not prevent rollback. TPM-backed or equivalent

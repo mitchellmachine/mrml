@@ -5822,6 +5822,40 @@ capability-authorized syscall. It enters none of the recorded `TRIGGERED`
 compatibility, host-share, accessibility-device, browser semantic,
 JavaScript/WebAssembly, AI, or media scopes.
 
+The next storage composition adds a reusable
+`prepare_block_stable_configuration` boundary. It creates one bounded
+`BlockFileSession` over the exact-block `BlockVolume` and invokes the existing
+stable-checkpoint staging gate; it accepts no device name, session token, host
+path, or authority from checkpoint bytes. A deterministic integration supplies
+the volume through `ServicedBlockDevice`, whose live session is principal-bound
+and independently reauthorized at every block operation. It stages the
+canonical policy checkpoint, verifies and flushes its extent and publication
+metadata, replaces only the inactive superblock, consumes one exact COW receipt,
+recovers only the selected stable-file generation, and reloads the trusted-
+object-bound restart policy. An attenuated read-only derived session is rejected
+before its first backend write; revoking the parent retires both generations.
+
+Windows and Arch Linux each passed 26 `mrml-config` and 107 `mrml-storage`
+release tests. Strict no-dependency `mrml-config` clippy passed on both. This is
+deterministic unit/simulation evidence, not signed CPL3 block-service execution,
+live reboot restoration, authenticated monotonic rollback state, physical
+power-loss, or device durability evidence.
+
+The `DIGITAL-RIGHTS REVIEW` found no remote disclosure, collection, retention,
+correlation, DRM, publisher veto, owner-attestation restriction, accessibility
+exclusion, AI authority, ambient namespace, or persistence grant. The
+`HOSTILE SECURITY REVIEW` treats configuration and file capabilities, block
+session/principal/rights, device and object identities, generations, extents,
+digests, metadata pointers, transaction participants, receipt, selected root,
+and every I/O outcome as hostile. Independent exact checks precede mutation;
+uncertainty remains an error. This agent review does not replace independent
+human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional composition of the existing MRML-
+native block service, exact-block file session, COW receipt, and configuration
+checkpoint. No compatibility, host-share, accessibility-device, browser,
+JavaScript/WebAssembly, AI, or media mechanism is entered.
+
 Focused verification after the live integration used:
 
 ```text

@@ -16,9 +16,10 @@ use mrml_kernel::{
     Rights, ServiceError, ServiceId, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
 };
 use mrml_storage::{
-    ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
-    FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityTable, StorageHandle,
-    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    BlockFileSession, BlockVolume, BlockVolumeError, ExtentMap, FileMetadata, FileReadBackend,
+    FileReadError, FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
+    StorageAuthorityTable, StorageBlockDevice, StorageHandle, StoragePrincipal, StorageTransaction,
+    TransactionError, TransactionReceipt,
 };
 
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
@@ -729,6 +730,61 @@ pub fn prepare_stable_configuration<
         checkpoint,
         revision: configuration.revision(),
     })
+}
+
+/// Composes checkpoint staging with the MRML exact-block volume through one
+/// bounded file session. The volume's `StorageBlockDevice` may itself be the
+/// capability-selected block-service adapter; device identity and checkpoint
+/// bytes never select or manufacture that authority.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_block_stable_configuration<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CURRENT_EXTENTS: usize,
+    const NEXT_EXTENTS: usize,
+    const AUTHORITIES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    D: StorageBlockDevice,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    root_capability: Capability,
+    current_file: &FileState<CURRENT_EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    next_extents: ExtentMap<NEXT_EXTENTS>,
+    next_metadata: FileMetadata,
+    file_metadata_pointer: MetadataPointer,
+    protected_metadata: &[MetadataPointer],
+    output: &mut [u8],
+    volume: &mut BlockVolume<'_, D>,
+    file_scratch: &mut [u8],
+) -> Result<
+    PreparedStableConfiguration<NEXT_EXTENTS>,
+    ConfigurationStorageError<BlockVolumeError<D::Error>>,
+> {
+    let mut session = BlockFileSession::<D, CURRENT_EXTENTS, NEXT_EXTENTS>::new(
+        volume,
+        current_file,
+        file_scratch,
+    )
+    .map_err(|error| ConfigurationStorageError::Write(FileWriteError::Backend(error)))?;
+    prepare_stable_configuration(
+        configuration,
+        capabilities,
+        root_capability,
+        current_file,
+        storage_authority,
+        file,
+        principal,
+        next_extents,
+        next_metadata,
+        file_metadata_pointer,
+        protected_metadata,
+        output,
+        &mut session,
+    )
 }
 
 /// Recovers only from one exact file generation already selected by
@@ -2303,9 +2359,11 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 mod tests {
     use super::*;
     use mrml_storage::{
-        CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
-        ExtentRecord, FileReadBackend, FileWriteBackend, StorageObjectId, StorageObjectKind,
-        StorageRights, StorageTransactionId, Superblock, VolumeHeader, VolumeId,
+        BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
+        BlockServiceError, BlockVolume, CowMetadataImage, CowMetadataWrite, CowPublicationBackend,
+        CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend, ServicedBlockDevice,
+        StorageObjectId, StorageObjectKind, StorageRights, StorageTransactionId, Superblock,
+        VolumeHeader, VolumeId,
     };
 
     fn fixture() -> (
@@ -3281,6 +3339,7 @@ mod tests {
     }
 
     const STABLE_BLOCK_BYTES: usize = 4096;
+    const STABLE_BLOCK_COUNT: usize = 16;
 
     fn stable_volume() -> VolumeId {
         VolumeId::new([0x51; 16]).unwrap()
@@ -3422,6 +3481,107 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum StableBlockError {
+        WrongDevice,
+        Range,
+    }
+
+    struct StableBlockBackend {
+        bytes: [u8; STABLE_BLOCK_BYTES * STABLE_BLOCK_COUNT],
+        device: BlockDeviceId,
+        reads: usize,
+        writes: usize,
+        flushes: usize,
+        replacements: usize,
+    }
+
+    impl StableBlockBackend {
+        fn new(device: BlockDeviceId) -> Self {
+            Self {
+                bytes: [0; STABLE_BLOCK_BYTES * STABLE_BLOCK_COUNT],
+                device,
+                reads: 0,
+                writes: 0,
+                flushes: 0,
+                replacements: 0,
+            }
+        }
+
+        fn range(
+            &self,
+            device: BlockDeviceId,
+            block: u64,
+            length: usize,
+        ) -> Result<core::ops::Range<usize>, StableBlockError> {
+            if device != self.device {
+                return Err(StableBlockError::WrongDevice);
+            }
+            let start = usize::try_from(block)
+                .ok()
+                .and_then(|value| value.checked_mul(STABLE_BLOCK_BYTES))
+                .ok_or(StableBlockError::Range)?;
+            let end = start.checked_add(length).ok_or(StableBlockError::Range)?;
+            (end <= self.bytes.len())
+                .then_some(start..end)
+                .ok_or(StableBlockError::Range)
+        }
+
+        fn install_block(&mut self, block: u64, bytes: &[u8; STABLE_BLOCK_BYTES]) {
+            let range = self.range(self.device, block, bytes.len()).unwrap();
+            self.bytes[range].copy_from_slice(bytes);
+        }
+    }
+
+    unsafe impl BlockServiceBackend for StableBlockBackend {
+        type Error = StableBlockError;
+
+        fn read_blocks(
+            &mut self,
+            device: BlockDeviceId,
+            block: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            let range = self.range(device, block, output.len())?;
+            output.copy_from_slice(&self.bytes[range]);
+            self.reads += 1;
+            Ok(())
+        }
+
+        fn write_blocks(
+            &mut self,
+            device: BlockDeviceId,
+            block: u64,
+            input: &[u8],
+        ) -> Result<(), Self::Error> {
+            let range = self.range(device, block, input.len())?;
+            self.bytes[range].copy_from_slice(input);
+            self.writes += 1;
+            Ok(())
+        }
+
+        fn flush(&mut self, device: BlockDeviceId) -> Result<(), Self::Error> {
+            if device != self.device {
+                return Err(StableBlockError::WrongDevice);
+            }
+            self.flushes += 1;
+            Ok(())
+        }
+
+        fn replace_superblock(
+            &mut self,
+            device: BlockDeviceId,
+            block: u64,
+            encoded: &[u8; mrml_storage::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            let range = self.range(device, block, STABLE_BLOCK_BYTES)?;
+            self.bytes[range.clone()].fill(0);
+            self.bytes[range.start..range.start + encoded.len()].copy_from_slice(encoded);
+            self.replacements += 1;
+            Ok(())
+        }
+    }
+
     fn stable_layout(
         checkpoint: &[u8],
     ) -> (
@@ -3514,6 +3674,105 @@ mod tests {
         .unwrap()
     }
 
+    fn block_stable_layout(
+        checkpoint: &[u8],
+        backend: &mut StableBlockBackend,
+    ) -> (
+        FileState<0>,
+        ExtentMap<1>,
+        FileMetadata,
+        CowPublicationPlan<4>,
+    ) {
+        let header = stable_header();
+        let object = stable_object(9);
+        let current = FileState::new(
+            object,
+            1,
+            0,
+            ExtentMap::<0>::build(header, object, 1, 0, &[]).unwrap(),
+        )
+        .unwrap();
+        let mut data = [0; STABLE_BLOCK_BYTES];
+        data[..checkpoint.len()].copy_from_slice(checkpoint);
+        let record = ExtentRecord::data(object, 2, 0, 1, 3, stable_digest(&data)).unwrap();
+        let next = ExtentMap::build(header, object, 2, checkpoint.len() as u64, &[record]).unwrap();
+        let metadata = FileMetadata::new(
+            header,
+            object,
+            2,
+            checkpoint.len() as u64,
+            1,
+            MetadataPointer::new(4, 1).unwrap(),
+            stable_digest(checkpoint),
+        )
+        .unwrap();
+
+        let mut extents = [0; STABLE_BLOCK_BYTES];
+        record.encode(
+            (&mut extents[..mrml_storage::EXTENT_RECORD_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let mut file_metadata = [0; STABLE_BLOCK_BYTES];
+        metadata.encode(
+            (&mut file_metadata[..mrml_storage::FILE_METADATA_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let root = [0x61; STABLE_BLOCK_BYTES];
+        let allocation = [0x71; STABLE_BLOCK_BYTES];
+        backend.install_block(4, &extents);
+        backend.install_block(5, &file_metadata);
+        backend.install_block(6, &root);
+        backend.install_block(7, &allocation);
+
+        let active = Superblock::new(
+            header,
+            1,
+            0,
+            stable_object(1),
+            MetadataPointer::new(8, 1).unwrap(),
+            MetadataPointer::new(9, 1).unwrap(),
+        )
+        .unwrap();
+        let plan = CowPublicationPlan::build(
+            header,
+            1,
+            active,
+            stable_object(1),
+            MetadataPointer::new(6, 1).unwrap(),
+            MetadataPointer::new(7, 1).unwrap(),
+            &[
+                CowMetadataWrite::new(
+                    MetadataPointer::new(5, 1).unwrap(),
+                    2,
+                    stable_digest(&file_metadata),
+                )
+                .unwrap(),
+                CowMetadataWrite::new(
+                    MetadataPointer::new(4, 1).unwrap(),
+                    2,
+                    stable_digest(&extents),
+                )
+                .unwrap(),
+                CowMetadataWrite::new(MetadataPointer::new(6, 1).unwrap(), 2, stable_digest(&root))
+                    .unwrap(),
+                CowMetadataWrite::new(
+                    MetadataPointer::new(7, 1).unwrap(),
+                    2,
+                    stable_digest(&allocation),
+                )
+                .unwrap(),
+            ],
+            &[
+                MetadataPointer::new(8, 1).unwrap(),
+                MetadataPointer::new(9, 1).unwrap(),
+            ],
+        )
+        .unwrap();
+        (current, next, metadata, plan)
+    }
+
     #[test]
     fn stable_checkpoint_requires_both_capabilities_and_one_use_publication_receipt() {
         let (mut service, capabilities, root, enabled, _) = fixture();
@@ -3603,6 +3862,203 @@ mod tests {
                 .value
                 .and_then(ConfigValue::as_bool),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn stable_policy_round_trip_uses_exact_capability_selected_block_service() {
+        let root_object = ObjectId(79);
+        let setting_object = ObjectId(80);
+        let service_object = ObjectId(81);
+        let setting = SettingId::new(1).unwrap();
+        let schema = SettingSchema::bytes(
+            setting,
+            setting_object,
+            PERSISTED_RESTART_POLICY_BYTES as u8,
+        )
+        .unwrap();
+        let mut configuration = ConfigurationService::<1, 2>::new(root_object, &[schema]).unwrap();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let root = capabilities
+            .insert(root_object, Rights::CONTROL.union(Rights::READ))
+            .unwrap();
+        let setting_access = capabilities
+            .insert(setting_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let policy = PersistedRestartPolicy::new(service_object, 3, 5, 20).unwrap();
+        let mut encoded_policy = [0; PERSISTED_RESTART_POLICY_BYTES];
+        policy.encode(&mut encoded_policy);
+        let mut update = ConfigTransaction::<1>::new(0);
+        update
+            .push(ConfigUpdate::new(
+                setting,
+                setting_access,
+                ConfigValue::bytes(&encoded_policy).unwrap(),
+            ))
+            .unwrap();
+        configuration.commit(&capabilities, root, &update).unwrap();
+        let mut checkpoint_bytes = [0; 512];
+        let checkpoint = configuration
+            .export_checkpoint(&capabilities, root, &mut checkpoint_bytes)
+            .unwrap();
+
+        let device = BlockDeviceId::new(7).unwrap();
+        let descriptor = BlockDeviceDescriptor::new(
+            device,
+            STABLE_BLOCK_BYTES as u32,
+            STABLE_BLOCK_COUNT as u64,
+        )
+        .unwrap();
+        let mut block_service = BlockService::<1, 2>::new();
+        block_service.register_device(descriptor).unwrap();
+        let block_session = block_service
+            .grant(device, stable_principal(), BlockRights::ALL)
+            .unwrap();
+        let read_only_session = block_service
+            .derive(
+                block_session,
+                stable_principal(),
+                StoragePrincipal::new(8).unwrap(),
+                BlockRights::READ,
+            )
+            .unwrap();
+        let mut backend = StableBlockBackend::new(device);
+        let (current, next, metadata, plan) =
+            block_stable_layout(&checkpoint_bytes[..checkpoint.length], &mut backend);
+        let (_, denied_next, denied_metadata, _) =
+            block_stable_layout(&checkpoint_bytes[..checkpoint.length], &mut backend);
+        let mut storage_authority = StorageAuthorityTable::<1>::new();
+        let file = storage_authority
+            .insert(
+                stable_object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                stable_principal(),
+            )
+            .unwrap();
+
+        {
+            let mut denied_volume_scratch = [0; STABLE_BLOCK_BYTES];
+            let denied_serviced = ServicedBlockDevice::new(
+                &block_service,
+                &mut backend,
+                read_only_session,
+                StoragePrincipal::new(8).unwrap(),
+            )
+            .unwrap();
+            let mut denied_volume = BlockVolume::new(
+                stable_header(),
+                1,
+                denied_serviced,
+                &mut denied_volume_scratch,
+            )
+            .unwrap();
+            let mut denied_file_scratch = [0; STABLE_BLOCK_BYTES];
+            let mut denied_export = [0; 512];
+            assert!(
+                prepare_block_stable_configuration(
+                    &configuration,
+                    &capabilities,
+                    root,
+                    &current,
+                    &storage_authority,
+                    file,
+                    stable_principal(),
+                    denied_next,
+                    denied_metadata,
+                    MetadataPointer::new(5, 1).unwrap(),
+                    &[],
+                    &mut denied_export,
+                    &mut denied_volume,
+                    &mut denied_file_scratch,
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(backend.writes, 0);
+
+        {
+            let mut volume_scratch = [0; STABLE_BLOCK_BYTES];
+            let serviced = ServicedBlockDevice::new(
+                &block_service,
+                &mut backend,
+                block_session,
+                stable_principal(),
+            )
+            .unwrap();
+            let mut volume =
+                BlockVolume::new(stable_header(), 1, serviced, &mut volume_scratch).unwrap();
+            let mut export = [0; 512];
+            let mut file_scratch = [0; STABLE_BLOCK_BYTES];
+            let prepared = prepare_block_stable_configuration(
+                &configuration,
+                &capabilities,
+                root,
+                &current,
+                &storage_authority,
+                file,
+                stable_principal(),
+                next,
+                metadata,
+                MetadataPointer::new(5, 1).unwrap(),
+                &[],
+                &mut export,
+                &mut volume,
+                &mut file_scratch,
+            )
+            .unwrap();
+            let mut transaction =
+                StorageTransaction::<1, 2>::new(StorageTransactionId::new(72).unwrap(), 2).unwrap();
+            prepared.admit(&mut transaction).unwrap();
+            let mut receipt = transaction.publish(&plan, &mut volume).unwrap();
+            let stable = prepared.commit(&mut receipt).unwrap();
+            assert_eq!(receipt.remaining(), 0);
+
+            let mut recovered_bytes = [0xa5; 512];
+            let recovered = recover_stable_configuration::<1, 2, _, _, _, _>(
+                stable.file(),
+                &storage_authority,
+                file,
+                stable_principal(),
+                2,
+                &capabilities,
+                root,
+                &mut recovered_bytes,
+                &mut volume,
+            )
+            .unwrap();
+            let bound = load_persisted_restart_policy(
+                &recovered,
+                &capabilities,
+                setting_access,
+                setting,
+                service_object,
+            )
+            .unwrap();
+            assert_eq!(bound.policy, policy);
+        }
+        assert!(backend.writes > 0);
+        assert!(backend.reads > 0);
+        assert!(backend.flushes >= 3);
+        assert_eq!(backend.replacements, 1);
+
+        assert_eq!(
+            block_service
+                .revoke(block_session, stable_principal())
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            ServicedBlockDevice::new(
+                &block_service,
+                &mut backend,
+                block_session,
+                stable_principal(),
+            )
+            .err(),
+            Some(BlockServiceError::StaleHandle)
         );
     }
 

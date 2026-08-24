@@ -36,9 +36,13 @@ setting. A separate commit request has zero authority fields and independently
 delegates fresh root CONTROL and setting WRITE. The service validates both
 opaque handles, commits revision 1 atomically, and returns a canonical 112-byte
 response. The supervised replacement repeats admission and commit from fresh
-volatile state; persistence is not implied. Native-storage persistence and
-recovery remain next. The storage-neutral checkpoint codec is
-implemented and adversarially tested, but its expected digest still requires a
-future authenticated native-storage commit; the embedded digest is not treated
-as self-authentication. Dynamic replacement is unit/simulation tested; no live
-persistent restoration or reboot-time authority reconstruction is claimed.
+volatile state; persistence is not implied. The reusable storage composition
+now stages through a bounded `BlockFileSession` over the exact-block
+`BlockVolume`, including its capability-selected MRML block-service adapter. A
+deterministic test publishes one checkpoint by exact COW receipt, recovers only
+the selected file generation, and reloads its service-bound restart policy. A
+derived read-only block session reaches no write, and parent revocation stales
+the complete session lineage. This is simulation evidence; the expected digest
+still requires authenticated native-storage selection and is not self-
+authentication. Live persistent restoration, reboot-time authority
+reconstruction, and physical durability remain pending.
