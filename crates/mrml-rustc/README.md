@@ -2940,6 +2940,10 @@ Range-derived slice and string initializers plan runtime start/end reads
 before the base read, retaining the exact `Subslice` projection for a local-
 array base. Recursion is capped at 64 levels. Call-derived fat-reference forms
 remain later work.
+Direct identifier, range-derived, and recursively conditional fat-reference
+explicit returns and final tails now plan their condition, endpoint, and base
+reads in exact emission order. Call-derived and unsupported wrapped return
+forms remain outside the slice.
 Direct sequence-wrapped tuple literals additionally plan their prefix once,
 whereas direct sequence-wrapped array literals plan their prefix before every
 element, preserving the two materializers' actual order.
@@ -2953,7 +2957,7 @@ blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
 Nested-loop blocks additionally mirror entry conditions and every stored control
 at its exact action boundary and control order before activating the following
 local or action.
-Method/call families, aggregate materialization, fat-reference returns,
+Method/call families, aggregate materialization, unsupported fat-reference returns,
 aggregate tails,
 remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
@@ -3066,6 +3070,13 @@ unit test proves condition, nested sequence prefix, runtime range endpoints,
 projected local-array base, alternate endpoint, and alternate reference base in
 the emitter's exact order. Its original replacement emits both COFF and ELF64
 objects through the same recursive initializer family.
+
+The fat-reference explicit/tail return milestone passed all 602 compiler and
+driver tests on Windows gnullvm and all 602 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+the branch condition, explicit-return start/end/base, and fallthrough-tail
+start/base facts in exact order. Its original replacement emits both COFF and
+ELF64 objects through the same explicit and tail return paths.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

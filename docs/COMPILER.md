@@ -230,6 +230,10 @@ initializers reserve their runtime start and end reads before the base read;
 local-array bases retain the exact `Subslice` projection. The recursion is
 bounded to 64 levels. Call-derived fat-reference materialization remains
 emission-time work.
+Supported direct identifier, range-derived, and recursively conditional fat-
+reference explicit returns and final tails now use the same bounded read
+preanalysis. Their conditions, runtime endpoints, and bases retain exact source
+and emission order on both native ABIs.
 The visitor also runs for every supported scalar expression statement at the
 top level, in conditional arms, in direct and nested loop actions, and after
 loops. Each statement is parsed once and its reads are reserved against the
@@ -265,7 +269,8 @@ supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
 It does not yet preanalyze compound array-base materialization, other wrapped or
 non-literal conditional aggregate values, call-derived fat-reference
-initializers, fat-reference returns, method/call, aggregate
+initializers, call-derived or otherwise unsupported wrapped fat-reference
+returns, method/call, aggregate
 returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not

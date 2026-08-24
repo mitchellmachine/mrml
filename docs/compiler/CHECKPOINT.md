@@ -89,7 +89,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   runtime range-endpoint reads followed by exact slice/string base reads, with
   a `Subslice` projection for local-array bases; recursive 64-level-bounded
   conditional, transparent return/break/inline-const, and sequence composition
-  of those non-call fat-reference forms; and
+  of those non-call fat-reference forms; plus direct, range-derived, and
+  recursively conditional fat-reference explicit-return and final-tail reads;
+  and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
   statements in the emitter's exact scoped order; and
@@ -104,7 +106,8 @@ unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Other wrapped or non-literal conditional aggregates, call-
-derived fat-reference initializers, fat-reference returns,
+derived fat-reference initializers, call-derived or otherwise unsupported
+wrapped fat-reference returns,
 compound array bases, method/call families, aggregate
 returns/tails, and other body reads remain emission-time facts. Names are still
 resolved during
@@ -146,8 +149,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 600 tests on each host: 330
-library tests, 10 conformance tests, 258 replacement tests, and 2 driver tests.
+The checkpoint source passed 602 tests on each host: 331
+library tests, 10 conformance tests, 259 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
