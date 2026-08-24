@@ -104,6 +104,10 @@ Architectural invariants:
 - keep a small backend-neutral paravirtualized VMM device family; use actual
   VirtIO specifications only where compatibility is intended and label every
   device VirtIO-compatible, VirtIO-inspired, MRML-specific, or legacy-emulated;
+- follow `docs/PARAVIRTUAL_DEVICES.md` for common device lifecycle, queues,
+  restart, hotplug, capability-selected backends, KVM/WHP parity, accessibility
+  emulation, block, host-share, QEMU differential testing, fuzzing, and evidence;
+  VirtIO transport and device identity never authorize host objects;
 - preserve MRML's signed-kernel CUDA compute mediation alongside any future
   VirtIO-GPU display path; do not distort VirtIO-GPU or remove stronger MRML
   capability, authentication, queue, and CUDA semantics to claim compatibility;

@@ -12,6 +12,9 @@ complexity rules are in
 inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy. Relevant
 predecessors and deliberately bounded comparison claims are recorded in
 [HISTORY_AND_PRIOR_ART.md](HISTORY_AND_PRIOR_ART.md).
+The reusable VMM queue, lifecycle, transport, capability-backend, host-share,
+and accessibility-emulation rules are canonical in
+[PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md).
 
 ## Status vocabulary
 
@@ -605,6 +608,11 @@ exit decoding remain behind their adapters. Shared semantics belong in common
 kernel/VMM policy. Hosted WHP and KVM do not protect a guest from their host.
 
 ### VMM device model
+
+All present and future devices follow the common architecture in
+[PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md): device identity, transport,
+queue state, backend authority, interrupt authority, and mapping authority remain
+distinct. VirtIO is a compatibility transport where adopted, never authority.
 
 The shared VMM will expose a small explicit device family, preferring
 paravirtualization over broad legacy emulation. **IMPLEMENTED:** backend-neutral

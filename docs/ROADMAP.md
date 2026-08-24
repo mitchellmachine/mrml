@@ -611,11 +611,22 @@ safely, and snapshots require authority without implying anti-rollback.
 
 ### Phase 2 virtual-device and service progression
 
-The VMM device family proceeds in this order: serial/console, block, network,
-input, graphics, audio, additional MRML-specific transports, then compatibility
-emulation only as required. Establish common queue, lifecycle/reset, interrupt,
-PCI-transport separation, and QEMU differential harnesses before broad device
-coverage. Every applicable device must behave consistently under KVM and WHP.
+The canonical cross-device plan and acceptance scenarios are in
+[PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md). Dependency order is: common
+lifecycle/transport; complete the MRML-native block transport; PCI attachment;
+VirtIO-blk compatibility and QEMU differential testing; capability-native share
+protocol; deterministic hostfs; VMM hostfs; optional VirtIO-fs compatibility;
+virtual accessibility bus; Braille, switch/alternative-input, and deterministic
+speech/audio emulators; networking; broader input/graphics/audio; then physical
+USB accessibility adapters. Phase 2 may build accessibility virtual hardware and
+test harnesses, but connection to semantic accessibility waits for the Phase 3
+Semantic Scene Graph and capability prerequisites.
+
+The existing serial/console bring-up path remains available. Establish common
+queue, lifecycle/reset, interrupt, PCI-transport separation, and differential
+harnesses before broad device coverage. Compatibility emulation appears only
+where required, and every applicable device behaves consistently under KVM and
+WHP.
 
 **PARTIALLY IMPLEMENTED:** the first MRML-specific virtual-block device core
 defines canonical fixed requests/completions, disjoint bounded shared rings,

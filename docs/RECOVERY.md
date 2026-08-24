@@ -523,6 +523,14 @@ explicitly and downgrade the status rather than guessing.
   general display device is implemented. QEMU VirtIO devices appearing in boot
   commands are external test infrastructure, not MRML VMM implementations.
 
+Before extending that inventory, read
+`docs/PARAVIRTUAL_DEVICES.md`. Preserve the MRML-native block transport and its
+generation, protected-completion, exact-acknowledgement, suspension, canonical-
+restart, poison-on-uncertainty, and bounded-runner evidence. VirtIO and QEMU are
+compatibility/testing layers, not authority. Host shares use exact capability
+roots rather than raw paths, and accessibility emulators remain distinct from
+physical-device and user evidence.
+
 For every future device, recover and update its classification, exact feature
 bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU
 differential status, KVM/WHP status, incompatibilities, fuzzing, and hardware

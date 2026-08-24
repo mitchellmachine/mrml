@@ -269,6 +269,12 @@ bounded and generational.
 
 ## Virtual-device invariants
 
+The complete reusable queue, lifecycle, restart, block, host-share, accessibility,
+hotplug, parity, fuzzing, and evidence rules are in
+[PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md). They preserve the existing
+MRML-native block device; no current mechanism is called VirtIO-compatible until
+that transport exists and passes its scoped differential tests.
+
 Virtual NIC or device presence never grants host network, raw device, USB,
 audio, microphone, HID, bridge, passthrough, or DMA authority. Host firewall and
 network policy remain outside guest control. Capture and playback are separate;

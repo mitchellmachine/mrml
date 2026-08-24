@@ -59,6 +59,11 @@ Stability belongs in explicit, bounded, versioned service protocols beneath
 safe SDKs. The kernel ABI remains extremely small; filesystem, network, GUI,
 configuration, AI, and media functionality normally comes from services.
 
+Application microVM devices are projections of the application's exact
+capabilities, following [PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md). A file,
+directory, connection, or accessibility capability cannot widen into a host
+disk, ambient host filesystem/network, global input, or secure attention.
+
 ### Unsafe-code policy
 
 - Ordinary native applications: unsafe code prohibited by default.

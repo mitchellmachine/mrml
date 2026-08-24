@@ -1385,6 +1385,18 @@ device state. Exact parsing and reserved-zero fields are standard defensive
 configuration techniques. No new patent-candidate mechanism was identified.
 This agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Paravirtual devices and accessibility emulation architecture
+
+**Result: TRIGGERED.** The planned VirtIO-blk/VirtIO-fs compatibility transports,
+capability-native host sharing, virtual accessibility bus, Braille/input/speech
+emulation, and their restart/hotplug protocols are substantial future mechanisms.
+Before implementation, search their actual claim limitations and worldwide
+families and verify every material right in authoritative territorial registers;
+standards participation or QEMU interoperability does not establish clearance.
+The architecture review introduces no implementation and makes no clearance or
+infringement conclusion. See
+[`docs/PARAVIRTUAL_DEVICES.md`](../PARAVIRTUAL_DEVICES.md).
+
 # 2026-08-24 — Read-only virtual-block configuration page
 
 **Result: NOT_TRIGGERED.** The change conventionally validates a page-aligned
