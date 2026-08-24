@@ -222,12 +222,14 @@ each materialized index.
 Sequence-wrapped direct tuple literals plan the prefix once before all tuple
 operands, while sequence-wrapped direct array literals plan the prefix before
 each element, matching their distinct materializers.
-Simple fat-reference initializers now reserve direct identifier reads, the
-condition followed by both direct-identifier branches, or a sequence prefix
-followed by its direct-identifier tail. Range-derived slice and string
+Fat-reference initializers now recursively reserve supported non-call forms:
+identifiers, conditional branches, transparent return/break/inline-const
+wrappers, sequence prefixes and tails, and range-derived slice/string values.
+Range-derived slice and string
 initializers reserve their runtime start and end reads before the base read;
-local-array bases retain the exact `Subslice` projection. Call-derived and other
-wrapped fat-reference materialization remains emission-time work.
+local-array bases retain the exact `Subslice` projection. The recursion is
+bounded to 64 levels. Call-derived fat-reference materialization remains
+emission-time work.
 The visitor also runs for every supported scalar expression statement at the
 top level, in conditional arms, in direct and nested loop actions, and after
 loops. Each statement is parsed once and its reads are reserved against the
@@ -262,7 +264,7 @@ nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
 It does not yet preanalyze compound array-base materialization, other wrapped or
-non-literal conditional aggregate values, otherwise complex fat-reference
+non-literal conditional aggregate values, call-derived fat-reference
 initializers, fat-reference returns, method/call, aggregate
 returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded

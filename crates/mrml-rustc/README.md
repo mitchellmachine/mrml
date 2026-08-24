@@ -2933,12 +2933,13 @@ tuple initializers with direct literal branches plan the condition once and both
 branches' scalar operands. Direct conditional array literals follow their
 different emitter order by planning condition, then element, and else element
 for every materialized index. Wrapped or non-literal conditional aggregates
-remain emission-time fact families. Simple fat-reference initializers now plan
-direct identifier reads, the condition and both direct-identifier branches, or
-a sequence prefix followed by its direct-identifier tail. Range-derived slice
-and string initializers now plan runtime start/end reads
+remain emission-time fact families. Fat-reference initializers now recursively
+plan supported non-call identifiers, conditionals, transparent return/break/
+inline-const wrappers, sequences, and range-derived slice/string values.
+Range-derived slice and string initializers plan runtime start/end reads
 before the base read, retaining the exact `Subslice` projection for a local-
-array base. Call-derived and other wrapped fat-reference forms remain later work.
+array base. Recursion is capped at 64 levels. Call-derived fat-reference forms
+remain later work.
 Direct sequence-wrapped tuple literals additionally plan their prefix once,
 whereas direct sequence-wrapped array literals plan their prefix before every
 element, preserving the two materializers' actual order.
@@ -2952,7 +2953,8 @@ blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
 Nested-loop blocks additionally mirror entry conditions and every stored control
 at its exact action boundary and control order before activating the following
 local or action.
-Method/call families, aggregate/fat materialization and returns, aggregate tails,
+Method/call families, aggregate materialization, fat-reference returns,
+aggregate tails,
 remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
 and later scoped locals append to the table's dynamic tail, so expansion cannot
@@ -3056,6 +3058,14 @@ native Arch Linux WSL, plus warnings-denied Clippy on both hosts. Its adversaria
 unit test proves runtime start/end reads precede the projected local-array base,
 then an open-ended slice start precedes its reference base. Its original
 replacement emits both COFF and ELF64 objects through those range families.
+
+The conditional/wrapped fat-reference initializer milestone passed all 600
+compiler and driver tests on Windows gnullvm and all 600 in release mode on
+native Arch Linux WSL, plus warnings-denied Clippy on both hosts. Its adversarial
+unit test proves condition, nested sequence prefix, runtime range endpoints,
+projected local-array base, alternate endpoint, and alternate reference base in
+the emitter's exact order. Its original replacement emits both COFF and ELF64
+objects through the same recursive initializer family.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
