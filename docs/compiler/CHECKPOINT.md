@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `fe6cf59`
-  (`compiler: preserve single array evaluation`)
+- Compiler checkpoint commit: `76b0fc6`
+  (`compiler: preanalyze tuple value returns`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -132,7 +132,12 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   elements remain evaluated once in source order, identifiers retain indexed
   read evidence, and direct repeats retain their single operand evaluation.
   Aggregate admission is syntax-based, so unsupported packed aggregates cannot
-  fall through the scalar planner.
+  fall through the scalar planner. Supported tuple-value explicit returns and
+  final tails now use the bounded whole-value tuple planner: sequence prefixes
+  and conditions are reserved once, literal fields remain in source order,
+  identifier copies retain numbered `TupleField` projections, and tuple-producing
+  call arguments remain left-to-right. Public tuple transport remains
+  unsupported; this evidence work does not invent an unstable Rust tuple ABI.
   Other aggregate return/tail shapes remain outside preanalysis.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
@@ -140,12 +145,12 @@ allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Unsupported aggregate-leaf call arguments and other aggregate-
-argument
-call-derived fat-reference initializers, call-derived or otherwise unsupported
-wrapped fat-reference returns,
-compound array bases, method/call families, tuple-value returns/tails, and other
-body reads remain emission-time facts. Names are still
+borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
+argument and call-derived fat-reference initializers, call-derived or otherwise
+unsupported wrapped fat-reference returns, compound array bases, method/call
+families, unsupported tuple-value shapes, and other body reads remain emission-
+time facts.
+Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
@@ -185,7 +190,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 639 tests on each host: 350
+The checkpoint source passed 640 tests on each host: 351
 library tests, 10 conformance tests, 277 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
