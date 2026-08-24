@@ -651,11 +651,15 @@ authority; unrelated domains continue.
    provider now starts a fresh unsalted, unbound SHA-256 policy session from
    explicit nonzero caller entropy, executes one exact owner-configured
    `PolicyPCR` recipe, and permits only the requested next NV operation;
-   mismatch and policy failure trigger best-effort cleanup. Actual owner-policy
+   immediate nonce reuse fails closed, and mismatch or policy failure triggers
+   best-effort cleanup. A safe constructor now composes this provider, the
+   admitted layout, the TPM backend, and the authenticated journal; an end-to-
+   end hosted test loads and atomically replaces journal state while rejecting
+   layout-policy substitution. Actual owner-policy
    provisioning/recovery, linked UEFI execution,
-   complete journal composition, and physical testing remain pending.
+   and physical testing remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 13 `mrml-uefi` library tests, all 115 storage tests, and strict
+   each pass all 15 `mrml-uefi` library tests, all 115 storage tests, and strict
    crate-local Clippy. Windows workspace-dependency Clippy remains blocked by
    unrelated existing `mrml-runtime` lints. An
    `x86_64-unknown-uefi` image check was attempted but failed in unrelated

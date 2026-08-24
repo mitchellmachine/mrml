@@ -330,10 +330,13 @@ explicitly and downgrade the status rather than guessing.
   and stale expected counters. A concrete provider now creates a fresh SHA-256
   policy session from explicit nonzero caller entropy, executes the exact
   configured `PolicyPCR` selection/digest, binds it to one requested next NV
-  operation, and best-effort flushes mismatched or failed sessions. This does
+  operation, rejects immediate nonce reuse, and best-effort flushes mismatched
+  or failed sessions. A safe constructor composes this provider, admitted NV
+  layout, TPM backend, and authenticated journal; policy/layout substitution
+  fails before journal use. This does
   not provision indices or the policy recipe, execute linked firmware, compose
-  a real journal instance,
-  or provide physical evidence. No complete TPM backend is claimed. Dependent
+  or provide physical evidence. No linked firmware or complete durable TPM
+  backend is claimed. Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator
   reads the exact selected configuration file,

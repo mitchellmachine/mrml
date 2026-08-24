@@ -2414,3 +2414,14 @@ transport, host-share protocol, accessibility device, browser semantic
 interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
+
+# 2026-08-24 — Composed TPM recovery journal
+
+**Result: NOT_TRIGGERED.** The change conventionally composes the existing
+standard TPM policy-session transport, exact NV layout admission, TPM journal
+backend, and two-slot authenticated journal behind one fail-closed constructor.
+It also rejects immediate caller-nonce reuse. It adds no attestation,
+compatibility transport, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, or other patent-candidate mechanism. Existing planned scopes remain
+`TRIGGERED`; this agent review does not replace independent human dual review.

@@ -479,13 +479,16 @@ digest, and operation. A concrete provider now starts a fresh unsalted,
 unbound SHA-256 policy session from caller entropy, executes one exact
 owner-configured `PolicyPCR` recipe, and permits only the requested next NV
 operation. Mismatch and policy failure trigger best-effort session cleanup.
+Immediate nonce reuse fails closed. A safe composition constructor exposes the
+authenticated journal only after the complete three-index layout is admitted
+through that provider; layout-policy substitution fails construction.
 Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, linked firmware execution,
-journal composition, and physical evidence remain pending. A consumed dependent-
+provisioning/recovery, linked firmware execution, and physical evidence remain
+pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

@@ -183,13 +183,16 @@ session. Full slot writes are read-verified and counter advancement rechecks the
 exact predecessor and successor. A concrete provider starts a fresh unsalted,
 unbound SHA-256 policy session using explicit nonzero caller entropy, executes
 one exact configured `PolicyPCR` recipe, and accepts only the requested next NV
-operation. Operation mismatch, policy failure, and a malformed nonce following
+operation. Zero or immediately reused caller nonces fail closed. Operation
+mismatch, policy failure, and a malformed nonce following
 a valid returned session handle trigger best-effort cleanup. The TPM still
 enforces the admitted NV index's exact policy digest; the provider does not
 derive authority from PCR data or expose remote attestation. The provider does
 not provision the owner policy, authenticate an owner UI, establish transport
 confidentiality, prove firmware integration, or establish physical durability,
 so this remains protocol evidence rather than rollback-resistance evidence.
+The safe journal constructor first admits all three exact NV public identities
+through this provider, so mismatched layout policy never yields a usable store.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

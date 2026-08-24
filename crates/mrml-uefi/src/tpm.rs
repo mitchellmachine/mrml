@@ -1,5 +1,7 @@
 use mrml_crypto::Sha256;
-use mrml_storage::{RECOVERY_JOURNAL_SLOT_BYTES, RecoveryJournalBackend};
+use mrml_storage::{
+    AuthenticatedRecoveryJournal, RECOVERY_JOURNAL_SLOT_BYTES, RecoveryJournalBackend,
+};
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
 const TPM_ST_SESSIONS: u16 = 0x8002;
@@ -118,6 +120,7 @@ pub struct PcrPolicySessionTransport<T, N> {
     nonce_source: N,
     policy: PcrPolicy,
     pending: Option<(u32, NvPolicyOperation)>,
+    last_nonce: Option<[u8; 32]>,
 }
 
 impl<T, N> PcrPolicySessionTransport<T, N> {
@@ -127,6 +130,7 @@ impl<T, N> PcrPolicySessionTransport<T, N> {
             nonce_source,
             policy,
             pending: None,
+            last_nonce: None,
         }
     }
 
@@ -169,9 +173,10 @@ unsafe impl<T: TpmTransport, N: TpmNonceSource> NvPolicySessionProvider
         }
         let mut nonce = [0; 32];
         self.nonce_source.fill_nonce(&mut nonce)?;
-        if nonce.iter().all(|byte| *byte == 0) {
+        if nonce.iter().all(|byte| *byte == 0) || self.last_nonce == Some(nonce) {
             return Err(NvCounterError::InvalidSession);
         }
+        self.last_nonce = Some(nonce);
         let handle = start_policy_session(&mut self.transport, nonce)?;
         if let Err(error) = execute_policy_pcr(&mut self.transport, handle, self.policy) {
             let _ = flush_context(&mut self.transport, handle);
@@ -305,6 +310,26 @@ impl<T: NvPolicySessionProvider> TpmRecoveryJournalBackend<T> {
         )?;
         policy_read(&mut self.transport, index, session)
     }
+}
+
+/// Composes the complete protocol stack for an owner-configured TPM recovery
+/// journal. Construction first admits all three NV public identities; no
+/// journal operation is available when layout or policy admission fails.
+pub fn open_recovery_journal<T: TpmTransport, N: TpmNonceSource>(
+    transport: T,
+    nonce_source: N,
+    layout: NvRecoveryLayout,
+    policy: PcrPolicy,
+) -> Result<
+    AuthenticatedRecoveryJournal<TpmRecoveryJournalBackend<PcrPolicySessionTransport<T, N>>>,
+    NvCounterError,
+> {
+    if layout.policy_digest != policy.policy_digest {
+        return Err(NvCounterError::InvalidIndex);
+    }
+    let provider = PcrPolicySessionTransport::new(transport, nonce_source, policy);
+    let backend = TpmRecoveryJournalBackend::new(provider, layout)?;
+    Ok(AuthenticatedRecoveryJournal::new(backend))
 }
 
 // SAFETY: construction validates the exact counter/slot public identities and
@@ -810,6 +835,8 @@ fn parse_empty_auth(response: &[u8]) -> Result<(), NvCounterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_crypto::Sha3_256;
+    use mrml_storage::{AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore};
 
     struct Counter {
         value: u64,
@@ -1055,6 +1082,9 @@ mod tests {
         pending: Option<(u32, NvPolicyOperation)>,
         authorizations: usize,
         corrupt_readback: bool,
+        concrete_sessions: bool,
+        policy_calls: usize,
+        flushes: usize,
     }
 
     impl JournalTransport {
@@ -1067,6 +1097,16 @@ mod tests {
                 pending: None,
                 authorizations: 0,
                 corrupt_readback: false,
+                concrete_sessions: false,
+                policy_calls: 0,
+                flushes: 0,
+            }
+        }
+
+        fn new_concrete(policy: [u8; 32]) -> Self {
+            Self {
+                concrete_sessions: true,
+                ..Self::new(policy)
             }
         }
 
@@ -1085,6 +1125,9 @@ mod tests {
             command: &[u8],
             operation: NvPolicyOperation,
         ) -> Result<(), NvCounterError> {
+            if self.concrete_sessions {
+                return Ok(());
+            }
             let handle = u32::from_be_bytes(command[22..26].try_into().unwrap());
             if self.pending.take() != Some((handle, operation)) {
                 return Err(NvCounterError::InvalidSession);
@@ -1097,6 +1140,35 @@ mod tests {
         fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
             let code = u32::from_be_bytes(command[6..10].try_into().unwrap());
             let index = u32::from_be_bytes(command[10..14].try_into().unwrap());
+            if code == TPM_CC_START_AUTH_SESSION {
+                if !self.concrete_sessions {
+                    return Err(NvCounterError::Transport);
+                }
+                let handle = self.next_session;
+                self.next_session += 1;
+                response[..48].fill(0);
+                response[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+                response[2..6].copy_from_slice(&48u32.to_be_bytes());
+                response[10..14].copy_from_slice(&handle.to_be_bytes());
+                response[14..16].copy_from_slice(&32u16.to_be_bytes());
+                response[16..48].fill(0x91);
+                self.authorizations += 1;
+                return Ok(48);
+            }
+            if code == TPM_CC_POLICY_PCR {
+                self.policy_calls += 1;
+                response[..10].fill(0);
+                response[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+                response[2..6].copy_from_slice(&10u32.to_be_bytes());
+                return Ok(10);
+            }
+            if code == TPM_CC_FLUSH_CONTEXT {
+                self.flushes += 1;
+                response[..10].fill(0);
+                response[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+                response[2..6].copy_from_slice(&10u32.to_be_bytes());
+                return Ok(10);
+            }
             if code == TPM_CC_NV_READ_PUBLIC {
                 let (kind, size) = Self::index_kind(index).ok_or(NvCounterError::InvalidIndex)?;
                 return Ok(public_response(
@@ -1189,6 +1261,61 @@ mod tests {
         assert_eq!(backend.increment_counter(1), Err(NvCounterError::Conflict));
     }
 
+    fn encoded_journal_slot(
+        sequence: u64,
+        state: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> [u8; RECOVERY_JOURNAL_SLOT_BYTES] {
+        let mut slot = [0; RECOVERY_JOURNAL_SLOT_BYTES];
+        slot[..8].copy_from_slice(b"MRJRNL01");
+        slot[8..16].copy_from_slice(&sequence.to_le_bytes());
+        slot[16..80].copy_from_slice(state);
+        let mut digest = Sha3_256::new();
+        digest.update(&slot[..80]);
+        slot[80..].copy_from_slice(&digest.finalize());
+        slot
+    }
+
+    #[test]
+    fn composed_policy_journal_admits_layout_and_atomically_replaces_state() {
+        let policy_digest = [0x7c; 32];
+        let original = [0x31; AUTHORITY_RECOVERY_STATE_BYTES];
+        let replacement = [0x52; AUTHORITY_RECOVERY_STATE_BYTES];
+        let mut transport = JournalTransport::new_concrete(policy_digest);
+        transport.slots[0] = encoded_journal_slot(0, &original);
+        let mut journal = open_recovery_journal(
+            transport,
+            CounterNonce { next: 1 },
+            layout(policy_digest),
+            PcrPolicy::new(policy_digest, [0xb4; 32], [0, 8, 0]).unwrap(),
+        )
+        .unwrap();
+
+        let mut loaded = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+        journal.load_authenticated(&mut loaded).unwrap();
+        assert_eq!(loaded, original);
+        journal.compare_and_store(&original, &replacement).unwrap();
+        journal.load_authenticated(&mut loaded).unwrap();
+        assert_eq!(loaded, replacement);
+
+        let provider = journal.into_backend().into_transport();
+        assert!(provider.pending.is_none());
+        let (transport, _) = provider.into_parts();
+        assert_eq!(transport.counter, 1);
+        assert_eq!(transport.policy_calls, transport.authorizations);
+        assert_eq!(transport.flushes, 0);
+        assert_eq!(transport.authorizations, 13);
+
+        assert!(matches!(
+            open_recovery_journal(
+                JournalTransport::new_concrete([0x99; 32]),
+                CounterNonce { next: 1 },
+                layout([0x99; 32]),
+                PcrPolicy::new(policy_digest, [0xb4; 32], [0, 8, 0]).unwrap(),
+            ),
+            Err(NvCounterError::InvalidIndex)
+        ));
+    }
+
     #[test]
     fn policy_commands_reject_forged_sessions_and_malformed_auth_responses() {
         let invalid = unsafe { AuthorizedNvSession::from_satisfied_policy(1) };
@@ -1213,6 +1340,21 @@ mod tests {
     impl TpmNonceSource for Nonce {
         fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError> {
             *output = self.value;
+            Ok(())
+        }
+    }
+
+    struct CounterNonce {
+        next: u8,
+    }
+
+    impl TpmNonceSource for CounterNonce {
+        fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError> {
+            output.fill(self.next);
+            self.next = self
+                .next
+                .checked_add(1)
+                .ok_or(NvCounterError::InvalidSession)?;
             Ok(())
         }
     }
@@ -1331,11 +1473,32 @@ mod tests {
         assert_eq!(provider.transport.flushes, 1);
 
         provider.transport.policy_error = true;
+        provider.nonce_source.value = [2; 32];
         assert!(matches!(
             provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
             Err(NvCounterError::Transport)
         ));
         assert_eq!(provider.transport.flushes, 2);
+    }
+
+    #[test]
+    fn pcr_provider_rejects_reused_nonzero_nonce() {
+        let tpm = PolicyTpm {
+            policy_error: false,
+            malformed_start: false,
+            flushes: 0,
+            policy_calls: 0,
+        };
+        let mut provider =
+            PcrPolicySessionTransport::new(tpm, Nonce { value: [7; 32] }, pcr_policy());
+        let session = provider
+            .authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Increment)
+            .unwrap();
+        policy_increment(&mut provider, 0x0180_0010, session).unwrap();
+        assert!(matches!(
+            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Increment),
+            Err(NvCounterError::InvalidSession)
+        ));
     }
 
     #[test]
