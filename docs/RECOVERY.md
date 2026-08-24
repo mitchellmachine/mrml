@@ -315,7 +315,14 @@ explicitly and downgrade the status rather than guessing.
   committed-but-uncertain advance, corrupt/stale slots, conflict, read
   uncertainty, and exhaustion. The unsafe backend contract—not this simulation—
   must provide policy-authorized exact slots and a power-loss-atomic counter.
-  No TPM implementation or physical evidence is claimed. Dependent recovery
+  UEFI-side TPM public-area admission now validates the prerequisite layout:
+  three distinct owner-configured indices, SHA-256 Names recomputed from each
+  complete public area, one exact 8-byte counter, two exact 112-byte ordinary
+  slots, one shared nonzero 32-byte authorization policy, policy-only read/write,
+  no-DA, and full-slot writes. Alias, type, size, policy, Name, and attribute
+  substitution fail closed. This does not implement TPM policy sessions, slot
+  reads/writes, counter/journal composition, provisioning, or physical evidence.
+  No complete TPM backend is claimed. Dependent recovery
   can run before that commit: one consumed transaction keeps the rebuilt table
   private while a narrowly
   unsafe side-effect-free validator reads the exact selected configuration file,

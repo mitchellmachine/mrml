@@ -295,7 +295,6 @@ dependencies = [
 name = "mrml-uefi"
 version = "0.4.0"
 dependencies = [
- "mrml-crypto",
  "mrml-kernel",
 ]
 

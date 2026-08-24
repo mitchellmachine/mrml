@@ -171,6 +171,14 @@ authenticated, monotonic, power-loss-atomic storage; measured boot; exact
 artifact-set admission; corruption handling; recovery; and key rotation remain
 required. Development signing is not production Secure Boot.
 
+The UEFI TPM parser can now validate the exact public identity of a planned
+owner-policy recovery layout: one monotonic counter and two full-write ordinary
+slots under a shared nonzero policy digest, with every SHA-256 TPM Name
+recomputed from its complete public area. This prevents numeric-index, type,
+size, attribute, policy, and returned-Name substitution during admission. It
+does not execute policy sessions or provide authenticated slot I/O, and is not a
+TPM state backend or rollback-resistance evidence.
+
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor
 veto. Owner key enrollment/replacement, owner-built and narrowly scoped

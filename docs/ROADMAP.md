@@ -635,6 +635,19 @@ authority; unrelated domains continue.
    older slot. A policy-authorized TPM NV adapter, provisioning/recovery path,
    and physical power-cut validation remain pending, so Phase 6 item 1 is not
    complete.
+   Its UEFI provisioning-admission prerequisite is now implemented: one bounded
+   parser recomputes SHA-256 TPM Names over complete NV public areas and admits
+   only three distinct owner-configured indices with a shared exact nonzero
+   policy digest, an exact 8-byte counter, two exact 112-byte ordinary slots,
+   policy-only read/write/no-DA attributes, and full-slot writes. Hostile tests
+   reject aliases, shortened or substituted policy, extra authority, wrong type
+   or size, and forged Names. Policy sessions, TPM slot I/O, journal composition,
+   actual provisioning/recovery, and physical testing remain pending.
+   Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
+   each pass all 8 `mrml-uefi` library tests and strict crate-local Clippy. An
+   `x86_64-unknown-uefi` image check was attempted but failed in unrelated
+   existing `mrml-runtime` target-cfg code before checking the loader; therefore
+   this milestone has no linked UEFI-image or firmware execution evidence.
    A generic consumed validation transaction now keeps that rebuilt table
    private while a dependent recovery validator uses one exact reconstructed
    file handle. The configuration adapter recovers only the selected file

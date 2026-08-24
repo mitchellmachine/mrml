@@ -464,7 +464,16 @@ while a committed-but-uncertain advance is observed as new state and conflicts
 with an old retry. The unsafe backend must still provide fixed owner-provisioned
 slot identities, authenticated exact I/O, durable verification, and a
 power-loss-atomic counter. No TPM policy-bound implementation or physical
-power-cut evidence exists yet. A consumed dependent-validation transaction now
+power-cut evidence exists yet. The UEFI TPM parser now admits a recovery layout
+only when three distinct owner-configured NV indices expose canonical public
+areas: one SHA-256-named 8-byte counter and two SHA-256-named 112-byte ordinary
+slots, all bound to the exact same nonzero 32-byte policy digest. Only the exact
+policy-read/policy-write/no-DA attributes are accepted; slots additionally
+require full-object writes, and dynamic `WRITTEN` is the sole tolerated extra
+bit. Returned TPM Names are recomputed from the complete public areas. This
+validates provisioning identity only; policy sessions, slot I/O, journal
+composition, and physical evidence remain pending. A consumed dependent-
+validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an
 exact selected configuration-file generation and binds its service restart

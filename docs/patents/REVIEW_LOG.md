@@ -2312,6 +2312,18 @@ interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
 
+# 2026-08-24 — TPM NV recovery-layout identity admission
+
+**Result: NOT_TRIGGERED.** The change conventionally decodes TPM NV public
+areas, recomputes standard SHA-256 TPM Names, and requires exact owner-selected
+indices, types, sizes, attributes, and shared authorization-policy digest before
+a future recovery backend may use them. It grants no authority and implements
+no attestation or remote identity. It adds no compatibility transport,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace independent human dual review.
+
 # 2026-08-24 — Monotonic two-slot recovery-state journal
 
 **Result: NOT_TRIGGERED.** The change conventionally composes two fixed
@@ -2340,6 +2352,16 @@ mechanism, or other patent-candidate mechanism. Existing planned scopes remain
 **Result: NOT_TRIGGERED.** The compiler conventionally propagates an explicit
 destination reference type through conditional final values so identifier arms
 are classified as shared or mutable reborrows. It adds no new arena,
+optimization, authority model, device or compatibility protocol, host-share
+mechanism, accessibility or browser-semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
+This agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Projected reference-place reborrows
+
+**Result: NOT_TRIGGERED.** The compiler conventionally applies an explicit
+destination reference type to a directly projected reference place and retains
+the existing bounded loan and initializedness facts. It adds no new arena,
 optimization, authority model, device or compatibility protocol, host-share
 mechanism, accessibility or browser-semantic interface, JavaScript/WebAssembly
 runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
