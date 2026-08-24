@@ -3421,6 +3421,16 @@ fn preanalyze_runtime_expression_at_reads<
                     assignment_span,
                 )
             }
+            ExprKind::IntegerToBytes { base, .. } => recurse(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                base,
+                depth + 1,
+                assignment_span,
+            ),
             ExprKind::If {
                 condition,
                 then_branch,
@@ -4968,6 +4978,7 @@ fn runtime_array_element_preanalysis_supported<const MAX_NODES: usize>(
             element_count,
         }) => index < element_count && elements[index].is_some(),
         Some(ExprKind::ArrayRepeat { count, .. }) => index < count,
+        Some(ExprKind::IntegerToBytes { .. }) => true,
         Some(
             ExprKind::If {
                 then_branch,
@@ -18962,6 +18973,46 @@ mod tests {
 
     struct FatCallResolver;
 
+    struct ByteCallResolver;
+
+    impl ConstantResolver for ByteCallResolver {
+        fn resolve(&self, _: &str) -> Option<u128> {
+            None
+        }
+
+        fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+            &self,
+            name: &str,
+            argument_count: usize,
+        ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+            if name != "choose_bytes" || argument_count != 2 || MAX_PARAMETERS < 2 {
+                return None;
+            }
+            let element = CallArrayElement::Integer(crate::IntegerType::U8);
+            let slice = ScalarType::SliceReference {
+                element,
+                mutable: false,
+            };
+            let mut parameters = [None; MAX_PARAMETERS];
+            parameters[0] = Some(RuntimeCallParameter {
+                name: "values",
+                ty: ScalarType::Array { element, count: 8 },
+            });
+            parameters[1] = Some(RuntimeCallParameter {
+                name: "bias",
+                ty: ScalarType::Integer(crate::IntegerType::Usize),
+            });
+            Some(RuntimeCallTarget {
+                name: "choose_bytes",
+                parameters,
+                parameter_count: 2,
+                return_type: slice,
+                return_type_name: "&[u8]",
+                body_expression: "{ if bias == 0 { &values[..] } else { &values[1..] } }",
+            })
+        }
+    }
+
     impl ConstantResolver for FatCallResolver {
         fn resolve(&self, _: &str) -> Option<u128> {
             None
@@ -20610,6 +20661,44 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 8192, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_integer_byte_array_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, prefix: u64, bias: usize) -> usize { let selected: &[u8] = choose_bytes(({ prefix; input }).to_le_bytes(), bias); selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let resolver = ByteCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 4, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 17);
+        for (index, fact) in facts.assignment_reads[..17].iter().enumerate() {
+            let fact = fact.unwrap();
+            let expected = if index == 16 {
+                RuntimePlaceIdentity::Parameter(2)
+            } else {
+                RuntimePlaceIdentity::Parameter(1 - index % 2)
+            };
+            assert_eq!(fact.base, expected);
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
