@@ -291,12 +291,15 @@ condition/control/return/tail paths above.
 Supported compound fixed-array index bases now reuse the bounded whole-array
 planner before the index read. Non-call fat-reference returns now share bounded
 return/break/inline-const, sequence, and conditional recursion between emission
-and read preanalysis. It does not yet preanalyze unsupported compound
+and read preanalysis. Direct and wrapped call-derived fat-reference returns now
+validate and preanalyze supported call arguments, then transport the inline
+pointer/length result through the explicit System V or Windows return path. It
+does not yet preanalyze unsupported compound
 array-base materialization, other wrapped or non-literal conditional aggregate
 values, wrapped/non-literal conditional-array
 and otherwise unsupported aggregate-argument call-derived fat-reference
-initializers, call-derived fat-reference returns, method/call families beyond
-the bounded initializer slice, unsupported
+initializers, method/call families beyond the bounded initializer slice,
+unsupported
 aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
