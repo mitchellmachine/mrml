@@ -77,6 +77,14 @@ resume/restart images, old-VM destruction before replacement, poison on
 uncertainty, bounded exit budgets, and common KVM/WHP runners. Generalization
 must preserve those tested invariants rather than duplicate them.
 
+The signed MRML-native PCI-MMIO probe now exercises the same consuming orderly
+replacement boundary after its five operations are fully retired. The old VM is
+destroyed before replacement preparation; the retained device, bridge, routed
+attachment, BAR state, and volatile backend remain suspended; restoration
+accepts only the exact canonical idle queue/resume image and transport identity.
+This is hosted controlled replacement evidence, not hot-unplug, asynchronous
+crash capture, backend-in-flight recovery, or durable-device evidence.
+
 ## Capability projection into application microVMs
 
 A microVM receives devices derived from exactly the application's capabilities:

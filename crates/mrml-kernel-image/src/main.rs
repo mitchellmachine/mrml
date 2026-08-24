@@ -145,7 +145,10 @@ use mrml_kernel::{PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGues
     feature = "smp-ipi-probe"
 ))]
 use mrml_kernel::{Priority, ScheduleOutcome};
-#[cfg(feature = "block-guest-driver-probe")]
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
 use mrml_kernel::{VIRTUAL_BLOCK_REQUEST_BYTES, VirtualBlockResumePage};
 
 #[cfg(feature = "gpu-benchmark")]
@@ -161,7 +164,10 @@ const GPU_BENCHMARK_ITERATIONS: u32 = 1_000;
     feature = "pci-configuration-probe"
 ))]
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
-#[cfg(feature = "block-guest-driver-probe")]
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
 #[cfg(any(
     feature = "block-guest-driver-probe",
@@ -2463,6 +2469,82 @@ unsafe fn run_block_guest_driver_probe() -> ! {
 
 #[cfg(feature = "pci-configuration-probe")]
 unsafe fn run_pci_configuration_probe() -> ! {
+    let mut restart_configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+    for (offset, byte) in restart_configuration.iter_mut().enumerate() {
+        *byte = unsafe { ((BLOCK_CONFIGURATION_BASE as *const u8).add(offset)).read_volatile() };
+    }
+    let decoded_restart = mrml_kernel::VirtualBlockConfiguration::decode(&restart_configuration)
+        .unwrap_or_else(|_| halt());
+    if decoded_restart.transport() != mrml_kernel::VirtualBlockTransport::MrmlSpecificPciMmio {
+        halt();
+    }
+    let restart_queue = decoded_restart.queue();
+    let request_published = unsafe { (restart_queue.request_base() as *const u64).read_volatile() };
+    let request_consumed =
+        unsafe { ((restart_queue.request_base() + 64) as *const u64).read_volatile() };
+    let completion_published =
+        unsafe { (restart_queue.completion_base() as *const u64).read_volatile() };
+    let completion_consumed =
+        unsafe { ((restart_queue.completion_base() + 64) as *const u64).read_volatile() };
+    let mut restart_page = [0; PAGE_SIZE as usize];
+    for (offset, byte) in restart_page.iter_mut().enumerate() {
+        *byte = unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
+    }
+    let restart_state =
+        VirtualBlockResumePage::decode_page(&restart_page).unwrap_or_else(|_| halt());
+    if restart_state.configuration() != decoded_restart
+        || restart_state.request_producer() != request_published
+        || restart_state.request_consumed() != request_consumed
+        || restart_state.completion_published() != completion_published
+        || restart_state.completion_consumer() != completion_consumed
+    {
+        halt();
+    }
+    let fresh = request_published == 0
+        && request_consumed == 0
+        && completion_published == 0
+        && completion_consumed == 0
+        && restart_state.last_admitted_request_id() == 0
+        && restart_state.last_published_request_id() == 0;
+    let recovering = request_published == u64::from(PCI_BLOCK_PROBE_OPERATIONS)
+        && request_consumed == u64::from(PCI_BLOCK_PROBE_OPERATIONS)
+        && completion_published == u64::from(PCI_BLOCK_PROBE_OPERATIONS)
+        && completion_consumed == u64::from(PCI_BLOCK_PROBE_OPERATIONS)
+        && restart_state.last_admitted_request_id() == u64::from(PCI_BLOCK_PROBE_OPERATIONS)
+        && restart_state.last_published_request_id() == u64::from(PCI_BLOCK_PROBE_OPERATIONS);
+    if recovering {
+        let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+        for (slot, request) in requests.iter_mut().enumerate() {
+            let base = restart_queue.request_base()
+                + 128
+                + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
+            for (offset, byte) in request.iter_mut().enumerate() {
+                *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
+            }
+        }
+        let _driver = VirtualBlockGuestDriver::resume_from_page(
+            &restart_configuration,
+            &restart_page,
+            &requests,
+            request_published,
+            request_consumed,
+            completion_published,
+            completion_consumed,
+        )
+        .unwrap_or_else(|_| halt());
+        unsafe {
+            asm!(
+                "out dx, eax",
+                in("dx") PCI_PROOF_PORT,
+                in("eax") PCI_BLOCK_PROBE_OPERATIONS,
+                options(nomem, nostack)
+            )
+        };
+        halt();
+    }
+    if !fresh {
+        halt();
+    }
     unsafe {
         asm!(
             "out dx, eax",

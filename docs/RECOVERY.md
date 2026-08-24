@@ -472,8 +472,8 @@ explicitly and downgrade the status rather than guessing.
   It is type state, not authenticated evidence or lifecycle authority. The VM
   budget contains exactly 64 common block exits. This proves deterministic
   host-forced execution loss only; asynchronous/unplanned crash orchestration,
-  backend-in-flight recovery, unbounded progress, and PCI-transport restart
-  recovery remain pending. A common
+  backend-in-flight recovery, and unbounded progress remain pending. The same
+  consuming image now covers an idle MRML-native PCI-MMIO replacement cut. A common
   unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer
@@ -564,6 +564,14 @@ interrupt-disable retains a pending completion without injection, and explicit
 unmask of the same function generation permits the separately capability-
 authorized vector. Recover this only as bounded hosted KVM/WHP evidence, not a
 production PCI interrupt implementation.
+The PCI-MMIO probe now also performs one orderly consuming VM replacement only
+after all five requests and protected completions are retired. It destroys the
+old native VM, retains the exact suspended device/bridge/attachment/backend,
+restores the canonical idle queue and resume pages into a fresh MMIO-trap guest,
+and resumes only after exact nonzero reconstruction. A scalar-transport
+substitution is rejected before restoration. Recover this as orderly hosted
+replacement evidence only, not crash capture, pending-I/O recovery, durable
+backend recovery, reset, hotplug, or physical evidence.
 
 For every future device, recover and update its classification, exact feature
 bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU

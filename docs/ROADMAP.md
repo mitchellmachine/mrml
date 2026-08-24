@@ -798,8 +798,13 @@ type is accepted by restoration; it is not authenticated evidence or resume
 authority. The exact
 policy budget is reduced to 64 common block exits. This is deterministic
 host-forced execution loss, not asynchronous/unplanned crash capture.
-Asynchronous crash orchestration, backend-in-flight recovery, unbounded
-progress, and PCI-transport restart recovery remain pending.
+Asynchronous crash orchestration, backend-in-flight recovery, and unbounded
+progress remain pending. The MRML-native PCI-MMIO probe now consumes and
+destroys its old VM after five fully retired operations, restores the canonical
+idle queue/resume image into a fresh MMIO-trap guest while the retained device
+and attachment remain suspended, and resumes only after exact reconstruction.
+Transport substitution is rejected before restoration. This is orderly
+replacement, not asynchronous crash recovery.
 
 Both scalar transport directions now cross one common backend-neutral
 transaction runner. Each invocation delivers any pending completion interrupt

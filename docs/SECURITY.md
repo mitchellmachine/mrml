@@ -389,6 +389,14 @@ trap-window mapper and bounded volatile block I/O; they do not prove production
 mapping revocation, native PCI interrupt routing, durability, or physical-device
 cleanup.
 
+Orderly PCI-MMIO VM replacement retains the exact routed attachment and backend
+authority; neither is reconstructed from guest data. The device and bridge must
+be suspended with all five operations fully retired before capture. The old VM
+is destroyed before a linear lost-execution witness can restore only the exact
+transport-bound canonical queue/resume image into fresh queue pages. Stale,
+noncanonical, or scalar-transport substitution fails before restoration, and
+resume occurs only after complete validation.
+
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
 are distinct capabilities. The MRML-specific compute path retains exact signed

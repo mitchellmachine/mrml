@@ -554,7 +554,13 @@ fn run_block_guest_driver_probe(
 }
 
 #[cfg(target_os = "linux")]
-fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
+fn run_pci_configuration_probe(
+    mut guest: PreparedKvmGuest<16>,
+    system: &KvmSystem,
+    executable: &VerifiedExecutable<'_>,
+    handoff: &[u8],
+    launch_layout: KvmLaunchLayout,
+) -> Result<()> {
     let mut vms = VmTable::<1>::new();
     let vm = vms
         .create(PCI_PROBE_POLICY_EXITS)
@@ -853,6 +859,59 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
     if backend.1 != 1 {
         return Err(anyhow!("KVM PCI-MMIO block flush count mismatch"));
     }
+    let configuration = device
+        .configuration()
+        .map_err(|_| anyhow!("PCI block configuration unavailable at replacement"))?;
+    let configuration_page =
+        VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
+            .map_err(|_| anyhow!("invalid PCI block replacement configuration page"))?;
+    let resume_page = VirtualBlockResumePage::fresh(BLOCK_RESUME_BASE, configuration_page)
+        .map_err(|_| anyhow!("invalid PCI block replacement resume page"))?;
+    device
+        .suspend()
+        .map_err(|_| anyhow!("PCI block device did not suspend exactly"))?;
+    let published = bridge
+        .publish_resume_page(&mut guest, &device, resume_page)
+        .map_err(|error| anyhow!("PCI block resume publication failed: {:?}", error))?;
+    let state = published.state();
+    let completed = u64::from(PCI_BLOCK_PROBE_OPERATIONS);
+    if state.request_producer() != completed
+        || state.request_consumed() != completed
+        || state.completion_published() != completed
+        || state.completion_consumer() != completed
+        || state.last_admitted_request_id() != completed
+        || state.last_published_request_id() != completed
+    {
+        return Err(anyhow!("PCI block replacement state mismatch"));
+    }
+    let restart_image = bridge
+        .capture_restart_image(&guest, &device, published)
+        .map_err(|error| anyhow!("PCI block restart snapshot failed: {:?}", error))?;
+    drop(guest);
+    // SAFETY: the exact captured native VM has been consumed and destroyed;
+    // the retained device, bridge, router, attachment, and backend stay live
+    // and suspended until restoration completes.
+    let lost_execution = unsafe { restart_image.confirm_execution_loss() };
+    let mut replacement = system
+        .prepare_kernel_block_mmio_guest::<16>(
+            0,
+            executable,
+            handoff,
+            launch_layout,
+            layout,
+            configuration_page,
+            VirtualBlockResumePage::fresh(BLOCK_RESUME_BASE, configuration_page)
+                .map_err(|_| anyhow!("invalid fresh PCI block replacement resume page"))?,
+            PCI_TEST_MMIO_BASE,
+        )
+        .map_err(|error| anyhow!("replacement PCI block VM preparation failed: {:?}", error))?;
+    bridge
+        .restore_restart_image(&mut replacement, &device, lost_execution)
+        .map_err(|error| anyhow!("replacement PCI block restoration failed: {:?}", error))?;
+    guest = replacement;
+    device
+        .resume()
+        .map_err(|_| anyhow!("PCI block device did not resume exactly"))?;
     let proof = VmBackend::run(&mut guest, 0)
         .map_err(|error| anyhow!("KVM PCI proof execution failed: {:?}", error))?;
     if proof
@@ -1232,9 +1291,9 @@ fn application_main() -> Result<()> {
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
     if mode == LaunchMode::PciConfigurationProbe {
-        run_pci_configuration_probe(guest)?;
+        run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/acknowledgement under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush and orderly VM replacement under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

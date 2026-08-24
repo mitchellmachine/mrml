@@ -879,8 +879,12 @@ KVM and WHP place confirmation immediately after `drop(guest)` and before any
 replacement preparation. The
 VM policy budget is exactly 64 common block exits; the former guest checkpoint
 exit and third I/O permission no longer exist. Asynchronous/unplanned crash
-capture, backend-in-flight recovery, unbounded progress, and PCI-MMIO restart
-recovery remain pending. One freshly
+capture, backend-in-flight recovery, and unbounded progress remain pending.
+PCI-MMIO now uses the same canonical lost-execution witness at an idle five-
+operation cut: the old VM is destroyed, the retained device/bridge/attachment
+stay suspended, a fresh MMIO-trap guest receives only the canonical queue/resume
+image, and exact nonzero driver reconstruction precedes proof. Transport
+substitution fails before restoration. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

@@ -2025,6 +2025,18 @@ mechanism. The planned compatibility, host-share, accessibility-device,
 browser, JavaScript/Wasm, and media scopes remain `TRIGGERED`; this agent review
 does not replace the required independent human dual review.
 
+# 2026-08-24 — MRML-native PCI-MMIO orderly VM replacement
+
+**Result: NOT_TRIGGERED.** The change applies the already implemented canonical
+block restart image, consuming old-VM destruction boundary, and linear
+lost-execution witness to the existing MRML-native PCI-MMIO transport at a fully
+retired idle cut. It introduces no new restart encoding, compatibility protocol,
+host-share mechanism, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or patent-candidate mechanism.
+The planned compatibility, host-share, accessibility-device, browser,
+JavaScript/Wasm, and media scopes remain `TRIGGERED`; this agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Mutable-reference tuple-field initializedness
 
 **Result: NOT_TRIGGERED.** The change conventionally retains thin scalar

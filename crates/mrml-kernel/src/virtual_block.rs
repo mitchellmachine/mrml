@@ -6049,6 +6049,63 @@ mod tests {
         assert!(bridge.is_poisoned());
     }
 
+    #[test]
+    fn restart_image_rejects_transport_substitution_before_restoration() {
+        let queue = layout::<2>();
+        let mut pci = VirtualBlockDevice::<2>::new_with_transport(
+            4096,
+            64,
+            VIRTUAL_BLOCK_FEATURE_FLUSH,
+            VirtualBlockTransport::MrmlSpecificPciMmio,
+        )
+        .unwrap();
+        pci.negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
+        pci.activate(queue, 48).unwrap();
+        let mut bridge = VirtualBlockQueueBridge::<2>::new(queue).unwrap();
+        let mut source = MockVmm::new();
+        let pci_configuration = pci.configuration().unwrap();
+        let pci_page = VirtualBlockConfigurationPage::new(0x5000, pci_configuration).unwrap();
+        let resume_page = VirtualBlockResumePage::fresh(0x4000, pci_page).unwrap();
+        pci.suspend().unwrap();
+        let published = bridge
+            .publish_resume_page(&mut source, &pci, resume_page)
+            .unwrap();
+        let image = bridge
+            .capture_restart_image(&source, &pci, published)
+            .unwrap();
+
+        let mut scalar = VirtualBlockDevice::<2>::new_with_transport(
+            4096,
+            64,
+            VIRTUAL_BLOCK_FEATURE_FLUSH,
+            VirtualBlockTransport::MrmlSpecificScalarIo,
+        )
+        .unwrap();
+        scalar.negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
+        scalar.activate(queue, 48).unwrap();
+        let scalar_configuration = scalar.configuration().unwrap();
+        scalar.suspend().unwrap();
+        let scalar_page = VirtualBlockConfigurationPage::new(0x5000, scalar_configuration).unwrap();
+        let scalar_resume = VirtualBlockResumePage::fresh(0x4000, scalar_page).unwrap();
+        let mut encoded_scalar_resume = [0; PAGE_SIZE as usize];
+        scalar_resume.encode_page(&mut encoded_scalar_resume);
+        let mut replacement = MockVmm::new();
+        replacement.bytes[0x4000..0x5000].copy_from_slice(&encoded_scalar_resume);
+        // SAFETY: this mock has no runnable native execution context.
+        let lost = unsafe { image.confirm_execution_loss() };
+        assert_eq!(
+            bridge.restore_restart_image(&mut replacement, &scalar, lost),
+            Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidConfiguration
+            ))
+        );
+        assert_eq!(
+            &replacement.bytes
+                [queue.request_base() as usize..queue.request_base() as usize + PAGE_SIZE as usize],
+            &[0; PAGE_SIZE as usize]
+        );
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum MockMutation {
         Complete,

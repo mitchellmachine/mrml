@@ -6219,6 +6219,72 @@ completion. It adds no compatibility, host-share, accessibility-device,
 browser, JavaScript/Wasm, or media mechanism. Those planned scopes remain
 `TRIGGERED`; agent review does not replace independent human dual review.
 
+### PCI-MMIO orderly VM replacement
+
+The attached MRML-native PCI-MMIO probe now applies the existing canonical
+block restart image and consuming lost-execution witness after all five requests
+and protected acknowledgements are fully retired. The host suspends the exact
+device and bridge, publishes and captures the canonical `5/5/5/5` idle queue
+state with request-ID anchors at five, destroys the old native VM, and only then
+converts the captured image into the one-use restoration witness. The retained
+routed attachment, BAR mapping, interrupt policy, backend capability, and
+volatile backend remain host-owned and are never reconstructed from guest data.
+
+A fresh VM is prepared from the same verified executable and handoff with the
+same first-level MMIO trap but fresh queue pages. Restoration accepts only the
+exact transport-bound configuration, queue, and resume image. The replacement
+guest rejects every state except all-zero fresh launch or exact `5/5/5/5`
+recovery, reconstructs the nonzero canonical driver history, and emits proof
+without replaying PCI configuration or block operations. The device resumes
+only after complete restoration. A focused hostile test proves a PCI-MMIO image
+cannot be restored against a scalar-transport device and that the substituted
+queue remains untouched.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features virtual_block
+  PASS: 70
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features virtual_pci
+  PASS: 28
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kvm-run -p mrml-whp-run --release --no-default-features
+  PASS: KVM-run 4; WHP-run 6
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel -p mrml-kvm -p mrml-whp -p mrml-kvm-run -p mrml-whp-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel-image --target x86_64-unknown-uefi --release --no-default-features --features pci-configuration-probe -- -D warnings -A clippy::result_unit_err
+  PASS
+wsl.exe -d archlinux --cd /mnt/c/Users/Mitch/Documents/mrml -- bash -lc 'CARGO_TARGET_DIR=target/pci-restart-kvm cargo test -p mrml-kernel --release --no-default-features virtual_block && CARGO_TARGET_DIR=target/pci-restart-kvm cargo test -p mrml-kernel --release --no-default-features virtual_pci && CARGO_TARGET_DIR=target/pci-restart-kvm cargo test -p mrml-kvm-run --release --no-default-features && CARGO_TARGET_DIR=target/pci-restart-kvm cargo clippy -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err'
+  PASS: block 70; PCI 28; KVM-run 7; strict Clippy passed
+target/pci-restart-kvm/release/mrml-kvm-run target/pci-restart-evidence/kernel.signed target/pci-restart-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=17215us prepare=2618us execute=87337us total=128166us
+target/pci-restart-evidence/release/mrml-whp-run.exe target/pci-restart-evidence/kernel.signed target/pci-restart-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=17477us prepare=4277us execute=5288us total=31039us
+```
+
+One fresh Lamport key signed the exact shared UEFI artifact once; the private
+key was consumed. This is unit/simulation and hosted controlled KVM/WHP orderly
+replacement evidence. It is not asynchronous crash capture, pending-I/O or
+uncertain-mutation recovery, reset/hotplug, durable storage, production BAR
+revocation, VirtIO/QEMU, physical-device, bare-metal, or host-resistant evidence.
+
+DIGITAL-RIGHTS REVIEW: replacement creates no ambient host path, telemetry,
+retention, disclosure, attestation, DRM, vendor authority, secret export,
+AI-only interface, accessibility restriction, or persistence. Current owner
+capabilities remain the authority; canonical guest state carries none.
+
+HOSTILE SECURITY REVIEW: queue counters, resume bytes, request history,
+transport identity, attachment generation, BAR state, interrupt state, backend
+identity, and lifecycle are hostile. Capture requires exact idle suspension;
+old execution is irreversibly destroyed before restoration authority exists;
+fresh memory, exact configuration, and transport are validated before writes;
+failure leaves the retained device suspended and cannot resume old execution.
+
+Patent review: `NOT_TRIGGERED` — this applies the existing canonical block
+restart image and lost-execution witness to the existing MRML-native PCI-MMIO
+transport at an idle cut. It adds no compatibility, host-share,
+accessibility-device, browser, JavaScript/Wasm, or media mechanism. Those
+planned scopes remain `TRIGGERED`; agent review does not replace independent
+human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered
