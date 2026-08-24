@@ -508,6 +508,13 @@ exact service task generation, one exact object, and an exact non-delegable
 `READ` capability. Delivery revokes that capability before copying the fixed
 record and then consumes the metadata. Wrong task, wrong object, overbroad or
 stale capability, replay, and replacement-task attempts receive zero output.
+An isolated operation-13 syscall adapter now decodes only that capability and
+one canonical output address, requires four zero reserved registers, validates
+one exact current-task writable range through a directional one-use ticket,
+then performs delivery and erases its fixed kernel scratch. Validation failure
+preserves the delivery; copy uncertainty after revocation is terminal and
+cannot be retried. Integration into a live booted storage-service dispatcher is
+still pending.
 The full deterministic configuration recovery path exercises delivery,
 canonical service-side decoding, authenticated-store binding, owner proof,
 capability-selected I/O, monotonic commit, and service registration in order.
@@ -517,8 +524,8 @@ have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, native UEFI-target linkage, syscall/user-copy wiring in a
-live booted storage service, and physical evidence remain pending. A consumed dependent-
+provisioning/recovery, native UEFI-target linkage, live booted storage-service
+dispatch of the isolated syscall adapter, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

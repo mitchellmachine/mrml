@@ -666,8 +666,13 @@ authority; unrelated domains continue.
    is emitted. Tests prove this metadata can exist while artifact rollback
    evidence remains false. It creates no recovery token, capability, or
    authority table. Actual owner-policy provisioning/recovery, native UEFI-
-   target linkage, booted storage-service syscall/user-copy wiring, and physical
-   testing remain pending. A storage-side one-use wrapper now binds the handed metadata to the
+   target linkage, live booted storage-service dispatch, and physical testing
+   remain pending. An isolated operation-13 adapter now decodes one exact
+   capability and canonical output address, validates the current task's fixed
+   writable range through a one-use directional ticket before revocation,
+   erases kernel scratch, and makes post-revocation copy uncertainty terminal.
+   This is focused unit evidence, not live boot-path evidence. A storage-side
+   one-use wrapper now binds the handed metadata to the
    independently authenticated state store: one exact load and one exact
    compare-and-store are permitted, with replay, field substitution, malformed
    state, or store uncertainty releasing nothing and erasing output. The full

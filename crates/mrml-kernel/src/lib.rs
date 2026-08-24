@@ -9,6 +9,7 @@ pub mod arch;
 mod artifact;
 mod boot;
 mod boot_recovery;
+mod boot_recovery_syscall;
 mod capability;
 mod early;
 mod framebuffer;
@@ -45,6 +46,10 @@ pub use artifact::{
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
 pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};
+pub use boot_recovery_syscall::{
+    BOOT_RECOVERY_SYSCALL_OPERATION, BootRecoverySyscallError, BootRecoverySyscallExecutor,
+    BootRecoverySyscallRequest,
+};
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

@@ -220,6 +220,12 @@ descendants are revoked before the fixed metadata record is copied; successful
 copy consumes the record. Wrong task/object, excess rights, stale generation,
 replay, and service replacement return zero bytes. This is a narrow mechanism,
 not an ambient recovery-state query or kernel-owned storage policy.
+The isolated syscall adapter accepts only the opaque capability, one canonical
+output address, and zero reserved registers. It validates the complete exact
+current-task writable range before revocation, consumes one directional copy
+ticket, erases kernel scratch on every return, and treats a copy failure after
+revocation as terminal delivery uncertainty rather than retry permission. This
+is unit-tested mechanism, not live boot-path or physical evidence.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

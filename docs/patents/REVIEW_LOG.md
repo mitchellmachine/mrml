@@ -2483,6 +2483,18 @@ runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
 Existing planned scopes remain `TRIGGERED`; this agent review does not replace
 independent human dual review.
 
+# 2026-08-24 — Recovery metadata syscall/user-copy adapter
+
+**Result: NOT_TRIGGERED.** The change conventionally decodes one fixed syscall
+shape, validates one exact current-task writable range through the existing
+directional one-use user-copy contract, invokes the existing capability-scoped
+revoke-before-copy delivery, and erases bounded scratch. Post-revocation copy
+uncertainty is terminal. It adds no attestation, compatibility transport,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace independent human dual review.
+
 # 2026-08-24 — Capability-scoped recovery metadata delivery
 
 **Result: NOT_TRIGGERED.** The change conventionally authorizes one fixed boot

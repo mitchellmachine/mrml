@@ -358,6 +358,13 @@ explicitly and downgrade the status rather than guessing.
   delegable `READ` capability; it revokes before copying and consumes the
   metadata. Wrong-service, wrong-object, overbroad/stale capability, replay, and
   replacement-task tests fail closed with zero output. The deterministic full
+  path now also has an isolated operation-13 syscall adapter. It decodes one
+  opaque capability and canonical output address with zero reserved registers,
+  validates an exact current-task writable range through the existing one-use
+  directional copy contract, performs revoke-before-copy delivery, and erases
+  fixed scratch on every return. Pre-delivery validation failure remains
+  retryable; copy uncertainty after revocation is terminal. This is focused unit
+  evidence, not live booted service, UEFI, TPM hardware, or durability evidence.
   recovery test now traverses this delivery mechanism before the authenticated-
   store wrapper. Syscall/user-copy wiring in a booted service remains pending.
   Dependent
