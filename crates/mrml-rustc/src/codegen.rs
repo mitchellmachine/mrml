@@ -3104,6 +3104,92 @@ fn preanalyze_runtime_expression_at_reads<
                     })?;
                     let expected = runtime_type_from_scalar(parameter.ty);
                     if let RuntimeExpressionType::Array { count, .. } = expected
+                        && let Some(ExprKind::Sequence { first, then }) =
+                            tree.expression(argument).map(|expression| expression.kind)
+                    {
+                        match tree.expression(then).map(|expression| expression.kind) {
+                            Some(ExprKind::Array {
+                                elements,
+                                element_count,
+                            }) if element_count == count => {
+                                for element in elements[..element_count].iter().flatten() {
+                                    visit!(first)?;
+                                    visit!(*element)?;
+                                }
+                            }
+                            Some(ExprKind::ArrayRepeat {
+                                element,
+                                count: repeat,
+                            }) if repeat == count => {
+                                for _ in 0..count {
+                                    visit!(first)?;
+                                    visit!(element)?;
+                                }
+                            }
+                            Some(
+                                ExprKind::If {
+                                    condition,
+                                    then_branch,
+                                    else_branch,
+                                }
+                                | ExprKind::LoopBreakIf {
+                                    condition,
+                                    then_branch,
+                                    else_branch,
+                                },
+                            ) => {
+                                let (
+                                    Some(ExprKind::Array {
+                                        elements: then_elements,
+                                        element_count: then_count,
+                                    }),
+                                    Some(ExprKind::Array {
+                                        elements: else_elements,
+                                        element_count: else_count,
+                                    }),
+                                ) = (
+                                    tree.expression(then_branch)
+                                        .map(|expression| expression.kind),
+                                    tree.expression(else_branch)
+                                        .map(|expression| expression.kind),
+                                )
+                                else {
+                                    return Err(CodegenError {
+                                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                        span: assignment_span,
+                                    });
+                                };
+                                if then_count != count || else_count != count {
+                                    return Err(CodegenError {
+                                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                                        span: assignment_span,
+                                    });
+                                }
+                                for index in 0..count {
+                                    for operand in [
+                                        first,
+                                        condition,
+                                        then_elements[index].ok_or(CodegenError {
+                                            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                            span: assignment_span,
+                                        })?,
+                                        else_elements[index].ok_or(CodegenError {
+                                            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                            span: assignment_span,
+                                        })?,
+                                    ] {
+                                        visit!(operand)?;
+                                    }
+                                }
+                            }
+                            _ => {
+                                return Err(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                });
+                            }
+                        }
+                    } else if let RuntimeExpressionType::Array { count, .. } = expected
                         && let Some(
                             ExprKind::If {
                                 condition,
@@ -4541,6 +4627,9 @@ fn runtime_aggregate_call_argument_preanalysis_supported<const MAX_NODES: usize>
             RuntimeExpressionType::Array { count, .. },
             Some(ExprKind::ArrayRepeat { count: repeat, .. }),
         ) => repeat == count,
+        (RuntimeExpressionType::Array { count, .. }, Some(ExprKind::Sequence { then, .. })) => {
+            runtime_wrapped_array_call_argument_preanalysis_supported(tree, then, count)
+        }
         (
             RuntimeExpressionType::Array { count, .. },
             Some(
@@ -4624,6 +4713,51 @@ fn runtime_aggregate_call_argument_preanalysis_supported<const MAX_NODES: usize>
         (expected @ RuntimeExpressionType::Tuple { .. }, Some(ExprKind::Sequence { then, .. })) => {
             runtime_aggregate_call_argument_preanalysis_supported(tree, then, expected, depth + 1)
         }
+        _ => false,
+    }
+}
+
+fn runtime_wrapped_array_call_argument_preanalysis_supported<const MAX_NODES: usize>(
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    count: usize,
+) -> bool {
+    match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Array {
+            elements,
+            element_count,
+        }) => element_count == count && elements[..element_count].iter().all(Option::is_some),
+        Some(ExprKind::ArrayRepeat { count: repeat, .. }) => repeat == count,
+        Some(
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            },
+        ) => matches!(
+            (
+                tree.expression(then_branch).map(|expression| expression.kind),
+                tree.expression(else_branch).map(|expression| expression.kind),
+            ),
+            (
+                Some(ExprKind::Array {
+                    elements: then_elements,
+                    element_count: then_count,
+                }),
+                Some(ExprKind::Array {
+                    elements: else_elements,
+                    element_count: else_count,
+                }),
+            ) if then_count == count
+                && else_count == count
+                && then_elements[..then_count].iter().all(Option::is_some)
+                && else_elements[..else_count].iter().all(Option::is_some)
+        ),
         _ => false,
     }
 }
@@ -18564,7 +18698,7 @@ mod tests {
             };
             if matches!(
                 name,
-                "choose_aggregate" | "choose_literal" | "choose_conditional"
+                "choose_aggregate" | "choose_literal" | "choose_conditional" | "choose_wrapped"
             ) && argument_count == 3
                 && MAX_PARAMETERS >= 3
             {
@@ -18592,7 +18726,8 @@ mod tests {
                     name: match name {
                         "choose_aggregate" => "choose_aggregate",
                         "choose_literal" => "choose_literal",
-                        _ => "choose_conditional",
+                        "choose_conditional" => "choose_conditional",
+                        _ => "choose_wrapped",
                     },
                     parameters,
                     parameter_count: 3,
@@ -19959,6 +20094,54 @@ mod tests {
             RuntimePlaceIdentity::Parameter(7),
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(6),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_sequence_wrapped_array_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize, choose: bool) -> usize { let selected: &[usize] = choose_wrapped({ prefix; if choose { [first, second, third] } else { [third, second, first] } }, (left, right), bias); selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 15);
+        for (fact, identity) in facts.assignment_reads[..15].iter().zip([
+            RuntimePlaceIdentity::Parameter(5),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(5),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(5),
             RuntimePlaceIdentity::Parameter(7),
             RuntimePlaceIdentity::Parameter(2),
             RuntimePlaceIdentity::Parameter(0),
