@@ -3407,7 +3407,17 @@ replacements. Non-exhaustive replacement preserves the original generation on
 the bypass path; exhaustive replacement kills it. Conflict-to-use analysis
 also retains path correlation, preventing mutually exclusive replacement and
 old-loan use from manufacturing a conflict. The pinned oracle confirmed E0499
-for the bypass case and acceptance for exhaustive replacement. A child issued
-where multiple parent generations reach fails explicitly rather than selecting
-one by source order. Expression-conditional and loop-carried generations remain
-unsupported. The hygiene scan remained empty.
+for the bypass case and acceptance for exhaustive replacement. Expression-
+conditional and loop-carried generations remain unsupported. The hygiene scan
+remained empty.
+
+The multi-parent reborrow-ancestry milestone retained the 715-test cross-host
+gate and warnings-denied compiler-only Clippy on Windows gnullvm and native
+Arch Linux release mode. A child issued after a conditional generation join now
+recursively follows every parent loan active at its issue point, applies
+suspension to every mutable parent, and checks conflicts against every possible
+ultimate owner path. The traversal is bounded by the existing combined
+initialization/effect count and malformed ancestry cycles fail closed. The
+pinned oracle confirmed E0499 when a bypass path leaves the original owner live
+through the child, and acceptance when exhaustive replacement removes that
+owner. This does not claim loop-carried or expression-conditional generations.

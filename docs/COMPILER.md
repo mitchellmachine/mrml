@@ -582,9 +582,11 @@ replacements now use bounded reaching definitions: a generation remains active
 when a bypass path reaches the use and is killed when every reaching path
 crosses a replacement. Conflict-to-use queries preserve the same path
 correlation instead of combining mutually exclusive events. A child reborrow
-issued where multiple parent generations reach still fails explicitly;
-expression-conditional and loop-carried reference replacements remain
-unclassified, and indirect reference-value moves are not loan origins.
+issued where multiple parent generations reach recursively preserves every
+possible ultimate owner path and applies parent suspension to each active
+mutable generation. Expression-conditional and loop-carried reference
+replacements remain unclassified, and indirect reference-value moves are not
+loan origins.
 A plain assignment of a direct reference identifier into an existing typed
 reference binding now uses the destination type as coercion context and records
 a shared or mutable implicit reborrow before the destination write. For mutable
@@ -611,9 +613,9 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is multi-parent reborrow
-ancestry at conditional joins, followed by loop-carried generation dataflow and
-broader coercion sites before region reasoning.
+The highest-value next major implementation task is loop-carried generation
+dataflow, followed by expression-conditional generations and broader coercion
+sites before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

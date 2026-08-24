@@ -1404,6 +1404,17 @@ JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Multi-parent reborrow ancestry
+
+**Result: NOT_TRIGGERED.** The compiler conventionally follows every direct
+parent loan reaching a child-reborrow issue point and applies existing bounded
+conflict checks to their ultimate owner paths. It adds no new arena,
+optimization, authority model, device or compatibility protocol, host-share
+mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Service policy-replacement syscall foundation
 
 **Result: NOT_TRIGGERED.** The change adds a conventional pointer-free syscall
