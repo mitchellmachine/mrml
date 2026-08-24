@@ -3735,6 +3735,13 @@ fn rustc_literal_aggregate_call_argument_reads_reach_native_objects() {
 }
 
 #[test]
+fn rustc_conditional_array_call_argument_reads_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize, choose: bool) -> usize { let selected: &[usize] = { prefix; choose_conditional(if choose { [first, second, third] } else { [third, second, first] }, (left, right), bias) }; selected.len() } fn choose_conditional(values: [usize; 3], pair: (usize, usize), bias: usize) -> &[usize] { pair.0; if bias == 0 { &values[..] } else { &values[1..] } }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_range_derived_fat_reference_initializer_reads_reach_native_objects() {
     let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &[usize], start: usize, end: usize, left: usize) -> usize { let local = [10usize, 20usize, 30usize, 40usize]; let from_local: &[usize] = &local[start..end]; let from_input: &[usize] = &input[left..]; from_local.len() + from_input.len() }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

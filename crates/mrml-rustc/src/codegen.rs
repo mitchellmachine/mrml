@@ -3103,7 +3103,53 @@ fn preanalyze_runtime_expression_at_reads<
                         span: assignment_span,
                     })?;
                     let expected = runtime_type_from_scalar(parameter.ty);
-                    if matches!(
+                    if let RuntimeExpressionType::Array { count, .. } = expected
+                        && let Some(
+                            ExprKind::If {
+                                condition,
+                                then_branch,
+                                else_branch,
+                            }
+                            | ExprKind::LoopBreakIf {
+                                condition,
+                                then_branch,
+                                else_branch,
+                            },
+                        ) = tree.expression(argument).map(|expression| expression.kind)
+                        && let (
+                            Some(ExprKind::Array {
+                                elements: then_elements,
+                                element_count: then_count,
+                            }),
+                            Some(ExprKind::Array {
+                                elements: else_elements,
+                                element_count: else_count,
+                            }),
+                        ) = (
+                            tree.expression(then_branch)
+                                .map(|expression| expression.kind),
+                            tree.expression(else_branch)
+                                .map(|expression| expression.kind),
+                        )
+                        && then_count == count
+                        && else_count == count
+                    {
+                        for index in 0..count {
+                            for operand in [
+                                condition,
+                                then_elements[index].ok_or(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                })?,
+                                else_elements[index].ok_or(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                })?,
+                            ] {
+                                visit!(operand)?;
+                            }
+                        }
+                    } else if matches!(
                         expected,
                         RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
                     ) && let Some(ExprKind::Identifier(name)) =
@@ -4495,6 +4541,39 @@ fn runtime_aggregate_call_argument_preanalysis_supported<const MAX_NODES: usize>
             RuntimeExpressionType::Array { count, .. },
             Some(ExprKind::ArrayRepeat { count: repeat, .. }),
         ) => repeat == count,
+        (
+            RuntimeExpressionType::Array { count, .. },
+            Some(
+                ExprKind::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::LoopBreakIf {
+                    then_branch,
+                    else_branch,
+                    ..
+                },
+            ),
+        ) => matches!(
+            (
+                tree.expression(then_branch).map(|expression| expression.kind),
+                tree.expression(else_branch).map(|expression| expression.kind),
+            ),
+            (
+                Some(ExprKind::Array {
+                    elements: then_elements,
+                    element_count: then_count,
+                }),
+                Some(ExprKind::Array {
+                    elements: else_elements,
+                    element_count: else_count,
+                }),
+            ) if then_count == count
+                && else_count == count
+                && then_elements[..then_count].iter().all(Option::is_some)
+                && else_elements[..else_count].iter().all(Option::is_some)
+        ),
         (
             RuntimeExpressionType::Tuple { element_count, .. },
             Some(ExprKind::Tuple {
@@ -18483,8 +18562,10 @@ mod tests {
                 element: CallArrayElement::Integer(crate::IntegerType::Usize),
                 mutable: false,
             };
-            if matches!(name, "choose_aggregate" | "choose_literal")
-                && argument_count == 3
+            if matches!(
+                name,
+                "choose_aggregate" | "choose_literal" | "choose_conditional"
+            ) && argument_count == 3
                 && MAX_PARAMETERS >= 3
             {
                 let element = CallArrayElement::Integer(crate::IntegerType::Usize);
@@ -18508,10 +18589,10 @@ mod tests {
                     ty: ScalarType::Integer(crate::IntegerType::Usize),
                 });
                 return Some(RuntimeCallTarget {
-                    name: if name == "choose_aggregate" {
-                        "choose_aggregate"
-                    } else {
-                        "choose_literal"
+                    name: match name {
+                        "choose_aggregate" => "choose_aggregate",
+                        "choose_literal" => "choose_literal",
+                        _ => "choose_conditional",
                     },
                     parameters,
                     parameter_count: 3,
@@ -19834,6 +19915,52 @@ mod tests {
             RuntimePlaceIdentity::Parameter(4),
             RuntimePlaceIdentity::Parameter(3),
             RuntimePlaceIdentity::Parameter(6),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(6),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_conditional_array_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize, choose: bool) -> usize { let selected: &[usize] = { prefix; choose_conditional(if choose { [first, second, third] } else { [third, second, first] }, (left, right), bias) }; selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 13);
+        for (fact, identity) in facts.assignment_reads[..13].iter().zip([
+            RuntimePlaceIdentity::Parameter(5),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(2),
             RuntimePlaceIdentity::Parameter(0),
             RuntimePlaceIdentity::Parameter(3),
             RuntimePlaceIdentity::Parameter(4),
