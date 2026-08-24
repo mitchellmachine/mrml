@@ -239,6 +239,13 @@ before exact lifecycle cleanup completed. The public test record grants no new
 storage authority. Hosted WHP/KVM remain controlled by their hosts; this is not
 native UEFI, TPM, persistence, reboot, rollback-resistance, Secure Boot, or
 physical evidence.
+The signed service now additionally binds the decoded handoff record through
+`BootRecoveryAdmission` to a separately constructed controlled read-only test
+record before it becomes ready. It requires one successful exact load followed
+by a rejected, zero-output replay, then erases all copies. The controlled
+provider cannot commit and is not authenticated hardware; this proves hosted
+one-use equality enforcement only. Mismatch, malformed bytes, or reuse halts
+before the block service accepts requests and releases no recovery authority.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

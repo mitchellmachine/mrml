@@ -379,7 +379,14 @@ explicitly and downgrade the status rather than guessing.
   authenticated TPM, persistence, reboot, rollback-resistance, Secure Boot, or
   physical evidence. The deterministic recovery test also traverses delivery
   before the authenticated-store wrapper; live composition with that store in
-  a booted service remains pending.
+  a booted service now reaches the one-use equality boundary: before readiness,
+  the signed service binds the delivered record to a separately constructed
+  controlled read-only record, requires one exact load, requires a replay to
+  fail with zero output, and erases both copies. Fresh signed WHP and KVM probes
+  passed, and Windows gnullvm plus Linux/WSL2 each passed all 116 storage tests.
+  The controlled provider refuses commits and is not authenticated hardware,
+  durable storage, or monotonic-write evidence. Live configuration/authority
+  release through a conforming store remains pending.
   Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator

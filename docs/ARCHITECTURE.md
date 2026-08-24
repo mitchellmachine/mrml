@@ -525,6 +525,13 @@ KVM controlled probes reached the existing complete service-cleanup gate. This
 is hosted invocation evidence only; native UEFI execution, authenticated TPM
 state, persistence, reboot, rollback resistance, and physical evidence remain
 pending.
+Before the signed block service announces readiness, it now passes the decoded
+record through the existing `BootRecoveryAdmission` wrapper against an
+independently constructed, read-only controlled test record. Exact equality is
+required; a deliberate second load must fail and zero its output, and both
+copies are erased. This composes live syscall delivery with the one-use store
+binding under hosted execution, but the controlled record is not a TPM,
+nonvolatile store, monotonic-write provider, or source of recovery authority.
 The full deterministic configuration recovery path exercises delivery,
 canonical service-side decoding, authenticated-store binding, owner proof,
 capability-selected I/O, monotonic commit, and service registration in order.

@@ -27,13 +27,14 @@ use mrml_kernel::{
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
-    BlockDeviceDescriptor, BlockDeviceId, BlockRequest, BlockResponse, BlockRights, BlockService,
-    BlockServiceBackend, BlockServiceLoop, BlockServiceSyscalls, BlockSessionHandle, BlockStatus,
-    BlockVolume, CowMetadataWrite, CowPublicationPlan, ExtentMap, ExtentRecord, FileMetadata,
-    FileState, MetadataPointer, ReceivedBlockEnvelope, StorageAuthorityTable, StorageBlockDevice,
-    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights, StorageTransaction,
-    StorageTransactionId, Superblock, VolumeHeader, VolumeId, BLOCK_REQUEST_BYTES,
-    BLOCK_RESPONSE_BYTES, SUPERBLOCK_BYTES,
+    AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
+    BlockDeviceId, BlockRequest, BlockResponse, BlockRights, BlockService, BlockServiceBackend,
+    BlockServiceLoop, BlockServiceSyscalls, BlockSessionHandle, BlockStatus, BlockVolume,
+    BootRecoveryAdmission, CowMetadataWrite, CowPublicationPlan, ExtentMap, ExtentRecord,
+    FileMetadata, FileState, MetadataPointer, ReceivedBlockEnvelope, StorageAuthorityTable,
+    StorageBlockDevice, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights,
+    StorageTransaction, StorageTransactionId, Superblock, VolumeHeader, VolumeId,
+    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, SUPERBLOCK_BYTES,
 };
 
 #[panic_handler]
@@ -454,11 +455,74 @@ unsafe fn verify_recovery_metadata(capability: u64) {
     };
     let expected = RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17)
         .unwrap_or_else(|_| halt());
-    if status != 0 || RecoveryStateMetadata::decode(&encoded) != Ok(expected) {
+    let delivered = RecoveryStateMetadata::decode(&encoded);
+    if status != 0 || delivered != Ok(expected) {
         encoded.fill(0);
         halt();
     }
+    let delivered = delivered.unwrap_or_else(|_| halt());
+    let mut store = ControlledRecoveryStateStore::new();
+    {
+        let bound = BootRecoveryAdmission::new(delivered)
+            .unwrap_or_else(|_| halt())
+            .bind(&mut store);
+        let mut authenticated = [0xa5; AUTHORITY_RECOVERY_STATE_BYTES];
+        if bound.load_authenticated(&mut authenticated).is_err() {
+            authenticated.fill(0);
+            encoded.fill(0);
+            halt();
+        }
+        let mut replay = [0xa5; AUTHORITY_RECOVERY_STATE_BYTES];
+        if bound.load_authenticated(&mut replay).is_ok() || replay.iter().any(|byte| *byte != 0) {
+            replay.fill(0);
+            authenticated.fill(0);
+            encoded.fill(0);
+            halt();
+        }
+        replay.fill(0);
+        authenticated.fill(0);
+    }
+    store.encoded.fill(0);
     encoded.fill(0);
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+struct ControlledRecoveryStateStore {
+    encoded: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+impl ControlledRecoveryStateStore {
+    fn new() -> Self {
+        let mut encoded = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+        encoded[..16].copy_from_slice(b"MRML-AUTHSTATE1\0");
+        encoded[16..24].copy_from_slice(&8u64.to_le_bytes());
+        encoded[24..28].copy_from_slice(&2u32.to_le_bytes());
+        encoded[32..48].copy_from_slice(&[0x44; 16]);
+        encoded[48..56].copy_from_slice(&17u64.to_le_bytes());
+        Self { encoded }
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+impl AuthorityRecoveryStateStore for ControlledRecoveryStateStore {
+    type Error = ();
+
+    fn load_authenticated(
+        &self,
+        output: &mut [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        *output = self.encoded;
+        Ok(())
+    }
+
+    fn compare_and_store(
+        &mut self,
+        _expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        _replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        Err(())
+    }
 }
 
 #[cfg(not(feature = "preemption-probe"))]

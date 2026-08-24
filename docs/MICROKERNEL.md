@@ -5619,6 +5619,15 @@ platform authentication of owner-approved policy, an owner-facing durable-grant
 UI, boot orchestration, and a conforming physical monotonic-store backend remain
 unimplemented, so complete reboot reconstruction and rollback resistance are not
 claimed.
+The signed hosted block service now crosses the narrower live binding gate. It
+receives the one-use operation-13 record, binds it with `BootRecoveryAdmission`
+to an independently constructed controlled read-only test record before
+readiness, requires the second load to fail with zero output, and erases all
+copies. Fresh signed WHP and KVM probes passed this ordering; Windows gnullvm
+and Linux/WSL2 each passed all 116 storage tests, and focused UEFI service
+Clippy passed. This is hosted controlled-oracle evidence only. The provider
+refuses compare-and-store and proves neither hardware authentication,
+monotonicity, durability, reboot recovery, nor rollback resistance.
 The `DIGITAL-RIGHTS REVIEW` found no new collection, disclosure, stable remote
 identity, vendor veto, DRM, deletion, or persistence authority: the record holds
 only the two local anti-replay counters, and owner-approved grant policy remains

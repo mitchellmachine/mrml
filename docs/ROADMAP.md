@@ -696,6 +696,14 @@ authority; unrelated domains continue.
    and KVM probes reached exact service cleanup after this invocation. These
    are unit, ABI-compilation, and hosted controlled-probe evidence, not native
    UEFI, TPM, persistence, reboot, rollback-resistance, or physical evidence.
+   The signed service now applies `BootRecoveryAdmission` to the delivered
+   record and a separately constructed controlled read-only test record before
+   readiness. It requires exact equality, proves replay rejection with zero
+   output, and erases both copies. Fresh signed WHP/KVM probes passed this path;
+   both platforms also passed all 116 storage tests. The controlled provider
+   refuses commits and supplies no durability, monotonic-write, authentication,
+   or recovery-authority evidence. Live release of recovered configuration
+   through a conforming store remains pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
    each pass all 447 kernel tests, all 16 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict

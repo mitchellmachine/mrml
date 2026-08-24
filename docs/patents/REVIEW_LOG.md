@@ -1361,6 +1361,18 @@ mechanism, device protocol, or other patent-candidate mechanism. Previously
 recorded planned scopes remain `TRIGGERED`; this agent review does not replace
 required independent human dual review.
 
+# 2026-08-24 — Booted-service recovery-state equality binding
+
+**Result: NOT_TRIGGERED.** The change conventionally applies the existing
+one-use equality wrapper to a syscall-delivered fixed record and a separately
+constructed controlled read-only test record, rejects replay, and erases
+temporary bytes before service readiness. It creates no store protocol,
+monotonic-write mechanism, attestation, compatibility transport, host-share
+protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace independent human dual review.
+
 # 2026-08-24 — Access-sensitive direct-loan use
 
 **Result: NOT_TRIGGERED.** The compiler conventionally distinguishes reads from
