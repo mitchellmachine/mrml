@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `593c13d`
-  (`compiler: distinguish implicit reborrows from moves`)
+- Compiler checkpoint commit: `5ed5cbe`
+  (`compiler: distinguish loan reads from mutations`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -124,13 +124,17 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   reference. The fixed-capacity traversal covers entry, blocks, edges, returns,
   and genuine cycles without treating mutually unreachable points as ordered.
   This is bounded direct-loan liveness and invalidation evidence, not indirect
-  alias tracking, implicit reborrows, regions, or complete NLL enforcement.
+  alias tracking, regions, or complete NLL enforcement.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
   accepted, and owner-path conflicts follow the ancestry root. Shared-to-shared
-  reborrows retain compatible shared parent reads. This is not general
-  coercion-site reborrowing or access-sensitive shared-child enforcement.
+  reborrows retain compatible shared parent reads. Mutation through a direct
+  mutable-reference parent is separately classified from a loan read, so a
+  live shared child blocks the former but preserves the latter until its last
+  reachable use. Reassignable reference bindings are excluded from derived
+  direct-loan identity until loan facts carry initialization generations. This
+  is not general coercion-site reborrowing.
   A direct identifier initializing an explicitly typed expected reference now
   records the corresponding shared or mutable implicit reborrow. The same
   identifier in an inferred mutable-reference binding remains a move, preserving
@@ -381,10 +385,10 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Array-element move paths, implicit reborrow and remaining indirect move/borrow classification,
+Array-element move paths and remaining indirect move/borrow classification,
 unsupported expression/control-flow forms, complete loans, indirect alias
-invalidation, broader coercion-site reborrows, shared-child mutation
-classification, regions,
+invalidation, broader coercion-site reborrows, generational loans for
+reassignable reference bindings, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -394,9 +398,10 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. add access-sensitive shared-child parent conflicts and broader coercion-site
-   reborrows before region reasoning; preserve the distinction between an
-   expected-reference reborrow and an inferred consuming move;
+1. add generational loan identity for reassignable reference bindings, then
+   broader coercion-site reborrows before region reasoning; preserve the
+   distinction between an expected-reference reborrow and an inferred
+   consuming move;
 2. exact constant owned-array element identity is now retained. Add array move
    paths only for a modern Rust operation that can legally move an element
    (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
@@ -426,8 +431,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 707 tests on each host: 389
-library tests, 10 conformance tests, 306 replacement tests, and 2 driver tests.
+The checkpoint source passed 709 tests on each host: 390
+library tests, 10 conformance tests, 307 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

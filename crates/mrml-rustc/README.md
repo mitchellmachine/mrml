@@ -3356,3 +3356,16 @@ premature parent use, acceptance after the child’s last use, and E0382 for the
 inferred move. This does not claim general coercion sites, access-sensitive
 shared-child mutation, regions, or complete Polonius semantics. The hygiene
 scan remained empty.
+
+The access-sensitive direct-loan milestone passed all 709 compiler and driver
+tests on Windows gnullvm and all 709 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Assignment through a direct
+mutable-reference borrower is now a distinct loan mutation: a live shared child
+blocks mutation through its mutable parent while retaining compatible parent
+reads, and the parent mutation is restored after the child's last reachable
+use. The pinned oracle independently confirmed the rejected and accepted
+pairs. Reassignable reference bindings are deliberately excluded from derived
+direct-loan identity until initialization generations can prevent stale loans;
+this does not claim general coercion sites, regions, or complete Polonius
+semantics. The `no_std`/allocation/unsafe hygiene scan remained empty.

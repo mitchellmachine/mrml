@@ -570,6 +570,13 @@ reborrows preserve compatible shared parent reads. An explicitly typed expected
 reference binding from a direct reference identifier creates the corresponding
 implicit reborrow, while an inferred mutable-reference binding remains a move.
 This does not yet classify every shared-child mutation or general coercion site.
+Assignments through a direct mutable-reference borrower now distinguish loan
+mutation from compatible loan reads. While a shared child is live, mutation
+through its mutable parent is rejected but reads through that parent remain
+compatible; mutation after the child's last reachable use is accepted. Direct
+loan identities are currently derived only for immutable reference bindings:
+reassignable reference bindings need generational initialization/loan facts so
+that an old loan identity cannot survive a binding replacement.
 
 ## Roadmap selection
 
@@ -590,9 +597,9 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is adding access-sensitive
-shared-child parent conflicts and broader coercion-site reborrows before region
-reasoning.
+The highest-value next major implementation task is generational loan identity
+for reassignable reference bindings, followed by broader coercion-site
+reborrows before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,
