@@ -8,7 +8,13 @@ const TPM_CC_NV_INCREMENT: u32 = 0x0000_0134;
 const TPM_CC_NV_READ: u32 = 0x0000_014e;
 const TPM_CC_NV_READ_PUBLIC: u32 = 0x0000_0169;
 const TPM_CC_NV_WRITE: u32 = 0x0000_0137;
+const TPM_CC_FLUSH_CONTEXT: u32 = 0x0000_0165;
+const TPM_CC_START_AUTH_SESSION: u32 = 0x0000_0176;
+const TPM_CC_POLICY_PCR: u32 = 0x0000_017f;
 const TPM_RC_SUCCESS: u32 = 0;
+const TPM_RH_NULL: u32 = 0x4000_0007;
+const TPM_SE_POLICY: u8 = 0x01;
+const TPM_ALG_NULL: u16 = 0x0010;
 const TPM_ALG_SHA256: u16 = 0x000b;
 const TPMA_NV_POLICYWRITE: u32 = 1 << 3;
 const TPMA_NV_TYPE_MASK: u32 = 0x0f << 4;
@@ -72,6 +78,108 @@ pub unsafe trait NvPolicySessionProvider: TpmTransport {
         policy_digest: [u8; 32],
         operation: NvPolicyOperation,
     ) -> Result<AuthorizedNvSession, NvCounterError>;
+}
+
+pub trait TpmNonceSource {
+    fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PcrPolicy {
+    policy_digest: [u8; 32],
+    expected_pcr_digest: [u8; 32],
+    pcr_select: [u8; 3],
+}
+
+impl PcrPolicy {
+    pub fn new(
+        policy_digest: [u8; 32],
+        expected_pcr_digest: [u8; 32],
+        pcr_select: [u8; 3],
+    ) -> Result<Self, NvCounterError> {
+        if policy_digest.iter().all(|byte| *byte == 0)
+            || expected_pcr_digest.iter().all(|byte| *byte == 0)
+            || pcr_select.iter().all(|byte| *byte == 0)
+        {
+            return Err(NvCounterError::InvalidSession);
+        }
+        Ok(Self {
+            policy_digest,
+            expected_pcr_digest,
+            pcr_select,
+        })
+    }
+}
+
+/// Concrete one-use provider for an owner-configured SHA-256 `PolicyPCR`
+/// recipe. It serializes one pending NV authorization at a time.
+pub struct PcrPolicySessionTransport<T, N> {
+    transport: T,
+    nonce_source: N,
+    policy: PcrPolicy,
+    pending: Option<(u32, NvPolicyOperation)>,
+}
+
+impl<T, N> PcrPolicySessionTransport<T, N> {
+    pub const fn new(transport: T, nonce_source: N, policy: PcrPolicy) -> Self {
+        Self {
+            transport,
+            nonce_source,
+            policy,
+            pending: None,
+        }
+    }
+
+    pub fn into_parts(self) -> (T, N) {
+        (self.transport, self.nonce_source)
+    }
+}
+
+impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
+    fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
+        if let Some((handle, operation)) = self.pending.take()
+            && (command.len() < 31
+                || u32::from_be_bytes(command[22..26].try_into().unwrap()) != handle
+                || operation_for_command(command) != Some(operation))
+        {
+            let _ = flush_context(&mut self.transport, handle);
+            return Err(NvCounterError::InvalidSession);
+        }
+        self.transport.submit(command, response)
+    }
+}
+
+// SAFETY: the wrapper creates a fresh TPM policy session from explicit entropy,
+// executes the exact configured PolicyPCR recipe, permits only one pending
+// command with the requested operation/handle, and flushes mismatched use.
+unsafe impl<T: TpmTransport, N: TpmNonceSource> NvPolicySessionProvider
+    for PcrPolicySessionTransport<T, N>
+{
+    fn authorize_nv(
+        &mut self,
+        name: [u8; 34],
+        policy_digest: [u8; 32],
+        operation: NvPolicyOperation,
+    ) -> Result<AuthorizedNvSession, NvCounterError> {
+        if self.pending.is_some()
+            || policy_digest != self.policy.policy_digest
+            || name[..2] != TPM_ALG_SHA256.to_be_bytes()
+        {
+            return Err(NvCounterError::InvalidSession);
+        }
+        let mut nonce = [0; 32];
+        self.nonce_source.fill_nonce(&mut nonce)?;
+        if nonce.iter().all(|byte| *byte == 0) {
+            return Err(NvCounterError::InvalidSession);
+        }
+        let handle = start_policy_session(&mut self.transport, nonce)?;
+        if let Err(error) = execute_policy_pcr(&mut self.transport, handle, self.policy) {
+            let _ = flush_context(&mut self.transport, handle);
+            return Err(error);
+        }
+        self.pending = Some((handle, operation));
+        Ok(unsafe { AuthorizedNvSession::from_satisfied_policy(handle) })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,6 +375,94 @@ unsafe impl<T: NvPolicySessionProvider> RecoveryJournalBackend for TpmRecoveryJo
             return Err(NvCounterError::Conflict);
         }
         Ok(advanced)
+    }
+}
+
+fn operation_for_command(command: &[u8]) -> Option<NvPolicyOperation> {
+    let code = u32::from_be_bytes(command.get(6..10)?.try_into().ok()?);
+    match code {
+        TPM_CC_NV_READ => Some(NvPolicyOperation::Read),
+        TPM_CC_NV_WRITE => Some(NvPolicyOperation::Write),
+        TPM_CC_NV_INCREMENT => Some(NvPolicyOperation::Increment),
+        _ => None,
+    }
+}
+
+fn start_policy_session<T: TpmTransport>(
+    transport: &mut T,
+    nonce: [u8; 32],
+) -> Result<u32, NvCounterError> {
+    let mut command = [0; 59];
+    command[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+    command[2..6].copy_from_slice(&59u32.to_be_bytes());
+    command[6..10].copy_from_slice(&TPM_CC_START_AUTH_SESSION.to_be_bytes());
+    command[10..14].copy_from_slice(&TPM_RH_NULL.to_be_bytes());
+    command[14..18].copy_from_slice(&TPM_RH_NULL.to_be_bytes());
+    command[18..20].copy_from_slice(&32u16.to_be_bytes());
+    command[20..52].copy_from_slice(&nonce);
+    command[54] = TPM_SE_POLICY;
+    command[55..57].copy_from_slice(&TPM_ALG_NULL.to_be_bytes());
+    command[57..59].copy_from_slice(&TPM_ALG_SHA256.to_be_bytes());
+    let mut response = [0; 64];
+    let length = transport.submit(&command, &mut response)?;
+    let (tag, _) = response_header(&response[..length])?;
+    if tag != TPM_ST_NO_SESSIONS || length != 48 {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    let handle = u32::from_be_bytes(response[10..14].try_into().unwrap());
+    if !(0x0300_0000..=0x03ff_ffff).contains(&handle) {
+        return Err(NvCounterError::MalformedResponse);
+    }
+    if u16::from_be_bytes(response[14..16].try_into().unwrap()) != 32
+        || response[16..48].iter().all(|byte| *byte == 0)
+    {
+        let _ = flush_context(transport, handle);
+        return Err(NvCounterError::MalformedResponse);
+    }
+    Ok(handle)
+}
+
+fn execute_policy_pcr<T: TpmTransport>(
+    transport: &mut T,
+    session: u32,
+    policy: PcrPolicy,
+) -> Result<(), NvCounterError> {
+    if !(0x0300_0000..=0x03ff_ffff).contains(&session) {
+        return Err(NvCounterError::InvalidSession);
+    }
+    let mut command = [0; 58];
+    command[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+    command[2..6].copy_from_slice(&58u32.to_be_bytes());
+    command[6..10].copy_from_slice(&TPM_CC_POLICY_PCR.to_be_bytes());
+    command[10..14].copy_from_slice(&session.to_be_bytes());
+    command[14..16].copy_from_slice(&32u16.to_be_bytes());
+    command[16..48].copy_from_slice(&policy.expected_pcr_digest);
+    command[48..52].copy_from_slice(&1u32.to_be_bytes());
+    command[52..54].copy_from_slice(&TPM_ALG_SHA256.to_be_bytes());
+    command[54] = 3;
+    command[55..58].copy_from_slice(&policy.pcr_select);
+    let mut response = [0; 32];
+    let length = transport.submit(&command, &mut response)?;
+    parse_empty_no_sessions(&response[..length])
+}
+
+fn flush_context<T: TpmTransport>(transport: &mut T, handle: u32) -> Result<(), NvCounterError> {
+    let mut command = [0; 14];
+    command[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+    command[2..6].copy_from_slice(&14u32.to_be_bytes());
+    command[6..10].copy_from_slice(&TPM_CC_FLUSH_CONTEXT.to_be_bytes());
+    command[10..14].copy_from_slice(&handle.to_be_bytes());
+    let mut response = [0; 32];
+    let length = transport.submit(&command, &mut response)?;
+    parse_empty_no_sessions(&response[..length])
+}
+
+fn parse_empty_no_sessions(response: &[u8]) -> Result<(), NvCounterError> {
+    let (tag, _) = response_header(response)?;
+    if tag == TPM_ST_NO_SESSIONS && response.len() == 10 {
+        Ok(())
+    } else {
+        Err(NvCounterError::MalformedResponse)
     }
 }
 
@@ -1008,5 +1204,158 @@ mod tests {
             parse_policy_response(&malformed),
             Err(NvCounterError::MalformedResponse)
         );
+    }
+
+    struct Nonce {
+        value: [u8; 32],
+    }
+
+    impl TpmNonceSource for Nonce {
+        fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError> {
+            *output = self.value;
+            Ok(())
+        }
+    }
+
+    struct PolicyTpm {
+        policy_error: bool,
+        malformed_start: bool,
+        flushes: usize,
+        policy_calls: usize,
+    }
+
+    impl TpmTransport for PolicyTpm {
+        fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
+            let code = u32::from_be_bytes(command[6..10].try_into().unwrap());
+            match code {
+                TPM_CC_START_AUTH_SESSION => {
+                    assert_eq!(command.len(), 59);
+                    assert_eq!(&command[10..18], &[0x40, 0, 0, 7, 0x40, 0, 0, 7]);
+                    assert_eq!(u16::from_be_bytes(command[18..20].try_into().unwrap()), 32);
+                    response[..48].fill(0);
+                    response[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+                    response[2..6].copy_from_slice(&48u32.to_be_bytes());
+                    response[10..14].copy_from_slice(&0x0300_0010u32.to_be_bytes());
+                    response[14..16].copy_from_slice(&32u16.to_be_bytes());
+                    response[16..48].fill(0x44);
+                    if self.malformed_start {
+                        response[14..16].copy_from_slice(&31u16.to_be_bytes());
+                    }
+                    Ok(48)
+                }
+                TPM_CC_POLICY_PCR => {
+                    self.policy_calls += 1;
+                    assert_eq!(command.len(), 58);
+                    assert_eq!(command[54], 3);
+                    if self.policy_error {
+                        return Err(NvCounterError::Transport);
+                    }
+                    response[..10].fill(0);
+                    response[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+                    response[2..6].copy_from_slice(&10u32.to_be_bytes());
+                    Ok(10)
+                }
+                TPM_CC_FLUSH_CONTEXT => {
+                    self.flushes += 1;
+                    response[..10].fill(0);
+                    response[..2].copy_from_slice(&TPM_ST_NO_SESSIONS.to_be_bytes());
+                    response[2..6].copy_from_slice(&10u32.to_be_bytes());
+                    Ok(10)
+                }
+                TPM_CC_NV_INCREMENT => Ok(policy_response(response, &[])),
+                _ => Err(NvCounterError::Transport),
+            }
+        }
+    }
+
+    fn pcr_policy() -> PcrPolicy {
+        PcrPolicy::new([0x33; 32], [0x55; 32], [1, 0, 0]).unwrap()
+    }
+
+    fn policy_name() -> [u8; 34] {
+        let mut name = [0x0b; 34];
+        name[..2].copy_from_slice(&TPM_ALG_SHA256.to_be_bytes());
+        name
+    }
+
+    #[test]
+    fn pcr_provider_issues_one_fresh_session_for_exact_next_operation() {
+        let tpm = PolicyTpm {
+            policy_error: false,
+            malformed_start: false,
+            flushes: 0,
+            policy_calls: 0,
+        };
+        let mut provider =
+            PcrPolicySessionTransport::new(tpm, Nonce { value: [0x22; 32] }, pcr_policy());
+        let name = policy_name();
+        let session = provider
+            .authorize_nv(name, [0x33; 32], NvPolicyOperation::Increment)
+            .unwrap();
+        assert!(matches!(
+            provider.authorize_nv(name, [0x33; 32], NvPolicyOperation::Increment),
+            Err(NvCounterError::InvalidSession)
+        ));
+        assert_eq!(
+            policy_increment(&mut provider, 0x0180_0010, session),
+            Ok(())
+        );
+        let (tpm, _) = provider.into_parts();
+        assert_eq!(tpm.policy_calls, 1);
+        assert_eq!(tpm.flushes, 0);
+    }
+
+    #[test]
+    fn pcr_provider_rejects_bad_entropy_policy_and_command_use() {
+        let tpm = PolicyTpm {
+            policy_error: false,
+            malformed_start: false,
+            flushes: 0,
+            policy_calls: 0,
+        };
+        let mut provider =
+            PcrPolicySessionTransport::new(tpm, Nonce { value: [0; 32] }, pcr_policy());
+        assert!(matches!(
+            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
+            Err(NvCounterError::InvalidSession)
+        ));
+
+        provider.nonce_source.value = [1; 32];
+        let session = provider
+            .authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read)
+            .unwrap();
+        assert_eq!(
+            policy_increment(&mut provider, 0x0180_0010, session),
+            Err(NvCounterError::InvalidSession)
+        );
+        assert_eq!(provider.transport.flushes, 1);
+
+        provider.transport.policy_error = true;
+        assert!(matches!(
+            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
+            Err(NvCounterError::Transport)
+        ));
+        assert_eq!(provider.transport.flushes, 2);
+    }
+
+    #[test]
+    fn pcr_provider_rejects_malformed_start_response_and_recipe() {
+        assert_eq!(
+            PcrPolicy::new([0; 32], [1; 32], [1, 0, 0]),
+            Err(NvCounterError::InvalidSession)
+        );
+        let tpm = PolicyTpm {
+            policy_error: false,
+            malformed_start: true,
+            flushes: 0,
+            policy_calls: 0,
+        };
+        let mut provider =
+            PcrPolicySessionTransport::new(tpm, Nonce { value: [1; 32] }, pcr_policy());
+        assert!(matches!(
+            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
+            Err(NvCounterError::MalformedResponse)
+        ));
+        assert_eq!(provider.transport.flushes, 1);
     }
 }

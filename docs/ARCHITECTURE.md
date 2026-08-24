@@ -463,8 +463,8 @@ only publication point. Failed pre-advance writes leave the old slot selected,
 while a committed-but-uncertain advance is observed as new state and conflicts
 with an old retry. The unsafe backend must still provide fixed owner-provisioned
 slot identities, authenticated exact I/O, durable verification, and a
-power-loss-atomic counter. No TPM policy-bound implementation or physical
-power-cut evidence exists yet. The UEFI TPM parser now admits a recovery layout
+power-loss-atomic counter. No linked firmware integration or physical power-cut
+evidence exists yet. The UEFI TPM parser now admits a recovery layout
 only when three distinct owner-configured NV indices expose canonical public
 areas: one SHA-256-named 8-byte counter and two SHA-256-named 112-byte ordinary
 slots, all bound to the exact same nonzero 32-byte policy digest. Only the exact
@@ -475,12 +475,16 @@ validates provisioning identity before use. A TPM journal adapter now composes
 those verified identities with the backend-neutral journal. Every exact read,
 full-slot write, or counter increment consumes a fresh one-use policy session
 issued by an unsafe owner-policy provider for the exact TPM Name, shared policy
-digest, and operation. Commands use bounded TPM session framing; responses must
+digest, and operation. A concrete provider now starts a fresh unsalted,
+unbound SHA-256 policy session from caller entropy, executes one exact
+owner-configured `PolicyPCR` recipe, and permits only the requested next NV
+operation. Mismatch and policy failure trigger best-effort session cleanup.
+Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
-incorrect `NV_Write` command code was corrected to `NV_Increment`. Actual policy-
-session establishment, owner provisioning/recovery, linked firmware execution,
+incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
+provisioning/recovery, linked firmware execution,
 journal composition, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
@@ -495,9 +499,8 @@ generation. The configuration recovery validator can include that plan before
 monotonic commit; only the committed-authority wrapper can consume it into a
 released configuration, authority table, and running service. Epoch mismatch or
 stale supervisor state releases no recovered system. This is typed in-memory
-boot orchestration, not a real reboot path. No TPM NV or equivalent power-loss-
-atomic backend has been
-implemented or physically tested. The platform owner-policy authenticator/UI
+boot orchestration, not a real reboot path. The TPM NV protocol backend has not
+been linked into firmware, provisioned, or physically tested. The platform owner-policy authenticator/UI
 and complete boot orchestration are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to

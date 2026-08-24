@@ -2312,6 +2312,17 @@ interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
 
+# 2026-08-24 — TPM PolicyPCR recovery-session establishment
+
+**Result: NOT_TRIGGERED.** The change conventionally encodes standard TPM
+`StartAuthSession`, `PolicyPCR`, and `FlushContext` commands to establish a
+one-use SHA-256 owner-configured policy session for the existing recovery
+journal adapter. It adds no attestation, compatibility transport, host-share
+protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other
+patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`; this
+agent review does not replace independent human dual review.
+
 # 2026-08-24 — Non-escaping call-argument reborrows
 
 **Result: NOT_TRIGGERED.** The compiler conventionally applies a resolved

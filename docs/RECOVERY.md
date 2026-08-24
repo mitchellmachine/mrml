@@ -327,8 +327,12 @@ explicitly and downgrade the status rather than guessing.
   Response parameters and authorization framing are exact; writes are read-
   verified and increments recheck predecessor and successor. Hosted tests reject
   forged session handles, malformed response authorization, readback mismatch,
-  and stale expected counters. This does not establish the policy sessions,
-  provision indices, execute linked firmware, compose a real journal instance,
+  and stale expected counters. A concrete provider now creates a fresh SHA-256
+  policy session from explicit nonzero caller entropy, executes the exact
+  configured `PolicyPCR` selection/digest, binds it to one requested next NV
+  operation, and best-effort flushes mismatched or failed sessions. This does
+  not provision indices or the policy recipe, execute linked firmware, compose
+  a real journal instance,
   or provide physical evidence. No complete TPM backend is claimed. Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator

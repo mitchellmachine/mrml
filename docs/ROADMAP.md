@@ -632,8 +632,8 @@ authority; unrelated domains continue.
    the inactive successor must be durably written and verified before one exact
    serialized counter advance. Tests inject every protocol boundary, including
    a committed-but-uncertain increment, and never search or silently select an
-   older slot. A policy-authorized TPM NV adapter, provisioning/recovery path,
-   and physical power-cut validation remain pending, so Phase 6 item 1 is not
+   older slot. Firmware integration, owner provisioning/recovery, and physical
+   power-cut validation remain pending, so Phase 6 item 1 is not
    complete.
    Its UEFI provisioning-admission prerequisite is now implemented: one bounded
    parser recomputes SHA-256 TPM Names over complete NV public areas and admits
@@ -647,12 +647,17 @@ authority; unrelated domains continue.
    from an unsafe provider bound to exact Name, policy digest, and operation.
    Exact response framing is enforced, writes are read-verified, and increments
    recheck predecessor and successor. The pre-existing rollback helper's command
-   code was corrected from `NV_Write` to the actual `NV_Increment`. Owner-policy
-   session establishment, actual provisioning/recovery, linked UEFI execution,
+   code was corrected from `NV_Write` to the actual `NV_Increment`. A concrete
+   provider now starts a fresh unsalted, unbound SHA-256 policy session from
+   explicit nonzero caller entropy, executes one exact owner-configured
+   `PolicyPCR` recipe, and permits only the requested next NV operation;
+   mismatch and policy failure trigger best-effort cleanup. Actual owner-policy
+   provisioning/recovery, linked UEFI execution,
    complete journal composition, and physical testing remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 10 `mrml-uefi` library tests, all 115 storage tests, and strict
-   crate-local Clippy. An
+   each pass all 13 `mrml-uefi` library tests, all 115 storage tests, and strict
+   crate-local Clippy. Windows workspace-dependency Clippy remains blocked by
+   unrelated existing `mrml-runtime` lints. An
    `x86_64-unknown-uefi` image check was attempted but failed in unrelated
    existing `mrml-runtime` target-cfg code before checking the loader; therefore
    this milestone has no linked UEFI-image or firmware execution evidence.
