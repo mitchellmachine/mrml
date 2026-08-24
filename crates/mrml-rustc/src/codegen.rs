@@ -10,6 +10,8 @@ const X86_64_RETURN_CONSTANT_BYTES: usize = 11;
 const MAX_X86_64_ABI_PARAMETERS: usize = 16;
 const MAX_RUNTIME_LOCAL_FACTS: usize = 256;
 const MAX_RUNTIME_PLACE_ACCESS_FACTS: usize = 256;
+const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
+const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
 const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,8 +79,11 @@ pub enum CodegenErrorKind {
     TooManyRuntimeLocals,
     TooManyRuntimeLocalFacts,
     TooManyRuntimePlaceAccessFacts,
+    TooManyRuntimeBasicBlockFacts,
+    TooManyRuntimeControlFlowEdgeFacts,
     TooManyRuntimePlaceProjections,
     InvalidRuntimePlaceFacts,
+    InvalidRuntimeControlFlowFacts,
     DuplicateLocal,
     ImmutableAssignment,
 }
@@ -2126,6 +2131,37 @@ struct RuntimePlaceAccessFact {
     span: Span,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeBasicBlockId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeBasicBlockFact {
+    id: RuntimeBasicBlockId,
+    first_statement: usize,
+    statement_count: usize,
+    reachable: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeControlFlowTarget {
+    Block(RuntimeBasicBlockId),
+    Return,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeControlFlowEdgeKind {
+    Unconditional,
+    True,
+    False,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeControlFlowEdgeFact {
+    from: RuntimeBasicBlockId,
+    target: RuntimeControlFlowTarget,
+    kind: RuntimeControlFlowEdgeKind,
+}
+
 struct RuntimeBodyFacts<'source> {
     locals: [Option<RuntimeLocalFact<'source>>; MAX_RUNTIME_LOCAL_FACTS],
     local_count: usize,
@@ -2135,6 +2171,11 @@ struct RuntimeBodyFacts<'source> {
     assignment_read_count: usize,
     accesses: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
     access_count: usize,
+    basic_blocks: [Option<RuntimeBasicBlockFact>; MAX_RUNTIME_BASIC_BLOCK_FACTS],
+    basic_block_count: usize,
+    control_flow_edges: [Option<RuntimeControlFlowEdgeFact>; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
+    control_flow_edge_count: usize,
+    control_flow_complete: bool,
 }
 
 impl<'source> RuntimeBodyFacts<'source> {
@@ -2147,6 +2188,11 @@ impl<'source> RuntimeBodyFacts<'source> {
         assignment_read_count: 0,
         accesses: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
         access_count: 0,
+        basic_blocks: [None; MAX_RUNTIME_BASIC_BLOCK_FACTS],
+        basic_block_count: 0,
+        control_flow_edges: [None; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
+        control_flow_edge_count: 0,
+        control_flow_complete: false,
     };
 
     fn push_local(
@@ -2195,6 +2241,52 @@ impl<'source> RuntimeBodyFacts<'source> {
             .ok_or(CodegenErrorKind::TooManyRuntimePlaceAccessFacts)?;
         *slot = Some(fact);
         self.assignment_read_count += 1;
+        Ok(())
+    }
+
+    fn push_basic_block(
+        &mut self,
+        first_statement: usize,
+        reachable: bool,
+    ) -> Result<RuntimeBasicBlockId, CodegenErrorKind> {
+        let slot = self
+            .basic_blocks
+            .get_mut(self.basic_block_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeBasicBlockFacts)?;
+        let id = RuntimeBasicBlockId(self.basic_block_count);
+        *slot = Some(RuntimeBasicBlockFact {
+            id,
+            first_statement,
+            statement_count: 0,
+            reachable,
+        });
+        self.basic_block_count += 1;
+        Ok(id)
+    }
+
+    fn extend_basic_block(&mut self, id: RuntimeBasicBlockId) -> Result<(), CodegenErrorKind> {
+        let fact = self
+            .basic_blocks
+            .get_mut(id.0)
+            .and_then(Option::as_mut)
+            .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        fact.statement_count = fact
+            .statement_count
+            .checked_add(1)
+            .ok_or(CodegenErrorKind::TooManyRuntimeBasicBlockFacts)?;
+        Ok(())
+    }
+
+    fn push_control_flow_edge(
+        &mut self,
+        edge: RuntimeControlFlowEdgeFact,
+    ) -> Result<(), CodegenErrorKind> {
+        let slot = self
+            .control_flow_edges
+            .get_mut(self.control_flow_edge_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts)?;
+        *slot = Some(edge);
+        self.control_flow_edge_count += 1;
         Ok(())
     }
 }
@@ -5149,6 +5241,70 @@ fn preanalyze_runtime_top_level_statement<
     Ok(())
 }
 
+fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
+    body: &crate::FunctionBody<'source, MAX_PARAMETERS>,
+    facts: &mut RuntimeBodyFacts<'source>,
+) -> Result<(), CodegenErrorKind> {
+    if body.statements().iter().flatten().any(|statement| {
+        matches!(
+            statement,
+            crate::BodyStatement::Loop(_)
+                | crate::BodyStatement::ConditionalAssignment(_)
+                | crate::BodyStatement::ConditionalReturnElse(_)
+        )
+    }) {
+        return Ok(());
+    }
+
+    let mut current = facts.push_basic_block(0, true)?;
+    let mut current_reachable = true;
+    let mut terminated = false;
+    let statement_count = body.statement_count();
+    for (statement_index, statement) in body.statements().iter().flatten().enumerate() {
+        facts.extend_basic_block(current)?;
+        match statement {
+            crate::BodyStatement::ConditionalReturn(_) => {
+                let next = facts.push_basic_block(statement_index + 1, current_reachable)?;
+                facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: current,
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::True,
+                })?;
+                facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: current,
+                    target: RuntimeControlFlowTarget::Block(next),
+                    kind: RuntimeControlFlowEdgeKind::False,
+                })?;
+                current = next;
+                terminated = false;
+            }
+            crate::BodyStatement::Return(_) => {
+                facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: current,
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                })?;
+                terminated = true;
+                if statement_index + 1 < statement_count {
+                    current = facts.push_basic_block(statement_index + 1, false)?;
+                    current_reachable = false;
+                    terminated = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    if !terminated {
+        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+            from: current,
+            target: RuntimeControlFlowTarget::Return,
+            kind: RuntimeControlFlowEdgeKind::Unconditional,
+        })?;
+    }
+    facts.control_flow_complete = true;
+    Ok(())
+}
+
 fn preanalyze_runtime_body_declarations<
     'source,
     R: ConstantResolver,
@@ -5227,6 +5383,10 @@ fn preanalyze_runtime_body_declarations<
             body_start,
         )?;
     }
+    preanalyze_runtime_body_control_flow(body, facts).map_err(|kind| CodegenError {
+        kind,
+        span: body.tail_span,
+    })?;
     Ok(facts.local_count)
 }
 
@@ -20639,6 +20799,119 @@ mod tests {
         assert_eq!(
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+    }
+
+    #[test]
+    fn runtime_body_facts_build_initial_conditional_return_cfg() {
+        let source = "fn value(input: usize, stop: bool) -> usize { let first = input + 1; if stop { return first; } let second = first + 1; second }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 2);
+        assert_eq!(
+            facts.basic_blocks[..2],
+            [
+                Some(RuntimeBasicBlockFact {
+                    id: RuntimeBasicBlockId(0),
+                    first_statement: 0,
+                    statement_count: 2,
+                    reachable: true,
+                }),
+                Some(RuntimeBasicBlockFact {
+                    id: RuntimeBasicBlockId(1),
+                    first_statement: 2,
+                    statement_count: 1,
+                    reachable: true,
+                }),
+            ]
+        );
+        assert_eq!(facts.control_flow_edge_count, 3);
+        assert_eq!(
+            facts.control_flow_edges[..3],
+            [
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(0),
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::True,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(0),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(1)),
+                    kind: RuntimeControlFlowEdgeKind::False,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(1),
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_body_cfg_fails_closed_and_bounds_fact_capacity() {
+        let source = "fn value(input: usize) -> usize { while input != 0 {} input }";
+        let module = Parser::new(source).parse_module::<1, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 2, 16>(
+            &function,
+            &NoConstants,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        assert!(!facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 0);
+        assert_eq!(facts.control_flow_edge_count, 0);
+
+        let mut capacity = RuntimeBodyFacts::EMPTY;
+        for index in 0..MAX_RUNTIME_BASIC_BLOCK_FACTS {
+            assert_eq!(
+                capacity.push_basic_block(index, true),
+                Ok(RuntimeBasicBlockId(index))
+            );
+        }
+        assert_eq!(
+            capacity.push_basic_block(MAX_RUNTIME_BASIC_BLOCK_FACTS, true),
+            Err(CodegenErrorKind::TooManyRuntimeBasicBlockFacts)
+        );
+        for _ in 0..MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS {
+            capacity
+                .push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(0),
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            capacity.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(0),
+                target: RuntimeControlFlowTarget::Return,
+                kind: RuntimeControlFlowEdgeKind::Unconditional,
+            }),
+            Err(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts)
         );
     }
 
