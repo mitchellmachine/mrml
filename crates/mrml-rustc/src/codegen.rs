@@ -10,6 +10,8 @@ const X86_64_RETURN_CONSTANT_BYTES: usize = 11;
 const MAX_X86_64_ABI_PARAMETERS: usize = 16;
 const MAX_RUNTIME_LOCAL_FACTS: usize = 256;
 const MAX_RUNTIME_PLACE_ACCESS_FACTS: usize = 256;
+const MAX_RUNTIME_MOVE_PATH_FACTS: usize = 512;
+const MAX_RUNTIME_INITIALIZATION_FACTS: usize = 512;
 const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
 const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
 const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
@@ -79,6 +81,8 @@ pub enum CodegenErrorKind {
     TooManyRuntimeLocals,
     TooManyRuntimeLocalFacts,
     TooManyRuntimePlaceAccessFacts,
+    TooManyRuntimeMovePathFacts,
+    TooManyRuntimeInitializationFacts,
     TooManyRuntimeBasicBlockFacts,
     TooManyRuntimeControlFlowEdgeFacts,
     TooManyRuntimePlaceProjections,
@@ -2132,6 +2136,31 @@ struct RuntimePlaceAccessFact {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeMovePathId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeMovePathFact {
+    id: RuntimeMovePathId,
+    parent: Option<RuntimeMovePathId>,
+    base: RuntimePlaceIdentity,
+    projections: RuntimePlaceProjections,
+    ty: RuntimeExpressionType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeInitializationOrigin {
+    Parameter,
+    LocalDeclaration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeInitializationFact {
+    path: RuntimeMovePathId,
+    origin: RuntimeInitializationOrigin,
+    span: Option<Span>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeBasicBlockId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2229,6 +2258,10 @@ struct RuntimeBodyFacts<'source> {
     assignment_read_count: usize,
     accesses: [Option<RuntimePlaceAccessFact>; MAX_RUNTIME_PLACE_ACCESS_FACTS],
     access_count: usize,
+    move_paths: [Option<RuntimeMovePathFact>; MAX_RUNTIME_MOVE_PATH_FACTS],
+    move_path_count: usize,
+    initializations: [Option<RuntimeInitializationFact>; MAX_RUNTIME_INITIALIZATION_FACTS],
+    initialization_count: usize,
     basic_blocks: [Option<RuntimeBasicBlockFact>; MAX_RUNTIME_BASIC_BLOCK_FACTS],
     basic_block_count: usize,
     control_flow_edges: [Option<RuntimeControlFlowEdgeFact>; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2246,6 +2279,10 @@ impl<'source> RuntimeBodyFacts<'source> {
         assignment_read_count: 0,
         accesses: [None; MAX_RUNTIME_PLACE_ACCESS_FACTS],
         access_count: 0,
+        move_paths: [None; MAX_RUNTIME_MOVE_PATH_FACTS],
+        move_path_count: 0,
+        initializations: [None; MAX_RUNTIME_INITIALIZATION_FACTS],
+        initialization_count: 0,
         basic_blocks: [None; MAX_RUNTIME_BASIC_BLOCK_FACTS],
         basic_block_count: 0,
         control_flow_edges: [None; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2264,7 +2301,16 @@ impl<'source> RuntimeBodyFacts<'source> {
             .locals
             .get_mut(self.local_count)
             .ok_or(CodegenErrorKind::TooManyRuntimeLocalFacts)?;
+        let move_path_slot = self
+            .move_paths
+            .get_mut(self.move_path_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeMovePathFacts)?;
+        let initialization_slot = self
+            .initializations
+            .get_mut(self.initialization_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeInitializationFacts)?;
         let id = RuntimeLocalId(self.local_count);
+        let path = RuntimeMovePathId(self.move_path_count);
         *slot = Some(RuntimeLocalFact {
             id,
             name,
@@ -2272,8 +2318,54 @@ impl<'source> RuntimeBodyFacts<'source> {
             mutable,
             declaration_span,
         });
+        *move_path_slot = Some(RuntimeMovePathFact {
+            id: path,
+            parent: None,
+            base: RuntimePlaceIdentity::Local(id),
+            projections: RuntimePlaceProjections::EMPTY,
+            ty,
+        });
+        *initialization_slot = Some(RuntimeInitializationFact {
+            path,
+            origin: RuntimeInitializationOrigin::LocalDeclaration,
+            span: declaration_span,
+        });
         self.local_count += 1;
+        self.move_path_count += 1;
+        self.initialization_count += 1;
         Ok(id)
+    }
+
+    fn push_initialized_parameter(
+        &mut self,
+        index: usize,
+        ty: RuntimeExpressionType,
+        span: Option<Span>,
+    ) -> Result<(), CodegenErrorKind> {
+        let move_path_slot = self
+            .move_paths
+            .get_mut(self.move_path_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeMovePathFacts)?;
+        let initialization_slot = self
+            .initializations
+            .get_mut(self.initialization_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeInitializationFacts)?;
+        let path = RuntimeMovePathId(self.move_path_count);
+        *move_path_slot = Some(RuntimeMovePathFact {
+            id: path,
+            parent: None,
+            base: RuntimePlaceIdentity::Parameter(index),
+            projections: RuntimePlaceProjections::EMPTY,
+            ty,
+        });
+        *initialization_slot = Some(RuntimeInitializationFact {
+            path,
+            origin: RuntimeInitializationOrigin::Parameter,
+            span,
+        });
+        self.move_path_count += 1;
+        self.initialization_count += 1;
+        Ok(())
     }
 
     fn push_assignment_access(
@@ -6508,6 +6600,21 @@ fn preanalyze_runtime_body_declarations<
     body_start: usize,
     facts: &mut RuntimeBodyFacts<'source>,
 ) -> Result<usize, CodegenError> {
+    for (index, parameter) in function.parameters().iter().enumerate() {
+        let Some(parameter) = parameter else {
+            continue;
+        };
+        let ty = runtime_type_from_text(parameter.ty.text).ok_or(CodegenError {
+            kind: CodegenErrorKind::UnsupportedParameterType,
+            span: parameter.ty.span,
+        })?;
+        facts
+            .push_initialized_parameter(index, ty, Some(parameter.span))
+            .map_err(|kind| CodegenError {
+                kind,
+                span: parameter.span,
+            })?;
+    }
     let mut locals: [Option<RuntimeLocal<'source>>; MAX_PARAMETERS] = [None; MAX_PARAMETERS];
     let mut local_count = 0usize;
     let mut saw_loop = false;
@@ -12357,6 +12464,79 @@ impl<
                     .is_some_and(|span| span.end < span.start)
             {
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+        }
+        let parameter_count = self.function.parameters().iter().flatten().count();
+        let required_move_path_count = parameter_count
+            .checked_add(self.body_facts.local_count)
+            .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+        if self.body_facts.move_path_count != required_move_path_count
+            || self.body_facts.move_path_count != self.body_facts.initialization_count
+            || self.body_facts.move_paths[..self.body_facts.move_path_count]
+                .iter()
+                .any(Option::is_none)
+            || self.body_facts.initializations[..self.body_facts.initialization_count]
+                .iter()
+                .any(Option::is_none)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        for index in 0..self.body_facts.move_path_count {
+            let path = self.body_facts.move_paths[index]
+                .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+            let initialization = self.body_facts.initializations[index]
+                .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+            let expected_base = if index < parameter_count {
+                RuntimePlaceIdentity::Parameter(index)
+            } else {
+                RuntimePlaceIdentity::Local(RuntimeLocalId(index - parameter_count))
+            };
+            if path.id != RuntimeMovePathId(index)
+                || path.parent.is_some()
+                || path.base != expected_base
+                || path.projections != RuntimePlaceProjections::EMPTY
+                || initialization.path != path.id
+                || initialization
+                    .span
+                    .is_some_and(|span| span.end < span.start)
+            {
+                return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+            match (path.base, initialization.origin) {
+                (
+                    RuntimePlaceIdentity::Local(id),
+                    RuntimeInitializationOrigin::LocalDeclaration,
+                ) => {
+                    let local = self
+                        .body_facts
+                        .locals
+                        .get(id.0)
+                        .and_then(|fact| *fact)
+                        .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+                    if local.id != id
+                        || local.ty != path.ty
+                        || local.declaration_span != initialization.span
+                    {
+                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                    }
+                }
+                (
+                    RuntimePlaceIdentity::Parameter(parameter),
+                    RuntimeInitializationOrigin::Parameter,
+                ) => {
+                    let parameter = self
+                        .function
+                        .parameters()
+                        .get(parameter)
+                        .and_then(|parameter| *parameter)
+                        .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+                    if runtime_type_from_text(parameter.ty.text) != Some(path.ty)
+                        || initialization.span != Some(parameter.span)
+                    {
+                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                    }
+                }
+                _ => return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts)),
             }
         }
         if self.body_facts.assignment_accesses[..self.body_facts.assignment_access_count]
@@ -21624,6 +21804,13 @@ mod tests {
         };
         let resolver = NoConstants;
         let mut body_facts = RuntimeBodyFacts::EMPTY;
+        body_facts
+            .push_initialized_parameter(
+                0,
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                Some(function.parameters()[0].unwrap().span),
+            )
+            .unwrap();
         let mut emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
@@ -21949,6 +22136,37 @@ mod tests {
             })
         );
         assert_eq!(facts.access_count, 0);
+        assert_eq!(facts.move_path_count, 3);
+        assert_eq!(facts.initialization_count, 3);
+        assert_eq!(
+            facts.move_paths[0],
+            Some(RuntimeMovePathFact {
+                id: RuntimeMovePathId(0),
+                parent: None,
+                base: RuntimePlaceIdentity::Parameter(0),
+                projections: RuntimePlaceProjections::EMPTY,
+                ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+            })
+        );
+        for (index, local) in [RuntimeLocalId(0), RuntimeLocalId(1)].iter().enumerate() {
+            let path_index = index + 1;
+            assert_eq!(
+                facts.move_paths[path_index].unwrap().base,
+                RuntimePlaceIdentity::Local(*local)
+            );
+            assert_eq!(
+                facts.initializations[path_index].unwrap().origin,
+                RuntimeInitializationOrigin::LocalDeclaration
+            );
+        }
+        assert_eq!(
+            facts.initializations[0],
+            Some(RuntimeInitializationFact {
+                path: RuntimeMovePathId(0),
+                origin: RuntimeInitializationOrigin::Parameter,
+                span: Some(function.parameters()[0].unwrap().span),
+            })
+        );
 
         let mut emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
@@ -21989,6 +22207,106 @@ mod tests {
         assert_eq!(
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+    }
+
+    #[test]
+    fn runtime_move_path_foundation_fails_closed_on_corruption_and_capacity() {
+        let source = "fn value(input: u16) -> u16 { input }";
+        let module = Parser::new(source).parse_module::<1, 1>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<1>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let local_count = preanalyze_runtime_body_declarations::<_, 1, 8>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        let assignment_access_count = facts.assignment_access_count;
+        let assignment_read_count = facts.assignment_read_count;
+        let emitter = RuntimeEmitter::<_, 64, 1> {
+            bytes: [0; 64],
+            length: 0,
+            trap_patches: [0; 64],
+            trap_count: 0,
+            function: &function,
+            resolver: &NoConstants,
+            abi: X86_64Abi::SystemV,
+            width: runtime_width("u16").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 1,
+            locals: [None; 1],
+            saved_locals: 0,
+            body_facts: &mut facts,
+            preanalyzed_local_count: local_count,
+            preanalyzed_local_cursor: local_count,
+            preanalyzed_assignment_access_cursor: assignment_access_count,
+            preanalyzed_assignment_read_cursor: assignment_read_count,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        emitter.validate_runtime_place_facts().unwrap();
+
+        let valid_path = emitter.body_facts.move_paths[0].unwrap();
+        emitter.body_facts.move_paths[0] = Some(RuntimeMovePathFact {
+            parent: Some(RuntimeMovePathId(0)),
+            ..valid_path
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.move_paths[0] = Some(valid_path);
+
+        let valid_initialization = emitter.body_facts.initializations[0].unwrap();
+        emitter.body_facts.initializations[0] = Some(RuntimeInitializationFact {
+            origin: RuntimeInitializationOrigin::LocalDeclaration,
+            ..valid_initialization
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.initializations[0] = Some(valid_initialization);
+        emitter.body_facts.move_path_count = 0;
+        emitter.body_facts.initialization_count = 0;
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+
+        let mut capacity = RuntimeBodyFacts::EMPTY;
+        capacity.move_path_count = MAX_RUNTIME_MOVE_PATH_FACTS;
+        assert_eq!(
+            capacity
+                .push_initialized_parameter(
+                    0,
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                    None,
+                )
+                .unwrap_err(),
+            CodegenErrorKind::TooManyRuntimeMovePathFacts
+        );
+        capacity.move_path_count = 0;
+        capacity.initialization_count = MAX_RUNTIME_INITIALIZATION_FACTS;
+        assert_eq!(
+            capacity
+                .push_initialized_parameter(
+                    0,
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                    None,
+                )
+                .unwrap_err(),
+            CodegenErrorKind::TooManyRuntimeInitializationFacts
         );
     }
 
@@ -24831,6 +25149,13 @@ mod tests {
         };
         let resolver = NoConstants;
         let mut body_facts = RuntimeBodyFacts::EMPTY;
+        body_facts
+            .push_initialized_parameter(
+                0,
+                runtime_reference_type("&u64").unwrap(),
+                Some(function.parameters()[0].unwrap().span),
+            )
+            .unwrap();
         let mut emitter = RuntimeEmitter::<_, 64, 2> {
             bytes: [0; 64],
             length: 0,
