@@ -547,9 +547,13 @@ authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. The loader
 now links as an optimized native `x86_64-unknown-uefi` image with the recovery
-path and without `mrml-runtime` in its firmware dependency graph. Owner-policy
-provisioning/recovery, native UEFI execution, and physical evidence remain
-pending. A consumed dependent-
+path and without `mrml-runtime` in its firmware dependency graph. A fresh
+QEMU/OVMF nested-KVM boot of pinned, independently signed kernel and service
+artifacts produced the exact trace `a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3 d0 d1
+d2 d3 d4 df`, proving loader execution through kernel entry and the existing
+VMX-root lifecycle. Recovery configuration was absent because no software TPM
+was available. Owner-policy provisioning/recovery, recovery-enabled native UEFI
+execution, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

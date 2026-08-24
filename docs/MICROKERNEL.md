@@ -2290,8 +2290,15 @@ rotation, corruption, conflict, and replay paths have unit tests. The concrete
 TPM NV path now links into an optimized native `x86_64-unknown-uefi` loader;
 the direct crypto dependency excludes its unused host runtime, and
 `mrml-runtime` is absent from the firmware graph. Owner provisioning, native
-firmware execution, physical power-cut testing, and any rollback-resistance
-claim remain pending.
+recovery-enabled firmware execution, physical power-cut testing, and any
+rollback-resistance claim remain pending. A fresh QEMU/OVMF nested-KVM boot of
+pinned, independently signed kernel and service artifacts produced `a1 a2 a3
+a4 a5 a6 a7 a8 b1 b2 b3 d0 d1 d2 d3 d4 df`, proving the native loader through
+kernel entry and the existing VMX-root lifecycle. Recovery variables were not
+embedded because no software TPM was available, so the journal path did not
+execute. The ordinary signed service build used by this probe also corrected
+its shared-buffer parameter binding and excludes recovery-only imports unless
+the block-service feature is selected.
 
 Boot admission also requires a coherent signed artifact set: exactly one
 kernel, VM image, service image, CUDA kernel bundle, and launch policy from the

@@ -205,7 +205,13 @@ The recovery-enabled loader now links as an optimized native
 host-runtime default feature, and dependency inspection confirms filesystem,
 network, process, and other `mrml-runtime` host facilities are absent from the
 firmware graph. This reduces ambient code and capability surface but is linkage
-evidence only, not firmware execution or physical TPM evidence.
+evidence only, not physical TPM evidence. A fresh QEMU/OVMF nested-KVM boot of
+pinned, independently signed kernel and service artifacts subsequently reached
+the exact trace `a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3 d0 d1 d2 d3 d4 df`. This
+proves controlled loader and kernel execution, but recovery configuration was
+absent because no software TPM was available. It is not recovery-journal,
+Secure Boot, bare-metal, physical TPM, power-loss, or rollback-resistance
+evidence.
 Canonical recovery metadata crosses the loader/kernel boundary only in its own
 optional fixed-size handoff record. Both encoder and decoder require nonzero
 epoch and handle generation, zero reserved bytes, and an all-or-none nonzero

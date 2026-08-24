@@ -717,8 +717,15 @@ authority; unrelated domains continue.
    dependency now disables its unused host-runtime default feature, so the
    optimized `x86_64-unknown-uefi` loader links successfully and strict target
    Clippy passes. Dependency inspection confirms `mrml-runtime` is absent from
-   the firmware graph. This is native image linkage evidence, not firmware,
-   provisioned TPM, reboot, Secure Boot, or physical execution evidence.
+   the firmware graph. A fresh QEMU/OVMF nested-KVM boot with pinned,
+   independently signed artifacts produced `a1 a2 a3 a4 a5 a6 a7 a8 b1 b2 b3
+   d0 d1 d2 d3 d4 df`, covering loader execution through kernel entry and the
+   existing VMX-root probe. Building that ordinary signed service also exposed
+   and fixed its feature-specific shared-buffer parameter names and confined
+   recovery-only imports to the block-service feature. Recovery configuration
+   was absent because no software TPM was available. This is controlled native
+   UEFI execution, not provisioned TPM, recovery-journal execution, reboot,
+   Secure Boot, bare-metal, or physical evidence.
    A generic consumed validation transaction now keeps that rebuilt table
    private while a dependent recovery validator uses one exact reconstructed
    file handle. The configuration adapter recovers only the selected file

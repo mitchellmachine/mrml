@@ -22,9 +22,10 @@ use mrml_config::{
 use mrml_crypto::Sha3_256;
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{
-    Capability, CapabilityError, HANDOFF_RECOVERY_STATE_BYTES, ObjectId, RecoveryStateMetadata,
-    RestartPolicy, Rights, ServiceId, ServiceState,
+    Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
 };
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+use mrml_kernel::{HANDOFF_RECOVERY_STATE_BYTES, RecoveryStateMetadata};
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore,
@@ -232,8 +233,8 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
     sender: u64,
     generation: u64,
-    _shared_write: u64,
-    _shared_read: u64,
+    shared_write: u64,
+    shared_read: u64,
     restart_manager: u64,
     _recovery_capability: u64,
 ) -> ! {

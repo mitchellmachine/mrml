@@ -341,8 +341,13 @@ explicitly and downgrade the status rather than guessing.
   `x86_64-unknown-uefi` loader now links this path after disabling the unused
   host-runtime default feature on its direct crypto dependency; dependency
   inspection confirms `mrml-runtime` is absent from the firmware graph. This
-  does not provision indices or policy, execute firmware, or provide physical
-  evidence.
+  path was then executed under QEMU/OVMF nested KVM with fresh pinned,
+  independently signed kernel and service artifacts. The exact trace `a1 a2 a3
+  a4 a5 a6 a7 a8 b1 b2 b3 d0 d1 d2 d3 d4 df` proves loader execution,
+  artifact admission, handoff/page-table construction, kernel entry, and the
+  existing VMX-root lifecycle. No recovery variables were embedded because the
+  environment has no software TPM, so this does not provision indices or
+  policy, execute the recovery journal, or provide physical evidence.
   The canonical epoch, handle generation, optional volume, and root generation
   now cross into early kernel decoding through a separately flagged 40-byte
   handoff record. Exact length, reserved bytes, nonzero generations, and the

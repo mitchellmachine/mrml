@@ -1396,6 +1396,17 @@ JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
 review does not replace independent human dual review.
 
+# 2026-08-24 — Controlled native UEFI loader execution
+
+**Result: NOT_TRIGGERED.** The work fixes ordinary feature-gated parameter and
+import bindings, then executes existing signed loader/kernel mechanisms under
+QEMU/OVMF. It introduces no algorithm, authority mechanism, TPM protocol,
+attestation, compatibility transport, host-share protocol, accessibility
+device, browser semantic interface, JavaScript/WebAssembly runtime, AI
+mechanism, media mechanism, or other patent-candidate mechanism. Existing
+planned scopes remain `TRIGGERED`; this agent review does not replace
+independent human dual review.
+
 # 2026-08-24 — Access-sensitive direct-loan use
 
 **Result: NOT_TRIGGERED.** The compiler conventionally distinguishes reads from
