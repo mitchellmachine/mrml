@@ -2555,3 +2555,15 @@ protocol, host-share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Conditional loop-block call-result loan origins
+
+**Result: NOT_TRIGGERED.** The compiler conventionally walks fixed-capacity,
+parser-represented conditional loop arms with no actions and merges explicit
+return-terminal parameter origins. Invalid arm ranges, branch actions, nested
+loops, mutation, ambiguity, malformed input, and capacity failures retain
+fail-closed classification. It adds no optimization, authority model,
+compatibility protocol, host-share mechanism, accessibility or browser-semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.
