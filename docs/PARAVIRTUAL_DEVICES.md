@@ -169,6 +169,14 @@ BlockCapability {
 }
 ```
 
+**IMPLEMENTED for exact object and operation rights:** the common MRML-native
+block runners now require a live generational capability for one trusted-policy-
+selected backend object and reauthorize `READ`, `WRITE`, or `FLUSH` before each
+corresponding backend operation. Wrong-object, attenuated, stale, and revoked
+authority reaches no backend. KVM and WHP use the same wrapper. Optional bounded-
+region capability enforcement remains pending, so the complete `BLOCK`
+acceptance scenario is not yet satisfied.
+
 Sector, offset, and length are checked request data. They cannot select another
 object. Bounded-region capabilities may expose a whole disk, partition, image,
 snapshot, ephemeral volume, or capability-native object.

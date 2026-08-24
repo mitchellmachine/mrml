@@ -1925,3 +1925,15 @@ configuration on native failure, and denies mapping when no explicit adapter is
 provided. It introduces no assigned identity, native adapter, device protocol,
 new authority model, or patent-candidate mechanism. This agent review does not
 replace the required independent human dual review.
+
+# 2026-08-24 — Capability-selected MRML-native block backend
+
+**Result: NOT_TRIGGERED.** The change conventionally checks one live
+generational capability for the exact trusted-policy-selected backend object and
+the operation-specific read, write, or flush right before each existing block
+backend call. Attenuation, wrong-object, and revoked-handle denial plus preservation
+of existing backend uncertainty semantics are ordinary defensive capability
+enforcement. It introduces no VirtIO transport, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly runtime,
+media mechanism, compatibility claim, or new patent-candidate mechanism. This
+agent review does not replace the required independent human dual review.

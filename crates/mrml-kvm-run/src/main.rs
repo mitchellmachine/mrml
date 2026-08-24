@@ -237,8 +237,15 @@ fn run_block_guest_driver_probe(
     launch_layout: KvmLaunchLayout,
     layout: VirtualBlockQueueLayout,
 ) -> Result<()> {
+    let block_object = ObjectId(0x300);
     let interrupt_object = ObjectId(0x301);
-    let mut capabilities = CapabilitySpace::<1>::new();
+    let mut capabilities = CapabilitySpace::<2>::new();
+    let block_capability = capabilities
+        .insert(
+            block_object,
+            Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
+        )
+        .map_err(|_| anyhow!("failed to create block backend capability"))?;
     let interrupt_capability = capabilities
         .insert(interrupt_object, Rights::SIGNAL)
         .map_err(|_| anyhow!("failed to create block interrupt capability"))?;
@@ -276,6 +283,8 @@ fn run_block_guest_driver_probe(
             let outcome = match run_virtual_block_transaction_once(
                 &mut guest,
                 &mut storage,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -393,6 +402,8 @@ fn run_block_guest_driver_probe(
             let acknowledgement = match run_virtual_block_transaction_once(
                 &mut guest,
                 &mut storage,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,

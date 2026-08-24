@@ -364,6 +364,12 @@ explicitly and downgrade the status rather than guessing.
   freshly one-time-signed compiled KVM and WHP images now exercise the common
   guest driver against volatile two-page backends; this is controlled hosted
   evidence, not recovery or persistence evidence.
+  The common runners now wrap those volatile backends in one exact-object live
+  capability projection and independently require `READ`, `WRITE`, or `FLUSH`
+  for the corresponding operation. Wrong-object, attenuated, stale, and revoked
+  authority reaches no backend. Fresh matching signed KVM and WHP probes cover
+  this path. Optional bounded-region authority, production block I/O, physical
+  durability, and hardware evidence remain absent.
   Prepared KVM and WHP guests attach the same validated request and guest-read-
   only completion ranges transactionally; ordinary completion writes fail while
   the device-memory path can publish. Dedicated initial-launch builders also

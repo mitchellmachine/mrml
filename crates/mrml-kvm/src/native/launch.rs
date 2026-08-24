@@ -2212,8 +2212,15 @@ mod tests {
         VmBackend::read_guest(&guest, 0x60_5000, &mut marker).unwrap();
         assert_eq!(marker, [0x4d]);
 
+        let block_object = ObjectId(0x200);
         let interrupt_object = ObjectId(0x201);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, Rights::SIGNAL)
             .unwrap();
@@ -2245,6 +2252,8 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut guest,
                 &mut storage,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -2302,6 +2311,8 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut guest,
                 &mut storage,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,

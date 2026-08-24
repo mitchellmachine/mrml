@@ -671,6 +671,14 @@ reads, and compares two complete pages with distinct per-cycle patterns. Signed
 read-only descriptor data supports exact interrupt entry and return. This is
 live-verified on both hosted backends. The guest still lacks a general interrupt
 framework and unbounded progress.
+The same common runners now require a separately provisioned live block
+capability for one exact backend object and reauthorize `READ`, `WRITE`, or
+`FLUSH` for each matching operation. Focused tests prove attenuation,
+wrong-object selection, and revocation fail before backend I/O, while backend
+rejection-versus-uncertainty semantics remain unchanged. Fresh signed KVM and
+WHP controlled probes exercised the common capability-selected path. Optional
+bounded-region authority, a production backend, and physical-device evidence
+remain pending, so the complete MRML-native block gate remains partial.
 Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the

@@ -5676,6 +5676,64 @@ Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,
 optimistic transactional revision checks, bounded audit rings, and capability
 authorization.
 
+### Capability-selected MRML-native block backend
+
+The backend-neutral virtual-block runners now accept one separately provisioned
+generational capability and exact backend object. A narrow wrapper reauthorizes
+the live handle for `READ`, `WRITE`, or the newly explicit `FLUSH` right before
+calling the corresponding unsafe backend method. Device and scalar-transport
+identity, block number, length, queue data, and interrupt authority remain data
+or separately authorized mechanisms and cannot redirect the backend object.
+Capability denial is a clean rejection and reaches no backend; the existing
+backend distinction between rejected and uncertain mutation is preserved, so
+uncertainty still fails the device and poisons queue state. KVM and WHP runners
+construct the same exact-object projection. Optional bounded block-region
+authority is not implemented.
+
+Focused tests cover read-only, write-only, and flush-only attenuation, exact
+wrong-object rejection, revoked-handle rejection, unchanged output on denied
+reads, and zero backend calls on every denied operation. Existing queue,
+lifecycle, protected-completion, acknowledgement, restart, and runner tests
+remain passing.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run -p mrml-whp -p mrml-whp-run --release --no-default-features
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-kvm -p mrml-kvm-run -p mrml-whp -p mrml-whp-run --release --no-default-features --no-deps -- -D warnings
+CARGO_TARGET_DIR=target/block-capability-linux cargo +nightly test -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run --release --no-default-features
+CARGO_TARGET_DIR=target/block-capability-linux cargo +nightly clippy -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
+```
+
+Windows passed 420 kernel, 7 KVM, 4 KVM-runner, 21 WHP, and 5 WHP-runner tests;
+the benchmark crate's 14 environment-specific tests and one WHP hardware test
+were ignored. Arch Linux under WSL2 passed 420 kernel, 18 KVM, and 6 KVM-runner
+tests; the benchmark crate's 13 environment-specific tests and one KVM hardware
+test were ignored. Both strict Clippy gates passed. A fresh one-time Lamport-
+signed matching block image then completed the 32-operation eight-cycle two-slot
+controlled probe under WHP (`verify=17907us prepare=3509us execute=6599us
+total=31752us`) and `/dev/kvm` (`verify=17392us prepare=2450us execute=79692us
+total=124107us`). These are hosted VMM controlled probes against volatile memory,
+not host-resistant, persistent-storage, physical-device, or durability evidence.
+An older WHP artifact produced a protocol mismatch and a later stale artifact did
+not complete; neither is evidence.
+
+The `DIGITAL-RIGHTS REVIEW` found no collection, retention, correlation, remote
+disclosure, attestation, DRM, publisher/vendor authority, first-party bypass,
+accessibility restriction, AI authority, or persistent owner-state change. The
+change reduces ambient host access by requiring owner-policy-selected exact
+authority. The `HOSTILE SECURITY REVIEW` treats capability tokens and
+generations, expected object, rights, operation, block arithmetic, queue and
+transport state, interrupt authority, revocation, and backend results as hostile.
+Authorization precedes backend access; denial performs no I/O; separate interrupt
+authority is preserved; and uncertainty remains fail-stop. This agent review does
+not replace the constitution's independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional operation-specific capability
+authorization around the existing MRML-native block backend. No VirtIO,
+host-share, accessibility-device, browser-semantic, JavaScript/Wasm, or media
+mechanism from the recorded triggered scope is implemented.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

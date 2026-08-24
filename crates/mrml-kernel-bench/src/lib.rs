@@ -679,8 +679,15 @@ mod tests {
         let mut storage = VirtualBlockStorage([0; 4096]);
         let mut scratch = [0; 4096];
 
+        let block_object = ObjectId(0x160);
         let interrupt_object = ObjectId(0x161);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, Rights::SIGNAL)
             .unwrap();
@@ -712,6 +719,8 @@ mod tests {
                 black_box(run_virtual_block_doorbell_once(
                     &mut memory,
                     &mut storage,
+                    block_capability,
+                    block_object,
                     0,
                     &mut vms,
                     vm,

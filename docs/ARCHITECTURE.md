@@ -630,8 +630,12 @@ generational in-flight tickets, and explicit create/negotiate/activate/operate/
 suspend/resume/fail/reset/remove/destroy state. Reset and removal invalidate all
 in-flight work and advance the device generation; VMM memory uncertainty poisons
 the queue bridge. A backend-neutral executor now requires an exact separately
-provisioned block backend, copies reads and writes through erased caller-owned
-bounded scratch, and distinguishes clean mutation rejection from uncertainty;
+provisioned block backend. The common runner selects that backend through one
+live exact-object capability and independently checks `READ`, `WRITE`, or
+`FLUSH` before the corresponding operation; wrong-object, attenuated, stale,
+and revoked authority reaches no backend. Optional bounded block-region
+authority remains pending. The executor copies reads and writes through erased
+caller-owned bounded scratch and distinguishes clean mutation rejection from uncertainty;
 uncertainty fails the device and poisons its bridge. A one-request processor now
 preflights both admission and completion capacity before consuming a queue entry,
 executes an admitted request once, and publishes its exact completion. Malformed

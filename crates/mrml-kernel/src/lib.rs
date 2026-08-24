@@ -127,12 +127,13 @@ pub use task_runtime::{
     TimerDomainBalanceOutcome,
 };
 pub use virtual_block::{
-    AdmittedVirtualBlockRequest, MAX_VIRTUAL_BLOCK_QUEUE_SLOTS, MAX_VIRTUAL_BLOCK_TRANSFER_BYTES,
+    AdmittedVirtualBlockRequest, CapabilitySelectedVirtualBlockBackend,
+    MAX_VIRTUAL_BLOCK_QUEUE_SLOTS, MAX_VIRTUAL_BLOCK_TRANSFER_BYTES,
     VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
     VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
     VIRTUAL_BLOCK_DOORBELL_VALUE, VIRTUAL_BLOCK_FEATURE_FLUSH, VIRTUAL_BLOCK_REQUEST_BYTES,
-    VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
-    VirtualBlockCompletionAckError, VirtualBlockCompletionAckResult,
+    VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCapabilityError,
+    VirtualBlockCompletion, VirtualBlockCompletionAckError, VirtualBlockCompletionAckResult,
     VirtualBlockCompletionAckRunError, VirtualBlockCompletionAckRunResult,
     VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockConfigurationPage,
     VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockDoorbellError,

@@ -1,7 +1,8 @@
 use crate::{
-    Capability, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter, InterruptPolicy,
-    IoDirection, IoPortPolicy, IoPortRule, ObjectId, PAGE_SIZE, VirtualBlockInterruptError,
-    VmBackend, VmError, VmId, VmRunError, VmTable, inject_virtual_block_interrupt, run_vm_once,
+    Capability, CapabilityError, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter,
+    InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, ObjectId, PAGE_SIZE, Rights,
+    VirtualBlockInterruptError, VmBackend, VmError, VmId, VmRunError, VmTable,
+    inject_virtual_block_interrupt, run_vm_once,
 };
 
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
@@ -2279,6 +2280,102 @@ pub unsafe trait VirtualBlockBackend {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockCapabilityError<E> {
+    Capability(CapabilityError),
+    ObjectMismatch,
+    Backend(E),
+}
+
+/// Revalidates one exact backend capability for every block operation.
+/// Possession of this adapter, its object ID, or the underlying backend is not
+/// authority; the live capability and operation-specific right are checked on
+/// every call. The common runners recreate the adapter for each transaction, so
+/// revocation and attenuation before the next transaction take effect.
+pub struct CapabilitySelectedVirtualBlockBackend<'a, D, const C: usize> {
+    backend: &'a mut D,
+    capabilities: &'a CapabilitySpace<C>,
+    capability: Capability,
+    object: ObjectId,
+}
+
+impl<'a, D, const C: usize> CapabilitySelectedVirtualBlockBackend<'a, D, C> {
+    pub fn new(
+        backend: &'a mut D,
+        capabilities: &'a CapabilitySpace<C>,
+        capability: Capability,
+        object: ObjectId,
+    ) -> Self {
+        Self {
+            backend,
+            capabilities,
+            capability,
+            object,
+        }
+    }
+
+    fn authorize(&self, right: Rights) -> Result<(), VirtualBlockCapabilityError<D::Error>>
+    where
+        D: VirtualBlockBackend,
+    {
+        let object = self
+            .capabilities
+            .authorize(self.capability, right)
+            .map_err(VirtualBlockCapabilityError::Capability)?;
+        if object != self.object {
+            return Err(VirtualBlockCapabilityError::ObjectMismatch);
+        }
+        Ok(())
+    }
+}
+
+unsafe impl<D: VirtualBlockBackend, const C: usize> VirtualBlockBackend
+    for CapabilitySelectedVirtualBlockBackend<'_, D, C>
+{
+    type Error = VirtualBlockCapabilityError<D::Error>;
+
+    fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+        self.authorize(Rights::READ)?;
+        self.backend
+            .read_blocks(block, output)
+            .map_err(VirtualBlockCapabilityError::Backend)
+    }
+
+    fn write_blocks(
+        &mut self,
+        block: u64,
+        input: &[u8],
+    ) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+        self.authorize(Rights::WRITE)
+            .map_err(VirtualBlockMutationError::Rejected)?;
+        self.backend
+            .write_blocks(block, input)
+            .map_err(|error| match error {
+                VirtualBlockMutationError::Rejected(error) => {
+                    VirtualBlockMutationError::Rejected(VirtualBlockCapabilityError::Backend(error))
+                }
+                VirtualBlockMutationError::Uncertain(error) => {
+                    VirtualBlockMutationError::Uncertain(VirtualBlockCapabilityError::Backend(
+                        error,
+                    ))
+                }
+            })
+    }
+
+    fn flush(&mut self) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+        self.authorize(Rights::FLUSH)
+            .map_err(VirtualBlockMutationError::Rejected)?;
+        self.backend.flush().map_err(|error| match error {
+            VirtualBlockMutationError::Rejected(error) => {
+                VirtualBlockMutationError::Rejected(VirtualBlockCapabilityError::Backend(error))
+            }
+            VirtualBlockMutationError::Uncertain(error) => {
+                VirtualBlockMutationError::Uncertain(VirtualBlockCapabilityError::Backend(error))
+            }
+        })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub enum VirtualBlockExecutionOutcome<E> {
     Completed(VirtualBlockCompletion),
     BackendRejected {
@@ -3222,6 +3319,8 @@ pub fn run_virtual_block_doorbell_once<
 >(
     memory: &mut M,
     block_backend: &mut D,
+    block_capability: Capability,
+    block_object: ObjectId,
     vcpu: u32,
     vms: &mut VmTable<V>,
     vm: VmId,
@@ -3235,7 +3334,7 @@ pub fn run_virtual_block_doorbell_once<
     device: &mut VirtualBlockDevice<N>,
     bridge: &mut VirtualBlockQueueBridge<N>,
     scratch: &mut [u8],
-) -> VirtualBlockRunResult<M::Error, D::Error>
+) -> VirtualBlockRunResult<M::Error, VirtualBlockCapabilityError<D::Error>>
 where
     M: VirtualBlockVmmMemory,
     D: VirtualBlockBackend,
@@ -3269,12 +3368,24 @@ where
         io_policy,
     )
     .map_err(VirtualBlockRunError::Exit)?;
-    let outcome =
-        process_virtual_block_doorbell(disposition, device, bridge, memory, block_backend, scratch)
-            .map_err(|error| {
-                let _ = vms.fail(vm);
-                VirtualBlockRunError::Doorbell(error)
-            })?;
+    let mut selected_backend = CapabilitySelectedVirtualBlockBackend::new(
+        block_backend,
+        capabilities,
+        block_capability,
+        block_object,
+    );
+    let outcome = process_virtual_block_doorbell(
+        disposition,
+        device,
+        bridge,
+        memory,
+        &mut selected_backend,
+        scratch,
+    )
+    .map_err(|error| {
+        let _ = vms.fail(vm);
+        VirtualBlockRunError::Doorbell(error)
+    })?;
 
     if matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
         inject_virtual_block_interrupt(
@@ -3359,6 +3470,8 @@ pub fn run_virtual_block_transaction_once<
 >(
     memory: &mut M,
     block_backend: &mut D,
+    block_capability: Capability,
+    block_object: ObjectId,
     vcpu: u32,
     vms: &mut VmTable<V>,
     vm: VmId,
@@ -3372,7 +3485,7 @@ pub fn run_virtual_block_transaction_once<
     device: &mut VirtualBlockDevice<N>,
     bridge: &mut VirtualBlockQueueBridge<N>,
     scratch: &mut [u8],
-) -> VirtualBlockTransactionRunResult<M::Error, D::Error>
+) -> VirtualBlockTransactionRunResult<M::Error, VirtualBlockCapabilityError<D::Error>>
 where
     M: VirtualBlockVmmMemory,
     D: VirtualBlockBackend,
@@ -3416,12 +3529,18 @@ where
             value: transport.doorbell_value(),
         })
     {
+        let mut selected_backend = CapabilitySelectedVirtualBlockBackend::new(
+            block_backend,
+            capabilities,
+            block_capability,
+            block_object,
+        );
         let outcome = process_virtual_block_doorbell(
             disposition,
             device,
             bridge,
             memory,
-            block_backend,
+            &mut selected_backend,
             scratch,
         )
         .map_err(|error| {
@@ -5070,6 +5189,149 @@ mod tests {
     }
 
     #[test]
+    fn capability_selected_backend_enforces_independent_operation_rights() {
+        let object = ObjectId(0x300);
+
+        let mut read_space = CapabilitySpace::<1>::new();
+        let read_capability = read_space.insert(object, crate::Rights::READ).unwrap();
+        let mut read_backend = MockBlock::new();
+        read_backend.bytes[..4096].fill(0x5a);
+        let mut output = [0; 4096];
+        let mut selected = CapabilitySelectedVirtualBlockBackend::new(
+            &mut read_backend,
+            &read_space,
+            read_capability,
+            object,
+        );
+        assert_eq!(selected.read_blocks(0, &mut output), Ok(()));
+        assert!(output.iter().all(|byte| *byte == 0x5a));
+        assert!(matches!(
+            selected.write_blocks(0, &[0x65; 4096]),
+            Err(VirtualBlockMutationError::Rejected(
+                VirtualBlockCapabilityError::Capability(CapabilityError::PermissionDenied)
+            ))
+        ));
+        assert!(matches!(
+            selected.flush(),
+            Err(VirtualBlockMutationError::Rejected(
+                VirtualBlockCapabilityError::Capability(CapabilityError::PermissionDenied)
+            ))
+        ));
+        assert_eq!(
+            (
+                read_backend.reads,
+                read_backend.writes,
+                read_backend.flushes
+            ),
+            (1, 0, 0)
+        );
+
+        let mut write_space = CapabilitySpace::<1>::new();
+        let write_capability = write_space.insert(object, crate::Rights::WRITE).unwrap();
+        let mut write_backend = MockBlock::new();
+        let mut selected = CapabilitySelectedVirtualBlockBackend::new(
+            &mut write_backend,
+            &write_space,
+            write_capability,
+            object,
+        );
+        assert!(matches!(
+            selected.read_blocks(0, &mut output),
+            Err(VirtualBlockCapabilityError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        ));
+        assert_eq!(selected.write_blocks(0, &[0x65; 4096]), Ok(()));
+        assert!(matches!(
+            selected.flush(),
+            Err(VirtualBlockMutationError::Rejected(
+                VirtualBlockCapabilityError::Capability(CapabilityError::PermissionDenied)
+            ))
+        ));
+        assert_eq!(
+            (
+                write_backend.reads,
+                write_backend.writes,
+                write_backend.flushes
+            ),
+            (0, 1, 0)
+        );
+
+        let mut flush_space = CapabilitySpace::<1>::new();
+        let flush_capability = flush_space.insert(object, crate::Rights::FLUSH).unwrap();
+        let mut flush_backend = MockBlock::new();
+        let mut selected = CapabilitySelectedVirtualBlockBackend::new(
+            &mut flush_backend,
+            &flush_space,
+            flush_capability,
+            object,
+        );
+        assert!(matches!(
+            selected.read_blocks(0, &mut output),
+            Err(VirtualBlockCapabilityError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        ));
+        assert!(matches!(
+            selected.write_blocks(0, &[0x65; 4096]),
+            Err(VirtualBlockMutationError::Rejected(
+                VirtualBlockCapabilityError::Capability(CapabilityError::PermissionDenied)
+            ))
+        ));
+        assert_eq!(selected.flush(), Ok(()));
+        assert_eq!(
+            (
+                flush_backend.reads,
+                flush_backend.writes,
+                flush_backend.flushes
+            ),
+            (0, 0, 1)
+        );
+    }
+
+    #[test]
+    fn capability_selected_backend_rejects_wrong_object_and_revoked_handle_before_io() {
+        let object = ObjectId(0x300);
+        let other = ObjectId(0x301);
+        let mut output = [0xa5; 4096];
+
+        let mut wrong_space = CapabilitySpace::<1>::new();
+        let wrong_capability = wrong_space.insert(other, crate::Rights::READ).unwrap();
+        let mut wrong_backend = MockBlock::new();
+        let mut selected = CapabilitySelectedVirtualBlockBackend::new(
+            &mut wrong_backend,
+            &wrong_space,
+            wrong_capability,
+            object,
+        );
+        assert_eq!(
+            selected.read_blocks(0, &mut output),
+            Err(VirtualBlockCapabilityError::ObjectMismatch)
+        );
+        assert_eq!(wrong_backend.reads, 0);
+        assert!(output.iter().all(|byte| *byte == 0xa5));
+
+        let mut revoked_space = CapabilitySpace::<1>::new();
+        let revoked_capability = revoked_space.insert(object, crate::Rights::READ).unwrap();
+        revoked_space.revoke(revoked_capability).unwrap();
+        let mut revoked_backend = MockBlock::new();
+        let mut selected = CapabilitySelectedVirtualBlockBackend::new(
+            &mut revoked_backend,
+            &revoked_space,
+            revoked_capability,
+            object,
+        );
+        assert_eq!(
+            selected.read_blocks(0, &mut output),
+            Err(VirtualBlockCapabilityError::Capability(
+                CapabilityError::Invalid
+            ))
+        );
+        assert_eq!(revoked_backend.reads, 0);
+        assert!(output.iter().all(|byte| *byte == 0xa5));
+    }
+
+    #[test]
     fn executor_copies_reads_and_writes_privately_and_flushes() {
         let mut device = active::<2>();
         let mut bridge = VirtualBlockQueueBridge::<2>::new(layout::<2>()).unwrap();
@@ -5735,7 +5997,16 @@ mod tests {
     #[test]
     fn shared_runners_reuse_one_slot_for_bounded_write_then_read() {
         let interrupt_object = ObjectId(68);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -5777,6 +6048,8 @@ mod tests {
                 run_virtual_block_doorbell_once(
                     &mut vmm,
                     &mut backend,
+                    block_capability,
+                    block_object,
                     0,
                     &mut vms,
                     vm,
@@ -5827,7 +6100,16 @@ mod tests {
     #[test]
     fn transaction_runner_dispatches_doorbell_then_protected_acknowledgement() {
         let interrupt_object = ObjectId(96);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -5858,6 +6140,8 @@ mod tests {
             run_virtual_block_transaction_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -5888,6 +6172,8 @@ mod tests {
             run_virtual_block_transaction_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -5912,7 +6198,16 @@ mod tests {
     #[test]
     fn transaction_runner_fails_vm_on_non_transport_exit() {
         let interrupt_object = ObjectId(100);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -5933,6 +6228,8 @@ mod tests {
             run_virtual_block_transaction_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -5959,7 +6256,16 @@ mod tests {
     #[test]
     fn shared_runner_completes_exact_doorbell_and_authorized_interrupt() {
         let interrupt_object = ObjectId(80);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -5990,6 +6296,8 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -6015,7 +6323,16 @@ mod tests {
     #[test]
     fn shared_runner_rejects_bad_doorbell_and_fails_vm_before_queue_access() {
         let interrupt_object = ObjectId(84);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -6041,6 +6358,8 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -6067,7 +6386,16 @@ mod tests {
     #[test]
     fn shared_runner_injection_failure_retains_completion_and_fails_vm() {
         let interrupt_object = ObjectId(88);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -6098,6 +6426,8 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,
@@ -6124,7 +6454,16 @@ mod tests {
     #[test]
     fn shared_runner_delivers_pending_notification_before_vcpu_entry() {
         let interrupt_object = ObjectId(92);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
         let interrupt_capability = capabilities
             .insert(interrupt_object, crate::Rights::SIGNAL)
             .unwrap();
@@ -6153,6 +6492,8 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
+                block_capability,
+                block_object,
                 0,
                 &mut vms,
                 vm,

@@ -15,6 +15,7 @@ impl Rights {
     pub const SIGNAL: Self = Self(1 << 4);
     pub const DELEGATE: Self = Self(1 << 5);
     pub const CONTROL: Self = Self(1 << 6);
+    pub const FLUSH: Self = Self(1 << 7);
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -35,7 +36,8 @@ impl Rights {
             | Self::MAP.0
             | Self::SIGNAL.0
             | Self::DELEGATE.0
-            | Self::CONTROL.0;
+            | Self::CONTROL.0
+            | Self::FLUSH.0;
         if bits == 0 || bits & !known != 0 {
             return Err(CapabilityError::Invalid);
         }
@@ -203,7 +205,10 @@ mod tests {
     #[test]
     fn rights_attenuate_and_revoked_handles_never_revalidate() {
         let mut source = CapabilitySpace::<2>::new();
-        let rights = Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE);
+        let rights = Rights::READ
+            .union(Rights::WRITE)
+            .union(Rights::FLUSH)
+            .union(Rights::DELEGATE);
         let root = source.insert(ObjectId(7), rights).unwrap();
         let mut child = CapabilitySpace::<2>::new();
         let read = source.derive(root, Rights::READ, &mut child).unwrap();
@@ -211,6 +216,10 @@ mod tests {
         assert_eq!(child.authorize_exact(read, Rights::READ), Ok(ObjectId(7)));
         assert_eq!(
             child.authorize(read, Rights::WRITE),
+            Err(CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            child.authorize(read, Rights::FLUSH),
             Err(CapabilityError::PermissionDenied)
         );
         assert_eq!(
