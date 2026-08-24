@@ -9434,30 +9434,152 @@ fn validate_runtime_initializedness(
     Ok(())
 }
 
-fn validate_runtime_single_control_point_shared_loans(
+fn runtime_ownership_point_reaches(
+    facts: &RuntimeBodyFacts<'_>,
+    from: RuntimeOwnershipControlPoint,
+    to: RuntimeOwnershipControlPoint,
+) -> bool {
+    const POINT_CAPACITY: usize =
+        1 + MAX_RUNTIME_BASIC_BLOCK_FACTS + MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS;
+
+    fn point_index(
+        facts: &RuntimeBodyFacts<'_>,
+        point: RuntimeOwnershipControlPoint,
+    ) -> Option<usize> {
+        match point {
+            RuntimeOwnershipControlPoint::Entry => Some(0),
+            RuntimeOwnershipControlPoint::Block(block) if block.0 < facts.basic_block_count => {
+                Some(1 + block.0)
+            }
+            RuntimeOwnershipControlPoint::Edge(edge) if edge < facts.control_flow_edge_count => {
+                Some(1 + facts.basic_block_count + edge)
+            }
+            RuntimeOwnershipControlPoint::Block(_)
+            | RuntimeOwnershipControlPoint::Edge(_)
+            | RuntimeOwnershipControlPoint::Unreachable => None,
+        }
+    }
+
+    fn push_point<const N: usize>(
+        index: usize,
+        visited: &mut [bool; N],
+        pending: &mut [usize; N],
+        pending_count: &mut usize,
+    ) {
+        if !visited[index] {
+            visited[index] = true;
+            pending[*pending_count] = index;
+            *pending_count += 1;
+        }
+    }
+
+    let Some(target) = point_index(facts, to) else {
+        return false;
+    };
+    let mut visited = [false; POINT_CAPACITY];
+    let mut pending = [0usize; POINT_CAPACITY];
+    let mut pending_count = 0usize;
+    match from {
+        RuntimeOwnershipControlPoint::Entry if facts.basic_block_count != 0 => {
+            push_point(1, &mut visited, &mut pending, &mut pending_count);
+        }
+        RuntimeOwnershipControlPoint::Block(block) => {
+            for (edge_index, edge) in facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .enumerate()
+            {
+                if edge.is_some_and(|edge| edge.from == block) {
+                    push_point(
+                        1 + facts.basic_block_count + edge_index,
+                        &mut visited,
+                        &mut pending,
+                        &mut pending_count,
+                    );
+                }
+            }
+        }
+        RuntimeOwnershipControlPoint::Edge(edge_index) => {
+            if let Some(RuntimeControlFlowEdgeFact {
+                target: RuntimeControlFlowTarget::Block(block),
+                ..
+            }) = facts.control_flow_edges.get(edge_index).and_then(|edge| *edge)
+            {
+                push_point(
+                    1 + block.0,
+                    &mut visited,
+                    &mut pending,
+                    &mut pending_count,
+                );
+            }
+        }
+        RuntimeOwnershipControlPoint::Entry | RuntimeOwnershipControlPoint::Unreachable => {}
+    }
+    let mut cursor = 0usize;
+    while cursor < pending_count {
+        let current = pending[cursor];
+        cursor += 1;
+        if current == target {
+            return true;
+        }
+        if current == 0 {
+            if facts.basic_block_count != 0 {
+                push_point(1, &mut visited, &mut pending, &mut pending_count);
+            }
+        } else if current <= facts.basic_block_count {
+            let block = RuntimeBasicBlockId(current - 1);
+            for (edge_index, edge) in facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .enumerate()
+            {
+                if edge.is_some_and(|edge| edge.from == block) {
+                    push_point(
+                        1 + facts.basic_block_count + edge_index,
+                        &mut visited,
+                        &mut pending,
+                        &mut pending_count,
+                    );
+                }
+            }
+        } else {
+            let edge_index = current - 1 - facts.basic_block_count;
+            if let Some(RuntimeControlFlowEdgeFact {
+                target: RuntimeControlFlowTarget::Block(block),
+                ..
+            }) = facts.control_flow_edges.get(edge_index).and_then(|edge| *edge)
+            {
+                push_point(
+                    1 + block.0,
+                    &mut visited,
+                    &mut pending,
+                    &mut pending_count,
+                );
+            }
+        }
+    }
+    false
+}
+
+fn runtime_ownership_event_precedes(
+    facts: &RuntimeBodyFacts<'_>,
+    earlier: RuntimePlaceEffectFact,
+    later: RuntimePlaceEffectFact,
+) -> bool {
+    let (Some(earlier_point), Some(later_point)) = (
+        facts.ownership_control_point(earlier.location),
+        facts.ownership_control_point(later.location),
+    ) else {
+        return false;
+    };
+    if earlier_point == later_point && earlier.event.0 < later.event.0 {
+        return true;
+    }
+    runtime_ownership_point_reaches(facts, earlier_point, later_point)
+}
+
+fn validate_runtime_bounded_shared_loan_liveness(
     facts: &RuntimeBodyFacts<'_>,
     fallback_span: Span,
 ) -> Result<(), CodegenError> {
-    fn same_segment_or_exit(
-        facts: &RuntimeBodyFacts<'_>,
-        from: RuntimeOwnershipControlPoint,
-        to: RuntimeOwnershipControlPoint,
-    ) -> bool {
-        if from == to {
-            return true;
-        }
-        let (RuntimeOwnershipControlPoint::Block(block), RuntimeOwnershipControlPoint::Edge(edge)) =
-            (from, to)
-        else {
-            return false;
-        };
-        facts
-            .control_flow_edges
-            .get(edge)
-            .and_then(|edge| *edge)
-            .is_some_and(|edge| edge.from == block)
-    }
-
     if !facts.control_flow_complete {
         return Ok(());
     }
@@ -9476,9 +9598,6 @@ fn validate_runtime_single_control_point_shared_loans(
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: fallback_span,
             })?;
-        let Some(point) = facts.ownership_control_point(issue.location) else {
-            continue;
-        };
         let borrower_path = facts
             .find_move_path(
                 RuntimePlaceIdentity::Local(loan.borrower),
@@ -9492,10 +9611,9 @@ fn validate_runtime_single_control_point_shared_loans(
             .iter()
             .flatten()
             .filter(|effect| {
-                effect.event.0 > issue.event.0
-                    && effect.path == loan.borrowed_path
+                effect.path == loan.borrowed_path
                     && effect.kind == RuntimePlaceEffectKind::MutableBorrow
-                    && facts.ownership_control_point(effect.location) == Some(point)
+                    && runtime_ownership_event_precedes(facts, issue, **effect)
             })
         {
             let used_after_conflict =
@@ -9503,12 +9621,9 @@ fn validate_runtime_single_control_point_shared_loans(
                     .iter()
                     .flatten()
                     .any(|effect| {
-                        effect.event.0 > conflict.event.0
-                            && effect.path == borrower_path
+                        effect.path == borrower_path
                             && effect.kind == RuntimePlaceEffectKind::LoanUse
-                            && facts.ownership_control_point(effect.location).is_some_and(
-                                |use_point| same_segment_or_exit(facts, point, use_point),
-                            )
+                            && runtime_ownership_event_precedes(facts, *conflict, *effect)
                     });
             if used_after_conflict {
                 return Err(CodegenError {
@@ -9662,7 +9777,7 @@ fn preanalyze_runtime_body_declarations<
             span: body.tail_span,
         })?;
     validate_runtime_initializedness(facts, body.tail_span)?;
-    validate_runtime_single_control_point_shared_loans(facts, body.tail_span)?;
+    validate_runtime_bounded_shared_loan_liveness(facts, body.tail_span)?;
     Ok(facts.local_count)
 }
 
@@ -26230,6 +26345,47 @@ mod tests {
                         && effect.path == RuntimeMovePathId(2)
                 })
         );
+    }
+
+    #[test]
+    fn runtime_shared_loan_liveness_follows_conditional_cfg_edges() {
+        let rejected = "fn value(input: u16, change: bool) -> u16 { let mut slot = input; let shared: &u16 = &slot; if change { let mutable: &mut u16 = &mut slot; *mutable += 1; } *shared }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16, change: bool) -> u16 { let mut slot = input; let shared: &u16 = &slot; let copied = *shared; if change { let mutable: &mut u16 = &mut slot; *mutable += 1; } copied }";
+        let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
     }
 
     #[test]
