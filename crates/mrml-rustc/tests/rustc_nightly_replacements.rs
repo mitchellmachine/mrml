@@ -3966,6 +3966,13 @@ fn rustc_contextual_move_and_tuple_write_effects_reach_native_objects() {
 }
 
 #[test]
+fn rustc_contextual_shared_mutable_and_reborrow_effects_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, reference: &mut u16) -> u16 { let mut first = input; let mut second = input; let shared: &u16 = &first; let mutable: &mut u16 = &mut second; let reborrowed: &mut u16 = &mut *reference; *shared + *mutable + *reborrowed }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",

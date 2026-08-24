@@ -2168,8 +2168,18 @@ struct RuntimeInitializationFact {
 enum RuntimePlaceEffectKind {
     Copy,
     Move,
+    SharedBorrow,
+    MutableBorrow,
     Write,
     ReadModifyWrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeReadEffectContext {
+    Value,
+    SharedBorrow,
+    MutableBorrow,
+    Unclassified,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2464,6 +2474,7 @@ impl<'source> RuntimeBodyFacts<'source> {
     fn push_assignment_read(
         &mut self,
         fact: RuntimePlaceAccessFact,
+        context: RuntimeReadEffectContext,
     ) -> Result<(), CodegenErrorKind> {
         if fact.access != RuntimePlaceAccess::Read {
             return Err(CodegenErrorKind::InvalidRuntimePlaceFacts);
@@ -2471,25 +2482,35 @@ impl<'source> RuntimeBodyFacts<'source> {
         if self.assignment_read_count >= self.assignment_reads.len() {
             return Err(CodegenErrorKind::TooManyRuntimePlaceAccessFacts);
         }
-        let copy_path = self
+        let effect = self
             .find_move_path(fact.base, fact.projections)
-            .filter(|path| {
-                self.move_paths
-                    .get(path.0)
-                    .and_then(|path| *path)
-                    .is_some_and(|path| runtime_type_is_copy(path.ty))
+            .and_then(|path| {
+                let path_ty = self.move_paths.get(path.0).and_then(|path| *path)?.ty;
+                let kind = match context {
+                    RuntimeReadEffectContext::Value if runtime_type_is_copy(path_ty) => {
+                        RuntimePlaceEffectKind::Copy
+                    }
+                    RuntimeReadEffectContext::SharedBorrow => RuntimePlaceEffectKind::SharedBorrow,
+                    RuntimeReadEffectContext::MutableBorrow => {
+                        RuntimePlaceEffectKind::MutableBorrow
+                    }
+                    RuntimeReadEffectContext::Value | RuntimeReadEffectContext::Unclassified => {
+                        return None;
+                    }
+                };
+                Some(RuntimePlaceEffectFact {
+                    path,
+                    kind,
+                    span: fact.span,
+                })
             });
-        if copy_path.is_some() && self.effect_count >= self.effects.len() {
+        if effect.is_some() && self.effect_count >= self.effects.len() {
             return Err(CodegenErrorKind::TooManyRuntimePlaceEffectFacts);
         }
         self.assignment_reads[self.assignment_read_count] = Some(fact);
         self.assignment_read_count += 1;
-        if let Some(path) = copy_path {
-            self.effects[self.effect_count] = Some(RuntimePlaceEffectFact {
-                path,
-                kind: RuntimePlaceEffectKind::Copy,
-                span: fact.span,
-            });
+        if let Some(effect) = effect {
+            self.effects[self.effect_count] = Some(effect);
             self.effect_count += 1;
         }
         Ok(())
@@ -3049,13 +3070,16 @@ fn preanalyze_runtime_local_binding<
                 other => other,
             };
             facts
-                .push_assignment_read(RuntimePlaceAccessFact {
-                    base,
-                    projections: RuntimePlaceProjections::single(projection),
-                    ty: base_type,
-                    access: RuntimePlaceAccess::Read,
-                    span: root_span,
-                })
+                .push_assignment_read(
+                    RuntimePlaceAccessFact {
+                        base,
+                        projections: RuntimePlaceProjections::single(projection),
+                        ty: base_type,
+                        access: RuntimePlaceAccess::Read,
+                        span: root_span,
+                    },
+                    RuntimeReadEffectContext::Value,
+                )
                 .map_err(|kind| CodegenError {
                     kind,
                     span: local.initializer_span,
@@ -3203,6 +3227,7 @@ fn push_read<'source, const MAX_PARAMETERS: usize>(
     locals: &[Option<RuntimeLocal<'source>>],
     function: &Function<'source, MAX_PARAMETERS>,
     place: RuntimeReadPlace<'source>,
+    context: RuntimeReadEffectContext,
     assignment_span: Span,
 ) -> Result<(), CodegenError> {
     let resolved = locals
@@ -3225,13 +3250,16 @@ fn push_read<'source, const MAX_PARAMETERS: usize>(
         });
     if let Some((base, ty)) = resolved {
         facts
-            .push_assignment_read(RuntimePlaceAccessFact {
-                base,
-                projections: place.projections,
-                ty,
-                access: RuntimePlaceAccess::Read,
-                span: place.span,
-            })
+            .push_assignment_read(
+                RuntimePlaceAccessFact {
+                    base,
+                    projections: place.projections,
+                    ty,
+                    access: RuntimePlaceAccess::Read,
+                    span: place.span,
+                },
+                context,
+            )
             .map_err(|kind| CodegenError {
                 kind,
                 span: assignment_span,
@@ -3358,7 +3386,14 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             count
                         };
                         for _ in 0..reads {
-                            push_read(facts, locals, function, place, assignment_span)?;
+                            push_read(
+                                facts,
+                                locals,
+                                function,
+                                place,
+                                RuntimeReadEffectContext::Unclassified,
+                                assignment_span,
+                            )?;
                         }
                     } else if runtime_return_array_preanalysis_supported(
                         function,
@@ -3404,7 +3439,14 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             kind,
             span: assignment_span,
         })? {
-            push_read(facts, locals, function, place, assignment_span)?;
+            push_read(
+                facts,
+                locals,
+                function,
+                place,
+                RuntimeReadEffectContext::Value,
+                assignment_span,
+            )?;
             if let ExprKind::Index { index, .. } = expression.kind {
                 recurse(
                     facts,
@@ -3440,29 +3482,19 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             | ExprKind::Return { operand }
             | ExprKind::LoopBreak { operand } => visit!(operand)?,
             ExprKind::Unary {
-                operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
+                operator:
+                    operator @ (crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut),
                 operand,
-            } => match tree.expression(operand).map(|expression| expression.kind) {
-                Some(ExprKind::Identifier(_)) => visit!(operand)?,
-                Some(ExprKind::Index { base, index }) => {
-                    let base_type = runtime_expression_type_with_locals(
-                        function,
-                        resolver,
-                        locals,
-                        tree,
-                        base,
-                        depth + 1,
-                    )
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: assignment_span,
-                    })?;
-                    if matches!(base_type, RuntimeExpressionType::Array { .. })
-                        && let Some(ExprKind::Identifier(name)) =
-                            tree.expression(base).map(|expression| expression.kind)
-                    {
+            } => {
+                let borrow_context = match operator {
+                    crate::UnaryOperator::AddressOf => RuntimeReadEffectContext::SharedBorrow,
+                    crate::UnaryOperator::AddressOfMut => RuntimeReadEffectContext::MutableBorrow,
+                    _ => unreachable!(),
+                };
+                match tree.expression(operand).map(|expression| expression.kind) {
+                    Some(ExprKind::Identifier(name)) => {
                         let span = tree
-                            .expression(base)
+                            .expression(operand)
                             .ok_or(CodegenError {
                                 kind: CodegenErrorKind::RuntimeExpressionUnsupported,
                                 span: assignment_span,
@@ -3475,72 +3507,138 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             RuntimeReadPlace {
                                 name,
                                 span,
-                                projections: RuntimePlaceProjections::single(
-                                    RuntimePlaceProjection::Index,
-                                ),
+                                projections: RuntimePlaceProjections::EMPTY,
                             },
+                            borrow_context,
                             assignment_span,
                         )?;
-                    } else {
-                        visit!(base)?;
                     }
-                    visit!(index)?;
-                }
-                Some(ExprKind::Unary {
-                    operator: crate::UnaryOperator::Dereference,
-                    operand: reference,
-                }) => visit!(reference)?,
-                Some(ExprKind::RangeIndex {
-                    base, start, end, ..
-                }) => {
-                    if let Some(start) = start {
-                        visit!(start)?;
-                    }
-                    if let Some(end) = end {
-                        visit!(end)?;
-                    }
-                    let base_type = runtime_expression_type_with_locals(
-                        function,
-                        resolver,
-                        locals,
-                        tree,
-                        base,
-                        depth + 1,
-                    )
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: assignment_span,
-                    })?;
-                    if matches!(base_type, RuntimeExpressionType::Array { .. })
-                        && let Some(ExprKind::Identifier(name)) =
-                            tree.expression(base).map(|expression| expression.kind)
-                    {
-                        let span = tree
-                            .expression(base)
-                            .ok_or(CodegenError {
-                                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
-                                span: assignment_span,
-                            })?
-                            .span;
-                        push_read(
-                            facts,
-                            locals,
+                    Some(ExprKind::Index { base, index }) => {
+                        let base_type = runtime_expression_type_with_locals(
                             function,
-                            RuntimeReadPlace {
-                                name,
-                                span,
-                                projections: RuntimePlaceProjections::single(
-                                    RuntimePlaceProjection::Subslice,
-                                ),
-                            },
-                            assignment_span,
-                        )?;
-                    } else {
-                        visit!(base)?;
+                            resolver,
+                            locals,
+                            tree,
+                            base,
+                            depth + 1,
+                        )
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: assignment_span,
+                        })?;
+                        if matches!(base_type, RuntimeExpressionType::Array { .. })
+                            && let Some(ExprKind::Identifier(name)) =
+                                tree.expression(base).map(|expression| expression.kind)
+                        {
+                            let span = tree
+                                .expression(base)
+                                .ok_or(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                })?
+                                .span;
+                            push_read(
+                                facts,
+                                locals,
+                                function,
+                                RuntimeReadPlace {
+                                    name,
+                                    span,
+                                    projections: RuntimePlaceProjections::single(
+                                        RuntimePlaceProjection::Index,
+                                    ),
+                                },
+                                borrow_context,
+                                assignment_span,
+                            )?;
+                        } else {
+                            visit!(base)?;
+                        }
+                        visit!(index)?;
                     }
+                    Some(ExprKind::Unary {
+                        operator: crate::UnaryOperator::Dereference,
+                        operand: reference,
+                    }) => {
+                        if let Some(ExprKind::Identifier(name)) =
+                            tree.expression(reference).map(|expression| expression.kind)
+                        {
+                            let span = tree
+                                .expression(reference)
+                                .ok_or(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                })?
+                                .span;
+                            push_read(
+                                facts,
+                                locals,
+                                function,
+                                RuntimeReadPlace {
+                                    name,
+                                    span,
+                                    projections: RuntimePlaceProjections::EMPTY,
+                                },
+                                borrow_context,
+                                assignment_span,
+                            )?;
+                        } else {
+                            visit!(reference)?;
+                        }
+                    }
+                    Some(ExprKind::RangeIndex {
+                        base, start, end, ..
+                    }) => {
+                        if let Some(start) = start {
+                            visit!(start)?;
+                        }
+                        if let Some(end) = end {
+                            visit!(end)?;
+                        }
+                        let base_type = runtime_expression_type_with_locals(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            base,
+                            depth + 1,
+                        )
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: assignment_span,
+                        })?;
+                        if matches!(base_type, RuntimeExpressionType::Array { .. })
+                            && let Some(ExprKind::Identifier(name)) =
+                                tree.expression(base).map(|expression| expression.kind)
+                        {
+                            let span = tree
+                                .expression(base)
+                                .ok_or(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                })?
+                                .span;
+                            push_read(
+                                facts,
+                                locals,
+                                function,
+                                RuntimeReadPlace {
+                                    name,
+                                    span,
+                                    projections: RuntimePlaceProjections::single(
+                                        RuntimePlaceProjection::Subslice,
+                                    ),
+                                },
+                                borrow_context,
+                                assignment_span,
+                            )?;
+                        } else {
+                            visit!(base)?;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             ExprKind::Unary { operand, .. } => visit!(operand)?,
             ExprKind::Sequence { first, then } => {
                 visit!(first)?;
@@ -3674,6 +3772,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                                 RuntimePlaceProjection::Index,
                                             ),
                                         },
+                                        RuntimeReadEffectContext::Value,
                                         assignment_span,
                                     )?;
                                 }
@@ -3844,6 +3943,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                         },
                                     ),
                                 },
+                                RuntimeReadEffectContext::Value,
                                 assignment_span,
                             )?;
                         }
@@ -4083,6 +4183,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         RuntimePlaceProjection::TupleField(field),
                     ),
                 },
+                RuntimeReadEffectContext::Value,
                 assignment_span,
             ),
             ExprKind::Return { operand }
@@ -4305,6 +4406,7 @@ fn preanalyze_runtime_return_array_element_reads<
                 span: expression.span,
                 projections: RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
             },
+            RuntimeReadEffectContext::Value,
             expression_span,
         ),
         ExprKind::Array {
@@ -12774,6 +12876,8 @@ impl<
                         runtime_type_is_copy(path.ty)
                             || path.projections != RuntimePlaceProjections::EMPTY
                     }
+                    RuntimePlaceEffectKind::SharedBorrow
+                    | RuntimePlaceEffectKind::MutableBorrow => false,
                     RuntimePlaceEffectKind::Write => false,
                     RuntimePlaceEffectKind::ReadModifyWrite => !runtime_type_is_copy(path.ty),
                 }
@@ -22120,13 +22224,16 @@ mod tests {
         assert_eq!(emitter.preanalyzed_assignment_access_cursor, 1);
         emitter
             .body_facts
-            .push_assignment_read(RuntimePlaceAccessFact {
-                base: RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
-                projections: RuntimePlaceProjections::EMPTY,
-                ty: first_place.ty,
-                access: RuntimePlaceAccess::Read,
-                span: Span { start: 10, end: 15 },
-            })
+            .push_assignment_read(
+                RuntimePlaceAccessFact {
+                    base: RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                    projections: RuntimePlaceProjections::EMPTY,
+                    ty: first_place.ty,
+                    access: RuntimePlaceAccess::Read,
+                    span: Span { start: 10, end: 15 },
+                },
+                RuntimeReadEffectContext::Value,
+            )
             .unwrap();
         emitter
             .record_identifier_read(
@@ -22766,17 +22873,100 @@ mod tests {
         );
         assert_eq!(
             capacity
-                .push_assignment_read(RuntimePlaceAccessFact {
-                    base: RuntimePlaceIdentity::Parameter(0),
-                    projections: RuntimePlaceProjections::EMPTY,
-                    ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
-                    access: RuntimePlaceAccess::Read,
-                    span: Span { start: 0, end: 1 },
-                })
+                .push_assignment_read(
+                    RuntimePlaceAccessFact {
+                        base: RuntimePlaceIdentity::Parameter(0),
+                        projections: RuntimePlaceProjections::EMPTY,
+                        ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                        access: RuntimePlaceAccess::Read,
+                        span: Span { start: 0, end: 1 },
+                    },
+                    RuntimeReadEffectContext::Value
+                )
                 .unwrap_err(),
             CodegenErrorKind::TooManyRuntimePlaceEffectFacts
         );
         assert_eq!(capacity.assignment_read_count, 0);
+    }
+
+    #[test]
+    fn runtime_place_effects_distinguish_value_reads_and_borrows() {
+        let source = "fn value(input: u16, reference: &mut u16) -> u16 { let mut first = input; let mut second = input; let shared: &u16 = &first; let mutable: &mut u16 = &mut second; let reborrowed: &mut u16 = &mut *reference; *shared + *mutable + *reborrowed }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let local_count = preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(local_count, 5);
+        assert_eq!(facts.effect_count, 5);
+        assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Copy);
+        assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
+        assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Copy);
+        assert_eq!(facts.effects[1].unwrap().path, RuntimeMovePathId(0));
+        assert_eq!(
+            facts.effects[2].unwrap().kind,
+            RuntimePlaceEffectKind::SharedBorrow
+        );
+        assert_eq!(facts.effects[2].unwrap().path, RuntimeMovePathId(2));
+        assert_eq!(
+            facts.effects[3].unwrap().kind,
+            RuntimePlaceEffectKind::MutableBorrow
+        );
+        assert_eq!(facts.effects[3].unwrap().path, RuntimeMovePathId(3));
+        assert_eq!(
+            facts.effects[4].unwrap().kind,
+            RuntimePlaceEffectKind::MutableBorrow
+        );
+        assert_eq!(facts.effects[4].unwrap().path, RuntimeMovePathId(1));
+
+        let assignment_access_count = facts.assignment_access_count;
+        let assignment_read_count = facts.assignment_read_count;
+        let emitter = RuntimeEmitter::<_, 128, 8> {
+            bytes: [0; 128],
+            length: 0,
+            trap_patches: [0; 128],
+            trap_count: 0,
+            function: &function,
+            resolver: &NoConstants,
+            abi: X86_64Abi::SystemV,
+            width: runtime_width("u16").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 2,
+            locals: [None; 8],
+            saved_locals: 0,
+            body_facts: &mut facts,
+            preanalyzed_local_count: local_count,
+            preanalyzed_local_cursor: local_count,
+            preanalyzed_assignment_access_cursor: assignment_access_count,
+            preanalyzed_assignment_read_cursor: assignment_read_count,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        emitter.validate_runtime_place_facts().unwrap();
+
+        let valid_borrow = emitter.body_facts.effects[2].unwrap();
+        emitter.body_facts.effects[2] = Some(RuntimePlaceEffectFact {
+            path: RuntimeMovePathId(MAX_RUNTIME_MOVE_PATH_FACTS),
+            ..valid_borrow
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
     }
 
     #[test]
