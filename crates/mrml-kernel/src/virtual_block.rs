@@ -1,10 +1,12 @@
-use crate::{PAGE_SIZE, VmBackend};
+use crate::{ExitDisposition, PAGE_SIZE, VmBackend};
 
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
 pub const VIRTUAL_BLOCK_COMPLETION_BYTES: usize = 32;
 pub const MAX_VIRTUAL_BLOCK_QUEUE_SLOTS: usize = 64;
 pub const MAX_VIRTUAL_BLOCK_TRANSFER_BYTES: u32 = 1024 * 1024;
 pub const VIRTUAL_BLOCK_FEATURE_FLUSH: u64 = 1 << 0;
+pub const VIRTUAL_BLOCK_DOORBELL_PORT: u16 = 0x4d42;
+pub const VIRTUAL_BLOCK_DOORBELL_VALUE: u32 = 1;
 const REQUEST_MAGIC: [u8; 4] = *b"MRBQ";
 const COMPLETION_MAGIC: [u8; 4] = *b"MRBC";
 const VERSION: u8 = 1;
@@ -879,6 +881,15 @@ pub enum VirtualBlockProcessError<M, D> {
 pub type VirtualBlockProcessResult<M, D> =
     Result<VirtualBlockProcessOutcome<D>, VirtualBlockProcessError<M, D>>;
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockDoorbellError<M, D> {
+    InvalidExit,
+    Process(VirtualBlockProcessError<M, D>),
+}
+
+pub type VirtualBlockDoorbellResult<M, D> =
+    Result<VirtualBlockProcessOutcome<D>, VirtualBlockDoorbellError<M, D>>;
+
 /// VMM memory authority for the MRML-specific block transport. Request pages
 /// are guest-writable; completion slots and read-result payloads are writable
 /// only by this device path.
@@ -1291,6 +1302,37 @@ where
         });
     }
     Ok(VirtualBlockProcessOutcome::Completed(execution))
+}
+
+/// Processes at most one request for an exact MRML virtual-block doorbell.
+/// The disposition must first have crossed the common deny-by-default VM exit
+/// dispatcher. Port, width, direction, and value are rechecked here before any
+/// queue, payload, scratch, or block-backend access. Interrupt delivery remains
+/// a separate capability-authorized operation after a published completion.
+pub fn process_virtual_block_doorbell<const N: usize, M, D>(
+    disposition: ExitDisposition,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    memory: &mut M,
+    backend: &mut D,
+    scratch: &mut [u8],
+) -> VirtualBlockDoorbellResult<M::Error, D::Error>
+where
+    M: VirtualBlockVmmMemory,
+    D: VirtualBlockBackend,
+{
+    if disposition
+        != (ExitDisposition::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        })
+    {
+        return Err(VirtualBlockDoorbellError::InvalidExit);
+    }
+    process_virtual_block_request(device, bridge, memory, backend, scratch)
+        .map_err(VirtualBlockDoorbellError::Process)
 }
 
 fn slot_address(
@@ -2094,6 +2136,131 @@ mod tests {
         assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
         assert!(bridge.is_poisoned());
         assert!(scratch.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn doorbell_rejects_every_scalar_mismatch_before_queue_or_backend_access() {
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        let request = encoded(VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096));
+        vmm.bytes[0x4000..0x5000].fill(0x73);
+        vmm.write_guest(0x1000 + QUEUE_HEADER_BYTES, &request)
+            .unwrap();
+        vmm.write_guest(0x1000, &1u64.to_le_bytes()).unwrap();
+
+        let invalid = [
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT + 1,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            },
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                size: 2,
+                write: true,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            },
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                size: 4,
+                write: false,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            },
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE + 1,
+            },
+            ExitDisposition::Resume,
+        ];
+        for disposition in invalid {
+            assert_eq!(
+                process_virtual_block_doorbell(
+                    disposition,
+                    &mut device,
+                    &mut bridge,
+                    &mut vmm,
+                    &mut backend,
+                    &mut scratch,
+                ),
+                Err(VirtualBlockDoorbellError::InvalidExit)
+            );
+        }
+        let mut consumed = [0; 8];
+        vmm.read_guest(0x1040, &mut consumed).unwrap();
+        assert_eq!(u64::from_le_bytes(consumed), 0);
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
+        assert!(scratch.iter().all(|byte| *byte == 0xa5));
+        assert_eq!(device.pending_interrupt_vector(), None);
+    }
+
+    #[test]
+    fn exact_doorbell_processes_at_most_one_request_and_latches_notification() {
+        let mut device = active::<2>();
+        let mut bridge = VirtualBlockQueueBridge::<2>::new(layout::<2>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        for (slot, request_id) in [1u64, 2].into_iter().enumerate() {
+            let request = encoded(VirtualBlockRequest::write(
+                1,
+                request_id,
+                request_id - 1,
+                1,
+                0x4000,
+                4096,
+            ));
+            vmm.write_guest(
+                0x1000 + QUEUE_HEADER_BYTES + (slot * VIRTUAL_BLOCK_REQUEST_BYTES) as u64,
+                &request,
+            )
+            .unwrap();
+        }
+        vmm.bytes[0x4000..0x5000].fill(0x41);
+        vmm.write_guest(0x1000, &2u64.to_le_bytes()).unwrap();
+        let doorbell = ExitDisposition::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        };
+
+        assert!(matches!(
+            process_virtual_block_doorbell(
+                doorbell,
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockProcessOutcome::Completed(_))
+        ));
+        assert_eq!(backend.writes, 1);
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+        let mut consumed = [0; 8];
+        vmm.read_guest(0x1040, &mut consumed).unwrap();
+        assert_eq!(u64::from_le_bytes(consumed), 1);
+
+        assert!(matches!(
+            process_virtual_block_doorbell(
+                doorbell,
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockProcessOutcome::Completed(_))
+        ));
+        assert_eq!(backend.writes, 2);
+        vmm.read_guest(0x1040, &mut consumed).unwrap();
+        assert_eq!(u64::from_le_bytes(consumed), 2);
     }
 
     #[test]

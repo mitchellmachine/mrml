@@ -1367,6 +1367,15 @@ exit handling, canonical responses, and byte comparisons are defensive systems
 integration. No new patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — MRML virtual-block scalar doorbell
+
+**Result: NOT_TRIGGERED.** The change conventionally assigns a fixed I/O port
+and scalar notification value, revalidates the dispatched port/width/direction/
+value tuple, and invokes an existing one-request processor. Reject-before-
+mutation and one-request-per-notification bounds are standard defensive
+virtual-device techniques. No patent-candidate mechanism was identified. This
+agent review does not replace the required independent human dual review.
+
 # 2026-08-24 — Virtual-block completion interrupt bridge
 
 **Result: NOT_TRIGGERED.** The change conventionally coalesces completion

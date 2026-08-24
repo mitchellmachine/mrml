@@ -127,14 +127,16 @@ pub use task_runtime::{
 };
 pub use virtual_block::{
     AdmittedVirtualBlockRequest, MAX_VIRTUAL_BLOCK_QUEUE_SLOTS, MAX_VIRTUAL_BLOCK_TRANSFER_BYTES,
-    VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_FEATURE_FLUSH, VIRTUAL_BLOCK_REQUEST_BYTES,
-    VirtualBlockBackend, VirtualBlockCompletion, VirtualBlockCompletionStatus, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockExecutionError,
-    VirtualBlockExecutionOutcome, VirtualBlockExecutionResult, VirtualBlockMutationError,
-    VirtualBlockOperation, VirtualBlockProcessError, VirtualBlockProcessOutcome,
-    VirtualBlockProcessResult, VirtualBlockQueueBridge, VirtualBlockQueueError,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockTicket, VirtualBlockVmmMemory,
-    execute_virtual_block_request, process_virtual_block_request,
+    VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT, VIRTUAL_BLOCK_DOORBELL_VALUE,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VIRTUAL_BLOCK_REQUEST_BYTES, VirtualBlockBackend,
+    VirtualBlockCompletion, VirtualBlockCompletionStatus, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockDoorbellError, VirtualBlockDoorbellResult,
+    VirtualBlockError, VirtualBlockExecutionError, VirtualBlockExecutionOutcome,
+    VirtualBlockExecutionResult, VirtualBlockMutationError, VirtualBlockOperation,
+    VirtualBlockProcessError, VirtualBlockProcessOutcome, VirtualBlockProcessResult,
+    VirtualBlockQueueBridge, VirtualBlockQueueError, VirtualBlockQueueLayout, VirtualBlockRequest,
+    VirtualBlockTicket, VirtualBlockVmmMemory, execute_virtual_block_request,
+    process_virtual_block_doorbell, process_virtual_block_request,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

@@ -632,7 +632,7 @@ capacity before consumption, distinguishes idle and backpressure, rejects a
 consumed malformed request before backend access, executes once, and publishes
 the bound completion. If completion publication becomes uncertain after possible
 mutation, the device and bridge fail rather than retry. A concrete hosted/
-physical backend, doorbells, PCI transport, KVM/WHP
+physical backend, PCI transport, KVM/WHP
 attachment, a guest driver, QEMU comparison, and fuzzing remain pending. This is
 not VirtIO-compatible. Completion publication now latches one coalesced
 notification. Delivery uses the device-configured vector through the existing
@@ -644,6 +644,12 @@ An optimized 10,000-iteration in-process regression baseline measures the full
 mock transaction-through-acknowledgement policy composition on Windows gnullvm
 and Arch Linux/WSL2; it is not storage, hypervisor, or hardware-interrupt
 latency evidence.
+The MRML-specific block doorbell is now an exact 32-bit write-only scalar tuple
+over the common deny-by-default I/O dispatcher. It rechecks port, width,
+direction, and value before queue access and processes at most one request per
+accepted disposition. The port and value carry no backend or interrupt
+authority. This remains shared-policy simulation; native runner wiring is
+pending.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

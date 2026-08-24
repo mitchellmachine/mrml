@@ -630,8 +630,12 @@ latch. A backend-neutral bridge derives the configured vector from that latch,
 requires the existing exact VM-interrupt `SIGNAL` capability and vector
 allowlist, and clears the latch only after confirmed injection; denial or
 backend uncertainty leaves it pending, while terminal device transitions clear
-it. It has no concrete hosted or physical backend, doorbell, PCI transport,
-KVM/WHP attachment, or guest driver yet. **PLANNED:** guest
+it. An MRML-specific scalar doorbell now takes the common I/O disposition,
+accepts only the exact 32-bit write/value tuple, and processes at most one
+request; every mismatch fails before queue or backend access. The port is
+routing data and does not grant block or interrupt authority. It has no concrete hosted or
+physical backend, PCI transport, KVM/WHP attachment, or guest driver yet.
+**PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No
 VirtIO-compatible MRML device currently exists.

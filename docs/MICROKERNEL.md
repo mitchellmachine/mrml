@@ -3298,6 +3298,45 @@ injection, reset, and removal as hostile; only confirmed authorized delivery
 acknowledges pending state, and uncertainty fails closed. This agent review does
 not replace the required independent human dual review.
 
+The MRML-specific virtual-block doorbell is fixed at port `0x4d42` and accepts
+only a 32-bit scalar write of value one. Its handler accepts the common
+`ExitDisposition::Io` intended to come from the deny-by-default VM exit
+dispatcher, treats even that host-side value as hostile, and independently
+rechecks port, width, direction, and value before touching scratch, ring
+counters, payload memory, or the block backend. The caller remains responsible
+for crossing the common dispatcher first; the doorbell tuple itself is not an
+authority proof. One accepted disposition invokes the existing processor once
+and therefore consumes at most one request. Idle and backpressure retain their
+existing behavior. Interrupt delivery remains the separate exact-`SIGNAL`
+operation described above; neither the port nor its value carries authority.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 361 `mrml-kernel` release tests and scoped strict Clippy. The 24
+focused virtual-block/interrupt tests now also cover wrong port, width,
+direction, value, and non-I/O disposition without queue, scratch, backend, or
+notification mutation, plus exact one-request-per-invocation behavior over two
+queued requests. This is shared unit/simulation evidence only. The doorbell is
+not wired into a KVM/WHP runner, PCI transport, guest driver, concrete block
+backend, or physical device.
+
+The 10,000-iteration optimized in-process benchmark now includes exact doorbell
+validation before the previously measured transaction-through-interrupt path.
+Windows measured 942,500 ns total (94.250 ns per iteration), versus the prior
+963,800 ns/96.380 ns sample without the doorbell wrapper. Arch Linux under WSL2
+measured 1,087,960 ns total (108.796 ns per iteration), versus the prior
+1,067,570 ns/106.757 ns sample. These single-sample differences are measurement
+noise, not an improvement or regression claim; the same mock-backend and
+non-hypervisor exclusions apply.
+
+The doorbell `DIGITAL-RIGHTS REVIEW` found no collection, tracking, retention,
+identity expansion, DRM, attestation, remote disclosure, vendor preference,
+accessibility restriction, or persistent owner-state change. The `HOSTILE
+SECURITY REVIEW` treats every scalar field, dispatcher result, ring state,
+backend result, and retry as hostile; mismatches precede all mutation and one
+doorbell cannot drain an unbounded queue. Data remains non-authorizing, and all
+existing uncertainty paths remain fail-stop. This agent review does not replace
+the required independent human dual review.
+
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one
 capability-selected shared buffer.

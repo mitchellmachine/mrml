@@ -349,8 +349,11 @@ explicitly and downgrade the status rather than guessing.
   the existing capability-authorized, allowlisted VM interrupt boundary and is
   cleared only after confirmed injection. Denied or uncertain delivery remains
   pending; terminal device lifecycle invalidates it. It is unit-tested shared
-  policy only: no concrete hosted/physical backend, KVM/WHP device attachment,
-  doorbell, guest driver, or durability evidence exists yet. A
+  policy only. An exact MRML-specific 32-bit write/value doorbell over the
+  common I/O disposition processes at most one request and rejects every scalar
+  mismatch before queue/backend access. No concrete hosted/physical backend,
+  KVM/WHP device attachment, native-runner wiring, guest driver, or durability
+  evidence exists yet. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned
