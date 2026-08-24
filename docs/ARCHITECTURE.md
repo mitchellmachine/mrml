@@ -427,9 +427,16 @@ authenticated high-water mark and the table computes the next value strictly
 above every issued slot, so a stale pre-reboot token cannot collide after
 recovery. Live handles are never serialized, and
 transient live capabilities are not automatically made durable. This remains a
-foundation: the proof issuer, stable-file publication, owner policy UI,
-authenticated boot/recovery binding, and rollback-resistant accepted-epoch
-persistence are not implemented.
+foundation. The canonical bytes can now become the complete content of a
+capability-authorized stable-file successor: exact file WRITE/RESIZE is checked
+before encoding, successor metadata binds the file object/generation/length/
+digest/extents, and an exact one-use COW transaction receipt activates it.
+Recovery accepts only the caller-supplied file generation already selected by
+authenticated reachable recovery, uses separate bootstrap file READ authority,
+does not search older generations, preserves I/O uncertainty, and erases the
+policy buffer after parsing. The proof issuer, owner policy UI, boot
+orchestration, and rollback-resistant accepted-epoch/generation persistence are
+not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

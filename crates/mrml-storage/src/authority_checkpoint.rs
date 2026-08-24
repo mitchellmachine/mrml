@@ -1,6 +1,8 @@
 use crate::{
-    StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectId,
-    StorageObjectKind, StoragePrincipal, StorageRights, VolumeId,
+    ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
+    FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityError,
+    StorageAuthorityTable, StorageHandle, StorageObjectId, StorageObjectKind, StoragePrincipal,
+    StorageRights, StorageTransaction, TransactionError, TransactionReceipt, VolumeId,
 };
 use core::array;
 use mrml_crypto::Sha3_256;
@@ -11,6 +13,42 @@ const DIGEST_OFFSET: usize = 48;
 const DIGEST_BYTES: usize = 32;
 const MAGIC: [u8; 4] = *b"MRAC";
 const VERSION: u8 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorityCheckpoint {
+    length: usize,
+    digest: [u8; DIGEST_BYTES],
+    epoch: u64,
+    root_generation: u64,
+    handle_generation: u32,
+    grant_count: usize,
+}
+
+impl AuthorityCheckpoint {
+    pub const fn length(self) -> usize {
+        self.length
+    }
+
+    pub const fn digest(self) -> [u8; DIGEST_BYTES] {
+        self.digest
+    }
+
+    pub const fn epoch(self) -> u64 {
+        self.epoch
+    }
+
+    pub const fn root_generation(self) -> u64 {
+        self.root_generation
+    }
+
+    pub const fn handle_generation(self) -> u32 {
+        self.handle_generation
+    }
+
+    pub const fn grant_count(self) -> usize {
+        self.grant_count
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StorageRecoveryGrant {
@@ -73,9 +111,11 @@ impl AuthenticatedAuthorityCheckpoint {
     /// # Safety
     ///
     /// The caller must bind all fields to authenticated recovery evidence and
-    /// must not issue more than one proof for the same accepted epoch. A raw
-    /// digest, object name, principal number, or checkpoint file is never
-    /// sufficient evidence.
+    /// serialize attempts against one authenticated recovery guard and ensure
+    /// no duplicate proof can outlive successful acceptance. Reissuing the
+    /// exact proof after a pre-acceptance I/O failure is permitted. A raw digest,
+    /// object name, principal number, or checkpoint file is never sufficient
+    /// evidence.
     pub const unsafe fn new(
         epoch: u64,
         volume: VolumeId,
@@ -98,6 +138,52 @@ pub struct RecoveredStorageAuthorities<const N: usize> {
     handles: [Option<StorageHandle>; N],
     count: usize,
     epoch: u64,
+}
+
+/// Durable-grant checkpoint staged into one fresh stable-file generation. The
+/// successor remains inactive until its exact transaction receipt is consumed.
+pub struct PreparedStableAuthorities<const EXTENTS: usize> {
+    file: PreparedFileWrite<EXTENTS>,
+    checkpoint: AuthorityCheckpoint,
+}
+
+impl<const EXTENTS: usize> PreparedStableAuthorities<EXTENTS> {
+    pub const fn checkpoint(&self) -> AuthorityCheckpoint {
+        self.checkpoint
+    }
+
+    pub fn admit<const PARTICIPANTS: usize, const WRITES: usize>(
+        &self,
+        transaction: &mut StorageTransaction<PARTICIPANTS, WRITES>,
+    ) -> Result<(), TransactionError> {
+        transaction.admit_file(&self.file)
+    }
+
+    pub fn commit<const PARTICIPANTS: usize>(
+        self,
+        receipt: &mut TransactionReceipt<PARTICIPANTS>,
+    ) -> Result<StableAuthorities<EXTENTS>, TransactionError> {
+        let file = self.file.commit_transaction(receipt)?;
+        Ok(StableAuthorities {
+            file,
+            checkpoint: self.checkpoint,
+        })
+    }
+}
+
+pub struct StableAuthorities<const EXTENTS: usize> {
+    file: FileState<EXTENTS>,
+    checkpoint: AuthorityCheckpoint,
+}
+
+impl<const EXTENTS: usize> StableAuthorities<EXTENTS> {
+    pub const fn file(&self) -> &FileState<EXTENTS> {
+        &self.file
+    }
+
+    pub const fn checkpoint(&self) -> AuthorityCheckpoint {
+        self.checkpoint
+    }
 }
 
 impl<const N: usize> RecoveredStorageAuthorities<N> {
@@ -252,6 +338,157 @@ pub fn authority_checkpoint_digest(
         return Err(AuthorityCheckpointError::Malformed);
     }
     Ok(checkpoint_digest(input))
+}
+
+/// Encodes an explicit owner-approved durable-grant policy and stages it as the
+/// complete content of the next capability-authorized stable file generation.
+/// The handle-generation value is derived from the live table high-water mark;
+/// callers cannot request reuse of an older token generation.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_stable_authorities<
+    const CURRENT_EXTENTS: usize,
+    const NEXT_EXTENTS: usize,
+    const AUTHORITIES: usize,
+    B: FileWriteBackend,
+>(
+    epoch: u64,
+    root_generation: u64,
+    grants: &[StorageRecoveryGrant],
+    current_file: &FileState<CURRENT_EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    next_extents: ExtentMap<NEXT_EXTENTS>,
+    next_metadata: FileMetadata,
+    file_metadata_pointer: MetadataPointer,
+    protected_metadata: &[MetadataPointer],
+    output: &mut [u8],
+    backend: &mut B,
+) -> Result<PreparedStableAuthorities<NEXT_EXTENTS>, AuthorityStorageError<B::Error>> {
+    let length = checkpoint_length(grants.len()).map_err(AuthorityStorageError::Checkpoint)?;
+    let checkpoint_length =
+        u64::try_from(length).map_err(|_| AuthorityStorageError::InvalidBinding)?;
+    let requested = if checkpoint_length == current_file.length() {
+        StorageRights::WRITE
+    } else {
+        StorageRights::WRITE.union(StorageRights::RESIZE)
+    };
+    let authorized = storage_authority
+        .authorize(file, principal, StorageObjectKind::File, requested)
+        .map_err(FileWriteError::Authority)
+        .map_err(AuthorityStorageError::Write)?;
+    if authorized != current_file.object() {
+        return Err(AuthorityStorageError::Write(FileWriteError::WrongFile));
+    }
+    let handle_generation = storage_authority
+        .next_recovery_generation()
+        .map_err(AuthorityCheckpointError::Authority)
+        .map_err(AuthorityStorageError::Checkpoint)?;
+    let encoded_length = encode_authority_checkpoint(
+        epoch,
+        current_file.object().volume(),
+        root_generation,
+        handle_generation,
+        grants,
+        output,
+    )
+    .map_err(AuthorityStorageError::Checkpoint)?;
+    if encoded_length != length {
+        return Err(AuthorityStorageError::InvalidBinding);
+    }
+    let digest = checkpoint_digest(&output[..length]);
+    let checkpoint = AuthorityCheckpoint {
+        length,
+        digest,
+        epoch,
+        root_generation,
+        handle_generation,
+        grant_count: grants.len(),
+    };
+    let mut content = Sha3_256::new();
+    content.update(&output[..length]);
+    if next_metadata.object() != current_file.object()
+        || next_metadata.generation() != current_file.generation().checked_add(1).unwrap_or(0)
+        || next_metadata.length() != checkpoint_length
+        || next_metadata.content_digest() != content.finalize()
+    {
+        return Err(AuthorityStorageError::InvalidBinding);
+    }
+    let file = current_file
+        .prepare_write(
+            storage_authority,
+            file,
+            principal,
+            0,
+            &output[..length],
+            checkpoint_length,
+            next_extents,
+            next_metadata,
+            file_metadata_pointer,
+            protected_metadata,
+            backend,
+        )
+        .map_err(AuthorityStorageError::Write)?;
+    Ok(PreparedStableAuthorities { file, checkpoint })
+}
+
+/// Reads only the exact checkpoint file generation already selected by
+/// authenticated reachable recovery. `bootstrap_authority` is an explicit
+/// trusted recovery capability used solely to read this policy file; names and
+/// the checkpoint itself cannot manufacture that authority.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_stable_authorities<
+    const GRANTS: usize,
+    const EXTENTS: usize,
+    const BOOTSTRAP_AUTHORITIES: usize,
+    B: FileReadBackend,
+>(
+    file_state: &FileState<EXTENTS>,
+    bootstrap_authority: &StorageAuthorityTable<BOOTSTRAP_AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    expected_file_generation: u64,
+    guard: &mut AuthorityRecoveryGuard,
+    proof: AuthenticatedAuthorityCheckpoint,
+    input: &mut [u8],
+    backend: &mut B,
+) -> Result<RecoveredStorageAuthorities<GRANTS>, AuthorityStorageError<B::Error>> {
+    input.fill(0);
+    if expected_file_generation == 0 || file_state.generation() != expected_file_generation {
+        return Err(AuthorityStorageError::InvalidBinding);
+    }
+    let maximum = checkpoint_length(GRANTS).map_err(AuthorityStorageError::Checkpoint)?;
+    let length = usize::try_from(file_state.length())
+        .ok()
+        .filter(|length| {
+            *length >= AUTHORITY_CHECKPOINT_HEADER_BYTES
+                && *length <= input.len()
+                && *length <= maximum
+        })
+        .ok_or(AuthorityStorageError::InvalidBinding)?;
+    file_state
+        .read(
+            bootstrap_authority,
+            file,
+            principal,
+            0,
+            &mut input[..length],
+            backend,
+        )
+        .map_err(AuthorityStorageError::Read)?;
+    let result = guard
+        .recover::<GRANTS>(&input[..length], proof)
+        .map_err(AuthorityStorageError::Checkpoint);
+    input.fill(0);
+    result
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityStorageError<E> {
+    Checkpoint(AuthorityCheckpointError),
+    InvalidBinding,
+    Read(FileReadError<E>),
+    Write(FileWriteError<E>),
 }
 
 struct Decoded<const N: usize> {
@@ -449,6 +686,10 @@ impl From<crate::StorageIdentityError> for AuthorityCheckpointError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
+        ExtentRecord, StorageTransactionId, Superblock, VolumeHeader,
+    };
 
     fn volume() -> VolumeId {
         VolumeId::new([0x41; 16]).unwrap()
@@ -460,6 +701,207 @@ mod tests {
 
     fn principal(value: u64) -> StoragePrincipal {
         StoragePrincipal::new(value).unwrap()
+    }
+
+    const BLOCK_BYTES: usize = 4096;
+
+    fn header() -> VolumeHeader {
+        VolumeHeader::new(volume(), BLOCK_BYTES as u32, 100, 1, 2).unwrap()
+    }
+
+    fn digest(bytes: &[u8]) -> [u8; 32] {
+        let mut digest = Sha3_256::new();
+        digest.update(bytes);
+        digest.finalize()
+    }
+
+    struct StableBackend {
+        bytes: [u8; BLOCK_BYTES],
+        writes: usize,
+        reads: usize,
+        fail_read: bool,
+    }
+
+    unsafe impl FileWriteBackend for StableBackend {
+        type Error = u8;
+
+        fn stage_new_extent(
+            &mut self,
+            file: StorageObjectId,
+            old_generation: u64,
+            old_length: u64,
+            next: ExtentRecord,
+            new_length: u64,
+            patch_offset: u64,
+            patch: &[u8],
+        ) -> Result<(), Self::Error> {
+            if file != object(90)
+                || old_generation != 1
+                || old_length != 0
+                || next.physical_block() != Some(10)
+                || patch_offset != 0
+                || usize::try_from(new_length).ok() != Some(patch.len())
+            {
+                return Err(1);
+            }
+            self.bytes.fill(0);
+            self.bytes[..patch.len()].copy_from_slice(patch);
+            if next.content_digest() != digest(&self.bytes) {
+                return Err(2);
+            }
+            self.writes += 1;
+            Ok(())
+        }
+
+        fn flush_new_file_data(
+            &mut self,
+            file: StorageObjectId,
+            generation: u64,
+            length: u64,
+            content_digest: [u8; 32],
+        ) -> Result<(), Self::Error> {
+            let length = usize::try_from(length).map_err(|_| 3)?;
+            if file != object(90)
+                || generation != 2
+                || content_digest != digest(&self.bytes[..length])
+            {
+                return Err(3);
+            }
+            Ok(())
+        }
+    }
+
+    unsafe impl FileReadBackend for StableBackend {
+        type Error = u8;
+
+        fn read_verified_extent(
+            &mut self,
+            record: ExtentRecord,
+            byte_offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            self.reads += 1;
+            if self.fail_read || record.content_digest() != digest(&self.bytes) {
+                return Err(4);
+            }
+            let start = usize::try_from(byte_offset).map_err(|_| 4)?;
+            let end = start.checked_add(output.len()).ok_or(4)?;
+            output.copy_from_slice(self.bytes.get(start..end).ok_or(4)?);
+            Ok(())
+        }
+    }
+
+    struct PublicationBackend;
+
+    unsafe impl CowPublicationBackend for PublicationBackend {
+        type Error = ();
+
+        fn verify_new_metadata(&mut self, _: CowMetadataWrite) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            _: &[u8; crate::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            (block == 2).then_some(()).ok_or(())
+        }
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    fn stable_layout(
+        checkpoint: &[u8],
+    ) -> (
+        FileState<0>,
+        ExtentMap<1>,
+        FileMetadata,
+        [CowMetadataImage; 2],
+    ) {
+        let header = header();
+        let current_extents = ExtentMap::<0>::build(header, object(90), 1, 0, &[]).unwrap();
+        let current = FileState::new(object(90), 1, 0, current_extents).unwrap();
+        let mut block = [0; BLOCK_BYTES];
+        block[..checkpoint.len()].copy_from_slice(checkpoint);
+        let record = ExtentRecord::data(object(90), 2, 0, 1, 10, digest(&block)).unwrap();
+        let next =
+            ExtentMap::build(header, object(90), 2, checkpoint.len() as u64, &[record]).unwrap();
+        let metadata = FileMetadata::new(
+            header,
+            object(90),
+            2,
+            checkpoint.len() as u64,
+            1,
+            MetadataPointer::new(20, 1).unwrap(),
+            digest(checkpoint),
+        )
+        .unwrap();
+        let mut encoded_metadata = [0; BLOCK_BYTES];
+        metadata.encode(
+            (&mut encoded_metadata[..crate::FILE_METADATA_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let mut encoded_extents = [0; BLOCK_BYTES];
+        record.encode(
+            (&mut encoded_extents[..crate::EXTENT_RECORD_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        (
+            current,
+            next,
+            metadata,
+            [
+                CowMetadataImage::new(
+                    MetadataPointer::new(21, 1).unwrap(),
+                    digest(&encoded_metadata),
+                ),
+                CowMetadataImage::new(
+                    MetadataPointer::new(20, 1).unwrap(),
+                    digest(&encoded_extents),
+                ),
+            ],
+        )
+    }
+
+    fn publication_plan(images: [CowMetadataImage; 2]) -> CowPublicationPlan<4> {
+        let active = Superblock::new(
+            header(),
+            1,
+            0,
+            object(1),
+            MetadataPointer::new(30, 1).unwrap(),
+            MetadataPointer::new(31, 1).unwrap(),
+        )
+        .unwrap();
+        let root =
+            CowMetadataWrite::new(MetadataPointer::new(40, 1).unwrap(), 2, [0x40; 32]).unwrap();
+        let allocation =
+            CowMetadataWrite::new(MetadataPointer::new(41, 1).unwrap(), 2, [0x41; 32]).unwrap();
+        CowPublicationPlan::build(
+            header(),
+            1,
+            active,
+            object(1),
+            root.pointer(),
+            allocation.pointer(),
+            &[
+                images[0].bind(2).unwrap(),
+                images[1].bind(2).unwrap(),
+                root,
+                allocation,
+            ],
+            &[
+                MetadataPointer::new(30, 1).unwrap(),
+                MetadataPointer::new(31, 1).unwrap(),
+            ],
+        )
+        .unwrap()
     }
 
     fn proof(
@@ -478,6 +920,166 @@ mod tests {
                 digest,
             )
         }
+    }
+
+    #[test]
+    fn stable_checkpoint_publishes_once_and_recovers_only_selected_generation() {
+        let grants = [StorageRecoveryGrant::root(
+            principal(11),
+            object(7),
+            StorageObjectKind::Directory,
+            StorageRights::LOOKUP.union(StorageRights::OPEN_CHILD),
+        )];
+        let mut authority = StorageAuthorityTable::<2>::new();
+        let file = authority
+            .insert(
+                object(90),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                principal(7),
+            )
+            .unwrap();
+        let mut expected =
+            [0; AUTHORITY_CHECKPOINT_HEADER_BYTES + AUTHORITY_CHECKPOINT_GRANT_BYTES];
+        encode_authority_checkpoint(9, volume(), 14, 2, &grants, &mut expected).unwrap();
+        let (current, next, metadata, images) = stable_layout(&expected);
+        let mut backend = StableBackend {
+            bytes: [0; BLOCK_BYTES],
+            writes: 0,
+            reads: 0,
+            fail_read: false,
+        };
+        let (denied_current, denied_next, denied_metadata, _) = stable_layout(&expected);
+        let mut denied_authority = StorageAuthorityTable::<1>::new();
+        let denied_file = denied_authority
+            .insert(
+                object(90),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                principal(7),
+            )
+            .unwrap();
+        let mut denied_output = [0xa5; 256];
+        assert!(matches!(
+            prepare_stable_authorities(
+                9,
+                14,
+                &grants,
+                &denied_current,
+                &denied_authority,
+                denied_file,
+                principal(7),
+                denied_next,
+                denied_metadata,
+                MetadataPointer::new(21, 1).unwrap(),
+                &[],
+                &mut denied_output,
+                &mut backend,
+            ),
+            Err(AuthorityStorageError::Write(FileWriteError::Authority(_)))
+        ));
+        assert!(denied_output.iter().all(|byte| *byte == 0xa5));
+        assert_eq!(backend.writes, 0);
+
+        let mut output = [0xa5; 256];
+        let prepared = prepare_stable_authorities(
+            9,
+            14,
+            &grants,
+            &current,
+            &authority,
+            file,
+            principal(7),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut output,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.checkpoint().digest(),
+            authority_checkpoint_digest(&expected).unwrap()
+        );
+        assert_eq!(prepared.checkpoint().handle_generation(), 2);
+        assert_eq!(backend.writes, 1);
+
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(80).unwrap(), 2).unwrap();
+        prepared.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let stable = prepared.commit(&mut receipt).unwrap();
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(stable.file().generation(), 2);
+        assert_eq!(stable.checkpoint().epoch(), 9);
+
+        let mut guard = AuthorityRecoveryGuard::new(8, 1);
+        let mut recovered_bytes = [0xa5; 256];
+        assert_eq!(
+            recover_stable_authorities::<2, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                principal(7),
+                1,
+                &mut guard,
+                proof(&expected, 9, 14, 2),
+                &mut recovered_bytes,
+                &mut backend,
+            )
+            .map(|_| ()),
+            Err(AuthorityStorageError::InvalidBinding)
+        );
+        assert_eq!((guard.accepted_epoch(), backend.reads), (8, 0));
+        assert!(recovered_bytes.iter().all(|byte| *byte == 0));
+
+        backend.fail_read = true;
+        assert!(matches!(
+            recover_stable_authorities::<2, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                principal(7),
+                2,
+                &mut guard,
+                proof(&expected, 9, 14, 2),
+                &mut recovered_bytes,
+                &mut backend,
+            ),
+            Err(AuthorityStorageError::Read(FileReadError::Backend(4)))
+        ));
+        assert_eq!(guard.accepted_epoch(), 8);
+        assert!(recovered_bytes.iter().all(|byte| *byte == 0));
+        backend.fail_read = false;
+        let recovered = recover_stable_authorities::<2, _, _, _>(
+            stable.file(),
+            &authority,
+            file,
+            principal(7),
+            2,
+            &mut guard,
+            proof(&expected, 9, 14, 2),
+            &mut recovered_bytes,
+            &mut backend,
+        )
+        .unwrap();
+        let (table, handles, count, _) = recovered.into_parts();
+        assert!(recovered_bytes.iter().all(|byte| *byte == 0));
+        assert_eq!(count, 1);
+        assert_eq!(
+            table.authorize(
+                handles[0].unwrap(),
+                principal(11),
+                StorageObjectKind::Directory,
+                StorageRights::OPEN_CHILD,
+            ),
+            Ok(object(7))
+        );
     }
 
     #[test]

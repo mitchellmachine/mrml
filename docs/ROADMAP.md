@@ -558,8 +558,15 @@ authority; unrelated domains continue.
    following authenticated checkpoint, preventing stale pre-reboot token
    collision. The grant policy is explicit rather than an automatic snapshot
    of transient capabilities.
-   Stable-file publication, authenticated boot/recovery integration, and
-   rollback-resistant persistence of the accepted epoch remain pending, so
+   The checkpoint is now staged as the complete content of an exact capability-
+   authorized stable-file successor. File WRITE/RESIZE precedes encoding,
+   metadata binds object, next generation, length, content digest, and extents,
+   and activation requires the matching COW transaction's one-use receipt.
+   Recovery reads only the exact file generation selected by authenticated
+   reachable recovery through separate bootstrap READ authority, preserves I/O
+   uncertainty, and erases policy bytes after parsing. Trusted proof issuance,
+   owner-policy admission, boot orchestration, and rollback-resistant
+   persistence of the accepted epoch/generation remain pending, so
    reboot-time capability reconstruction is still partial. A hosted/physical
    device backend and physical
    power-loss evidence remain pending. A focused signed KVM/WHP controlled

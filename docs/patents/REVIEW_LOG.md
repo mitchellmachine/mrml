@@ -1377,3 +1377,13 @@ before-commit behavior are standard defensive capability and recovery
 techniques. No live bearer token
 is serialized and no patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
+
+# 2026-08-24 — Durable-grant stable-file transaction binding
+
+**Result: NOT_TRIGGERED.** The change conventionally stages the bounded grant
+manifest as complete stable-file content using existing capability checks,
+copy-on-write file preparation, metadata binding, transaction admission, and a
+one-use publication receipt. Exact-generation recovery through separately
+authorized reads and post-parse buffer erasure are standard defensive storage
+integration. No patent-candidate mechanism was identified. This agent review
+does not replace the required independent human dual review.

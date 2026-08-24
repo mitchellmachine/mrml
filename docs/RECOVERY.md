@@ -281,9 +281,15 @@ explicitly and downgrade the status rather than guessing.
   substitution, amplification, corruption, and replay; and advances the
   volatile epoch/generation guards only after complete reconstruction. Fresh
   slots start at that high-water mark and expose the next value above every
-  issued generation, preventing stale pre-reboot token collision. Stable
-  publication, owner-policy admission, authenticated boot/recovery proof issuance, and
-  rollback-resistant persistence of the accepted epoch remain pending, so
+  issued generation, preventing stale pre-reboot token collision. The canonical
+  checkpoint can now be staged as a complete capability-authorized stable-file
+  successor and activated only through its exact one-use COW transaction
+  receipt. Recovery requires separate bootstrap file READ authority and the
+  exact file generation already selected by authenticated reachable recovery;
+  it never searches older generations, preserves I/O errors, and erases policy
+  bytes after parsing. Owner-policy admission, authenticated boot/recovery proof
+  issuance and orchestration, and rollback-resistant persistence of the
+  accepted epoch/generation remain pending, so
   reboot-time capability reconstruction and concrete block durability remain
   partial.
   Configuration checkpoints can now participate in this same exact stable-file

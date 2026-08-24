@@ -37,9 +37,11 @@ pub use authority::{
 };
 pub use authority_checkpoint::{
     AUTHORITY_CHECKPOINT_GRANT_BYTES, AUTHORITY_CHECKPOINT_HEADER_BYTES,
-    AuthenticatedAuthorityCheckpoint, AuthorityCheckpointError, AuthorityRecoveryGuard,
-    RecoveredStorageAuthorities, StorageRecoveryGrant, authority_checkpoint_digest,
-    encode_authority_checkpoint,
+    AuthenticatedAuthorityCheckpoint, AuthorityCheckpoint, AuthorityCheckpointError,
+    AuthorityRecoveryGuard, AuthorityStorageError, PreparedStableAuthorities,
+    RecoveredStorageAuthorities, StableAuthorities, StorageRecoveryGrant,
+    authority_checkpoint_digest, encode_authority_checkpoint, prepare_stable_authorities,
+    recover_stable_authorities,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{

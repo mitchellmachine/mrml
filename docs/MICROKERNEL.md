@@ -3512,16 +3512,30 @@ proof issuance. The codec intentionally does not export the current live table,
 because doing so would silently convert transient or time-bounded authority into
 persistent authority.
 
+The durable-grant bytes are now bound to the existing capability-native stable-
+file and COW transaction path. Preparation checks exact file WRITE and
+conditional RESIZE before producing checkpoint bytes, derives the handle-
+generation high-water mark from the live table, and requires successor file
+metadata to match the exact object, next generation, length, content digest,
+extent map, and publication participant. Staged bytes do not become active
+until the matching one-use transaction receipt is consumed. Recovery uses a
+separate bootstrap file READ capability and only the exact nonzero file
+generation already selected by authenticated reachable recovery. It performs
+no older-generation search, preserves backend uncertainty, and erases the
+caller policy buffer after every parsed success or rejection. Wrong file
+generation fails before I/O; denied preparation produces no checkpoint bytes or
+backend writes.
+
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
-each pass all 105 `mrml-storage` tests and scoped strict Clippy. Focused tests
+each pass all 106 `mrml-storage` tests and scoped strict Clippy. Focused tests
 cover fresh attenuated lineage, descendant revocation, and cross-recovery stale-
 token rejection; corruption and root-generation substitution; replay without
 guard advancement; rights
 amplification, forward lineage, hidden reserved data even with a recomputed
 digest, and capacity mismatch. This is unit/simulation evidence only. Stable-
-file transaction binding, trusted proof issuance, owner-facing durable-grant
-policy, boot integration, and rollback-resistant persistence of the accepted
-epoch remain unimplemented, so complete reboot reconstruction is not claimed.
+Trusted proof issuance, owner-facing durable-grant policy, boot orchestration,
+and rollback-resistant persistence of the accepted epoch/generation remain
+unimplemented, so complete reboot reconstruction is not claimed.
 This agent review is not
 independent human audit.
 
