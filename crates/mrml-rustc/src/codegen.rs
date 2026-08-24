@@ -4835,17 +4835,18 @@ fn runtime_call_arguments_preanalysis_supported<
         {
             continue;
         }
-        if matches!(expected, RuntimeExpressionType::Array { .. })
-            && runtime_array_call_argument_preanalysis_supported(
-                function,
-                resolver,
-                locals,
-                tree,
-                *argument,
-                expected,
-                depth + 1,
-            )?
-        {
+        if matches!(
+            expected,
+            RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
+        ) && runtime_array_call_argument_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            *argument,
+            expected,
+            depth + 1,
+        )? {
             continue;
         }
         if runtime_aggregate_call_argument_preanalysis_supported(
@@ -19082,6 +19083,69 @@ mod tests {
 
     struct ByteCallResolver;
 
+    struct TupleCallResolver;
+
+    impl ConstantResolver for TupleCallResolver {
+        fn resolve(&self, _: &str) -> Option<u128> {
+            None
+        }
+
+        fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+            &self,
+            name: &str,
+            argument_count: usize,
+        ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+            let element = CallArrayElement::Integer(crate::IntegerType::Usize);
+            let mut tuple_elements = [None; 4];
+            tuple_elements[0] = Some(element);
+            tuple_elements[1] = Some(element);
+            let tuple = ScalarType::Tuple {
+                elements: tuple_elements,
+                element_count: 2,
+            };
+            let mut parameters = [None; MAX_PARAMETERS];
+            match (name, argument_count) {
+                ("make_tuple", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Integer(crate::IntegerType::Usize),
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: ScalarType::Integer(crate::IntegerType::Usize),
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "make_tuple",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: tuple,
+                        return_type_name: "(usize, usize)",
+                        body_expression: "(first, second)",
+                    })
+                }
+                ("consume_tuple", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "pair",
+                        ty: tuple,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "bias",
+                        ty: ScalarType::Integer(crate::IntegerType::Usize),
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "consume_tuple",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: ScalarType::Integer(crate::IntegerType::Usize),
+                        return_type_name: "usize",
+                        body_expression: "pair.0 + pair.1 + bias",
+                    })
+                }
+                _ => None,
+            }
+        }
+    }
+
     impl ConstantResolver for ByteCallResolver {
         fn resolve(&self, _: &str) -> Option<u128> {
             None
@@ -20821,7 +20885,6 @@ mod tests {
             assert_eq!(fact.base, expected);
             assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
         }
-
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
         }
@@ -20861,6 +20924,50 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 16384, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_tuple_producing_call_arguments_once() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, prefix: usize, bias: usize, choose: bool) -> usize { let direct = consume_tuple(make_tuple(first, second), bias); let wrapped = consume_tuple({ prefix; if choose { make_tuple(first, second) } else { make_tuple(second, first) } }, bias); direct + wrapped }";
+        let module = Parser::new(source).parse_module::<1, 6>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<6>().unwrap();
+        let resolver = TupleCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 6, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_read_count, 12);
+        for (fact, parameter) in facts.assignment_reads[..10]
+            .iter()
+            .zip([0, 1, 3, 2, 4, 0, 1, 1, 0, 3])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+        for (fact, local) in facts.assignment_reads[10..12]
+            .iter()
+            .zip([RuntimeLocalId(0), RuntimeLocalId(1)])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Local(local));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 6, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
