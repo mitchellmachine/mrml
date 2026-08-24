@@ -68,6 +68,11 @@ their fixed order, kinds, nonzero versions, and verified SHA3-512 digests. The
 measured-boot handoff bit requires all three extensions. This binds the pair the
 current loader actually selects; it is not same-release admission for the
 planned VM, CUDA, launch-policy, configuration, or compiler/runtime artifacts.
+The legacy record now correctly labels the service as artifact kind 3 rather
+than VM kind 2. When release-manifest admission is active, the loader instead
+extends a canonical 272-byte version-2 record containing the manifest identity
+(kind 5), kernel identity (kind 1), and service identity (kind 3), all at the
+same authenticated release and with the exact manifest and payload digests.
 The existing authenticated `VerifiedRelease` boundary now admits an artifact
 only when its kind-specific root matches and its signed version equals—not
 merely meets—the manifest release. Executable admission performs this exact

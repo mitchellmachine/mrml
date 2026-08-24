@@ -635,6 +635,7 @@ pub fn parse_nonzero_version(encoded: &[u8]) -> Option<u64> {
 }
 
 pub const SELECTED_BOOT_ARTIFACT_SET_BYTES: usize = 192;
+pub const SELECTED_RELEASE_ARTIFACT_SET_BYTES: usize = 272;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SelectedArtifactSetError {
@@ -662,7 +663,33 @@ pub fn encode_selected_boot_artifact_set(
     output[18..20].copy_from_slice(&1u16.to_le_bytes());
     output[20..22].copy_from_slice(&2u16.to_le_bytes());
     encode_artifact_identity(&mut output[32..112], 1, kernel_version, kernel_digest);
-    encode_artifact_identity(&mut output[112..192], 2, service_version, service_digest);
+    encode_artifact_identity(&mut output[112..192], 3, service_version, service_digest);
+    Ok(output)
+}
+
+/// Encodes the authenticated release manifest plus the exact kernel/service
+/// pairing it authorized. This PCR evidence record carries no authority.
+pub fn encode_selected_release_artifact_set(
+    release: u64,
+    manifest_digest: [u8; 64],
+    kernel_digest: [u8; 64],
+    service_digest: [u8; 64],
+) -> Result<[u8; SELECTED_RELEASE_ARTIFACT_SET_BYTES], SelectedArtifactSetError> {
+    if release == 0
+        || manifest_digest.iter().all(|byte| *byte == 0)
+        || kernel_digest.iter().all(|byte| *byte == 0)
+        || service_digest.iter().all(|byte| *byte == 0)
+    {
+        return Err(SelectedArtifactSetError::InvalidIdentity);
+    }
+    let mut output = [0; SELECTED_RELEASE_ARTIFACT_SET_BYTES];
+    output[..16].copy_from_slice(b"MRML-BOOTSET-v2\0");
+    output[16..18].copy_from_slice(&(SELECTED_RELEASE_ARTIFACT_SET_BYTES as u16).to_le_bytes());
+    output[18..20].copy_from_slice(&2u16.to_le_bytes());
+    output[20..22].copy_from_slice(&3u16.to_le_bytes());
+    encode_artifact_identity(&mut output[32..112], 5, release, manifest_digest);
+    encode_artifact_identity(&mut output[112..192], 1, release, kernel_digest);
+    encode_artifact_identity(&mut output[192..272], 3, release, service_digest);
     Ok(output)
 }
 
@@ -737,7 +764,7 @@ mod tests {
         assert!(encoded[34..40].iter().all(|byte| *byte == 0));
         assert_eq!(u64::from_le_bytes(encoded[40..48].try_into().unwrap()), 7);
         assert_eq!(&encoded[48..112], &[0x11; 64]);
-        assert_eq!(u16::from_le_bytes(encoded[112..114].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(encoded[112..114].try_into().unwrap()), 3);
         assert!(encoded[114..120].iter().all(|byte| *byte == 0));
         assert_eq!(u64::from_le_bytes(encoded[120..128].try_into().unwrap()), 9);
         assert_eq!(&encoded[128..192], &[0x22; 64]);
@@ -759,6 +786,36 @@ mod tests {
         );
         assert_eq!(
             encode_selected_boot_artifact_set(1, [1; 64], 1, [0; 64]),
+            Err(SelectedArtifactSetError::InvalidIdentity)
+        );
+    }
+
+    #[test]
+    fn selected_release_set_binds_manifest_and_exact_same_release_artifacts() {
+        let encoded =
+            encode_selected_release_artifact_set(11, [0x33; 64], [0x44; 64], [0x55; 64]).unwrap();
+        assert_eq!(&encoded[..16], b"MRML-BOOTSET-v2\0");
+        assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 272);
+        assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 2);
+        assert_eq!(u16::from_le_bytes(encoded[20..22].try_into().unwrap()), 3);
+        for (offset, kind, digest) in [(32, 5, 0x33), (112, 1, 0x44), (192, 3, 0x55)] {
+            assert_eq!(
+                u16::from_le_bytes(encoded[offset..offset + 2].try_into().unwrap()),
+                kind
+            );
+            assert!(
+                encoded[offset + 2..offset + 8]
+                    .iter()
+                    .all(|byte| *byte == 0)
+            );
+            assert_eq!(
+                u64::from_le_bytes(encoded[offset + 8..offset + 16].try_into().unwrap()),
+                11
+            );
+            assert_eq!(&encoded[offset + 16..offset + 80], &[digest; 64]);
+        }
+        assert_eq!(
+            encode_selected_release_artifact_set(0, [1; 64], [2; 64], [3; 64]),
             Err(SelectedArtifactSetError::InvalidIdentity)
         );
     }

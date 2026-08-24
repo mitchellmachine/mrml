@@ -3,7 +3,7 @@
 
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
-use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
+use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, Sha3_512};
 use mrml_kernel::{
     ArtifactKind, BOOTSTRAP_STATE_BYTES, BootstrapState, FramebufferInfo, MAX_HANDOFF_BYTES,
     MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MemoryKind,
@@ -121,6 +121,7 @@ struct PreparedRelease {
     verified: VerifiedRelease,
     expected: [u8; BOOTSTRAP_STATE_BYTES],
     replacement: [u8; BOOTSTRAP_STATE_BYTES],
+    manifest_digest: [u8; 64],
     transition: bool,
 }
 
@@ -466,15 +467,25 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         service_signed.payload(),
         b"MRML authenticated service PE",
     )?;
-    let artifact_set = encode_selected_boot_artifact_set(
-        verified.artifact().version(),
-        *verified.artifact().digest(),
-        service_verified.artifact().version(),
-        *service_verified.artifact().digest(),
-    )
-    .map_err(|_| LOAD_ERROR)?;
-    let artifact_set_measured =
-        measure_artifact(services, &artifact_set, b"MRML selected artifact set")?;
+    let artifact_set_measured = if let Some(release) = prepared_release.as_ref() {
+        let artifact_set = encode_selected_release_artifact_set(
+            release.verified.release(),
+            release.manifest_digest,
+            *verified.artifact().digest(),
+            *service_verified.artifact().digest(),
+        )
+        .map_err(|_| LOAD_ERROR)?;
+        measure_artifact(services, &artifact_set, b"MRML selected release set")?
+    } else {
+        let artifact_set = encode_selected_boot_artifact_set(
+            verified.artifact().version(),
+            *verified.artifact().digest(),
+            service_verified.artifact().version(),
+            *service_verified.artifact().digest(),
+        )
+        .map_err(|_| LOAD_ERROR)?;
+        measure_artifact(services, &artifact_set, b"MRML selected artifact set")?
+    };
     let measured_boot = kernel_measured && service_measured && artifact_set_measured;
     if require_tpm_measurement() && !measured_boot {
         return Err(LOAD_ERROR);
@@ -835,6 +846,7 @@ unsafe fn prepare_configured_release(
     let manifest = unsafe {
         core::slice::from_raw_parts(manifest_file.address as *const u8, manifest_file.length)
     };
+    let manifest_digest = Sha3_512::digest(manifest);
 
     let mut protocol_pointer = core::ptr::null_mut();
     check(unsafe {
@@ -861,6 +873,7 @@ unsafe fn prepare_configured_release(
             verified,
             expected,
             replacement: expected,
+            manifest_digest,
             transition: false,
         }));
     }
@@ -902,6 +915,7 @@ unsafe fn prepare_configured_release(
         verified,
         expected,
         replacement: next.encode(),
+        manifest_digest,
         transition: true,
     }))
 }

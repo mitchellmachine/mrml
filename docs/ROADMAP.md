@@ -1358,7 +1358,7 @@ can count as trusted consent.
    owner-policy session mechanism,
    read-verifies writes, checks exact counter succession, and provides an
    explicit cross-journal index-alias rejection gate. Arch Linux/WSL2 passes all
-   23 UEFI library tests, including hostile exact-size/alias admission and a
+   24 UEFI library tests, including hostile exact-size/alias admission and a
    composed 200-byte publication simulation. This is not TPM provisioning,
    reboot, physical power-loss, or rollback-resistance evidence.
    The native UEFI submission wrapper is now bounded at 256 bytes rather than
@@ -1371,11 +1371,13 @@ can count as trusted consent.
    service order, explicit kinds, nonzero signed versions, verified SHA3-512
    digests, exact length, and zero reserved bytes. The measured-boot handoff bit
    is set only when all three extensions succeed; focused tests reject missing
-   identity and verify every canonical field. This records the exact pair the
-   current loader selected. With a complete compiled release-journal
-   configuration, it now loads one exact manifest and enforces it for the
-   kernel and service, but it does not yet include
-   include the planned VM image, CUDA bundle, launch policy, configuration root,
+   identity and verify every canonical field. The legacy record now correctly
+   labels service kind 3 rather than VM kind 2. With a complete compiled
+   release-journal configuration, the loader instead extends a canonical
+   272-byte version-2 record binding the exact manifest digest and kind 5 plus
+   the kernel and service digests and kinds 1 and 3 at one authenticated
+   release. It does not yet include the planned VM image, CUDA bundle, launch
+   policy, configuration root,
    or compiler/runtime artifacts. No TPM-backed execution or remote-attestation
    evidence is claimed. The implemented `VerifiedRelease` foundation now also
    withholds its per-kind minimum-version roots and exposes exact-release
@@ -1392,10 +1394,11 @@ can count as trusted consent.
    root path. Coherent-set boot admission remains partial because the other
    manifest artifact kinds and physical reboot/power-loss behavior are not yet
    integrated. Verification on 2026-08-24 passed all 5 artifact tests, all 5
-   release-journal tests, all 23 UEFI library tests, strict kernel/storage/UEFI
+   release-journal tests, all 24 UEFI library tests, strict kernel/storage/UEFI
    library Clippy on Windows and Arch Linux/WSL2, strict native UEFI-target
    loader Clippy on Windows, all 452 kernel and 121 storage tests on Arch
-   Linux/WSL2, and an optimized native UEFI loader build. A preceding 451-test Windows full run
+   Linux/WSL2, and an optimized native UEFI loader build. A preceding 451-test
+   Windows full run
    passed 450 tests; the known deep delegation-capacity test again overflowed
    the Windows test-process stack independently of this artifact code. As the
    next manifest-admission

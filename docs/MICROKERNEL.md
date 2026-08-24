@@ -2004,6 +2004,11 @@ are `MRML_RELEASE_COUNTER_NV_INDEX_HEX`, `MRML_RELEASE_SLOT0_NV_INDEX_HEX`,
 `MRML_RELEASE_PCR_DIGEST_HEX`, and `MRML_RELEASE_PCR_SELECT_HEX`.
 `MRML_REQUIRE_RELEASE_MANIFEST=1` forbids fallback. If recovery journal fields
 are also present, every release and recovery NV index must be disjoint.
+Measured boot records configured release admission in a canonical 272-byte
+version-2 selected set: manifest kind 5, kernel kind 1, and service kind 3 share
+the exact release number and retain their verified SHA3-512 digests. The legacy
+192-byte development record now also labels the service correctly as kind 3,
+not VM kind 2. These PCR records are evidence data and confer no authority.
 The manifest codec now rejects duplicate key roles before encoding: its next
 manifest root and five kind-specific roots are pairwise distinct. After the
 current manifest signature is authenticated, transition independently rejects
