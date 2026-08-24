@@ -135,8 +135,9 @@ pub use virtual_block::{
     VirtualBlockExecutionResult, VirtualBlockMutationError, VirtualBlockOperation,
     VirtualBlockProcessError, VirtualBlockProcessOutcome, VirtualBlockProcessResult,
     VirtualBlockQueueBridge, VirtualBlockQueueError, VirtualBlockQueueLayout, VirtualBlockRequest,
-    VirtualBlockTicket, VirtualBlockVmmMemory, execute_virtual_block_request,
-    process_virtual_block_doorbell, process_virtual_block_request,
+    VirtualBlockRunError, VirtualBlockRunResult, VirtualBlockTicket, VirtualBlockVmmMemory,
+    execute_virtual_block_request, process_virtual_block_doorbell, process_virtual_block_request,
+    run_virtual_block_doorbell_once,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

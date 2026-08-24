@@ -632,8 +632,8 @@ capacity before consumption, distinguishes idle and backpressure, rejects a
 consumed malformed request before backend access, executes once, and publishes
 the bound completion. If completion publication becomes uncertain after possible
 mutation, the device and bridge fail rather than retry. A concrete block
-backend, PCI transport, native runner dispatch, a guest driver, QEMU comparison,
-and fuzzing remain pending. This is
+backend, PCI transport, guest driver, QEMU comparison, and fuzzing remain
+pending. This is
 not VirtIO-compatible. Completion publication now latches one coalesced
 notification. Delivery uses the device-configured vector through the existing
 allowlisted, exact-`SIGNAL`-capability VM interrupt boundary and acknowledges
@@ -648,8 +648,13 @@ The MRML-specific block doorbell is now an exact 32-bit write-only scalar tuple
 over the common deny-by-default I/O dispatcher. It rechecks port, width,
 direction, and value before queue access and processes at most one request per
 accepted disposition. The port and value carry no backend or interrupt
-authority. This remains shared-policy simulation; native runner wiring is
-pending.
+authority. A backend-neutral one-exit runner now composes backend execution,
+exit accounting, common I/O dispatch, exact doorbell handling, one queue
+transaction, and capability-authorized notification delivery. It delivers an
+already pending notification before another vCPU entry and fails the VM on any
+runner-stage error. Both prepared native guest types satisfy its memory
+contract, but no signed guest executes this path yet; the composition evidence
+remains shared-policy simulation.
 Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the

@@ -3337,6 +3337,44 @@ doorbell cannot drain an unbounded queue. Data remains non-authorizing, and all
 existing uncertainty paths remain fail-stop. This agent review does not replace
 the required independent human dual review.
 
+A backend-neutral one-exit virtual-block runner now composes `VmBackend::run`,
+the VM exit budget and lifecycle accounting, the common deny-by-default I/O
+dispatcher, the independently revalidated MRML-specific doorbell, one bounded
+queue transaction, and the exact capability-authorized interrupt delivery
+boundary. If a completion notification is already pending, delivery is
+attempted before entering the vCPU again. Every exit, doorbell, transaction, or
+interrupt error fails the VM; failed interruption retains the device latch, so
+the guest is never resumed after uncertain delivery. Both prepared KVM and WHP
+guests implement the runner's memory contract, but no signed guest driver yet
+executes this path.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 365 `mrml-kernel` release tests and scoped strict Clippy. The 28
+focused virtual-block tests include exact runner completion, bad-doorbell
+failure before queue access, retained notification after injection failure, and
+pending-notification delivery before vCPU entry. This is unit/simulation
+evidence only, not native KVM/WHP doorbell execution or physical-device
+evidence.
+
+The optimized 10,000-iteration in-process runner benchmark measured 979,700 ns
+total (97.970 ns per iteration) on Windows and 1,197,723 ns total (119.772 ns
+per iteration) on Arch Linux under WSL2. Unlike the prior 94.250 ns and 108.796
+ns samples, this includes mock backend entry, exit accounting, and common I/O
+dispatch in addition to doorbell, transaction, and interrupt policy. These are
+single noisy regression samples, not an improvement/regression claim, storage
+latency, hypervisor latency, or hardware throughput.
+
+The runner `DIGITAL-RIGHTS REVIEW` found no collection, tracking, retention,
+identity expansion, DRM, attestation, remote disclosure, vendor preference,
+accessibility restriction, or persistent owner-state change. Doorbell and exit
+data create no authority. The `HOSTILE SECURITY REVIEW` treats native exits,
+budgets, dispatcher results, notification state, capability state, queue
+counters, backend effects, completion publication, and injection as hostile;
+pending delivery precedes entry and uncertainty prevents resume. Existing
+revocation, rollback-resistance, accessibility, and evidence gates are
+unchanged. This agent review does not replace the required independent human
+dual review.
+
 `PreparedKvmGuest` and `PreparedWhpGuest` now implement the common
 `VirtualBlockVmmMemory` contract and expose consuming transactional attachment
 for one validated `VirtualBlockQueueLayout`. Each backend creates two disjoint

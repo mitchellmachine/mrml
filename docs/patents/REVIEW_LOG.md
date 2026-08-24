@@ -1396,6 +1396,16 @@ defensive virtual-device techniques. No patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Backend-neutral virtual-block runner transaction
+
+**Result: NOT_TRIGGERED.** The change conventionally composes one native backend
+exit with existing bounded exit accounting, deny-by-default I/O dispatch, exact
+doorbell validation, one queue transaction, and separately capability-authorized
+interrupt injection. Delivering a retained notification before re-entry and
+failing the VM on uncertain runner stages are standard defensive virtual-device
+techniques. No patent-candidate mechanism was identified. This agent review does
+not replace the required independent human dual review.
+
 # 2026-08-24 — Block-service controlled-probe lifecycle cleanup
 
 **Result: NOT_TRIGGERED.** The change conventionally routes both probe-task

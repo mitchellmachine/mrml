@@ -1,4 +1,8 @@
-use crate::{ExitDisposition, PAGE_SIZE, VmBackend};
+use crate::{
+    Capability, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter, InterruptPolicy,
+    IoPortPolicy, ObjectId, PAGE_SIZE, VirtualBlockInterruptError, VmBackend, VmId, VmRunError,
+    VmTable, inject_virtual_block_interrupt, run_vm_once,
+};
 
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
 pub const VIRTUAL_BLOCK_COMPLETION_BYTES: usize = 32;
@@ -890,6 +894,16 @@ pub enum VirtualBlockDoorbellError<M, D> {
 pub type VirtualBlockDoorbellResult<M, D> =
     Result<VirtualBlockProcessOutcome<D>, VirtualBlockDoorbellError<M, D>>;
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockRunError<M, D> {
+    Exit(VmRunError<M>),
+    Doorbell(VirtualBlockDoorbellError<M, D>),
+    Interrupt(VirtualBlockInterruptError<M>),
+}
+
+pub type VirtualBlockRunResult<M, D> =
+    Result<VirtualBlockProcessOutcome<D>, VirtualBlockRunError<M, D>>;
+
 /// VMM memory authority for the MRML-specific block transport. Request pages
 /// are guest-writable; completion slots and read-result payloads are writable
 /// only by this device path.
@@ -1335,6 +1349,97 @@ where
         .map_err(VirtualBlockDoorbellError::Process)
 }
 
+/// Runs one vCPU to an exact virtual-block doorbell, processes at most one
+/// request, and delivers completion notification through the ordinary VM
+/// interrupt authority. Pending notification is delivered before vCPU entry.
+/// Any stage error fails the VM so uncertain native or device state cannot be
+/// resumed through this composition.
+#[allow(clippy::too_many_arguments)]
+pub fn run_virtual_block_doorbell_once<
+    M,
+    D,
+    const N: usize,
+    const V: usize,
+    const C: usize,
+    const G: usize,
+    const I: usize,
+>(
+    memory: &mut M,
+    block_backend: &mut D,
+    vcpu: u32,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    router: &mut HypercallRouter,
+    capabilities: &CapabilitySpace<C>,
+    guest_memory: &GuestMemory<G>,
+    io_policy: &IoPortPolicy<I>,
+    interrupt_policy: &InterruptPolicy,
+    interrupt_capability: Capability,
+    interrupt_object: ObjectId,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    scratch: &mut [u8],
+) -> VirtualBlockRunResult<M::Error, D::Error>
+where
+    M: VirtualBlockVmmMemory,
+    D: VirtualBlockBackend,
+{
+    if device.pending_interrupt_vector().is_some() {
+        inject_virtual_block_interrupt(
+            device,
+            memory,
+            vms,
+            vm,
+            vcpu,
+            interrupt_policy,
+            capabilities,
+            interrupt_capability,
+            interrupt_object,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockRunError::Interrupt(error)
+        })?;
+    }
+
+    let disposition = run_vm_once(
+        memory,
+        vcpu,
+        vms,
+        vm,
+        router,
+        capabilities,
+        guest_memory,
+        io_policy,
+    )
+    .map_err(VirtualBlockRunError::Exit)?;
+    let outcome =
+        process_virtual_block_doorbell(disposition, device, bridge, memory, block_backend, scratch)
+            .map_err(|error| {
+                let _ = vms.fail(vm);
+                VirtualBlockRunError::Doorbell(error)
+            })?;
+
+    if matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
+        inject_virtual_block_interrupt(
+            device,
+            memory,
+            vms,
+            vm,
+            vcpu,
+            interrupt_policy,
+            capabilities,
+            interrupt_capability,
+            interrupt_object,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockRunError::Interrupt(error)
+        })?;
+    }
+    Ok(outcome)
+}
+
 fn slot_address(
     base: u64,
     position: u64,
@@ -1588,6 +1693,9 @@ mod tests {
         fail_read: bool,
         fail_write: bool,
         fail_write_address: Option<u64>,
+        next_exit: Option<VmExit>,
+        injected: Option<(u32, u8)>,
+        fail_inject: bool,
     }
 
     impl MockVmm {
@@ -1597,6 +1705,9 @@ mod tests {
                 fail_read: false,
                 fail_write: false,
                 fail_write_address: None,
+                next_exit: None,
+                injected: None,
+                fail_inject: false,
             }
         }
     }
@@ -1605,7 +1716,7 @@ mod tests {
         type Error = MockError;
 
         fn run(&mut self, _: u32) -> Result<VmExit, Self::Error> {
-            unreachable!()
+            self.next_exit.take().ok_or(MockError::Injected)
         }
 
         fn read_guest(&self, address: u64, output: &mut [u8]) -> Result<(), Self::Error> {
@@ -1622,7 +1733,11 @@ mod tests {
             self.write_virtual_block(address, input)
         }
 
-        fn inject_interrupt(&mut self, _: u32, _: u8) -> Result<(), Self::Error> {
+        fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> Result<(), Self::Error> {
+            if self.fail_inject {
+                return Err(MockError::Injected);
+            }
+            self.injected = Some((vcpu, vector));
             Ok(())
         }
     }
@@ -2261,6 +2376,244 @@ mod tests {
         assert_eq!(backend.writes, 2);
         vmm.read_guest(0x1040, &mut consumed).unwrap();
         assert_eq!(u64::from_le_bytes(consumed), 2);
+    }
+
+    fn runner_vm() -> (VmTable<1>, VmId) {
+        let mut vms = VmTable::new();
+        let vm = vms.create(8).unwrap();
+        vms.mark_loaded(vm).unwrap();
+        vms.start(vm).unwrap();
+        (vms, vm)
+    }
+
+    fn block_io_policy() -> IoPortPolicy<1> {
+        let mut policy = IoPortPolicy::deny_all();
+        policy
+            .allow(
+                crate::IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, crate::IoDirection::Write)
+                    .unwrap(),
+            )
+            .unwrap();
+        policy
+    }
+
+    #[test]
+    fn shared_runner_completes_exact_doorbell_and_authorized_interrupt() {
+        let interrupt_object = ObjectId(80);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(81), ObjectId(82), ObjectId(83));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        let request = encoded(VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096));
+        vmm.bytes[0x4000..0x5000].fill(0x65);
+        vmm.write_guest(0x1000 + QUEUE_HEADER_BYTES, &request)
+            .unwrap();
+        vmm.write_guest(0x1000, &1u64.to_le_bytes()).unwrap();
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        });
+
+        assert!(matches!(
+            run_virtual_block_doorbell_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockProcessOutcome::Completed(_))
+        ));
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+        assert_eq!(backend.writes, 1);
+        assert_eq!(vmm.injected, Some((0, 48)));
+        assert_eq!(device.pending_interrupt_vector(), None);
+    }
+
+    #[test]
+    fn shared_runner_rejects_bad_doorbell_and_fails_vm_before_queue_access() {
+        let interrupt_object = ObjectId(84);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(85), ObjectId(86), ObjectId(87));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE + 1,
+        });
+
+        assert_eq!(
+            run_virtual_block_doorbell_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Err(VirtualBlockRunError::Doorbell(
+                VirtualBlockDoorbellError::InvalidExit
+            ))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
+        assert!(scratch.iter().all(|byte| *byte == 0xa5));
+    }
+
+    #[test]
+    fn shared_runner_injection_failure_retains_completion_and_fails_vm() {
+        let interrupt_object = ObjectId(88);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(89), ObjectId(90), ObjectId(91));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        let request = encoded(VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096));
+        vmm.write_guest(0x1000 + QUEUE_HEADER_BYTES, &request)
+            .unwrap();
+        vmm.write_guest(0x1000, &1u64.to_le_bytes()).unwrap();
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        });
+        vmm.fail_inject = true;
+
+        assert_eq!(
+            run_virtual_block_doorbell_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Err(VirtualBlockRunError::Interrupt(
+                VirtualBlockInterruptError::Injection(VmRunError::Backend(MockError::Injected))
+            ))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!(backend.writes, 1);
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+    }
+
+    #[test]
+    fn shared_runner_delivers_pending_notification_before_vcpu_entry() {
+        let interrupt_object = ObjectId(92);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(93), ObjectId(94), ObjectId(95));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_io_policy();
+        let mut device = active::<1>();
+        device.latch_completion_interrupt().unwrap();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let expected_exit = VmExit::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        };
+        vmm.next_exit = Some(expected_exit);
+        vmm.fail_inject = true;
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+
+        assert!(matches!(
+            run_virtual_block_doorbell_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Err(VirtualBlockRunError::Interrupt(_))
+        ));
+        assert_eq!(vmm.next_exit, Some(expected_exit));
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
     }
 
     #[test]

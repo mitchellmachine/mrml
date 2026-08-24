@@ -12,14 +12,14 @@ mod tests {
     use core::hint::black_box;
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
-        CapabilitySpace, Endpoint, ExitDisposition, GuestMemory, GuestRegion, HostResourceHandle,
-        InterruptPolicy, KernelScheduler, ObjectId, PeriodicBalancer, PhysAddr, Priority, Rights,
-        Scheduler, SchedulerLoad, SharedAccess, SharedEndpoint, SharedMemoryBindings, TaskRuntime,
-        VIRTUAL_BLOCK_DOORBELL_PORT, VIRTUAL_BLOCK_DOORBELL_VALUE, VirtualBlockBackend,
-        VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
-        VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest,
-        VirtualBlockVmmMemory, VmBackend, VmExit, VmTable, inject_virtual_block_interrupt,
-        process_virtual_block_doorbell,
+        CapabilitySpace, Endpoint, GuestMemory, GuestRegion, HostResourceHandle, HypercallRouter,
+        InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, KernelScheduler, ObjectId,
+        PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler, SchedulerLoad, SharedAccess,
+        SharedEndpoint, SharedMemoryBindings, TaskRuntime, VIRTUAL_BLOCK_DOORBELL_PORT,
+        VIRTUAL_BLOCK_DOORBELL_VALUE, VirtualBlockBackend, VirtualBlockDevice,
+        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+        VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockVmmMemory, VmBackend, VmExit,
+        VmTable, run_virtual_block_doorbell_once,
     };
     use mrml_runtime::{Instant, mrml_println};
 
@@ -32,6 +32,7 @@ mod tests {
     struct VirtualBlockMemory {
         bytes: [u8; 0x5000],
         interrupts: u64,
+        next_exit: Option<VmExit>,
     }
 
     impl VirtualBlockMemory {
@@ -45,7 +46,7 @@ mod tests {
         type Error = ();
 
         fn run(&mut self, _: u32) -> Result<VmExit, Self::Error> {
-            Err(())
+            self.next_exit.take().ok_or(())
         }
 
         fn read_guest(&self, address: u64, output: &mut [u8]) -> Result<(), Self::Error> {
@@ -661,7 +662,7 @@ mod tests {
 
     #[test]
     #[ignore = "manual release-mode performance gate"]
-    fn virtual_block_doorbell_interrupt_policy_budget() {
+    fn virtual_block_runner_policy_budget() {
         let layout = VirtualBlockQueueLayout::new(0x1000, 0x3000, 1).unwrap();
         let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0).unwrap();
         device.negotiate(0).unwrap();
@@ -670,6 +671,7 @@ mod tests {
         let mut memory = VirtualBlockMemory {
             bytes: [0; 0x5000],
             interrupts: 0,
+            next_exit: None,
         };
         memory.bytes[0x4000..0x5000].fill(0x5a);
         let mut storage = VirtualBlockStorage([0; 4096]);
@@ -686,6 +688,11 @@ mod tests {
         let vm = vms.create(VIRTUAL_BLOCK_ITERATIONS + 1).unwrap();
         vms.mark_loaded(vm).unwrap();
         vms.start(vm).unwrap();
+        let mut router = HypercallRouter::new(ObjectId(0x162), ObjectId(0x163), ObjectId(0x164));
+        let guest_memory = GuestMemory::<0>::new();
+        let mut io = IoPortPolicy::<1>::deny_all();
+        io.allow(IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write).unwrap())
+            .unwrap();
 
         let start = Instant::now();
         for sequence in 1..=VIRTUAL_BLOCK_ITERATIONS {
@@ -694,40 +701,36 @@ mod tests {
             memory.write(0x1000 + 128, &request);
             memory.write(0x1000, &sequence.to_le_bytes());
             memory.write(0x3000 + 64, &(sequence - 1).to_le_bytes());
+            memory.next_exit = Some(VmExit::Io {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            });
             assert!(matches!(
-                black_box(process_virtual_block_doorbell(
-                    ExitDisposition::Io {
-                        port: VIRTUAL_BLOCK_DOORBELL_PORT,
-                        size: 4,
-                        write: true,
-                        value: VIRTUAL_BLOCK_DOORBELL_VALUE,
-                    },
-                    &mut device,
-                    &mut bridge,
+                black_box(run_virtual_block_doorbell_once(
                     &mut memory,
                     &mut storage,
+                    0,
+                    &mut vms,
+                    vm,
+                    &mut router,
+                    &capabilities,
+                    &guest_memory,
+                    &io,
+                    &policy,
+                    interrupt_capability,
+                    interrupt_object,
+                    &mut device,
+                    &mut bridge,
                     &mut scratch,
                 ))
                 .unwrap(),
                 VirtualBlockProcessOutcome::Completed(_)
             ));
-            assert_eq!(
-                black_box(inject_virtual_block_interrupt(
-                    &mut device,
-                    &mut memory,
-                    &mut vms,
-                    vm,
-                    0,
-                    &policy,
-                    &capabilities,
-                    interrupt_capability,
-                    interrupt_object,
-                )),
-                Ok(true)
-            );
         }
         report(
-            "virtual_block_doorbell_interrupt_policy",
+            "virtual_block_runner_policy",
             start.elapsed().as_nanos(),
             VIRTUAL_BLOCK_ITERATIONS,
         );

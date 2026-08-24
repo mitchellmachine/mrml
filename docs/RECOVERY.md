@@ -351,8 +351,12 @@ explicitly and downgrade the status rather than guessing.
   pending; terminal device lifecycle invalidates it. It is unit-tested shared
   policy only. An exact MRML-specific 32-bit write/value doorbell over the
   common I/O disposition processes at most one request and rejects every scalar
-  mismatch before queue/backend access. No concrete hosted/physical backend,
-  native-runner dispatch, guest driver, or durability evidence exists yet.
+  mismatch before queue/backend access. A backend-neutral one-exit runner now
+  composes backend execution, exit accounting, common I/O dispatch, the exact
+  doorbell, one queue transaction, and capability-authorized interruption;
+  pending delivery precedes another vCPU entry and any stage error fails the VM.
+  No concrete hosted/physical backend, signed guest driver, or durability
+  evidence exists yet.
   Prepared KVM and WHP guests do now attach the same validated request and
   guest-read-only completion ranges transactionally; ordinary completion writes
   fail while the device-memory path can publish. This is controlled hosted

@@ -633,9 +633,13 @@ backend uncertainty leaves it pending, while terminal device transitions clear
 it. An MRML-specific scalar doorbell now takes the common I/O disposition,
 accepts only the exact 32-bit write/value tuple, and processes at most one
 request; every mismatch fails before queue or backend access. The port is
-routing data and does not grant block or interrupt authority. It has no concrete
-hosted or physical block backend, PCI transport, runner dispatch, or guest
-driver yet.
+routing data and does not grant block or interrupt authority. A backend-neutral
+one-exit runner now composes native backend execution, exit-budget accounting,
+the common deny-by-default I/O dispatcher, exact doorbell validation, one queue
+transaction, and capability-authorized completion interruption. A notification
+already pending is delivered before another vCPU entry, and any runner-stage
+error fails the VM. It has no concrete hosted or physical block backend, PCI
+transport, or guest driver yet.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path
