@@ -381,8 +381,11 @@ explicitly and downgrade the status rather than guessing.
   Signed-guest discovery and PCI presentation remain pending. A
   backend-neutral allocation-free initial guest-driver state now discovers only
   a canonical configuration with a completely fresh idle queue, uses two-phase
-  exact publication tickets, permits one in-flight request, and binds completion
-  acceptance to the exact counter/generation/request/status/length. An accepted
+  exact publication tickets, fills only the configured-capacity in-flight
+  window, and binds ordered completion acceptance to the exact
+  counter/slot/generation/request/status/length. A slot is reusable only after
+  exact retirement, and a terminal completion invalidates all outstanding
+  descendants. An accepted
   reset records its terminal cause and can rediscover only the exact canonical
   successor generation with four zero counters; rejection changes nothing,
   while removal and sequence exhaustion remain permanent. Nonzero restart

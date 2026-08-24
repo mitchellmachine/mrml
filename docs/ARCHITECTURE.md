@@ -685,8 +685,10 @@ A backend-neutral allocation-free initial guest-driver state now strictly
 decodes that record only against a completely fresh idle queue snapshot. It
 derives slots and request geometry from the configuration, prepares requests
 without mutation, commits only the exact fresh publication ticket, permits one
-in-flight request, and accepts a completion only when counter, generation,
-request ID, status, and transferred length match. Reset/removal completions and
+configured-capacity window of in-flight requests, and accepts completions only
+in protected consumer order when counter, slot, generation, request ID, status,
+and transferred length match. Capacity exhaustion rejects before mutation and
+slot reuse follows exact retirement. Reset/removal completions and
 request-ID exhaustion record an explicit terminal cause. Only reset may recover:
 rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal

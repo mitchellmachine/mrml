@@ -3547,26 +3547,31 @@ Read/write preparation bounds block arithmetic, exact configured byte length,
 the 1 MiB limit, and guest buffer wrap; flush additionally requires the
 negotiated feature. Preparation is non-mutating and returns the canonical
 request, derived slot, and next producer counter. Commit accepts only that exact
-fresh ticket and permits one in-flight request. Completion acceptance preserves
-pending state on every malformed, stale, misordered, wrong-generation,
+fresh ticket and fills at most the configured slot count. Completion acceptance
+retires only the next protected consumer slot and preserves pending state on
+every malformed, stale, misordered, wrong-generation,
 wrong-request, or wrong-length record, then advances its local acknowledgement
 position only after exact validation. Reset/removal and request-ID exhaustion
 record an explicit terminal cause. Only reset is recoverable: rediscovery
 requires the canonical exact-successor generation and four zero queue counters.
 Every corrupt record, stale or skipped generation, nonzero counter, removal,
-and exhausted sequence rejects without changing the terminal state.
+and exhausted sequence rejects without changing the terminal state. Reset or
+removal invalidates every still-outstanding request; normal retirement frees
+only its exact slot. Request-ID exhaustion blocks preparation without wrapping
+while the last bounded window drains.
 
-Windows gnullvm and Arch Linux/WSL2 each passed all 379 release kernel tests and
-scoped strict Clippy. Three focused tests cover strict fresh-queue discovery,
+Windows gnullvm and Arch Linux/WSL2 each passed all 380 release kernel tests and
+scoped strict Clippy. Four focused tests cover strict fresh-queue discovery,
 corrupt configuration and counter disagreement, non-mutating preparation,
 canonical request encoding, stale/replayed publication tickets, forged and
-misordered completions without state loss, slot progression, geometry/buffer
+misordered completions without state loss, exact capacity denial, multi-slot
+fill and ordered retirement, post-retirement slot reuse, descendant
+invalidation, the maximum 64-slot boundary, slot progression, geometry/buffer
 arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
 and permanently terminal removal/exhaustion. This is
 unit/simulation evidence only. The signed KVM/WHP producer still uses its
 bounded fixed mechanics; mapped-image use of the common state, nonzero resume,
-multi-in-flight or unbounded progress, PCI, native boot, and physical hardware
-remain unverified.
+unbounded progress, PCI, native boot, and physical hardware remain unverified.
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
@@ -3576,7 +3581,9 @@ feature, buffer range, arithmetic result, request ID, slot, copied ticket,
 completion record, replay, terminal status, and exhaustion as hostile. Data
 does not grant device or backend authority, preparation cannot silently commit,
 invalid completion data cannot release pending ownership, and only an exact
-reset successor can clear reset-terminal state. Existing
+reset successor can clear reset-terminal state. Capacity and request-ID
+exhaustion cannot wrap, and terminal lifecycle invalidates outstanding derived
+state. Existing
 capability, revocation, rollback-resistance, accessibility, and evidence gates
 are unchanged. This agent review does not replace the required independent
 human dual review.

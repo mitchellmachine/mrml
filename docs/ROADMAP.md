@@ -699,15 +699,16 @@ The first reusable guest-driver state is now implemented as allocation-free
 backend-neutral policy. Discovery requires the canonical record plus four exact
 zero queue counters; nonzero restart state is rejected because the current
 record cannot reconstruct prior request-ID history safely. Request preparation
-is non-mutating, exact publication tickets commit one in-flight request, queue
-slots derive from the configured slot count, and completion acceptance binds
-the next published counter, generation, request ID, status, and expected byte
-count before returning an acknowledgement. Geometry, buffer arithmetic, flush
-features, replay, stale tickets, terminal reset/removal, and exhaustion fail
-closed. Reset rediscovery now records the exact terminal cause, accepts only a
-canonical exact-successor generation with four zero queue counters, and leaves
-all state unchanged on rejection. Removal and request-ID exhaustion cannot be
-rediscovered. Integration into the signed guest image, multi-in-flight or
+is non-mutating, exact publication tickets fill at most the configured queue
+capacity, and completion acceptance binds the next published counter and slot,
+generation, request ID, status, and expected byte count before returning an
+acknowledgement. Slots cannot be reused before exact in-order retirement, and
+reset/removal invalidates every outstanding descendant. Geometry, buffer
+arithmetic, flush features, replay, stale tickets, terminal reset/removal, and
+exhaustion fail closed. Reset rediscovery now records the exact terminal cause,
+accepts only a canonical exact-successor generation with four zero queue
+counters, and leaves all state unchanged on rejection. Removal and request-ID
+exhaustion cannot be rediscovered. Integration into the signed guest image,
 unbounded progress, nonzero-queue restart, and PCI transport remain pending.
 
 Networking proceeds from capability-bound network objects and a basic native

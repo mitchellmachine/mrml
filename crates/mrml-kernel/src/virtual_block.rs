@@ -512,8 +512,8 @@ impl VirtualBlockConfigurationPage {
     }
 }
 
-/// A prepared single-slot publication. Encoding the request and publishing the
-/// returned producer counter must complete before this ticket is committed.
+/// A prepared single-request publication. Encoding the request and publishing
+/// the returned producer counter must complete before this ticket is committed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VirtualBlockGuestSubmission {
     request: VirtualBlockRequest,
@@ -566,14 +566,17 @@ impl VirtualBlockGuestCompletion {
 
 /// Allocation-free initial guest-driver state discovered from canonical device
 /// data and an idle queue snapshot. The state carries no backend authority and
-/// supports one exact in-flight request so ownership and replay are explicit.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// supports one exact configured-capacity window so ownership and replay are
+/// explicit.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VirtualBlockGuestDriver {
     configuration: VirtualBlockConfiguration,
     next_request_id: u64,
+    request_ids_exhausted: bool,
     request_producer: u64,
     completion_consumer: u64,
-    pending: Option<VirtualBlockGuestSubmission>,
+    pending: [Option<VirtualBlockGuestSubmission>; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
+    pending_count: u16,
     terminal: Option<VirtualBlockGuestTerminalReason>,
 }
 
@@ -595,9 +598,11 @@ impl VirtualBlockGuestDriver {
         Ok(Self {
             configuration,
             next_request_id: 1,
+            request_ids_exhausted: false,
             request_producer,
             completion_consumer,
-            pending: None,
+            pending: [None; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
+            pending_count: 0,
             terminal: None,
         })
     }
@@ -634,35 +639,41 @@ impl VirtualBlockGuestDriver {
         *self = Self {
             configuration,
             next_request_id: 1,
+            request_ids_exhausted: false,
             request_producer: 0,
             completion_consumer: 0,
-            pending: None,
+            pending: [None; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
+            pending_count: 0,
             terminal: None,
         };
         Ok(())
     }
 
-    pub const fn configuration(self) -> VirtualBlockConfiguration {
+    pub const fn configuration(&self) -> VirtualBlockConfiguration {
         self.configuration
     }
 
-    pub const fn request_producer(self) -> u64 {
+    pub const fn request_producer(&self) -> u64 {
         self.request_producer
     }
 
-    pub const fn completion_consumer(self) -> u64 {
+    pub const fn completion_consumer(&self) -> u64 {
         self.completion_consumer
     }
 
-    pub const fn has_pending(self) -> bool {
-        self.pending.is_some()
+    pub const fn has_pending(&self) -> bool {
+        self.pending_count != 0
     }
 
-    pub const fn is_terminal(self) -> bool {
+    pub const fn pending_count(&self) -> u16 {
+        self.pending_count
+    }
+
+    pub const fn is_terminal(&self) -> bool {
         self.terminal.is_some()
     }
 
-    pub const fn terminal_reason(self) -> Option<VirtualBlockGuestTerminalReason> {
+    pub const fn terminal_reason(&self) -> Option<VirtualBlockGuestTerminalReason> {
         self.terminal
     }
 
@@ -726,8 +737,21 @@ impl VirtualBlockGuestDriver {
         {
             return Err(VirtualBlockError::StaleTicket);
         }
+        let slot = usize::from(submission.slot);
+        if self.pending[slot].is_some() {
+            return Err(VirtualBlockError::InvalidState);
+        }
+        let pending_count = self
+            .pending_count
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
         self.request_producer = submission.producer;
-        self.pending = Some(submission);
+        self.pending[slot] = Some(submission);
+        self.pending_count = pending_count;
+        match self.next_request_id.checked_add(1) {
+            Some(next) => self.next_request_id = next,
+            None => self.request_ids_exhausted = true,
+        }
         Ok(())
     }
 
@@ -736,11 +760,13 @@ impl VirtualBlockGuestDriver {
         published: u64,
         encoded_completion: &[u8],
     ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
-        let pending = self.pending.ok_or(VirtualBlockError::InvalidState)?;
         let expected_published = self
             .completion_consumer
             .checked_add(1)
             .ok_or(VirtualBlockError::SequenceExhausted)?;
+        let slot =
+            (self.completion_consumer % u64::from(self.configuration.queue().slots())) as usize;
+        let pending = self.pending[slot].ok_or(VirtualBlockError::InvalidState)?;
         let completion = VirtualBlockCompletion::decode(encoded_completion)?;
         if published != expected_published
             || published > self.request_producer
@@ -751,11 +777,19 @@ impl VirtualBlockGuestDriver {
         {
             return Err(VirtualBlockError::InvalidCompletion);
         }
-        let exhausted = self.next_request_id == u64::MAX;
+        let pending_count = self
+            .pending_count
+            .checked_sub(1)
+            .ok_or(VirtualBlockError::InvalidState)?;
         self.completion_consumer = published;
-        self.next_request_id = self.next_request_id.saturating_add(1);
-        self.pending = None;
-        self.terminal = if exhausted {
+        self.pending[slot] = None;
+        self.pending_count = pending_count;
+        self.terminal = if self.request_ids_exhausted
+            && (self.pending_count == 0
+                || matches!(
+                    completion.status(),
+                    VirtualBlockCompletionStatus::Reset | VirtualBlockCompletionStatus::Removed
+                )) {
             Some(VirtualBlockGuestTerminalReason::SequenceExhausted)
         } else {
             match completion.status() {
@@ -766,6 +800,10 @@ impl VirtualBlockGuestDriver {
                 _ => None,
             }
         };
+        if self.terminal.is_some() {
+            self.pending.fill(None);
+            self.pending_count = 0;
+        }
         Ok(VirtualBlockGuestCompletion {
             status: completion.status(),
             transferred: completion.transferred(),
@@ -774,11 +812,21 @@ impl VirtualBlockGuestDriver {
     }
 
     fn prepare_ready(&self) -> Result<(), VirtualBlockError> {
-        if self.terminal.is_some() || self.pending.is_some() {
-            Err(VirtualBlockError::InvalidState)
-        } else {
-            Ok(())
+        if self.terminal.is_some() {
+            return Err(VirtualBlockError::InvalidState);
         }
+        if self.request_ids_exhausted {
+            return Err(VirtualBlockError::SequenceExhausted);
+        }
+        if self.completion_consumer > self.request_producer {
+            return Err(VirtualBlockError::InvalidState);
+        }
+        if self.request_producer - self.completion_consumer
+            >= u64::from(self.configuration.queue().slots())
+        {
+            return Err(VirtualBlockError::QueueFull);
+        }
+        Ok(())
     }
 
     fn prepare_data(
@@ -2415,21 +2463,29 @@ mod tests {
         driver.commit_submission(first).unwrap();
         assert_eq!(driver.request_producer(), 1);
         assert!(driver.has_pending());
+        assert_eq!(driver.pending_count(), 1);
+        let second = driver.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
+        assert_eq!(second.producer(), 2);
+        assert_eq!(second.slot(), 1);
+        assert_eq!(second.request().request_id(), 2);
+        driver.commit_submission(second).unwrap();
+        assert_eq!(driver.pending_count(), 2);
         assert_eq!(
             driver.prepare_read(0, 1, 0x80_0000, 4096),
-            Err(VirtualBlockError::InvalidState)
+            Err(VirtualBlockError::QueueFull)
         );
         assert_eq!(
             driver.commit_submission(first),
-            Err(VirtualBlockError::InvalidState)
+            Err(VirtualBlockError::QueueFull)
         );
 
-        let forged = completion_bytes(1, 2, VirtualBlockCompletionStatus::Ok, 4096);
+        let second_completion = completion_bytes(1, 2, VirtualBlockCompletionStatus::Ok, 4096);
         assert_eq!(
-            driver.accept_completion(1, &forged),
+            driver.accept_completion(1, &second_completion),
             Err(VirtualBlockError::InvalidCompletion)
         );
         assert!(driver.has_pending());
+        assert_eq!(driver.pending_count(), 2);
         assert_eq!(driver.completion_consumer(), 0);
         let completed = completion_bytes(1, 1, VirtualBlockCompletionStatus::Ok, 4096);
         assert_eq!(
@@ -2440,17 +2496,70 @@ mod tests {
         assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Ok);
         assert_eq!(outcome.transferred(), 4096);
         assert_eq!(outcome.acknowledgement(), 1);
-        assert!(!driver.has_pending());
+        assert!(driver.has_pending());
+        assert_eq!(driver.pending_count(), 1);
 
-        let second = driver.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
-        assert_eq!(second.producer(), 2);
-        assert_eq!(second.slot(), 1);
-        assert_eq!(second.request().request_id(), 2);
+        let third = driver.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
+        assert_eq!(third.producer(), 3);
+        assert_eq!(third.slot(), 0);
+        assert_eq!(third.request().request_id(), 3);
         assert_eq!(
             driver.commit_submission(first),
             Err(VirtualBlockError::StaleTicket)
         );
-        driver.commit_submission(second).unwrap();
+        driver.commit_submission(third).unwrap();
+        assert_eq!(driver.pending_count(), 2);
+        driver.accept_completion(2, &second_completion).unwrap();
+        let third_completion = completion_bytes(1, 3, VirtualBlockCompletionStatus::Ok, 4096);
+        driver.accept_completion(3, &third_completion).unwrap();
+        assert!(!driver.has_pending());
+
+        let fourth = driver.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
+        driver.commit_submission(fourth).unwrap();
+        let fifth = driver.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
+        driver.commit_submission(fifth).unwrap();
+        assert_eq!(driver.pending_count(), 2);
+        let reset = completion_bytes(1, 4, VirtualBlockCompletionStatus::Reset, 0);
+        driver.accept_completion(4, &reset).unwrap();
+        assert_eq!(
+            driver.terminal_reason(),
+            Some(VirtualBlockGuestTerminalReason::Reset)
+        );
+        assert_eq!(driver.pending_count(), 0);
+        let invalidated = completion_bytes(1, 5, VirtualBlockCompletionStatus::Ok, 4096);
+        assert_eq!(
+            driver.accept_completion(5, &invalidated),
+            Err(VirtualBlockError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn guest_driver_maximum_window_is_bounded_and_drains_in_order() {
+        let device = active::<MAX_VIRTUAL_BLOCK_QUEUE_SLOTS>();
+        let mut driver = discovered_driver(&device);
+        for index in 0..MAX_VIRTUAL_BLOCK_QUEUE_SLOTS {
+            let submission = driver
+                .prepare_read(index as u64, 1, 0x80_0000 + (index as u64 * 4096), 4096)
+                .unwrap();
+            assert_eq!(submission.slot(), index as u16);
+            assert_eq!(submission.request().request_id(), index as u64 + 1);
+            driver.commit_submission(submission).unwrap();
+        }
+        assert_eq!(driver.pending_count(), MAX_VIRTUAL_BLOCK_QUEUE_SLOTS as u16);
+        assert_eq!(
+            driver.prepare_read(0, 1, 0x90_0000, 4096),
+            Err(VirtualBlockError::QueueFull)
+        );
+
+        for position in 1..=MAX_VIRTUAL_BLOCK_QUEUE_SLOTS as u64 {
+            let completion = completion_bytes(1, position, VirtualBlockCompletionStatus::Ok, 4096);
+            driver.accept_completion(position, &completion).unwrap();
+            assert_eq!(
+                driver.pending_count(),
+                (MAX_VIRTUAL_BLOCK_QUEUE_SLOTS as u64 - position) as u16
+            );
+        }
+        assert!(!driver.has_pending());
     }
 
     #[test]
@@ -2491,7 +2600,7 @@ mod tests {
             Err(VirtualBlockError::InvalidState)
         );
 
-        let reset_state = driver;
+        let reset_state = driver.clone();
         let mut stale_configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
         no_flush
             .configuration()
@@ -2550,15 +2659,21 @@ mod tests {
         let mut exhausted = VirtualBlockGuestDriver {
             configuration,
             next_request_id: u64::MAX,
+            request_ids_exhausted: false,
             request_producer: u64::MAX - 1,
             completion_consumer: u64::MAX - 1,
-            pending: None,
+            pending: [None; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
+            pending_count: 0,
             terminal: None,
         };
         let last = exhausted.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
         assert_eq!(last.request().request_id(), u64::MAX);
         assert_eq!(last.producer(), u64::MAX);
         exhausted.commit_submission(last).unwrap();
+        assert_eq!(
+            exhausted.prepare_write(0, 1, 0x80_0000, 4096),
+            Err(VirtualBlockError::SequenceExhausted)
+        );
         let completed = completion_bytes(
             configuration.generation(),
             u64::MAX,
