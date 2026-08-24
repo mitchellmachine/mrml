@@ -574,9 +574,12 @@ Assignments through a direct mutable-reference borrower now distinguish loan
 mutation from compatible loan reads. While a shared child is live, mutation
 through its mutable parent is rejected but reads through that parent remain
 compatible; mutation after the child's last reachable use is accepted. Direct
-loan identities are currently derived only for immutable reference bindings:
-reassignable reference bindings need generational initialization/loan facts so
-that an old loan identity cannot survive a binding replacement.
+For an unconditional top-level explicit-borrow assignment to a mutable
+reference binding, the destination write is a new bounded loan generation.
+Uses resolve to the latest generation, while a child created before replacement
+remains tied to the old generation. Conditional, expression-conditional, and
+loop-carried reference replacements remain unclassified until generation joins
+are path-sensitive; indirect reference-value moves are also not loan origins.
 
 ## Roadmap selection
 
@@ -597,9 +600,9 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is generational loan identity
-for reassignable reference bindings, followed by broader coercion-site
-reborrows before region reasoning.
+The highest-value next major implementation task is path-sensitive generation
+joins for conditional and loop-carried reference replacements, followed by
+broader coercion-site reborrows before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

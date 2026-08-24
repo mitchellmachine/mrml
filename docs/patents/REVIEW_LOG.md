@@ -1371,6 +1371,17 @@ accessibility interface, browser semantic interface, JavaScript/WebAssembly
 runtime, media mechanism, or other patent-candidate mechanism. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — Explicit reference-reassignment loan generations
+
+**Result: NOT_TRIGGERED.** The compiler conventionally versions a direct loan
+when an explicit borrow is assigned to a mutable reference binding and applies
+standard last-use conflict checks to that bounded event identity. It adds no
+new arena, optimization, authority model, device or compatibility protocol,
+host-share mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Service policy-replacement syscall foundation
 
 **Result: NOT_TRIGGERED.** The change adds a conventional pointer-free syscall

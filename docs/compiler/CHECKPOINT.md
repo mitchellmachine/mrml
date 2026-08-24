@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `5ed5cbe`
-  (`compiler: distinguish loan reads from mutations`)
+- Compiler checkpoint commit: `5e3798e`
+  (`compiler: bound reassigned loan generations`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -132,9 +132,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   reborrows retain compatible shared parent reads. Mutation through a direct
   mutable-reference parent is separately classified from a loan read, so a
   live shared child blocks the former but preserves the latter until its last
-  reachable use. Reassignable reference bindings are excluded from derived
-  direct-loan identity until loan facts carry initialization generations. This
-  is not general coercion-site reborrowing.
+  reachable use. An unconditional top-level explicit-borrow assignment to a
+  mutable reference binding creates a new loan generation from the existing
+  bounded write event. Uses select the latest generation, while children issued
+  before replacement retain the old identity. Conditional, expression-
+  conditional, and loop-carried replacements remain excluded until generation
+  joins become path-sensitive; moved reference values are not indirect loan
+  origins. This is not general coercion-site reborrowing.
   A direct identifier initializing an explicitly typed expected reference now
   records the corresponding shared or mutable implicit reborrow. The same
   identifier in an inferred mutable-reference binding remains a move, preserving
@@ -387,8 +391,8 @@ emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths and remaining indirect move/borrow classification,
 unsupported expression/control-flow forms, complete loans, indirect alias
-invalidation, broader coercion-site reborrows, generational loans for
-reassignable reference bindings, regions,
+invalidation, broader coercion-site reborrows, path-sensitive generation joins
+for conditional and loop-carried reference replacements, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -398,10 +402,10 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. add generational loan identity for reassignable reference bindings, then
-   broader coercion-site reborrows before region reasoning; preserve the
-   distinction between an expected-reference reborrow and an inferred
-   consuming move;
+1. add path-sensitive generation joins for conditional and loop-carried
+   reference replacements, then broader coercion-site reborrows before region
+   reasoning; preserve the distinction between an expected-reference reborrow,
+   an explicit reassignment borrow, and an indirect consuming move;
 2. exact constant owned-array element identity is now retained. Add array move
    paths only for a modern Rust operation that can legally move an element
    (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
@@ -431,8 +435,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 709 tests on each host: 390
-library tests, 10 conformance tests, 307 replacement tests, and 2 driver tests.
+The checkpoint source passed 711 tests on each host: 391
+library tests, 10 conformance tests, 308 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

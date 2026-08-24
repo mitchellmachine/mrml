@@ -3369,3 +3369,17 @@ pairs. Reassignable reference bindings are deliberately excluded from derived
 direct-loan identity until initialization generations can prevent stale loans;
 this does not claim general coercion sites, regions, or complete Polonius
 semantics. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The explicit reference-reassignment generation milestone passed all 711
+compiler and driver tests on Windows gnullvm and all 711 in release mode on
+native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts
+using rustc workspace commit
+`fb6531d550e0075b9eb9a51464f404805eec87d9`. An unconditional top-level write
+of an explicit borrow into a mutable reference binding now establishes a new
+loan generation using existing bounded event identities. Later uses select the
+new generation, while a child created before replacement remains associated
+with the old loan. The pinned oracle confirmed the clean replacement, old-child
+survival, and new-child E0506 cases. Conditional, expression-conditional, and
+loop-carried replacements are deliberately excluded until path-sensitive
+generation joins exist; moved reference values are not yet indirect loan
+origins. The hygiene scan remained empty.
