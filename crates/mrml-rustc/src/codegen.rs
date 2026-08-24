@@ -2597,6 +2597,20 @@ struct RuntimePlaceEffectFact {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct RuntimeLoanId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct RuntimeLoanFact {
+    id: RuntimeLoanId,
+    borrower: RuntimeLocalId,
+    borrowed_path: RuntimeMovePathId,
+    kind: RuntimePlaceEffectKind,
+    issue_effect: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeBasicBlockId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3761,6 +3775,51 @@ impl<'source> RuntimeBodyFacts<'source> {
         self.effect_count += 1;
         self.ownership_event_count += 1;
         Ok(())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn direct_loan_fact(&self, initialization_index: usize) -> Option<RuntimeLoanFact> {
+        let initialization = self
+            .initializations
+            .get(initialization_index)
+            .and_then(|initialization| *initialization)?;
+        if initialization.origin != RuntimeInitializationOrigin::LocalDeclaration {
+            return None;
+        }
+        let root = self
+            .move_paths
+            .get(initialization.path.0)
+            .and_then(|path| *path)?;
+        let RuntimePlaceIdentity::Local(borrower) = root.base else {
+            return None;
+        };
+        let RuntimeExpressionType::Reference { mutable, .. } = root.ty else {
+            return None;
+        };
+        self.effects
+            .get(..self.effect_count)?
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .filter(|(_, effect)| {
+                effect.event.0 < initialization.event.0
+                    && effect.location == initialization.location
+                    && effect.expression_path == initialization.expression_path
+                    && effect.expression_conditional == initialization.expression_conditional
+                    && matches!(
+                        (mutable, effect.kind),
+                        (false, RuntimePlaceEffectKind::SharedBorrow)
+                            | (true, RuntimePlaceEffectKind::MutableBorrow)
+                    )
+            })
+            .max_by_key(|(_, effect)| effect.event.0)
+            .map(|(issue_effect, effect)| RuntimeLoanFact {
+                id: RuntimeLoanId(initialization_index),
+                borrower,
+                borrowed_path: effect.path,
+                kind: effect.kind,
+                issue_effect,
+            })
     }
 
     fn push_assignment_access(
@@ -25934,6 +25993,36 @@ mod tests {
             RuntimePlaceEffectKind::MutableBorrow
         );
         assert_eq!(facts.effects[4].unwrap().path, RuntimeMovePathId(1));
+        assert_eq!(
+            facts.direct_loan_fact(4),
+            Some(RuntimeLoanFact {
+                id: RuntimeLoanId(4),
+                borrower: RuntimeLocalId(2),
+                borrowed_path: RuntimeMovePathId(2),
+                kind: RuntimePlaceEffectKind::SharedBorrow,
+                issue_effect: 2,
+            })
+        );
+        assert_eq!(
+            facts.direct_loan_fact(5),
+            Some(RuntimeLoanFact {
+                id: RuntimeLoanId(5),
+                borrower: RuntimeLocalId(3),
+                borrowed_path: RuntimeMovePathId(3),
+                kind: RuntimePlaceEffectKind::MutableBorrow,
+                issue_effect: 3,
+            })
+        );
+        assert_eq!(
+            facts.direct_loan_fact(6),
+            Some(RuntimeLoanFact {
+                id: RuntimeLoanId(6),
+                borrower: RuntimeLocalId(4),
+                borrowed_path: RuntimeMovePathId(1),
+                kind: RuntimePlaceEffectKind::MutableBorrow,
+                issue_effect: 4,
+            })
+        );
 
         let assignment_access_count = facts.assignment_access_count;
         let assignment_read_count = facts.assignment_read_count;
@@ -25972,6 +26061,8 @@ mod tests {
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
+        emitter.body_facts.effects[2] = Some(valid_borrow);
+        assert_eq!(emitter.body_facts.direct_loan_fact(0), None);
     }
 
     #[test]
