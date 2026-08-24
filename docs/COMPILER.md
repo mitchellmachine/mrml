@@ -241,10 +241,17 @@ origins. Conditional returns now distinguish indexed condition evaluation,
 true-return values, and the final else value. Conditional assignments distinguish
 indexed conditions and every indexed branch/else action. A fixed parser-shaped
 statement table validates exact branch counts, else presence, and action counts;
-forged or mismatched program points fail closed. Nested-action and loop-operation
-provenance is not yet refined beyond its containing statement. Events still lack
-final CFG-block membership, so multi-block and
-multi-path functions remain unenforced rather than being analyzed linearly.
+forged or mismatched program points fail closed. Complete supported CFGs now
+derive a control point for every non-expansion origin without adding a per-event
+table: parameter entry, exact top-level or conditional blocks, true/false return
+edges for conditional return values, sourced conditional action blocks including
+disconnected post-return suffixes, reachable tail-return edges, or an explicit
+`Unreachable` point for syntactically retained tails after all-path termination.
+Final validation rejects origins whose required block or edge cannot be found.
+Nested-action and loop-operation provenance is not yet refined beyond its
+containing statement, so their derived point remains the enclosing loop header.
+General multi-block and multi-path initializedness remains unenforced rather
+than being analyzed linearly.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root

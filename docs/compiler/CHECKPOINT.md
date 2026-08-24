@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8ddd42f`
-  (`compiler: refine conditional event origins`)
+- Compiler checkpoint commit: `66c896f`
+  (`compiler: map ownership events to control flow`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `df01b9b` (`compiler: retain ownership event
+- Preceding compiler commits: `8ddd42f` (`compiler: refine conditional event
+  origins`), `df01b9b` (`compiler: retain ownership event
   origins`), `40d7544` (`compiler: reject linear use after
   move`), `1e0dc42` (`compiler: order ownership events`),
   `724f40b` (`compiler: classify call and return
@@ -107,8 +108,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   effects in their actual preanalysis order. Final validation merges the two
   append-only tables and requires exactly `0..event_count` with no holes,
   duplicates, inversions, or uncounted entries. Event-capacity failure occurs
-  before mutating a path, initialization, read, effect, or counter. These event
-  IDs do not yet claim CFG-block membership; and
+  before mutating a path, initialization, read, effect, or counter. Event IDs
+  remain independent of CFG numbering; their source origins can now be mapped
+  on demand without enlarging every event fact; and
 - insertion-time provenance on every initialization and effect. Parameter roots
   record `ParameterEntry`; preanalyzed body events record an exact bounded
   `TopLevelStatement(index)` or verified `Tail`; dynamically appended inlined-
@@ -123,8 +125,18 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   origin. A fixed 32-entry statement-shape table retains exact conditional
   branch counts, else presence, and the parser-bounded four action counts per
   branch plus else. Forged branch/action indexes, mismatched origin kinds, holes,
-  and out-of-body statements fail validation. Nested-action and loop-operation
-  provenance is not yet refined beyond its containing top-level statement; and
+  and out-of-body statements fail validation. For complete supported CFGs,
+  parameter entries map to function entry, top-level and conditional conditions
+  map to exact blocks, conditional return values map to exact true/false return
+  edges, and conditional branch/else actions map to their sourced blocks,
+  including disconnected post-return suffixes. Reachable tails map to their
+  unconditional return edge; syntactically retained tails after all-path
+  termination map to an explicit `Unreachable` point rather than a fabricated
+  block. Final place-fact validation requires every non-expansion origin to
+  resolve. Missing or forged action-block provenance fails closed. This mapping
+  is derived from the bounded 64-block/128-edge CFG and adds no per-event table.
+  Nested-action and loop-operation provenance is not yet refined beyond its
+  containing top-level statement; and
 - bounded initializedness enforcement for functions proven to have exactly one
   reachable top-level basic block and an expression stream with no conditional
   path split. A fixed 1,360-path state map consumes the dense event order.
@@ -276,7 +288,8 @@ resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths, remaining indirect move/borrow classification,
-general CFG initializedness and use-after-move enforcement, unsupported
+complete loop/nested-action control-point mapping, general CFG initializedness
+and use-after-move enforcement, unsupported
 parser/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
@@ -288,7 +301,8 @@ Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
 1. refine statement provenance into nested-action and loop-operation origins;
-2. map conditional and loop program points to the existing CFG;
+2. extend the implemented conditional/top-level control-point mapping across
+   those loop and nested-action origins;
 3. compute fixed-point initializedness across CFG edges and precise tuple paths;
 4. extend contextual effects for implicit coercions and remaining indirect
    call/return shapes without treating ambiguous pointee reads as moves;
@@ -319,8 +333,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 685 tests on each host: 377
-library tests, 10 conformance tests, 296 replacement tests, and 2 driver tests.
+The checkpoint source passed 686 tests on each host: 377
+library tests, 10 conformance tests, 297 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
