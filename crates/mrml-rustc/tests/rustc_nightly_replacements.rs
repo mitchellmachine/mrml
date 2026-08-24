@@ -4075,6 +4075,27 @@ fn rustc_shared_child_parent_access_matches_the_oracle() {
 }
 
 #[test]
+fn rustc_reassigned_reference_loan_generations_match_the_oracle() {
+    let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut parent: &mut u16 = &mut *first; parent = &mut *second; let child: &u16 = &*parent; *parent += 1; *child }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(rejected, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeBorrowConflict
+            ))
+        );
+    }
+
+    let accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut parent: &mut u16 = &mut *first; let old = *parent; parent = &mut *second; *parent += 1; old + *parent }";
+    assert_eq!(compile_wide(accepted, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(accepted, ObjectFormat::Coff), Ok(()));
+
+    let old_child = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut parent: &mut u16 = &mut *first; let child: &u16 = &*parent; parent = &mut *second; *child }";
+    assert_eq!(compile_wide(old_child, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(old_child, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
     let source = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 2; *returned }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
