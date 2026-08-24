@@ -841,13 +841,14 @@ deny-by-default dispatcher with Mechanism #1 and the router. Read outcomes cross
 a narrow backend completion contract carrying exact vCPU, port, width, and
 bounded value; writes never invoke it. Transport failure, completion uncertainty,
 or any other exit fails the VM before another entry. Mock-backend tests cover
-present and absent reads plus failure. Native KVM/WHP implementations of that
-contract and live runner integration remain the next gate. The native KVM half
-is now implemented: the mapped run page is completely re-decoded as one input
-exit, exact vCPU/port/width/count/data-offset identity is required, only the
-selected 1/2/4 bytes are written, duplicate or mismatched completion is denied,
-and vCPU re-entry is blocked while a read remains pending. Native WHP parity and
-composition into an actual PCI runner remain pending.
+present and absent reads plus failure. Both native implementations now satisfy
+that contract. KVM completely re-decodes the mapped run page, requires exact
+vCPU/port/width/count/data-offset identity, and writes only the selected bytes.
+WHP retains the exact per-vCPU port/width/instruction-length tuple and installs
+the architectural-width RAX result with a checked next RIP in one register-set
+operation. Both deny duplicate or mismatched completion and block vCPU re-entry
+while a read remains pending. Composition into an actual native PCI runner and
+live PCI discovery evidence remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

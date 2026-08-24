@@ -703,11 +703,12 @@ advertise a concrete PCI function. A backend-neutral one-transaction runner now
 composes native execution, exit accounting, the exact transport allowlist,
 selector/data dispatch, and scalar-input completion. Its narrow completion
 contract binds a result to the exact still-pending vCPU, port, and width;
-completion uncertainty or any non-PCI exit fails the VM. KVM and WHP do not yet
-both implement that completion contract: native KVM now revalidates and writes
-the exact pending run-page input and refuses vCPU re-entry while it remains
-pending. WHP completion and native PCI-runner integration remain unimplemented,
-so there is still no live PCI discovery evidence.
+completion uncertainty or any non-PCI exit fails the VM. Native KVM revalidates
+and writes the exact pending run-page input; native WHP binds the pending tuple
+to one vCPU and installs the width-correct RAX result plus checked next RIP in
+one register operation. Both refuse vCPU re-entry while completion remains
+pending. Native PCI-runner integration remains unimplemented, so there is still
+no live PCI discovery evidence.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

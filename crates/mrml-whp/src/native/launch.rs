@@ -955,6 +955,18 @@ impl VmBackend for PreparedWhpGuest<'_> {
     }
 }
 
+impl mrml_kernel::IoReadCompleter for PreparedWhpGuest<'_> {
+    fn complete_io_read(
+        &mut self,
+        vcpu: u32,
+        port: u16,
+        size: u8,
+        value: u32,
+    ) -> Result<(), Self::Error> {
+        self.partition.complete_io_read(vcpu, port, size, value)
+    }
+}
+
 impl RevocableVmBackend for PreparedWhpGuest<'_> {
     fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
         self.partition.revoke_guest_mapping(guest_address, bytes)

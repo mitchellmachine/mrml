@@ -320,6 +320,12 @@ For KVM, completion revalidates the complete `KVM_EXIT_IO` input record and
 kernel-provided data offset before mutating only the exact selected bytes. The
 vCPU retains one pending tuple and refuses another `KVM_RUN` until exact
 completion succeeds; mismatch or duplicate completion fails closed.
+For WHP, each vCPU retains one pending port, width, and decoded instruction
+length. Completion requires the exact tuple, preserves the unaffected RAX bits
+for byte and word inputs, applies x86 zero-extension for a dword input, checks
+the next RIP for overflow and canonicality, and submits RAX and RIP together.
+The tuple remains pending after any register-read, validation, or register-set
+failure, so re-entry and stale or duplicate completion fail closed.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

@@ -4650,8 +4650,8 @@ The allocation-free ABI test fills adjacent data bytes with a sentinel, proves
 a 16-bit completion changes exactly two bytes, and verifies wrong port, smaller
 or larger width, and output direction preserve the complete run page. Native
 Linux compilation covers the pending-state integration, but no guest executes a
-PCI input instruction through the common runner in this increment. WHP remains
-without completion parity.
+PCI input instruction through the common runner in this increment. WHP parity
+is recorded separately below.
 
 ```text
 Complexity impact: LOW
@@ -4694,6 +4694,62 @@ accessibility, or hardware review.
 
 Patent review: `NOT_TRIGGERED` — conventional KVM run-page scalar-input
 completion with exact pending-state validation; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
+Native WHP now implements the same narrow completion boundary. Each prepared
+partition retains at most one pending scalar-input tuple per created vCPU:
+port, width, and the strictly decoded instruction length. A second run on that
+vCPU is rejected until completion succeeds. Completion requires the exact vCPU,
+port, and width, reads only RAX and RIP, preserves the unaffected RAX bits for
+8- and 16-bit inputs, applies architectural zero-extension for a 32-bit input,
+and checks RIP addition for overflow and x86-64 canonicality. It submits RAX and
+RIP together through one WHP register-set call and clears pending state only
+after that call reports success. Any lookup, register-read, validation, or
+register-set failure retains the pending tuple and therefore prevents ambiguous
+resume; mismatch and duplicate completion fail closed. `PreparedWhpGuest`
+delegates the common `IoReadCompleter` contract to that partition state.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm passed 21 WHP release
+tests with one unrelated manual performance test ignored. The new allocation-
+free test covers byte/word preservation, dword zero-extension, checked next-RIP
+calculation, invalid width, and noncanonical next RIP. Strict scoped Clippy for
+kernel, WHP, and WHP-run passed with dependency linting excluded. This is
+unit, compile, and lint evidence only: no guest executed a PCI input through the
+common runner, and no live WHP, signed runtime, PCI discovery, QEMU differential,
+nested-virtualization, native-boot, bare-metal, or physical-hardware claim is
+made.
+
+The WHP-completion `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, attestation, DRM, vendor or publisher preference,
+first-party bypass, accessibility restriction, AI authority, persistence, or
+lock-in. Only a capability-authorized VMM path can supply public configuration
+data; names and data do not grant authority. The `HOSTILE SECURITY REVIEW`
+treats vCPU identity, decoded exit, port, width, instruction length, RAX, RIP,
+value, arithmetic, register API result, pending tuple, duplicate completion,
+and subsequent entry as hostile. Exact tuple validation precedes mutation,
+width semantics are explicit, RIP must remain canonical, RAX/RIP are submitted
+together, and pending state clears only on reported success. An uncertain WHP
+register failure cannot resume through this adapter. Hosted WHP remains outside
+the security boundary against its host. Existing capability, revocation,
+rollback-resistance, accessibility, evidence, owner-sovereignty, data-
+minimization, anti-DRM, owner-controlled-attestation, third-party-accessibility,
+AI-containment, and anti-persistence gates remain unchanged. This agent review
+does not replace independent human implementer, reviewer, adversary,
+accessibility, or hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional exact WHP scalar-input register
+completion with fail-closed pending-state validation; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,

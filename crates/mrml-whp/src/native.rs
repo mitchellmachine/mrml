@@ -43,6 +43,7 @@ const MEM_RELEASE: u32 = 0x8000;
 const PAGE_READWRITE: u32 = 4;
 const MAX_MAPPINGS: usize = 32;
 const MAX_SUBMAPPINGS: usize = MAX_PE_SECTIONS + 1;
+const REG_RAX: u32 = 0;
 const REG_RCX: u32 = 1;
 const REG_RDX: u32 = 2;
 const REG_RSP: u32 = 4;
@@ -220,6 +221,7 @@ impl WhpSystem {
             api: self.api,
             mappings: [const { None }; MAX_MAPPINGS],
             vp_count: processor_count,
+            pending_io_reads: [None; 2],
             mapping_poisoned: false,
             _system: core::marker::PhantomData,
         };
@@ -250,8 +252,35 @@ pub struct PreparedWhpPartition<'system> {
     api: Api,
     mappings: [Option<OwnedMapping>; MAX_MAPPINGS],
     vp_count: u32,
+    pending_io_reads: [Option<PendingIoRead>; 2],
     mapping_poisoned: bool,
     _system: core::marker::PhantomData<&'system WhpSystem>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingIoRead {
+    port: u16,
+    size: u8,
+    instruction_bytes: u8,
+}
+
+fn completed_io_registers(
+    rax: u64,
+    rip: u64,
+    pending: PendingIoRead,
+    value: u32,
+) -> Result<[RegisterValue; 2], WhpError> {
+    let rax = match pending.size {
+        1 => (rax & !0xff) | u64::from(value & 0xff),
+        2 => (rax & !0xffff) | u64::from(value & 0xffff),
+        4 => u64::from(value),
+        _ => return Err(WhpError::MalformedExit),
+    };
+    let rip = rip
+        .checked_add(u64::from(pending.instruction_bytes))
+        .filter(|address| canonical(*address))
+        .ok_or(WhpError::InvalidRegisterState)?;
+    Ok([RegisterValue::scalar(rax), RegisterValue::scalar(rip)])
 }
 
 struct WhpVcpuRunner {
@@ -726,6 +755,9 @@ impl PreparedWhpPartition<'_> {
         if index >= self.vp_count {
             return Err(WhpError::InvalidVcpu);
         }
+        if self.pending_io_reads[index as usize].is_some() {
+            return Err(WhpError::InvalidRegisterState);
+        }
         let mut context = [0u8; WHP_EXIT_CONTEXT_BYTES];
         check(unsafe {
             (self.api.run_vp)(
@@ -738,8 +770,53 @@ impl PreparedWhpPartition<'_> {
         let exit = decode_exit_context(&context)?;
         if matches!(exit, VmExit::Io { write: true, .. }) {
             self.advance_output_instruction(index, context[10] & 0x0f)?;
+        } else if let VmExit::Io {
+            port,
+            size,
+            write: false,
+            ..
+        } = exit
+        {
+            let instruction_bytes = context[10] & 0x0f;
+            if instruction_bytes == 0 || instruction_bytes > 15 {
+                return Err(WhpError::MalformedExit);
+            }
+            self.pending_io_reads[index as usize] = Some(PendingIoRead {
+                port,
+                size,
+                instruction_bytes,
+            });
         }
         Ok(exit)
+    }
+
+    fn complete_io_read(
+        &mut self,
+        index: u32,
+        port: u16,
+        size: u8,
+        value: u32,
+    ) -> Result<(), WhpError> {
+        if index >= self.vp_count {
+            return Err(WhpError::InvalidVcpu);
+        }
+        let pending = self.pending_io_reads[index as usize]
+            .filter(|pending| pending.port == port && pending.size == size)
+            .ok_or(WhpError::InvalidRegisterState)?;
+        let [rax, rip] = self.read_registers_at(index, [REG_RAX, REG_RIP])?;
+        let values = completed_io_registers(rax.low, rip.low, pending, value)?;
+        let names = [REG_RAX, REG_RIP];
+        check(unsafe {
+            (self.api.set_registers)(
+                self.partition.as_ptr(),
+                index,
+                names.as_ptr(),
+                names.len() as u32,
+                values.as_ptr(),
+            )
+        })?;
+        self.pending_io_reads[index as usize] = None;
+        Ok(())
     }
 
     pub(crate) fn revoke_guest_mapping(
@@ -1178,6 +1255,48 @@ mod tests {
         assert!(canonical(0xffff_8000_0000_0000));
         assert!(!canonical(0x0000_8000_0000_0000));
         assert!(!canonical(0xffff_0000_0000_0000));
+    }
+
+    #[test]
+    fn scalar_io_completion_preserves_architectural_rax_widths() {
+        let base = PendingIoRead {
+            port: 0xcfc,
+            size: 1,
+            instruction_bytes: 2,
+        };
+        let [rax, rip] =
+            completed_io_registers(0x8877_6655_4433_2211, 0x1000, base, 0xaabb_ccdd).unwrap();
+        assert_eq!((rax.low, rip.low), (0x8877_6655_4433_22dd, 0x1002));
+
+        let [rax, _] = completed_io_registers(
+            u64::MAX,
+            0x1000,
+            PendingIoRead { size: 2, ..base },
+            0xaabb_ccdd,
+        )
+        .unwrap();
+        assert_eq!(rax.low, 0xffff_ffff_ffff_ccdd);
+        let [rax, _] = completed_io_registers(
+            u64::MAX,
+            0x1000,
+            PendingIoRead { size: 4, ..base },
+            0xaabb_ccdd,
+        )
+        .unwrap();
+        assert_eq!(rax.low, 0xaabb_ccdd);
+        assert!(matches!(
+            completed_io_registers(
+                0,
+                0x0000_7fff_ffff_ffff,
+                PendingIoRead { size: 3, ..base },
+                0,
+            ),
+            Err(WhpError::MalformedExit)
+        ));
+        assert!(matches!(
+            completed_io_registers(0, 0x0000_7fff_ffff_ffff, base, 0),
+            Err(WhpError::InvalidRegisterState)
+        ));
     }
 
     #[test]
