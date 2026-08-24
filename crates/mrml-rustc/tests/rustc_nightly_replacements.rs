@@ -3882,6 +3882,13 @@ fn rustc_initial_conditional_return_cfg_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_exhaustive_conditional_return_cfg_reaches_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u8) -> u8 { if input == 0 { return 10; } else if input == 1 { return 20; } else if input == 2 { return 30; } else { return 40; } }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",

@@ -2135,8 +2135,18 @@ struct RuntimePlaceAccessFact {
 struct RuntimeBasicBlockId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeBasicBlockSource {
+    TopLevel,
+    ConditionalReturnBranch {
+        statement_index: usize,
+        branch_index: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeBasicBlockFact {
     id: RuntimeBasicBlockId,
+    source: RuntimeBasicBlockSource,
     first_statement: usize,
     statement_count: usize,
     reachable: bool,
@@ -2256,11 +2266,31 @@ impl<'source> RuntimeBodyFacts<'source> {
         let id = RuntimeBasicBlockId(self.basic_block_count);
         *slot = Some(RuntimeBasicBlockFact {
             id,
+            source: RuntimeBasicBlockSource::TopLevel,
             first_statement,
             statement_count: 0,
             reachable,
         });
         self.basic_block_count += 1;
+        Ok(id)
+    }
+
+    fn push_conditional_return_branch_block(
+        &mut self,
+        statement_index: usize,
+        branch_index: usize,
+        reachable: bool,
+    ) -> Result<RuntimeBasicBlockId, CodegenErrorKind> {
+        let id = self.push_basic_block(statement_index, reachable)?;
+        let fact = self
+            .basic_blocks
+            .get_mut(id.0)
+            .and_then(Option::as_mut)
+            .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        fact.source = RuntimeBasicBlockSource::ConditionalReturnBranch {
+            statement_index,
+            branch_index,
+        };
         Ok(id)
     }
 
@@ -5248,9 +5278,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
     if body.statements().iter().flatten().any(|statement| {
         matches!(
             statement,
-            crate::BodyStatement::Loop(_)
-                | crate::BodyStatement::ConditionalAssignment(_)
-                | crate::BodyStatement::ConditionalReturnElse(_)
+            crate::BodyStatement::Loop(_) | crate::BodyStatement::ConditionalAssignment(_)
         )
     }) {
         return Ok(());
@@ -5277,6 +5305,60 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                 })?;
                 current = next;
                 terminated = false;
+            }
+            crate::BodyStatement::ConditionalReturnElse(index) => {
+                let conditional = body
+                    .conditional_return_elses()
+                    .get(*index)
+                    .and_then(|conditional| *conditional)
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                let mut condition_block = current;
+                let branch_count = conditional.branch_count();
+                if branch_count == 0 {
+                    return Err(CodegenErrorKind::InvalidRuntimeControlFlowFacts);
+                }
+                for branch_index in 0..branch_count {
+                    facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                        from: condition_block,
+                        target: RuntimeControlFlowTarget::Return,
+                        kind: RuntimeControlFlowEdgeKind::True,
+                    })?;
+                    if branch_index + 1 < branch_count {
+                        let next = facts.push_conditional_return_branch_block(
+                            statement_index,
+                            branch_index + 1,
+                            current_reachable,
+                        )?;
+                        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                            from: condition_block,
+                            target: RuntimeControlFlowTarget::Block(next),
+                            kind: RuntimeControlFlowEdgeKind::False,
+                        })?;
+                        condition_block = next;
+                    } else if conditional.else_value.is_some() {
+                        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                            from: condition_block,
+                            target: RuntimeControlFlowTarget::Return,
+                            kind: RuntimeControlFlowEdgeKind::False,
+                        })?;
+                        terminated = true;
+                    } else {
+                        let next =
+                            facts.push_basic_block(statement_index + 1, current_reachable)?;
+                        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                            from: condition_block,
+                            target: RuntimeControlFlowTarget::Block(next),
+                            kind: RuntimeControlFlowEdgeKind::False,
+                        })?;
+                        current = next;
+                        terminated = false;
+                    }
+                }
+                if terminated && statement_index + 1 < statement_count {
+                    current = facts.push_basic_block(statement_index + 1, false)?;
+                    current_reachable = false;
+                    terminated = false;
+                }
             }
             crate::BodyStatement::Return(_) => {
                 facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
@@ -20828,12 +20910,14 @@ mod tests {
             [
                 Some(RuntimeBasicBlockFact {
                     id: RuntimeBasicBlockId(0),
+                    source: RuntimeBasicBlockSource::TopLevel,
                     first_statement: 0,
                     statement_count: 2,
                     reachable: true,
                 }),
                 Some(RuntimeBasicBlockFact {
                     id: RuntimeBasicBlockId(1),
+                    source: RuntimeBasicBlockSource::TopLevel,
                     first_statement: 2,
                     statement_count: 1,
                     reachable: true,
@@ -20912,6 +20996,123 @@ mod tests {
                 kind: RuntimeControlFlowEdgeKind::Unconditional,
             }),
             Err(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts)
+        );
+    }
+
+    #[test]
+    fn runtime_body_facts_build_exhaustive_conditional_return_cfg() {
+        let source = "fn value(input: u8) -> u8 { if input == 0 { return 10; } else if input == 1 { return 20; } else if input == 2 { return 30; } else { return 40; } }";
+        let module = Parser::new(source).parse_module::<1, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 2, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 3);
+        assert_eq!(facts.basic_blocks[0].unwrap().statement_count, 1);
+        for branch_index in 1..3 {
+            let block = facts.basic_blocks[branch_index].unwrap();
+            assert_eq!(block.id, RuntimeBasicBlockId(branch_index));
+            assert_eq!(
+                block.source,
+                RuntimeBasicBlockSource::ConditionalReturnBranch {
+                    statement_index: 0,
+                    branch_index,
+                }
+            );
+            assert_eq!(block.first_statement, 0);
+            assert_eq!(block.statement_count, 0);
+            assert!(block.reachable);
+        }
+        assert_eq!(facts.control_flow_edge_count, 6);
+        for block in 0..3 {
+            assert_eq!(
+                facts.control_flow_edges[block * 2],
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(block),
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::True,
+                })
+            );
+            assert_eq!(
+                facts.control_flow_edges[block * 2 + 1],
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(block),
+                    target: if block == 2 {
+                        RuntimeControlFlowTarget::Return
+                    } else {
+                        RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(block + 1))
+                    },
+                    kind: RuntimeControlFlowEdgeKind::False,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_build_fallthrough_conditional_return_cfg() {
+        let source = "fn value(input: u8) -> u8 { if input == 0 { return 10; } else if input == 1 { return 20; } input + 1 }";
+        let module = Parser::new(source).parse_module::<1, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 2, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 3);
+        assert_eq!(
+            facts.basic_blocks[0].unwrap().source,
+            RuntimeBasicBlockSource::TopLevel
+        );
+        assert_eq!(
+            facts.basic_blocks[1].unwrap().source,
+            RuntimeBasicBlockSource::ConditionalReturnBranch {
+                statement_index: 0,
+                branch_index: 1,
+            }
+        );
+        assert_eq!(
+            facts.basic_blocks[2].unwrap().source,
+            RuntimeBasicBlockSource::TopLevel
+        );
+        assert_eq!(facts.basic_blocks[2].unwrap().first_statement, 1);
+        assert_eq!(facts.control_flow_edge_count, 5);
+        assert_eq!(
+            facts.control_flow_edges[3],
+            Some(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(1),
+                target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(2)),
+                kind: RuntimeControlFlowEdgeKind::False,
+            })
+        );
+        assert_eq!(
+            facts.control_flow_edges[4],
+            Some(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(2),
+                target: RuntimeControlFlowTarget::Return,
+                kind: RuntimeControlFlowEdgeKind::Unconditional,
+            })
         );
     }
 
