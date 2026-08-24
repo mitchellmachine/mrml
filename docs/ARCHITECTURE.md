@@ -668,6 +668,15 @@ notification was confirmed delivered; empty, premature, mismatched-state, or
 uncertain acknowledgements fail the device and poison the bridge. Scalar data
 grants no authority. A reusable guest completion consumer and multi-request
 runner remain pending.
+A canonical 128-byte MRML-specific active-device configuration record now binds
+the live generation, block geometry, supported and negotiated features, exact
+queue ranges and page count, slot count, interrupt vector, fixed scalar ports,
+maximum transfer, and request/completion wire sizes. It is pointer-free,
+reserved-zero, and data only. Construction requires a fully active device;
+decode reconstructs and rechecks the queue arithmetic, and use requires exact
+revalidation against the live device. Reset makes an old record stale. The
+record is not yet mapped to a guest or presented through PCI or another
+transport.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

@@ -373,6 +373,9 @@ explicitly and downgrade the status rather than guessing.
   probes now reuse one retired slot for a bounded write/read pair, validating
   and acknowledging both protected records; KVM has live execution evidence
   for this path while the WHP implementation is currently type-checked only. A
+  canonical pointer-free active-device configuration record now captures exact
+  virtual-block mechanics and must be revalidated against the live generation;
+  it is not authority and has no guest mapping or PCI presentation yet. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

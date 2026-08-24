@@ -6,6 +6,7 @@ use crate::{
 
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
 pub const VIRTUAL_BLOCK_COMPLETION_BYTES: usize = 32;
+pub const VIRTUAL_BLOCK_CONFIGURATION_BYTES: usize = 128;
 pub const MAX_VIRTUAL_BLOCK_QUEUE_SLOTS: usize = 64;
 pub const MAX_VIRTUAL_BLOCK_TRANSFER_BYTES: u32 = 1024 * 1024;
 pub const VIRTUAL_BLOCK_FEATURE_FLUSH: u64 = 1 << 0;
@@ -15,12 +16,15 @@ pub const VIRTUAL_BLOCK_COMPLETION_ACK_PORT: u16 = 0x4d43;
 pub const VIRTUAL_BLOCK_COMPLETION_ACK_VALUE: u32 = 1;
 const REQUEST_MAGIC: [u8; 4] = *b"MRBQ";
 const COMPLETION_MAGIC: [u8; 4] = *b"MRBC";
+const CONFIGURATION_MAGIC: [u8; 4] = *b"MRBD";
+const MRML_SPECIFIC_DEVICE_CLASS: u8 = 1;
 const VERSION: u8 = 1;
 const QUEUE_HEADER_BYTES: u64 = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VirtualBlockError {
     InvalidGeometry,
+    InvalidConfiguration,
     InvalidFeatures,
     InvalidState,
     InvalidQueue,
@@ -327,6 +331,131 @@ impl VirtualBlockQueueLayout {
     }
 }
 
+/// Canonical pointer-free discovery data for one active MRML-specific block
+/// device. This record carries no device, mapping, backend, or interrupt
+/// authority. A decoded copy must be revalidated against the live device before
+/// use because reset and reconfiguration make old snapshots stale.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockConfiguration {
+    generation: u32,
+    block_size: u32,
+    block_count: u64,
+    supported_features: u64,
+    negotiated_features: u64,
+    queue: VirtualBlockQueueLayout,
+    interrupt_vector: u8,
+}
+
+impl VirtualBlockConfiguration {
+    pub const fn generation(self) -> u32 {
+        self.generation
+    }
+
+    pub const fn block_size(self) -> u32 {
+        self.block_size
+    }
+
+    pub const fn block_count(self) -> u64 {
+        self.block_count
+    }
+
+    pub const fn supported_features(self) -> u64 {
+        self.supported_features
+    }
+
+    pub const fn negotiated_features(self) -> u64 {
+        self.negotiated_features
+    }
+
+    pub const fn queue(self) -> VirtualBlockQueueLayout {
+        self.queue
+    }
+
+    pub const fn interrupt_vector(self) -> u8 {
+        self.interrupt_vector
+    }
+
+    pub fn encode(self, output: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]) {
+        output.fill(0);
+        output[..4].copy_from_slice(&CONFIGURATION_MAGIC);
+        output[4] = VERSION;
+        output[5] = MRML_SPECIFIC_DEVICE_CLASS;
+        output[8..12].copy_from_slice(&self.generation.to_le_bytes());
+        output[12..16].copy_from_slice(&self.block_size.to_le_bytes());
+        output[16..24].copy_from_slice(&self.block_count.to_le_bytes());
+        output[24..32].copy_from_slice(&self.supported_features.to_le_bytes());
+        output[32..40].copy_from_slice(&self.negotiated_features.to_le_bytes());
+        output[40..48].copy_from_slice(&self.queue.request_base().to_le_bytes());
+        output[48..56].copy_from_slice(&self.queue.completion_base().to_le_bytes());
+        output[56..64].copy_from_slice(&self.queue.pages_per_queue().to_le_bytes());
+        output[64..66].copy_from_slice(&self.queue.slots().to_le_bytes());
+        output[66] = self.interrupt_vector;
+        output[68..70].copy_from_slice(&VIRTUAL_BLOCK_DOORBELL_PORT.to_le_bytes());
+        output[70..72].copy_from_slice(&VIRTUAL_BLOCK_COMPLETION_ACK_PORT.to_le_bytes());
+        output[72..76].copy_from_slice(&MAX_VIRTUAL_BLOCK_TRANSFER_BYTES.to_le_bytes());
+        output[76..78].copy_from_slice(&(VIRTUAL_BLOCK_REQUEST_BYTES as u16).to_le_bytes());
+        output[78..80].copy_from_slice(&(VIRTUAL_BLOCK_COMPLETION_BYTES as u16).to_le_bytes());
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, VirtualBlockError> {
+        if input.len() != VIRTUAL_BLOCK_CONFIGURATION_BYTES
+            || input[..4] != CONFIGURATION_MAGIC
+            || input[4] != VERSION
+            || input[5] != MRML_SPECIFIC_DEVICE_CLASS
+            || input[6..8].iter().any(|byte| *byte != 0)
+            || input[67] != 0
+            || input[80..].iter().any(|byte| *byte != 0)
+            || u16::from_le_bytes(input[68..70].try_into().unwrap()) != VIRTUAL_BLOCK_DOORBELL_PORT
+            || u16::from_le_bytes(input[70..72].try_into().unwrap())
+                != VIRTUAL_BLOCK_COMPLETION_ACK_PORT
+            || u32::from_le_bytes(input[72..76].try_into().unwrap())
+                != MAX_VIRTUAL_BLOCK_TRANSFER_BYTES
+            || u16::from_le_bytes(input[76..78].try_into().unwrap())
+                != VIRTUAL_BLOCK_REQUEST_BYTES as u16
+            || u16::from_le_bytes(input[78..80].try_into().unwrap())
+                != VIRTUAL_BLOCK_COMPLETION_BYTES as u16
+        {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        let generation = u32::from_le_bytes(input[8..12].try_into().unwrap());
+        let block_size = u32::from_le_bytes(input[12..16].try_into().unwrap());
+        let block_count = u64::from_le_bytes(input[16..24].try_into().unwrap());
+        let supported_features = u64::from_le_bytes(input[24..32].try_into().unwrap());
+        let negotiated_features = u64::from_le_bytes(input[32..40].try_into().unwrap());
+        let pages_per_queue = u64::from_le_bytes(input[56..64].try_into().unwrap());
+        let slots = usize::from(u16::from_le_bytes(input[64..66].try_into().unwrap()));
+        let interrupt_vector = input[66];
+        if generation == 0
+            || !(4096..=65_536).contains(&block_size)
+            || !block_size.is_power_of_two()
+            || block_count == 0
+            || supported_features & !VIRTUAL_BLOCK_FEATURE_FLUSH != 0
+            || negotiated_features & !supported_features != 0
+            || !(32..=254).contains(&interrupt_vector)
+        {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        let queue = VirtualBlockQueueLayout::new(
+            u64::from_le_bytes(input[40..48].try_into().unwrap()),
+            u64::from_le_bytes(input[48..56].try_into().unwrap()),
+            slots,
+        )
+        .map_err(|_| VirtualBlockError::InvalidConfiguration)?;
+        if queue.pages_per_queue() != pages_per_queue {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        Ok(Self {
+            generation,
+            block_size,
+            block_count,
+            supported_features,
+            negotiated_features,
+            queue,
+            interrupt_vector,
+        })
+    }
+}
+
 fn queue_bytes(slots: usize, slot_bytes: usize) -> Result<u64, VirtualBlockError> {
     (slots as u64)
         .checked_mul(slot_bytes as u64)
@@ -436,6 +565,10 @@ impl<const N: usize> VirtualBlockDevice<N> {
         self.negotiated_features
     }
 
+    pub const fn supported_features(&self) -> u64 {
+        self.supported_features
+    }
+
     pub const fn block_size(&self) -> u32 {
         self.block_size
     }
@@ -450,6 +583,36 @@ impl<const N: usize> VirtualBlockDevice<N> {
 
     pub const fn interrupt_vector(&self) -> Option<u8> {
         self.interrupt_vector
+    }
+
+    pub fn configuration(&self) -> Result<VirtualBlockConfiguration, VirtualBlockError> {
+        if self.state != VirtualBlockDeviceState::Active {
+            return Err(VirtualBlockError::InvalidState);
+        }
+        Ok(VirtualBlockConfiguration {
+            generation: self.generation,
+            block_size: self.block_size,
+            block_count: self.block_count,
+            supported_features: self.supported_features,
+            negotiated_features: self.negotiated_features,
+            queue: self.queue.ok_or(VirtualBlockError::InvalidState)?,
+            interrupt_vector: self
+                .interrupt_vector
+                .ok_or(VirtualBlockError::InvalidState)?,
+        })
+    }
+
+    pub fn validate_configuration(
+        &self,
+        configuration: VirtualBlockConfiguration,
+    ) -> Result<(), VirtualBlockError> {
+        if configuration.generation() != self.generation {
+            return Err(VirtualBlockError::StaleGeneration);
+        }
+        if configuration != self.configuration()? {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        Ok(())
     }
 
     /// Returns the configured vector only while a published completion still
@@ -1643,6 +1806,105 @@ mod tests {
         );
         assert_eq!(
             device.admit(&encoded(VirtualBlockRequest::flush(2, 1))),
+            Err(VirtualBlockError::StaleGeneration)
+        );
+    }
+
+    #[test]
+    fn active_configuration_round_trips_exact_mechanics_without_authority() {
+        let device = active::<2>();
+        let configuration = device.configuration().unwrap();
+        assert_eq!(configuration.generation(), 1);
+        assert_eq!(configuration.block_size(), 4096);
+        assert_eq!(configuration.block_count(), 64);
+        assert_eq!(
+            configuration.supported_features(),
+            VIRTUAL_BLOCK_FEATURE_FLUSH
+        );
+        assert_eq!(
+            configuration.negotiated_features(),
+            VIRTUAL_BLOCK_FEATURE_FLUSH
+        );
+        assert_eq!(configuration.queue(), layout::<2>());
+        assert_eq!(configuration.interrupt_vector(), 48);
+
+        let mut encoded = [0xa5; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        configuration.encode(&mut encoded);
+        assert_eq!(
+            VirtualBlockConfiguration::decode(&encoded),
+            Ok(configuration)
+        );
+        assert!(encoded[80..].iter().all(|byte| *byte == 0));
+        assert_eq!(device.validate_configuration(configuration), Ok(()));
+    }
+
+    #[test]
+    fn configuration_decode_rejects_every_noncanonical_boundary_class() {
+        let configuration = active::<2>().configuration().unwrap();
+        let mut canonical = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        configuration.encode(&mut canonical);
+        assert_eq!(
+            VirtualBlockConfiguration::decode(&canonical[..127]),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
+
+        let mutations: [fn(&mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]); 21] = [
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[0] ^= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[4] += 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[5] += 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[6] = 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[8..12].fill(0),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[12..16].fill(0),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[16..24].fill(0),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[24..32].fill(2),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[24..32].fill(0),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[40] |= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| {
+                let request_base: [u8; 8] = bytes[40..48].try_into().unwrap();
+                bytes[48..56].copy_from_slice(&request_base);
+            },
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[56..64].fill(0),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[64..66].fill(0),
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[66] = 31,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[67] = 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[68] ^= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[70] ^= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[72] ^= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[76] ^= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[78] ^= 1,
+            |bytes: &mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]| bytes[127] = 1,
+        ];
+        for mutate in mutations {
+            let mut corrupted = canonical;
+            mutate(&mut corrupted);
+            assert_eq!(
+                VirtualBlockConfiguration::decode(&corrupted),
+                Err(VirtualBlockError::InvalidConfiguration)
+            );
+        }
+    }
+
+    #[test]
+    fn configuration_requires_exact_live_binding_and_reset_stales_snapshot() {
+        let mut device = active::<1>();
+        let configuration = device.configuration().unwrap();
+        let mut encoded = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        configuration.encode(&mut encoded);
+        encoded[32..40].fill(0);
+        let altered = VirtualBlockConfiguration::decode(&encoded).unwrap();
+        assert_eq!(
+            device.validate_configuration(altered),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
+        assert_eq!(device.suspend(), Ok(()));
+        assert_eq!(
+            device.validate_configuration(configuration),
+            Err(VirtualBlockError::InvalidState)
+        );
+        device.resume().unwrap();
+        device.reset().unwrap();
+        assert_eq!(
+            device.validate_configuration(configuration),
             Err(VirtualBlockError::StaleGeneration)
         );
     }

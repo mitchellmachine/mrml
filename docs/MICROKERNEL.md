@@ -3522,6 +3522,43 @@ revocation, rollback-resistance, accessibility, and evidence gates are
 unchanged. This agent review does not replace the required independent human
 dual review.
 
+The next reusable-driver prerequisite is a canonical 128-byte active-device
+configuration. It is explicitly MRML-specific and pointer-free. The record
+binds version/classification, live generation, block size/count, supported and
+negotiated features, request/completion bases and derived page count, slot
+count, interrupt vector, exact doorbell and acknowledgement ports, the 1 MiB
+transfer ceiling, and both wire-record sizes. Encoding clears every reserved
+byte. Decode requires the exact length and constants, bounds geometry and
+features, reconstructs the queue to recheck alignment/overlap/arithmetic, and
+rejects any page-count mismatch. Only an active device with complete queue and
+vector binding can construct a record.
+
+A parsed configuration remains data, not authority. Before use it must compare
+exactly with a fresh configuration from the live device. A generation mismatch
+is stale; reset advances the generation and invalidates the old snapshot, while
+suspend or another non-active state rejects validation. The record is not yet
+guest-mapped and does not create block-backend, mapping, interrupt, PCI, or
+capability authority.
+
+Verification on Arch Linux under WSL2 ran all 375 release kernel unit tests and
+scoped strict Clippy successfully; the three focused configuration tests cover
+canonical round-trip and zero padding, 21 corrupt boundary classes including
+queue aliasing, exact live binding, non-active rejection, and reset staleness.
+Windows release `cargo check`, scoped strict Clippy, and the formatting check
+also passed. Windows tests were not executed because the required MSVC linker is
+not installed. This is unit/simulation evidence only, not guest mapping, PCI,
+native boot, nested-virtualization, or physical-hardware evidence.
+
+The configuration `DIGITAL-RIGHTS REVIEW` found no identity, collection,
+retention, correlation, attestation, DRM, disclosure, vendor preference,
+accessibility restriction, or persistent owner-state change. The `HOSTILE
+SECURITY REVIEW` treats every byte, reserved field, constant, feature,
+generation, geometry value, GPA, page/slot count, vector, port, and stale copy as
+hostile. Exact decode precedes use and live revalidation prevents data from
+becoming authority. Existing capability, revocation, rollback-resistance,
+accessibility, and evidence gates are unchanged. This agent review does not
+replace the required independent human dual review.
+
 The native-doorbell `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
 retention, identity expansion, DRM, attestation, remote disclosure, vendor
 preference, accessibility restriction, or persistent owner-state change. The

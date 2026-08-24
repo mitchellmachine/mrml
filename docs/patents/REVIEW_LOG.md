@@ -1376,6 +1376,15 @@ to prevent reuse after partial failure is a standard defensive resource-
 construction technique. No patent-candidate mechanism was identified. This
 agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Canonical virtual-block active-device configuration
+
+**Result: NOT_TRIGGERED.** The change conventionally encodes fixed device
+geometry, features, queue layout, vector, and wire constants in a canonical
+pointer-free record and requires stale snapshots to be revalidated against live
+device state. Exact parsing and reserved-zero fields are standard defensive
+configuration techniques. No new patent-candidate mechanism was identified.
+This agent review does not replace the required independent human dual review.
+
 # 2026-08-24 — Bounded virtual-block single-slot reuse
 
 **Result: NOT_TRIGGERED.** The change conventionally performs one write and one

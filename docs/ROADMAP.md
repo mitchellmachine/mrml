@@ -682,6 +682,14 @@ acknowledgements fail closed. This remains shared unit/simulation policy: the
 signed KVM/WHP images now contain the matching bounded two-step consumer and
 single-slot reuse, with new live execution evidence only for KVM.
 
+The next reusable-driver prerequisite is now a canonical 128-byte active-device
+configuration record. It is explicitly MRML-specific and binds generation,
+geometry, supported/negotiated features, exact queue layout, vector, ports,
+transfer bound, and wire sizes with zero reserved bytes. Only a fully active
+device can produce it. A decoded copy must reconstruct the queue exactly and
+match the current live device; reset makes the old generation stale. The record
+carries no authority and is not yet guest-mapped or exposed by a PCI transport.
+
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,
 then a VirtIO-net-compatible device and QEMU comparison. Multiqueue, offloads,
