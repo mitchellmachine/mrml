@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, and initial bounded ownership/place/effect facts exist, but there is no flow-sensitive move enforcement, loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
+| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and single-path initializedness enforcement exist, but there is no general CFG move enforcement, loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -221,15 +221,20 @@ guessed. Direct shared
 and mutable borrows of exact roots, including reborrows through a direct
 reference root, now record distinct `SharedBorrow` or `MutableBorrow` effects;
 they do not yet claim loan lifetime or conflict enforcement. The facts do not
-yet compute flow-sensitive initializedness, reject use after move, or claim that
-unreachable or divergent declarations execute.
+claim that unreachable or divergent declarations execute.
 A derived fixed 1,280-event ownership order now spans the maximum 512
 initializations and 768 effects. Event IDs are assigned at insertion time, so
 RHS effects precede the successful initialization of their destination local.
 Validation requires the initialization and effect tables to merge into one
 dense monotonic sequence without holes, duplicates, inversions, or corrupt
-counts. This is ordering evidence only: events do not yet claim CFG-block
-membership and are not yet used to reject source programs.
+counts. For functions proven to have one reachable top-level block and no
+conditional expression paths, a fixed 1,360-path state map now consumes this
+order and rejects a copy, move, borrow, or read-modify-write of an uninitialized
+exact path as `RuntimeUseAfterMove`. Moves clear roots and tuple descendants;
+exact writes restore state and child writes recompute tuple-root completeness.
+Conditional expression nodes disable enforcement even when the structural CFG
+has one block. Events still lack CFG-block membership, so multi-block and
+multi-path functions remain unenforced rather than being analyzed linearly.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root
