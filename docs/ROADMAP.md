@@ -335,9 +335,13 @@ authority; unrelated domains continue.
    Generic bounded reads and writes repeat those checks at every use, reject
    empty/overflowing ranges and read-only writes before backend access, expose
    no address, and preserve backend errors. An isolated service process,
-   block-specific receive/syscall, binding selection and dispatcher-to-buffer
-   wiring, concrete hosted/physical backend, and
+   block-specific receive/syscall and dispatcher-to-buffer wiring, concrete
+   hosted/physical backend, and
    physical durability evidence remain pending.
+   Service-side binding selection is implemented: the exact transferred
+   capability and kernel-known VM/task identity must select exactly one live
+   binding of the required access, while missing, ambiguous, and stale
+   candidates fail before backend use and request bytes supply no binding ID.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data

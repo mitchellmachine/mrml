@@ -142,9 +142,11 @@ explicitly and downgrade the status rather than guessing.
   and non-executable state before returning only the opaque host resource
   handle. Generic buffer I/O repeats the exact capability and binding checks on
   every use, checks nonempty bounded ranges and write access before calling an
-  opaque-handle backend, and preserves backend uncertainty. No isolated service
-  process or block-specific receive, binding selection and
-  dispatcher-to-buffer wiring,
+  opaque-handle backend, and preserves backend uncertainty. Selection derives
+  one live binding from exact receiver authority and kernel-known VM/task
+  identity; missing or ambiguous selection fails before I/O and no request
+  field supplies a binding ID. No isolated service process or block-specific
+  receive and dispatcher-to-buffer wiring,
   concrete hosted or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,

@@ -1121,3 +1121,15 @@ resource handle. Checked ranges, read-only enforcement, and explicit backend
 errors add no novel IPC, capability, mapping, or buffer-I/O technique.
 
 Patent review: `NOT_TRIGGERED` — conventional authorized bounded I/O.
+
+## 2026-08-23 — authenticated shared-binding selection
+
+MRML source: `crates/mrml-kernel/src/{ipc,shared_memory}.rs`.
+
+The kernel conventionally selects exactly one bounded table entry by an
+already-authorized object plus kernel-known VM/task identity and access mode,
+then applies its existing live-binding checks before opaque-handle I/O. Missing
+or duplicate matches are rejected. This adds no novel capability, lookup,
+mapping, or resource-selection technique.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded authorized lookup.

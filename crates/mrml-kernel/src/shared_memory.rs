@@ -27,6 +27,16 @@ pub enum SharedAccess {
 }
 
 impl SharedAccess {
+    pub(crate) const fn from_rights(rights: Rights) -> Option<Self> {
+        if rights.bits() == Rights::MAP.union(Rights::READ).bits() {
+            Some(Self::ReadOnly)
+        } else if rights.bits() == Rights::MAP.union(Rights::READ).union(Rights::WRITE).bits() {
+            Some(Self::ReadWrite)
+        } else {
+            None
+        }
+    }
+
     pub(crate) const fn rights(self) -> Rights {
         match self {
             Self::ReadOnly => Rights::MAP.union(Rights::READ),
@@ -126,6 +136,8 @@ pub enum SharedBindingError {
     TableFull,
     DuplicateHostHandle,
     DuplicateMapping,
+    MissingBinding,
+    AmbiguousBinding,
     StaleBinding,
     StaleMapping,
     WrongVm,
@@ -400,6 +412,39 @@ impl<const N: usize> SharedMemoryBindings<N> {
             access: entry.access,
             bytes,
         })
+    }
+
+    pub(crate) fn select_resource<const CAPS: usize, const MAPPINGS: usize>(
+        &self,
+        capabilities: &CapabilitySpace<CAPS>,
+        authority: Capability,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+        access: SharedAccess,
+    ) -> Result<(SharedBindingId, ResolvedSharedBinding), SharedBindingError> {
+        let object = capabilities.authorize(authority, access.rights())?;
+        let mut selected = None;
+        for (index, entry) in self.entries.iter().enumerate() {
+            let Some(entry) = entry.filter(|entry| {
+                entry.object == object
+                    && entry.vm == vm
+                    && entry.task == Some(task)
+                    && entry.access == access
+            }) else {
+                continue;
+            };
+            if selected.is_some() {
+                return Err(SharedBindingError::AmbiguousBinding);
+            }
+            selected = Some((
+                SharedBindingId::new(index, entry.generation),
+                SharedEndpoint::for_task(vm, task, entry.mapping, access),
+            ));
+        }
+        let (id, endpoint) = selected.ok_or(SharedBindingError::MissingBinding)?;
+        let resource = self.resolve_resource(id, capabilities, authority, memory, endpoint)?;
+        Ok((id, resource))
     }
 
     pub fn revoke<const CAPS: usize>(
@@ -1132,6 +1177,186 @@ mod tests {
             Err(IpcSharedBufferIoError::AccessDenied)
         );
         assert_eq!(backend.calls, 1);
+    }
+
+    #[test]
+    fn selected_shared_buffer_uses_authenticated_task_binding_only() {
+        let vm = vm();
+        let (task, other_task) = tasks();
+        let (memory, mapping) = mapped();
+        let source_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let buffer_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let mut source = CapabilitySpace::<1>::new();
+        let root = source.insert(OBJECT, source_rights).unwrap();
+        let endpoint = SharedEndpoint::for_task(vm, task, mapping, SharedAccess::ReadWrite);
+        let host = HostResourceHandle::new(126).unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        bindings
+            .bind(&source, root, &memory, endpoint, host)
+            .unwrap();
+        let mut receiver = CapabilitySpace::<1>::new();
+        let message = Message::transfer(
+            b"selected-buffer",
+            &[(root, buffer_rights)],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        let mut backend = BufferBackend {
+            handle: host,
+            bytes: [0; crate::PAGE_SIZE as usize],
+            calls: 0,
+            fail: false,
+        };
+
+        message
+            .write_selected_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                &memory,
+                vm,
+                task,
+                9,
+                b"selected",
+                &mut backend,
+            )
+            .unwrap();
+        let mut output = [0; 8];
+        message
+            .read_selected_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                &memory,
+                vm,
+                task,
+                9,
+                &mut output,
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(&output, b"selected");
+        assert_eq!(backend.calls, 2);
+        assert_eq!(
+            message.read_selected_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                &memory,
+                vm,
+                other_task,
+                0,
+                &mut [0],
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::Authorization(
+                IpcSharedBufferError::Binding(SharedBindingError::MissingBinding)
+            ))
+        );
+        assert_eq!(backend.calls, 2);
+    }
+
+    #[test]
+    fn selected_shared_buffer_rejects_ambiguous_and_stale_bindings() {
+        let vm = vm();
+        let (task, _) = tasks();
+        let mut memory = GuestMemory::<2>::new();
+        let first = memory
+            .map(GuestRegion::new(0x4000, PhysAddr::new(0x8000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let second = memory
+            .map(GuestRegion::new(0x5000, PhysAddr::new(0x9000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let source_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let buffer_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let mut source = CapabilitySpace::<1>::new();
+        let root = source.insert(OBJECT, source_rights).unwrap();
+        let mut bindings = SharedMemoryBindings::<2>::new();
+        let first_binding = bindings
+            .bind(
+                &source,
+                root,
+                &memory,
+                SharedEndpoint::for_task(vm, task, first, SharedAccess::ReadWrite),
+                HostResourceHandle::new(127).unwrap(),
+            )
+            .unwrap();
+        let second_binding = bindings
+            .bind(
+                &source,
+                root,
+                &memory,
+                SharedEndpoint::for_task(vm, task, second, SharedAccess::ReadWrite),
+                HostResourceHandle::new(128).unwrap(),
+            )
+            .unwrap();
+        let mut receiver = CapabilitySpace::<1>::new();
+        let message = Message::transfer(
+            b"ambiguous",
+            &[(root, buffer_rights)],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        let mut backend = BufferBackend {
+            handle: HostResourceHandle::new(127).unwrap(),
+            bytes: [0; crate::PAGE_SIZE as usize],
+            calls: 0,
+            fail: false,
+        };
+        assert_eq!(
+            message.read_selected_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                &memory,
+                vm,
+                task,
+                0,
+                &mut [0],
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::Authorization(
+                IpcSharedBufferError::Binding(SharedBindingError::AmbiguousBinding)
+            ))
+        );
+        assert_eq!(backend.calls, 0);
+
+        assert_eq!(
+            bindings
+                .revoke(second_binding, &source, root)
+                .unwrap()
+                .handle(),
+            HostResourceHandle::new(128).unwrap()
+        );
+        memory.unmap(first).unwrap();
+        assert_eq!(
+            message.read_selected_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                &memory,
+                vm,
+                task,
+                0,
+                &mut [0],
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::Authorization(
+                IpcSharedBufferError::Binding(SharedBindingError::StaleMapping)
+            ))
+        );
+        assert_eq!(backend.calls, 0);
+        assert_ne!(first_binding.token(), second_binding.token());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::{
     Capability, CapabilityError, CapabilitySpace, GuestMemory, HostResourceHandle, ObjectId,
     Rights, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,
-    SharedMemoryBindings,
+    SharedMemoryBindings, TaskId, VmId,
 };
 
 pub const MAX_INLINE_PAYLOAD: usize = 4096;
@@ -313,6 +313,63 @@ impl Message {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn read_selected_shared_buffer<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+        offset: u64,
+        output: &mut [u8],
+        backend: &mut B,
+    ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
+        let (_, resource) = self
+            .select_single_shared_resource(receiver_space, required, bindings, memory, vm, task)
+            .map_err(IpcSharedBufferIoError::Authorization)?;
+        validate_buffer_range(resource.bytes(), offset, output.len())?;
+        backend
+            .read(resource.handle(), offset, output)
+            .map_err(IpcSharedBufferIoError::Backend)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_selected_shared_buffer<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+        offset: u64,
+        input: &[u8],
+        backend: &mut B,
+    ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
+        let (_, resource) = self
+            .select_single_shared_resource(receiver_space, required, bindings, memory, vm, task)
+            .map_err(IpcSharedBufferIoError::Authorization)?;
+        if resource.access() != SharedAccess::ReadWrite {
+            return Err(IpcSharedBufferIoError::AccessDenied);
+        }
+        validate_buffer_range(resource.bytes(), offset, input.len())?;
+        backend
+            .write(resource.handle(), offset, input)
+            .map_err(IpcSharedBufferIoError::Backend)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn resolve_single_shared_resource<
         const CAPS: usize,
         const MAPPINGS: usize,
@@ -348,6 +405,37 @@ impl Message {
             )
             .map_err(IpcSharedBufferError::Binding)?;
         Ok((authority, resource))
+    }
+
+    fn select_single_shared_resource<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        memory: &GuestMemory<MAPPINGS>,
+        vm: VmId,
+        task: TaskId,
+    ) -> Result<(SharedBindingId, crate::shared_memory::ResolvedSharedBinding), IpcSharedBufferError>
+    {
+        let access =
+            SharedAccess::from_rights(required).ok_or(IpcSharedBufferError::AccessMismatch)?;
+        let authority = self
+            .authorize_single_capability(receiver_space, required)
+            .map_err(IpcSharedBufferError::Ipc)?;
+        bindings
+            .select_resource(
+                receiver_space,
+                authority.capability(),
+                memory,
+                vm,
+                task,
+                access,
+            )
+            .map_err(IpcSharedBufferError::Binding)
     }
 
     /// Encodes without allocation. Tokens only have meaning in a
