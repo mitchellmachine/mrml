@@ -90,6 +90,11 @@ for both its read and publication operations. Later boot preparation failure is
 retryable through the installed-manifest receipt. A required-mode
 flag fails closed when the complete release configuration is absent. The legacy
 independent-root path remains available only when required mode is disabled.
+The canonical handoff carries a distinct coherent-release evidence bit only
+when this manifest path was used. Kernel production policy requires that bit in
+addition to Secure Boot, measured boot, and rollback protection; development
+policy may explicitly accept the legacy path. The bit is evidence from the
+authenticated loader, not a capability or remote-attestation statement.
 Release-manifest construction additionally requires the next manifest root and
 all five kind-specific artifact roots to be pairwise distinct. Authenticated
 transition rejects reuse of the current manifest-signing root in any next or

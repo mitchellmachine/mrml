@@ -223,6 +223,11 @@ extension so the journal's read/write PCR policy remains coherent. Complete
 release and recovery layouts must be index-disjoint. Required mode rejects an
 absent or partial release configuration; optional development mode still uses
 the legacy independent embedded roots.
+The handoff represents manifest admission with its own canonical flag rather
+than inferring it from version or PCR success. Production `BootPolicy` rejects
+the legacy path even if Secure Boot, measurement, and a rollback counter are
+present; development policy may opt into it. This loader evidence does not
+manufacture authority for missing manifest artifacts and is not attestation.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

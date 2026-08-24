@@ -1161,7 +1161,9 @@ switch, and virtualization primitives. AArch64 and RISC-V64 are represented in
 public platform types now so x86 assumptions cannot leak into policy APIs.
 
 Production boot policy requires firmware secure-boot evidence, a measured image
-digest, and a monotonically enforced minimum image version. The UEFI loader must
+digest, a monotonically enforced minimum image version, and a distinct
+coherent-release handoff flag proving that manifest admission—not the legacy
+independent-root path—was used. The UEFI loader must
 source its 256-bit boot seed from the firmware RNG protocol or a documented
 architecture entropy source; the portable kernel rejects absent evidence but
 cannot independently prove firmware entropy quality. Development policy may
@@ -1802,7 +1804,7 @@ Successful NV validation and advancement is now represented by a dedicated bit
 in the canonical UEFI-to-kernel handoff rather than inferred from the image
 version. The decoder rejects unknown bits, `BootEvidence` retains the result,
 and production `BootPolicy` independently requires Secure Boot, measured boot,
-and rollback protection. A version meeting the compiled floor is therefore not
+rollback protection, and coherent-release admission. A version meeting the compiled floor is therefore not
 enough when monotonic enforcement was skipped. A freshly signed version-5
 kernel using the expanded evidence contract still reached the QEMU GOP marker.
 

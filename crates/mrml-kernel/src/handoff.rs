@@ -23,13 +23,15 @@ const FLAG_MADT_SNAPSHOT: u16 = 1 << 3;
 const FLAG_AP_TRAMPOLINE: u16 = 1 << 4;
 const FLAG_SERVICE_IMAGE: u16 = 1 << 5;
 const FLAG_RECOVERY_STATE: u16 = 1 << 6;
+const FLAG_COHERENT_RELEASE: u16 = 1 << 7;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
     | FLAG_MADT_SNAPSHOT
     | FLAG_AP_TRAMPOLINE
     | FLAG_SERVICE_IMAGE
-    | FLAG_RECOVERY_STATE;
+    | FLAG_RECOVERY_STATE
+    | FLAG_COHERENT_RELEASE;
 
 /// Canonical rollback-state metadata handed off by the authenticated loader.
 /// It is evidence data only and carries no recovery or storage authority.
@@ -479,6 +481,7 @@ impl BootHandoff {
             flags & FLAG_SECURE_BOOT != 0,
             flags & FLAG_MEASURED_BOOT != 0,
             flags & FLAG_ROLLBACK_PROTECTED != 0,
+            flags & FLAG_COHERENT_RELEASE != 0,
         )
         .map_err(HandoffError::InvalidBootEvidence)?;
         for index in 0..region_count {
@@ -521,6 +524,7 @@ pub fn encode_handoff(
         secure_boot,
         measured_boot,
         rollback_protected,
+        false,
         acpi_root,
         framebuffer,
         regions,
@@ -553,6 +557,7 @@ pub fn encode_handoff_with_recovery(
         secure_boot,
         measured_boot,
         rollback_protected,
+        false,
         acpi_root,
         framebuffer,
         regions,
@@ -592,6 +597,7 @@ pub fn encode_handoff_with_madt(
         secure_boot,
         measured_boot,
         rollback_protected,
+        false,
         acpi_root,
         framebuffer,
         regions,
@@ -638,6 +644,7 @@ pub fn encode_handoff_with_smp(
         secure_boot,
         measured_boot,
         rollback_protected,
+        false,
         acpi_root,
         framebuffer,
         regions,
@@ -685,6 +692,7 @@ pub fn encode_handoff_with_smp_and_service(
         secure_boot,
         measured_boot,
         rollback_protected,
+        false,
         acpi_root,
         framebuffer,
         regions,
@@ -704,6 +712,7 @@ pub fn encode_handoff_with_smp_service_and_recovery(
     secure_boot: bool,
     measured_boot: bool,
     rollback_protected: bool,
+    coherent_release: bool,
     acpi_root: u64,
     framebuffer: FramebufferInfo,
     regions: &[MemoryRegion],
@@ -733,6 +742,7 @@ pub fn encode_handoff_with_smp_service_and_recovery(
         secure_boot,
         measured_boot,
         rollback_protected,
+        coherent_release,
         acpi_root,
         framebuffer,
         regions,
@@ -752,6 +762,7 @@ fn encode_handoff_inner(
     secure_boot: bool,
     measured_boot: bool,
     rollback_protected: bool,
+    coherent_release: bool,
     acpi_root: u64,
     framebuffer: FramebufferInfo,
     regions: &[MemoryRegion],
@@ -809,6 +820,7 @@ fn encode_handoff_inner(
         secure_boot,
         measured_boot,
         rollback_protected,
+        coherent_release,
     )
     .map_err(HandoffError::InvalidBootEvidence)?;
     output[..length].fill(0);
@@ -818,6 +830,7 @@ fn encode_handoff_inner(
     let flags = ((secure_boot as u16) * FLAG_SECURE_BOOT)
         | ((measured_boot as u16) * FLAG_MEASURED_BOOT)
         | ((rollback_protected as u16) * FLAG_ROLLBACK_PROTECTED)
+        | ((coherent_release as u16) * FLAG_COHERENT_RELEASE)
         | ((madt.is_some() as u16) * FLAG_MADT_SNAPSHOT)
         | ((ap_resources.is_some() as u16) * FLAG_AP_TRAMPOLINE)
         | ((service.is_some() as u16) * FLAG_SERVICE_IMAGE)
@@ -1298,6 +1311,7 @@ mod tests {
                 true,
                 true,
                 false,
+                true,
                 0x9000,
                 framebuffer,
                 &regions,
@@ -1313,6 +1327,7 @@ mod tests {
         let decoded = BootHandoff::decode(&with_recovery, |_| {}).unwrap();
         assert_eq!(decoded.recovery_state(), Some(recovery));
         assert!(!decoded.evidence().rollback_protected());
+        assert!(decoded.evidence().coherent_release());
 
         let recovery_offset =
             HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + HANDOFF_SERVICE_BYTES;

@@ -965,7 +965,7 @@ mod tests {
     use crate::{BootEvidence, BootPolicy};
 
     fn validated_boot(entropy: [u8; 32], measurement: [u8; 64]) -> ValidatedBoot {
-        let evidence = BootEvidence::new(entropy, measurement, 1, true, true, true).unwrap();
+        let evidence = BootEvidence::new(entropy, measurement, 1, true, true, true, true).unwrap();
         BootPolicy::production(1).admit(&evidence).unwrap()
     }
 

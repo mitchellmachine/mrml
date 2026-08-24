@@ -582,6 +582,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     }
     let recovery_state =
         admit_configured_recovery_journal(services, rng_pointer.cast(), recovery_configuration)?;
+    let coherent_release = prepared_release.is_some();
 
     loader_trace(0xa8);
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services) }?;
@@ -596,6 +597,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             measured_boot,
             secure_boot,
             rollback_protected,
+            coherent_release,
             entropy,
             acpi_root,
             framebuffer,
@@ -625,6 +627,7 @@ unsafe fn launch_after_exit(
     measured_boot: bool,
     secure_boot: bool,
     rollback_protected: bool,
+    coherent_release: bool,
     entropy: [u8; 32],
     acpi_root: u64,
     framebuffer: Framebuffer,
@@ -664,6 +667,7 @@ unsafe fn launch_after_exit(
         measured_boot,
         secure_boot,
         rollback_protected,
+        coherent_release,
         entropy,
         acpi_root,
         framebuffer,
@@ -1165,6 +1169,7 @@ fn enter_kernel(
     measured_boot: bool,
     secure_boot: bool,
     rollback_protected: bool,
+    coherent_release: bool,
     entropy: [u8; 32],
     acpi_root: u64,
     framebuffer: Framebuffer,
@@ -1220,6 +1225,7 @@ fn enter_kernel(
         secure_boot,
         measured_boot,
         rollback_protected,
+        coherent_release,
         acpi_root,
         framebuffer_info,
         &kernel_regions[..regions.len()],
