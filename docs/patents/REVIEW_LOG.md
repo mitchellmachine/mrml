@@ -1393,6 +1393,17 @@ interface, JavaScript/WebAssembly runtime, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Conditional loan-generation reaching definitions
+
+**Result: NOT_TRIGGERED.** The compiler conventionally applies bounded CFG
+reachability and replacement-kill checks to direct reference-loan generations,
+including path-correlated conflict/use queries. It adds no new arena,
+optimization, authority model, device or compatibility protocol, host-share
+mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Service policy-replacement syscall foundation
 
 **Result: NOT_TRIGGERED.** The change adds a conventional pointer-free syscall

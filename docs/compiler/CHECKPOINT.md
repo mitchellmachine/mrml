@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `909f0d9`
-  (`compiler: reborrow typed reference assignments`)
+- Compiler checkpoint commit: `8b998ca`
+  (`compiler: join conditional loan generations`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -135,10 +135,14 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   reachable use. An unconditional top-level explicit-borrow assignment to a
   mutable reference binding creates a new loan generation from the existing
   bounded write event. Uses select the latest generation, while children issued
-  before replacement retain the old identity. Conditional, expression-
-  conditional, and loop-carried replacements remain excluded until generation
-  joins become path-sensitive; moved reference values are not indirect loan
-  origins. This is not general coercion-site reborrowing.
+  before replacement retain the old identity. Conditional statement
+  replacements use a fixed 193-point reaching-definition traversal: bypass
+  paths retain the old generation, exhaustive replacement kills it, and
+  conflict-to-use queries do not combine mutually exclusive paths. A child
+  issued with multiple reaching parent generations fails explicitly pending
+  multi-parent ancestry. Expression-conditional and loop-carried replacements
+  remain excluded; moved reference values are not indirect loan origins. This
+  is not general coercion-site reborrowing.
   A plain direct reference identifier assigned into an existing typed reference
   binding uses the destination reference type as coercion context and records a
   shared or mutable reborrow before the destination write. Mutable parent
@@ -397,8 +401,8 @@ emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths and remaining indirect move/borrow classification,
 unsupported expression/control-flow forms, complete loans, indirect alias
-invalidation, broader coercion-site reborrows, path-sensitive generation joins
-for conditional and loop-carried reference replacements, regions,
+invalidation, broader coercion-site reborrows, multi-parent reborrow ancestry,
+expression-conditional and loop-carried reference generations, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -408,10 +412,11 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. add path-sensitive generation joins for conditional and loop-carried
-   reference replacements, then broader coercion-site reborrows before region
-   reasoning; preserve the distinction between an expected-reference reborrow,
-   an explicit reassignment borrow, and an indirect consuming move;
+1. add multi-parent reborrow ancestry at conditional joins, then expression-
+   conditional and loop-carried generation dataflow and broader coercion sites
+   before region reasoning; preserve the distinction between an expected-
+   reference reborrow, an explicit reassignment borrow, and an indirect
+   consuming move;
 2. exact constant owned-array element identity is now retained. Add array move
    paths only for a modern Rust operation that can legally move an element
    (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
@@ -441,8 +446,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 713 tests on each host: 392
-library tests, 10 conformance tests, 309 replacement tests, and 2 driver tests.
+The checkpoint source passed 715 tests on each host: 393
+library tests, 10 conformance tests, 310 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

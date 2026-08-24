@@ -3396,3 +3396,18 @@ last use. Existing branch-only use-after-move coverage now uses a call-derived
 move, because the oracle confirms direct typed reference assignment is a
 reborrow. Projected, compound, conditional-RHS, and call-derived assignments do
 not claim this coercion behavior. The hygiene scan remained empty.
+
+The conditional loan-generation join milestone passed all 715 compiler and
+driver tests on Windows gnullvm and all 715 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using rustc
+workspace commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. A fixed 193-point
+reachability set derived from the existing 64-block/128-edge bounds now tests
+whether direct reference generations reach a use while avoiding all intervening
+replacements. Non-exhaustive replacement preserves the original generation on
+the bypass path; exhaustive replacement kills it. Conflict-to-use analysis
+also retains path correlation, preventing mutually exclusive replacement and
+old-loan use from manufacturing a conflict. The pinned oracle confirmed E0499
+for the bypass case and acceptance for exhaustive replacement. A child issued
+where multiple parent generations reach fails explicitly rather than selecting
+one by source order. Expression-conditional and loop-carried generations remain
+unsupported. The hygiene scan remained empty.

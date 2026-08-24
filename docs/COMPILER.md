@@ -573,13 +573,18 @@ This does not yet classify every shared-child mutation or general coercion site.
 Assignments through a direct mutable-reference borrower now distinguish loan
 mutation from compatible loan reads. While a shared child is live, mutation
 through its mutable parent is rejected but reads through that parent remain
-compatible; mutation after the child's last reachable use is accepted. Direct
-For an unconditional top-level explicit-borrow assignment to a mutable
+compatible; mutation after the child's last reachable use is accepted. For an
+unconditional top-level explicit-borrow assignment to a mutable
 reference binding, the destination write is a new bounded loan generation.
 Uses resolve to the latest generation, while a child created before replacement
-remains tied to the old generation. Conditional, expression-conditional, and
-loop-carried reference replacements remain unclassified until generation joins
-are path-sensitive; indirect reference-value moves are also not loan origins.
+remains tied to the old generation. Conditional statement reference
+replacements now use bounded reaching definitions: a generation remains active
+when a bypass path reaches the use and is killed when every reaching path
+crosses a replacement. Conflict-to-use queries preserve the same path
+correlation instead of combining mutually exclusive events. A child reborrow
+issued where multiple parent generations reach still fails explicitly;
+expression-conditional and loop-carried reference replacements remain
+unclassified, and indirect reference-value moves are not loan origins.
 A plain assignment of a direct reference identifier into an existing typed
 reference binding now uses the destination type as coercion context and records
 a shared or mutable implicit reborrow before the destination write. For mutable
@@ -606,9 +611,9 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is path-sensitive generation
-joins for conditional and loop-carried reference replacements, followed by
-broader coercion-site reborrows before region reasoning.
+The highest-value next major implementation task is multi-parent reborrow
+ancestry at conditional joins, followed by loop-carried generation dataflow and
+broader coercion sites before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,
