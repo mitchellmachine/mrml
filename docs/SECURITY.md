@@ -188,6 +188,12 @@ manifest release and exact requested kind; executable payload parsing follows
 that check. Tests reject both older-manifest/newer-artifact and newer-manifest/
 older-artifact substitution plus kind substitution. This is unit-tested
 admission machinery, not UEFI manifest integration or durable release commit.
+Manifest admission also rejects every root-role collision: the next manifest
+root and five artifact roots must be pairwise distinct, and none may equal the
+current authenticated manifest-signing root. This prevents one Lamport key from
+being authorized for a second statement or a different artifact role. The
+check is local key-lifecycle enforcement, not proof that external backups were
+destroyed or independently controlled.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

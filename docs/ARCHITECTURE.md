@@ -74,6 +74,11 @@ merely meets—the manifest release. Executable admission performs this exact
 release check before PE parsing. The per-kind minimum-version roots are no
 longer exposed from `VerifiedRelease`, closing the cross-release splice at this
 foundation; the UEFI loader has not yet consumed a release manifest.
+Release-manifest construction additionally requires the next manifest root and
+all five kind-specific artifact roots to be pairwise distinct. Authenticated
+transition rejects reuse of the current manifest-signing root in any next or
+artifact role. This preserves the one-statement lifetime of every Lamport key
+before a release can expose per-kind admission.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
 authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM

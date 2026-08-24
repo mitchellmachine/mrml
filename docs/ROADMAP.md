@@ -1356,11 +1356,18 @@ can count as trusted consent.
    interpretation can succeed. Focused tests reject substitution from both an
    older and a newer release. The UEFI loader does not yet load or commit this
    manifest, so coherent-set boot admission remains partial. Verification on
-   2026-08-24 passed all 4 artifact tests and strict crate-local Clippy on
-   Windows gnullvm, all 451 kernel tests on Arch Linux/WSL2, and an optimized
-   native UEFI loader build. The Windows full suite passed 450 tests; the known
-   deep delegation-capacity test again overflowed the Windows test-process
-   stack, independently of this artifact code.
+   2026-08-24 passed all 5 artifact tests, all 3 signer tests, and strict scoped
+   Clippy on Windows gnullvm; all 452 kernel tests on Arch Linux/WSL2; and an
+   optimized native UEFI loader build. A preceding 451-test Windows full run
+   passed 450 tests; the known deep delegation-capacity test again overflowed
+   the Windows test-process stack independently of this artifact code. As the
+   next manifest-admission
+   prerequisite, construction now requires the next manifest root and all five
+   artifact roots to be pairwise distinct; authenticated transition also
+   rejects any reuse of the current manifest-signing root in those six roles.
+   Adversarial tests cover next/artifact, artifact/artifact, and current/
+   artifact collisions. This enforces in-repository Lamport key separation but
+   cannot prove external one-time-key backup destruction or human key custody.
 3. Add rollback, stale-update, corruption, interrupted-write, and recovery tests.
 4. Establish reproducible builds, independently controlled release keys,
    Secure Boot integration, recovery, and key rotation.

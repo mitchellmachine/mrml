@@ -295,6 +295,15 @@ impl ReleaseManifest {
         {
             return Err(ArtifactError::MissingTrustRoot);
         }
+        for (index, root) in artifact_roots.iter().enumerate() {
+            if constant_time_equal(root, &next_root_digest)
+                || artifact_roots[index + 1..]
+                    .iter()
+                    .any(|other| constant_time_equal(root, other))
+            {
+                return Err(ArtifactError::ReusedTrustRoot);
+            }
+        }
         Ok(Self {
             release,
             next_root_digest,
@@ -370,7 +379,12 @@ impl BootstrapState {
             self.minimum_release,
         )
         .verify(manifest.release, encoded, public_key, signature)?;
-        if constant_time_equal(&manifest.next_root_digest, &self.current_root_digest) {
+        if constant_time_equal(&manifest.next_root_digest, &self.current_root_digest)
+            || manifest
+                .artifact_roots
+                .iter()
+                .any(|root| constant_time_equal(root, &self.current_root_digest))
+        {
             return Err(ArtifactError::ReusedTrustRoot);
         }
         let minimum_release = manifest
@@ -616,6 +630,51 @@ mod tests {
     }
 
     #[test]
+    fn release_manifest_rejects_every_one_time_root_collision() {
+        let roots = [[1; 64], [2; 64], [3; 64], [4; 64], [5; 64]];
+        assert_eq!(
+            ReleaseManifest::new(7, roots[0], roots).err(),
+            Some(ArtifactError::ReusedTrustRoot)
+        );
+        let mut duplicate = roots;
+        duplicate[4] = duplicate[1];
+        assert_eq!(
+            ReleaseManifest::new(7, [9; 64], duplicate).err(),
+            Some(ArtifactError::ReusedTrustRoot)
+        );
+
+        let mut private = [0u8; LAMPORT_PRIVATE_KEY_BYTES];
+        for (index, byte) in private.iter_mut().enumerate() {
+            *byte = (index as u64).wrapping_mul(53).wrapping_add(11) as u8;
+        }
+        let mut public = [0u8; LAMPORT_PUBLIC_KEY_BYTES];
+        let mut signature = [0u8; LAMPORT_SIGNATURE_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let current_root = Sha3_512::digest(&public);
+        let manifest = ReleaseManifest::new(
+            7,
+            [9; 64],
+            [current_root, [2; 64], [3; 64], [4; 64], [5; 64]],
+        )
+        .unwrap()
+        .encode();
+        let statement = artifact_statement(
+            ArtifactKind::LaunchPolicy,
+            7,
+            manifest.len() as u64,
+            Sha3_512::digest(&manifest),
+        );
+        lamport_sign(&private, &statement, &mut signature).unwrap();
+
+        assert_eq!(
+            BootstrapState::genesis(current_root, 7)
+                .verify_release(&manifest, &public, &signature)
+                .err(),
+            Some(ArtifactError::ReusedTrustRoot)
+        );
+    }
+
+    #[test]
     fn bootstrap_state_rejects_corruption_and_atomic_conflicts() {
         let root = [7; 64];
         let encoded = BootstrapState::genesis(root, 3).encode();
@@ -689,7 +748,13 @@ mod tests {
             Some(ArtifactError::WrongArtifactKind)
         );
 
-        let artifact_roots = [Sha3_512::digest(&public); 5];
+        let artifact_roots = [
+            Sha3_512::digest(&public),
+            [2; 64],
+            [3; 64],
+            [4; 64],
+            [5; 64],
+        ];
         let exact_release = VerifiedRelease {
             manifest: ReleaseManifest::new(9, [0xa5; 64], artifact_roots).unwrap(),
         };

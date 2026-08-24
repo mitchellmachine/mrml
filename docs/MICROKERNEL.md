@@ -1989,6 +1989,12 @@ methods require the signed artifact version to equal the manifest release and
 the requested kind to match before PE parsing. This prevents a valid artifact
 from an adjacent release being spliced through a minimum-version check. The
 current UEFI loader has not yet integrated manifest loading or monotonic commit.
+The manifest codec now rejects duplicate key roles before encoding: its next
+manifest root and five kind-specific roots are pairwise distinct. After the
+current manifest signature is authenticated, transition independently rejects
+that current root appearing in any next role. These checks prevent repository
+code from authorizing a one-time Lamport key for multiple statements; they do
+not attest external key deletion or independent human custody.
 
 Each digest argument is the 128-character SHA3-512 public-key digest printed by
 `key-digest`. The kernel now decodes this exact representation, verifies it
