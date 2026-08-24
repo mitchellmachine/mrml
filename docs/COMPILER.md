@@ -320,9 +320,11 @@ arm-specific terminals, including structurally proven exhaustive termination.
 Nested loop blocks now carry dedicated entry headers and ordered action/control
 provenance, including parser-resolved inner and outer break/continue targets,
 conditional returns, entry-condition exits, and divergent backedges without
-replaying preceding outer-body operations. Action lists containing statements
-after a return, residual unit-loop parser shapes, and post-terminal loop-
-operation suffixes remain explicitly incomplete. This runtime place/CFG
+replaying preceding outer-body operations. The parser's immediately-breaking
+nested unit-loop form stays within the enclosing operation range, matching its
+existing no-op emitter semantics. Action lists containing statements after a
+return and post-terminal loop-operation suffixes remain explicitly incomplete.
+This runtime place/CFG
 foundation is therefore an incremental prerequisite, not a claim of ownership
 checking.
 

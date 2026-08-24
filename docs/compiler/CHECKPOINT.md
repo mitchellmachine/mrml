@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `367b671`
-  (`compiler: model nested loop CFG targets`)
+- Compiler checkpoint commit: `b78571e`
+  (`compiler: complete unit break loop CFG`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -174,9 +174,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   and control blocks; parser-resolved inner and outer break/continue targets,
   conditional returns, nested entry-condition exits, and divergent backedges
   are represented without replaying preceding outer operations. Duplicate,
-  missing, or out-of-range control-order metadata fails closed. Residual unit-
-  loop parser shapes and operation suffixes after an unconditional terminal
-  remain explicitly incomplete.
+  missing, or out-of-range control-order metadata fails closed. The parser's
+  dedicated immediately-breaking `NestedUnitLoop` form remains inside the
+  enclosing contiguous operation range, matching its existing no-op emitter
+  semantics. Operation suffixes after an unconditional terminal remain
+  explicitly incomplete.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -201,8 +203,8 @@ compatibility gaps:
 
 1. complete bounded read-place preanalysis for supported
    aggregate/materialization families in exact emission order;
-2. extend explicit basic blocks and control-flow edges through residual unit-
-   loop parser shapes and remaining unreachable terminal suffixes;
+2. extend explicit basic blocks and control-flow edges through remaining
+   unreachable terminal suffixes;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
@@ -228,8 +230,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 663 tests on each host: 366
-library tests, 10 conformance tests, 285 replacement tests, and 2 driver tests.
+The checkpoint source passed 665 tests on each host: 367
+library tests, 10 conformance tests, 286 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
