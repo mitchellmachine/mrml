@@ -305,8 +305,13 @@ authority; unrelated domains continue.
    adapter now supplies canonical padded staging, complete digest readback,
    ordered flushes, inactive-superblock-only atomic replacement, fail-stop
    session poisoning, and exact immutable recovery reads. This is a tested
-   service-boundary adapter, not physical-device durability evidence; file-data
-   integration and the concrete block service remain pending.
+   service-boundary adapter, not physical-device durability evidence. Exact-
+   block file reads now verify a complete extent before copying any requested
+   subrange. A bounded write session reconstructs every successor data block
+   from the exact verified predecessor plus holes and patch bytes, independently
+   rejects reserved, active, and overlapping physical ranges, verifies complete
+   staged extents and the complete logical-file digest, and flushes once before
+   metadata publication. The concrete block service/device remains pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -408,10 +413,10 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, file-data block integration, the concrete block
-   service/device implementation, and physical power-loss evidence remain
-   pending. The bounded exact-block metadata publication/recovery adapter is
-   implemented as described above.
+   checkpoint/reconstruction, the concrete block service/device implementation,
+   and physical power-loss evidence remain pending. The bounded exact-block
+   metadata publication/recovery and file-data adapters are implemented as
+   described above.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

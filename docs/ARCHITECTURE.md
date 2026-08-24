@@ -254,7 +254,12 @@ after replacement as fail-stop. A bounded block-volume adapter now implements
 metadata staging, complete-image readback verification, durable-flush calls,
 inactive-superblock replacement, and immutable recovery reads over an unsafe
 exact-block device boundary. It permanently poisons a session after uncertain
-replacement durability. There is not yet a block service or physical device
+replacement durability. Exact-block file reads now hash each complete physical
+extent before copying a requested subrange. A bounded one-use file-write session
+binds one exact predecessor, reconstructs successor blocks from verified old
+data, holes, and the caller patch, rejects active/reserved/overlapping ranges,
+verifies each complete staged extent by readback and the complete logical-file
+digest, then flushes data before metadata publication. There is not yet a block service or physical device
 implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
@@ -410,8 +415,8 @@ is present in the COW plan and its one-use receipt is consumed. Directory
 successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The exact-block
-metadata adapter is implemented, but its block service/device implementation,
-file-data integration, snapshots, physical power-loss testing, and persistent anti-rollback state
+metadata and file-data adapters are implemented, but their block service/device
+implementation, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import

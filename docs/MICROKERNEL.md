@@ -2909,6 +2909,23 @@ operations after uncertain superblock durability. The unsafe device contract
 must still provide exact transfer, atomic replacement, and durable flush; no
 block service or physical device implementation exists yet.
 
+The same boundary now covers file data without adding an ambient namespace or
+object lookup. Exact-block reads make a complete first pass over the physical
+extent and compare its digest before a second pass copies only the requested
+subrange. A bounded `BlockFileSession` retains the exact predecessor file state
+and one independent block-sized work buffer. For each next-generation data
+extent it reconstructs every logical block twice from digest-verified old data,
+explicit holes, zero extension/truncation, and the exact patch: the first pass
+must match the proposed extent digest before any write, and the second writes
+only the proposed disjoint COW range. Complete readback must match again before
+the extent enters the session. The session independently rejects wrong file,
+volume, block geometry, generation, length, ordering, capacity, reserved blocks,
+active-range reuse, successor physical overlap, digest substitution, and replay.
+Before its one allowed flush it reads the complete staged logical successor,
+synthesizes holes as zeroes, verifies the exact file-length digest, and only then
+requests device durability. This remains an adapter tested with simulated
+storage, not a real block service, device driver, or physical durability result.
+
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
 self-ownership. Extent lists now use a separate canonical block-aligned image
@@ -3004,15 +3021,20 @@ checked block arithmetic, canonical zero padding, digest verification after
 write, an inactive superblock target, flush ordering, exclusive session access,
 and permanent fail-stop poisoning after uncertain replacement durability. It
 does not treat a device error as proof of corruption or permission to roll back.
+File-data review additionally requires complete extent verification before
+copying, exact predecessor identity/generation/length, verified old-source reads,
+checked patch intersections, zeroed holes and tails, disjoint unreachable output,
+complete readback, whole-file digest verification, output erasure by the file
+API on backend failure, and one-use flush state. No name or stable object ID
+authorizes either path.
 This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Eighty-two focused unit tests and strict crate-local clippy pass on Windows
-gnullvm and Arch Linux under WSL2. File-data block integration,
+Eighty-six focused unit tests and strict crate-local clippy pass on Windows
+gnullvm and Arch Linux under WSL2. A concrete block service/device,
 complete directory hierarchy/lifetime handling, reboot-time capability
-checkpoint/reconstruction, complete crash recovery, snapshots, a block-device
-service/device implementation, and
+checkpoint/reconstruction, complete crash recovery, snapshots, and
 configuration-checkpoint persistence remain unimplemented.
 
 ```text
@@ -3022,7 +3044,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 82 tests, and both strict crate-local clippy
+Both current unit-test runs pass 86 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of metadata/authority and exact-block
 adapter state, not

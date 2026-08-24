@@ -29,7 +29,7 @@ pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,
     StorageObjectKind, StoragePrincipal, StorageRights,
 };
-pub use block::{BlockVolume, BlockVolumeError, StorageBlockDevice};
+pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
     CowPublishError,

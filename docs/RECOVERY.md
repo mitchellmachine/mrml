@@ -124,8 +124,11 @@ explicitly and downgrade the status rather than guessing.
   bounded block-volume adapter now performs exact metadata writes, digest
   readback, flush ordering, inactive-superblock replacement, and immutable
   recovery reads over an unsafe block-device contract; uncertain superblock
-  durability permanently poisons that adapter session. No concrete block
-  service/device, file-data adapter integration, persistent allocation/free
+  durability permanently poisons that adapter session. Exact-block file reads
+  verify complete extents before copying, while a bounded file-write session
+  reconstructs successor blocks from an exact verified predecessor, verifies
+  complete extent and logical-file digests, and flushes before metadata
+  publication. No concrete block service/device, persistent allocation/free
   engine, complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its

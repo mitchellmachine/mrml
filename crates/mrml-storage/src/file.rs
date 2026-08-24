@@ -189,6 +189,10 @@ impl<const N: usize> FileState<N> {
         self.length
     }
 
+    pub(crate) const fn extents(&self) -> &ExtentMap<N> {
+        &self.extents
+    }
+
     pub fn read<const A: usize, B: FileReadBackend>(
         &self,
         authority: &StorageAuthorityTable<A>,

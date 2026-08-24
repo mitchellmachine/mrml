@@ -1019,6 +1019,19 @@ technique.
 
 Patent review: `NOT_TRIGGERED` — conventional checked block-I/O adaptation.
 
+## 2026-08-23 — exact-block file-data adapter
+
+MRML source: `crates/mrml-storage/src/block.rs` and the crate-private
+`FileState` extent-map accessor in `crates/mrml-storage/src/file.rs`.
+
+The service conventionally verifies a complete extent before a subrange read,
+reconstructs copy-on-write successor blocks from verified predecessor data,
+holes, and patch bytes, verifies complete staged extents by readback, checks the
+complete logical-file digest, and flushes once. This adds no novel filesystem,
+copy-on-write, block-I/O, hashing, reconstruction, or persistence technique.
+
+Patent review: `NOT_TRIGGERED` — conventional verified file-data adaptation.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and
