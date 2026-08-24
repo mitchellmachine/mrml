@@ -697,13 +697,18 @@ authority; unrelated domains continue.
    are unit, ABI-compilation, and hosted controlled-probe evidence, not native
    UEFI, TPM, persistence, reboot, rollback-resistance, or physical evidence.
    The signed service now applies `BootRecoveryAdmission` to the delivered
-   record and a separately constructed controlled read-only test record before
+   record and a separately constructed controlled test record before
    readiness. It requires exact equality, proves replay rejection with zero
    output, and erases both copies. Fresh signed WHP/KVM probes passed this path;
    both platforms also passed all 116 storage tests. The controlled provider
-   refuses commits and supplies no durability, monotonic-write, authentication,
-   or recovery-authority evidence. Live release of recovered configuration
-   through a conforming store remains pending.
+   now also participates in the full dependent transaction in the configuration
+   client: exact owner-approved checkpoint proof reconstructs one private
+   attenuated file capability, configuration and restart policy are validated,
+   and only the fixed epoch 8→9, handle generation 2→3, root generation 1→2
+   successor releases results. Fresh signed WHP/KVM probes and 27 configuration
+   tests on Windows and Linux passed. This proves hosted orchestration and exact
+   volatile compare-and-store behavior only; a conforming authenticated,
+   power-loss-atomic backend and physical evidence remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
    each pass all 447 kernel tests, all 16 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict

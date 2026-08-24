@@ -240,12 +240,16 @@ storage authority. Hosted WHP/KVM remain controlled by their hosts; this is not
 native UEFI, TPM, persistence, reboot, rollback-resistance, Secure Boot, or
 physical evidence.
 The signed service now additionally binds the decoded handoff record through
-`BootRecoveryAdmission` to a separately constructed controlled read-only test
-record before it becomes ready. It requires one successful exact load followed
-by a rejected, zero-output replay, then erases all copies. The controlled
-provider cannot commit and is not authenticated hardware; this proves hosted
-one-use equality enforcement only. Mismatch, malformed bytes, or reuse halts
-before the block service accepts requests and releases no recovery authority.
+`BootRecoveryAdmission` to a separately constructed controlled test record
+before it becomes ready. It requires one successful exact load followed by a
+rejected, zero-output replay, then erases all copies. The client receives the
+metadata only as data and independently binds it before the existing dependent
+authority-recovery transaction. Owner-approved checkpoint proof, temporary
+attenuated capability reconstruction, configuration and policy validation, and
+an exact epoch/generation/root successor all precede release. Mismatch,
+malformed bytes, replay, stale expected state, or successor substitution halts
+without releasing recovered authority or configuration. The controlled provider
+is volatile test code, not authenticated hardware or durability evidence.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

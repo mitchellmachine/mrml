@@ -381,12 +381,17 @@ explicitly and downgrade the status rather than guessing.
   before the authenticated-store wrapper; live composition with that store in
   a booted service now reaches the one-use equality boundary: before readiness,
   the signed service binds the delivered record to a separately constructed
-  controlled read-only record, requires one exact load, requires a replay to
+  controlled record, requires one exact load, requires a replay to
   fail with zero output, and erases both copies. Fresh signed WHP and KVM probes
   passed, and Windows gnullvm plus Linux/WSL2 each passed all 116 storage tests.
-  The controlled provider refuses commits and is not authenticated hardware,
-  durable storage, or monotonic-write evidence. Live configuration/authority
-  release through a conforming store remains pending.
+  The configuration client receives only the typed data, independently rebinds
+  it, proves an exact owner-approved authority checkpoint, privately rebuilds
+  one attenuated file capability, validates configuration and restart policy,
+  and releases them only after the controlled record accepts the exact epoch
+  8→9, handle generation 2→3, and root generation 1→2 successor. Both platforms
+  passed all 27 configuration tests. The provider remains volatile controlled
+  test code, not authenticated hardware, durable storage, power-loss atomicity,
+  or physical monotonic-write evidence.
   Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator

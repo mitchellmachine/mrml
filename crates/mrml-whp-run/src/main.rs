@@ -1117,7 +1117,7 @@ fn application_main() -> Result<()> {
             *executable.artifact().digest(),
             u64::from(block_guest_driver_mode || pci_configuration_mode) + 1,
             block_service_mode.then(|| {
-                RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17)
+                RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1)
                     .expect("fixed recovery metadata")
             }),
         )?
@@ -2477,7 +2477,7 @@ mod tests {
 
     #[test]
     fn recovery_handoff_binds_fixed_probe_metadata() {
-        let recovery = RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17).unwrap();
+        let recovery = RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1).unwrap();
         let encoded = boot_handoff(12, [0x38; 32], [0xaa; 64], 1, Some(recovery)).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.recovery_state(), Some(recovery));

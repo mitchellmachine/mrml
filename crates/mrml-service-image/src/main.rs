@@ -7,34 +7,36 @@ use core::arch::{asm, global_asm};
 #[cfg(not(feature = "preemption-probe"))]
 #[allow(unused_imports)]
 use mrml_config::{
-    dispatch_configuration_envelope, dispatch_supervision_policy_envelope,
-    dispatch_supervision_query_envelope, dispatch_supervision_restart_envelope,
-    encode_commit_message_request, encode_schema_message_request, load_persisted_restart_policy,
-    prepare_block_stable_configuration, recover_stable_configuration, CapabilityAuthorizer,
-    ConfigError, ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationResponse,
-    ConfigurationService, PersistedRestartPolicy, ResponseStatus, ServicePolicyAuthorizer,
+    CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError, ConfigTransaction, ConfigUpdate,
+    ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
+    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, ResponseStatus,
+    SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES, ServicePolicyAuthorizer,
     ServiceRestartAuthorizer, ServiceStateAuthorizer, SettingId, SettingSchema,
-    SupervisionOperation, SupervisionRequest, SupervisionResponse, SupervisionState,
-    CONFIG_RESPONSE_BYTES, MAX_CONFIG_REQUEST_BYTES, PERSISTED_RESTART_POLICY_BYTES,
-    SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES,
+    StableConfigurationRecoveryValidator, SupervisionOperation, SupervisionRequest,
+    SupervisionResponse, SupervisionState, dispatch_configuration_envelope,
+    dispatch_supervision_policy_envelope, dispatch_supervision_query_envelope,
+    dispatch_supervision_restart_envelope, encode_commit_message_request,
+    encode_schema_message_request, prepare_block_stable_configuration,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_crypto::Sha3_256;
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{
-    Capability, CapabilityError, ObjectId, RecoveryStateMetadata, RestartPolicy, Rights,
-    ServiceId, ServiceState, HANDOFF_RECOVERY_STATE_BYTES,
+    Capability, CapabilityError, HANDOFF_RECOVERY_STATE_BYTES, ObjectId, RecoveryStateMetadata,
+    RestartPolicy, Rights, ServiceId, ServiceState,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
-    AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
-    BlockDeviceId, BlockRequest, BlockResponse, BlockRights, BlockService, BlockServiceBackend,
-    BlockServiceLoop, BlockServiceSyscalls, BlockSessionHandle, BlockStatus, BlockVolume,
-    BootRecoveryAdmission, CowMetadataWrite, CowPublicationPlan, ExtentMap, ExtentRecord,
-    FileMetadata, FileState, MetadataPointer, ReceivedBlockEnvelope, StorageAuthorityTable,
-    StorageBlockDevice, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights,
-    StorageTransaction, StorageTransactionId, Superblock, VolumeHeader, VolumeId,
-    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, SUPERBLOCK_BYTES,
+    AUTHORITY_RECOVERY_STATE_BYTES, AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore,
+    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockDeviceDescriptor, BlockDeviceId, BlockRequest,
+    BlockResponse, BlockRights, BlockService, BlockServiceBackend, BlockServiceLoop,
+    BlockServiceSyscalls, BlockSessionHandle, BlockStatus, BlockVolume, BootRecoveryAdmission,
+    CowMetadataWrite, CowPublicationPlan, ExtentMap, ExtentRecord, FileMetadata, FileReadBackend,
+    FileState, MetadataPointer, OwnerApprovedAuthorityCheckpoint, ReceivedBlockEnvelope,
+    SUPERBLOCK_BYTES, StorageAuthorityTable, StorageBlockDevice, StorageObjectId,
+    StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights, StorageTransaction,
+    StorageTransactionId, Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest,
+    encode_authority_checkpoint, recover_validate_and_commit_stable_authorities,
 };
 
 #[panic_handler]
@@ -389,9 +391,10 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     _restart_manager: u64,
     recovery_capability: u64,
 ) -> ! {
-    if recovery_capability != 0 {
-        unsafe { verify_recovery_metadata(recovery_capability) };
+    if recovery_capability == 0 {
+        halt();
     }
+    let recovery = unsafe { verify_recovery_metadata(recovery_capability) };
     let device = BlockDeviceId::new(1).unwrap_or_else(|| halt());
     let principal = StoragePrincipal::new(1).unwrap_or_else(|_| halt());
     let mut service = BlockService::<1, 1>::new();
@@ -416,7 +419,11 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_RECEIVER_SCRATCH) };
     scratch.0.fill(0);
     let mut response = [0u8; BLOCK_RESPONSE_BYTES];
-    unsafe { send_buffer(endpoint, sender, &session.token().to_le_bytes(), &[]) };
+    let mut ready = [0; 8 + HANDOFF_RECOVERY_STATE_BYTES];
+    ready[..8].copy_from_slice(&session.token().to_le_bytes());
+    ready[8..].copy_from_slice(&recovery.encode());
+    unsafe { send_buffer(endpoint, sender, &ready, &[]) };
+    ready.fill(0);
     for _ in 0..18 {
         loop_state
             .serve_one(
@@ -437,7 +444,7 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-unsafe fn verify_recovery_metadata(capability: u64) {
+unsafe fn verify_recovery_metadata(capability: u64) -> RecoveryStateMetadata {
     let mut encoded = [0xa5; HANDOFF_RECOVERY_STATE_BYTES];
     let mut status = 13u64;
     unsafe {
@@ -453,8 +460,7 @@ unsafe fn verify_recovery_metadata(capability: u64) {
             options(nostack)
         )
     };
-    let expected = RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17)
-        .unwrap_or_else(|_| halt());
+    let expected = RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1).unwrap_or_else(|_| halt());
     let delivered = RecoveryStateMetadata::decode(&encoded);
     if status != 0 || delivered != Ok(expected) {
         encoded.fill(0);
@@ -484,6 +490,7 @@ unsafe fn verify_recovery_metadata(capability: u64) {
     }
     store.encoded.fill(0);
     encoded.fill(0);
+    delivered
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
@@ -498,9 +505,13 @@ impl ControlledRecoveryStateStore {
         encoded[..16].copy_from_slice(b"MRML-AUTHSTATE1\0");
         encoded[16..24].copy_from_slice(&8u64.to_le_bytes());
         encoded[24..28].copy_from_slice(&2u32.to_le_bytes());
-        encoded[32..48].copy_from_slice(&[0x44; 16]);
-        encoded[48..56].copy_from_slice(&17u64.to_le_bytes());
+        encoded[32..48].copy_from_slice(&[0x51; 16]);
+        encoded[48..56].copy_from_slice(&1u64.to_le_bytes());
         Self { encoded }
+    }
+
+    fn accepted_epoch(&self) -> u64 {
+        u64::from_le_bytes(self.encoded[16..24].try_into().unwrap_or_else(|_| halt()))
     }
 }
 
@@ -518,10 +529,80 @@ impl AuthorityRecoveryStateStore for ControlledRecoveryStateStore {
 
     fn compare_and_store(
         &mut self,
-        _expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
-        _replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        expected: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
     ) -> Result<(), Self::Error> {
-        Err(())
+        let mut required = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+        required[..16].copy_from_slice(b"MRML-AUTHSTATE1\0");
+        required[16..24].copy_from_slice(&9u64.to_le_bytes());
+        required[24..28].copy_from_slice(&3u32.to_le_bytes());
+        required[32..48].copy_from_slice(&[0x51; 16]);
+        required[48..56].copy_from_slice(&2u64.to_le_bytes());
+        if self.encoded != *expected || *replacement != required {
+            required.fill(0);
+            return Err(());
+        }
+        self.encoded = required;
+        Ok(())
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+struct ControlledAuthorityCheckpoint {
+    object: StorageObjectId,
+    bytes: [u8; PROBE_BLOCK_BYTES],
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+impl ControlledAuthorityCheckpoint {
+    fn new(object: StorageObjectId) -> Self {
+        Self {
+            object,
+            bytes: [0; PROBE_BLOCK_BYTES],
+        }
+    }
+
+    fn file(&self, length: usize) -> FileState<1> {
+        let extent = ExtentRecord::data(self.object, 2, 0, 1, 11, probe_digest(&self.bytes))
+            .unwrap_or_else(|_| halt());
+        let extents = ExtentMap::build(
+            probe_header(),
+            self.object,
+            2,
+            u64::try_from(length).unwrap_or_else(|_| halt()),
+            &[extent],
+        )
+        .unwrap_or_else(|_| halt());
+        FileState::new(
+            self.object,
+            2,
+            u64::try_from(length).unwrap_or_else(|_| halt()),
+            extents,
+        )
+        .unwrap_or_else(|_| halt())
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+unsafe impl FileReadBackend for ControlledAuthorityCheckpoint {
+    type Error = ();
+
+    fn read_verified_extent(
+        &mut self,
+        record: ExtentRecord,
+        byte_offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        if record.file() != self.object
+            || record.metadata_generation() != 2
+            || record.content_digest() != probe_digest(&self.bytes)
+        {
+            return Err(());
+        }
+        let start = usize::try_from(byte_offset).map_err(|_| ())?;
+        let end = start.checked_add(output.len()).ok_or(())?;
+        output.copy_from_slice(self.bytes.get(start..end).ok_or(())?);
+        Ok(())
     }
 }
 
@@ -1125,14 +1206,19 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     root_capability: u64,
     shared_read: u64,
 ) -> ! {
-    let mut ready = [0u8; 8];
+    let mut ready = [0u8; 8 + HANDOFF_RECOVERY_STATE_BYTES];
     let mut no_capabilities = [0u64; 0];
     let (length, count) = unsafe { receive_buffer(&mut ready, &mut no_capabilities) };
     if length != ready.len() || count != 0 {
         halt();
     }
-    let session =
-        BlockSessionHandle::from_token(u64::from_le_bytes(ready)).unwrap_or_else(|| halt());
+    let session = BlockSessionHandle::from_token(u64::from_le_bytes(
+        ready[..8].try_into().unwrap_or_else(|_| halt()),
+    ))
+    .unwrap_or_else(|| halt());
+    let recovery = RecoveryStateMetadata::decode(ready[8..].try_into().unwrap_or_else(|_| halt()))
+        .unwrap_or_else(|_| halt());
+    ready.fill(0);
     let mut device = RemoteBlockDevice {
         endpoint,
         receiver,
@@ -1332,33 +1418,85 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     if receipt.remaining() != 0 || stable.file().generation() != 2 {
         halt();
     }
-    let recovered = recover_stable_configuration::<1, 2, _, _, _, _>(
+    let grants = [StorageRecoveryGrant::root(
+        principal,
+        file_object,
+        StorageObjectKind::File,
+        StorageRights::READ,
+    )];
+    let mut authority_bytes = [0; 128];
+    let authority_length =
+        encode_authority_checkpoint(9, probe_volume(), 2, 3, &grants, &mut authority_bytes)
+            .unwrap_or_else(|_| halt());
+    let authority_digest = authority_checkpoint_digest(&authority_bytes[..authority_length])
+        .unwrap_or_else(|_| halt());
+    let admission =
+        unsafe { OwnerApprovedAuthorityCheckpoint::new(9, probe_volume(), 2, 3, authority_digest) };
+    let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+    let authority_object = probe_object(10);
+    let mut authority_backend = ControlledAuthorityCheckpoint::new(authority_object);
+    authority_backend.bytes[..authority_length]
+        .copy_from_slice(&authority_bytes[..authority_length]);
+    authority_bytes.fill(0);
+    let authority_file = authority_backend.file(authority_length);
+    let mut bootstrap = StorageAuthorityTable::<1>::new();
+    let bootstrap_file = bootstrap
+        .insert(
+            authority_object,
+            StorageObjectKind::File,
+            StorageRights::READ,
+            principal,
+        )
+        .unwrap_or_else(|_| halt());
+    let mut state_store = ControlledRecoveryStateStore::new();
+    let mut recovered_scratch = [0xa5; 512];
+    let validator = StableConfigurationRecoveryValidator::<1, 2, _, _, _>::new(
         stable.file(),
-        &authority,
-        file,
+        0,
         principal,
         2,
         &KernelAuthorizer,
         Capability::from_token(root_capability),
-        &mut checkpoint,
-        &mut volume,
-    )
-    .unwrap_or_else(|_| halt());
-    let bound = load_persisted_restart_policy(
-        &recovered,
-        &KernelAuthorizer,
         Capability::from_token(setting_capability),
         setting,
         ObjectId(0xa1),
-    )
-    .unwrap_or_else(|_| halt());
+        &mut recovered_scratch,
+        &mut volume,
+    );
+    let mut validator = validator;
+    let mut authority_scratch = [0xa5; 128];
+    let (authorities, recovered) = {
+        let mut boot_store = BootRecoveryAdmission::new(recovery)
+            .unwrap_or_else(|_| halt())
+            .bind(&mut state_store);
+        recover_validate_and_commit_stable_authorities::<1, 1, 1, _, _, _>(
+            &authority_file,
+            &bootstrap,
+            bootstrap_file,
+            principal,
+            2,
+            &mut issuer,
+            &mut authority_scratch,
+            &mut authority_backend,
+            &mut boot_store,
+            &mut validator,
+        )
+        .unwrap_or_else(|_| halt())
+    };
+    let bound = recovered.policy();
     if bound.service() != policy.service()
-        || bound.configuration_revision() != recovered.revision()
+        || bound.configuration_revision() != recovered.configuration().revision()
         || bound.setting_revision() != 1
+        || authorities.epoch() != 9
+        || state_store.accepted_epoch() != 9
+        || authority_scratch.iter().any(|byte| *byte != 0)
+        || recovered_scratch.iter().any(|byte| *byte != 0)
         || volume.into_device().next_request != 19
     {
         halt();
     }
+    state_store.encoded.fill(0);
+    authority_backend.bytes.fill(0);
     unsafe { terminate(3) }
 }
 
@@ -1520,11 +1658,7 @@ unsafe impl BlockServiceSyscalls for UserspaceBlockSyscalls {
                 options(nostack)
             )
         };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(status)
-        }
+        if status == 0 { Ok(()) } else { Err(status) }
     }
 
     fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
@@ -1542,11 +1676,7 @@ unsafe impl BlockServiceSyscalls for UserspaceBlockSyscalls {
                 options(nostack)
             )
         };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(status)
-        }
+        if status == 0 { Ok(()) } else { Err(status) }
     }
 }
 
@@ -1573,11 +1703,7 @@ fn shared_buffer_call(
             options(nostack)
         )
     };
-    if status == 0 {
-        Ok(())
-    } else {
-        Err(status)
-    }
+    if status == 0 { Ok(()) } else { Err(status) }
 }
 
 #[cfg(not(feature = "preemption-probe"))]
