@@ -4573,6 +4573,68 @@ Patent review: `NOT_TRIGGERED` — conventional PCI Configuration Mechanism #1
 field decoding and bounded scalar-I/O dispatch; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The next backend-neutral increment adds `IoReadCompleter` and
+`run_pci_configuration_once`. The completion contract exists separately from
+ordinary guest-memory writes: an implementation must verify that the exact
+vCPU's scalar-input exit is still pending with the same port and width, publish
+only the width-bounded value, and report success only if no partial native state
+can remain uncertain. The common runner creates the exact eight-rule transport
+policy, enters one vCPU through the existing exit-accounting dispatcher, accepts
+only its resulting PCI I/O disposition, processes it through Mechanism #1 and
+the router, and completes reads before returning. Writes never invoke input
+completion. A rejected transport, failed completion, or non-PCI disposition
+fails the VM before another entry.
+
+Focused mock-backend tests bind present and absent 16-bit reads to the exact
+vCPU/port/width/value tuple, prove selector writes do not call completion, and
+inject completion failure and an unrelated interrupt exit. The latter paths
+leave the VM permanently failed. KVM's run-page data write and WHP's RAX/RIP
+update are not implemented by this increment; neither native backend implements
+`IoReadCompleter` yet, so there is no live guest-input evidence.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each passed all 412 release kernel tests, including 22 focused PCI tests. The
+Windows kernel/WHP/WHP-run test-target check and strict scoped Clippy passed.
+Strict scoped Linux Clippy passed for the kernel and KVM runner, and strict
+nightly UEFI Clippy passed for the block-probe image. The successful commands
+were the same scoped commands recorded above, with Linux using isolated
+`CARGO_TARGET_DIR=target/virtual-pci-runner`. This is unit and compile/lint
+evidence only. No native read completion, native PCI runner, signed runtime,
+enumeration, QEMU differential, nested-virtualization, native-boot, bare-metal,
+or physical-hardware evidence is claimed.
+
+The common-runner `DIGITAL-RIGHTS REVIEW` found no data collection, retention,
+correlation, disclosure, attestation, DRM, publisher/vendor preference, hidden
+first-party path, accessibility restriction, AI authority, persistence, or
+lock-in. Read completion conveys only guest-requested public configuration data
+already bounded by the router. The `HOSTILE SECURITY REVIEW` treats native exit,
+vCPU, port, width, direction, value, policy construction, selector/router state,
+read outcome class, completion binding, backend failure, repeated entry, and
+unexpected disposition as hostile. Existing exit accounting and exact policy
+precede transport mutation; only read outcomes can reach completion; every
+failure fails the VM; and the unsafe native completion details remain outside
+this unimplemented shared boundary. Existing capability, revocation, rollback-
+resistance, accessibility, evidence, owner-sovereignty, data-minimization, anti-
+DRM, owner-controlled-attestation, third-party-accessibility, AI-containment,
+and anti-persistence requirements remain unchanged. This agent review does not
+replace independent human implementer, reviewer, adversary, accessibility, or
+hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional one-exit dispatch and exact scalar
+input completion contract; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

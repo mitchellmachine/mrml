@@ -235,6 +235,15 @@ pub enum VirtualPciIoOutcome {
     AbsentWrite,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualPciRunError<E> {
+    Policy(crate::VmError),
+    Exit(crate::VmRunError<E>),
+    Transport(VirtualPciError),
+    Completion(E),
+    InvalidExit,
+}
+
 /// Minimal conventional Type-0 header state. It intentionally has no
 /// capability list, MSI/MSI-X, bus mastering, expansion ROM, legacy interrupt
 /// pin, or additional BARs.
@@ -380,6 +389,73 @@ const fn width_mask(size: u8) -> u32 {
         4 => u32::MAX,
         _ => 0,
     }
+}
+
+/// Runs exactly one allowlisted Configuration Mechanism #1 transaction through
+/// common VM policy. Scalar reads are completed through a backend contract
+/// bound to the exact still-pending exit before this function returns.
+#[allow(clippy::too_many_arguments)]
+pub fn run_pci_configuration_once<B, const V: usize, const C: usize, const M: usize>(
+    backend: &mut B,
+    vcpu: u32,
+    vms: &mut crate::VmTable<V>,
+    vm: crate::VmId,
+    hypercalls: &mut crate::HypercallRouter,
+    capabilities: &crate::CapabilitySpace<C>,
+    memory: &crate::GuestMemory<M>,
+    transport: &mut VirtualPciConfigurationMechanismOne,
+    router: &mut VirtualPciConfigurationRouter,
+) -> Result<VirtualPciIoOutcome, VirtualPciRunError<B::Error>>
+where
+    B: crate::IoReadCompleter,
+{
+    let policy =
+        VirtualPciConfigurationMechanismOne::io_policy().map_err(VirtualPciRunError::Policy)?;
+    let disposition = crate::run_vm_once(
+        backend,
+        vcpu,
+        vms,
+        vm,
+        hypercalls,
+        capabilities,
+        memory,
+        &policy,
+    )
+    .map_err(VirtualPciRunError::Exit)?;
+    let crate::ExitDisposition::Io {
+        port,
+        size,
+        write,
+        value,
+    } = disposition
+    else {
+        let _ = vms.fail(vm);
+        return Err(VirtualPciRunError::InvalidExit);
+    };
+    let outcome = transport
+        .access(router, port, size, write, value)
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualPciRunError::Transport(error)
+        })?;
+    if !write {
+        let read = match outcome {
+            VirtualPciIoOutcome::AddressRegister(value)
+            | VirtualPciIoOutcome::Read(value)
+            | VirtualPciIoOutcome::AbsentRead(value) => value,
+            VirtualPciIoOutcome::Write(_) | VirtualPciIoOutcome::AbsentWrite => {
+                let _ = vms.fail(vm);
+                return Err(VirtualPciRunError::InvalidExit);
+            }
+        };
+        backend
+            .complete_io_read(vcpu, port, size, read)
+            .map_err(|error| {
+                let _ = vms.fail(vm);
+                VirtualPciRunError::Completion(error)
+            })?;
+    }
+    Ok(outcome)
 }
 
 impl Default for VirtualPciConfigurationRouter {
@@ -1120,5 +1196,235 @@ mod tests {
                 Err(VirtualPciError::InvalidTransport)
             );
         }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum RunBackendError {
+        Unused,
+        Completion,
+    }
+
+    struct RunBackend {
+        exit: crate::VmExit,
+        completion: Option<(u32, u16, u8, u32)>,
+        fail_completion: bool,
+    }
+
+    impl crate::VmBackend for RunBackend {
+        type Error = RunBackendError;
+
+        fn run(&mut self, _vcpu: u32) -> Result<crate::VmExit, Self::Error> {
+            Ok(self.exit)
+        }
+
+        fn read_guest(&self, _guest_address: u64, _output: &mut [u8]) -> Result<(), Self::Error> {
+            Err(RunBackendError::Unused)
+        }
+
+        fn write_guest(&mut self, _guest_address: u64, _input: &[u8]) -> Result<(), Self::Error> {
+            Err(RunBackendError::Unused)
+        }
+
+        fn inject_interrupt(&mut self, _vcpu: u32, _vector: u8) -> Result<(), Self::Error> {
+            Err(RunBackendError::Unused)
+        }
+    }
+
+    impl crate::IoReadCompleter for RunBackend {
+        fn complete_io_read(
+            &mut self,
+            vcpu: u32,
+            port: u16,
+            size: u8,
+            value: u32,
+        ) -> Result<(), Self::Error> {
+            if self.fail_completion {
+                return Err(RunBackendError::Completion);
+            }
+            self.completion = Some((vcpu, port, size, value));
+            Ok(())
+        }
+    }
+
+    fn running_vm() -> (crate::VmTable<1>, crate::VmId) {
+        let mut vms = crate::VmTable::new();
+        let vm = vms.create(8).unwrap();
+        vms.mark_loaded(vm).unwrap();
+        vms.start(vm).unwrap();
+        (vms, vm)
+    }
+
+    #[test]
+    fn common_runner_completes_exact_present_and_absent_reads() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        router
+            .attach(VirtualPciLocation::new(0, 0, 1, 0).unwrap(), function(1))
+            .unwrap();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        transport
+            .access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 1, 0, 0),
+            )
+            .unwrap();
+        let capabilities = crate::CapabilitySpace::<0>::new();
+        let memory = crate::GuestMemory::<0>::new();
+        let mut hypercalls =
+            crate::HypercallRouter::new(crate::ObjectId(1), crate::ObjectId(2), crate::ObjectId(3));
+        let (mut vms, vm) = running_vm();
+        let mut backend = RunBackend {
+            exit: crate::VmExit::Io {
+                port: PCI_CONFIGURATION_DATA_PORT,
+                size: 2,
+                write: false,
+                value: 0,
+            },
+            completion: None,
+            fail_completion: false,
+        };
+        assert_eq!(
+            run_pci_configuration_once(
+                &mut backend,
+                7,
+                &mut vms,
+                vm,
+                &mut hypercalls,
+                &capabilities,
+                &memory,
+                &mut transport,
+                &mut router,
+            ),
+            Ok(VirtualPciIoOutcome::Read(0x1234))
+        );
+        assert_eq!(
+            backend.completion,
+            Some((7, PCI_CONFIGURATION_DATA_PORT, 2, 0x1234))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+
+        transport
+            .access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 2, 0, 0),
+            )
+            .unwrap();
+        backend.completion = None;
+        assert_eq!(
+            run_pci_configuration_once(
+                &mut backend,
+                7,
+                &mut vms,
+                vm,
+                &mut hypercalls,
+                &capabilities,
+                &memory,
+                &mut transport,
+                &mut router,
+            ),
+            Ok(VirtualPciIoOutcome::AbsentRead(u16::MAX as u32))
+        );
+        assert_eq!(
+            backend.completion,
+            Some((7, PCI_CONFIGURATION_DATA_PORT, 2, u16::MAX as u32))
+        );
+    }
+
+    #[test]
+    fn common_runner_write_never_invokes_read_completion() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        let selected = selector(0, 1, 0, 0);
+        let mut backend = RunBackend {
+            exit: crate::VmExit::Io {
+                port: PCI_CONFIGURATION_ADDRESS_PORT,
+                size: 4,
+                write: true,
+                value: selected,
+            },
+            completion: None,
+            fail_completion: false,
+        };
+        let (mut vms, vm) = running_vm();
+        assert_eq!(
+            run_pci_configuration_once(
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut crate::HypercallRouter::new(
+                    crate::ObjectId(1),
+                    crate::ObjectId(2),
+                    crate::ObjectId(3),
+                ),
+                &crate::CapabilitySpace::<0>::new(),
+                &crate::GuestMemory::<0>::new(),
+                &mut transport,
+                &mut router,
+            ),
+            Ok(VirtualPciIoOutcome::AddressRegister(selected))
+        );
+        assert_eq!(transport.address(), selected);
+        assert_eq!(backend.completion, None);
+    }
+
+    #[test]
+    fn common_runner_completion_failure_and_wrong_exit_fail_vm() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        let mut backend = RunBackend {
+            exit: crate::VmExit::Io {
+                port: PCI_CONFIGURATION_DATA_PORT,
+                size: 4,
+                write: false,
+                value: 0,
+            },
+            completion: None,
+            fail_completion: true,
+        };
+        let capabilities = crate::CapabilitySpace::<0>::new();
+        let memory = crate::GuestMemory::<0>::new();
+        let mut hypercalls =
+            crate::HypercallRouter::new(crate::ObjectId(1), crate::ObjectId(2), crate::ObjectId(3));
+        let (mut vms, vm) = running_vm();
+        assert_eq!(
+            run_pci_configuration_once(
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut hypercalls,
+                &capabilities,
+                &memory,
+                &mut transport,
+                &mut router,
+            ),
+            Err(VirtualPciRunError::Completion(RunBackendError::Completion))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+
+        let (mut vms, vm) = running_vm();
+        backend.exit = crate::VmExit::Interrupted;
+        backend.fail_completion = false;
+        assert_eq!(
+            run_pci_configuration_once(
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut hypercalls,
+                &capabilities,
+                &memory,
+                &mut transport,
+                &mut router,
+            ),
+            Err(VirtualPciRunError::InvalidExit)
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
     }
 }

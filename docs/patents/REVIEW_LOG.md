@@ -1847,3 +1847,13 @@ over the existing router. It introduces no assigned PCI identity, native exit
 integration, BAR mapping, interrupt, DMA, device attachment, new authority
 model, or patent-candidate mechanism. This agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Common PCI configuration transaction runner
+
+**Result: NOT_TRIGGERED.** The change conventionally composes one VMM exit with
+the existing deny-by-default PCI transport/router and adds an exact pending-
+input completion interface carrying vCPU, port, width, and value. Fail-closed
+completion and unexpected-exit handling are standard defensive VMM techniques.
+No native backend implementation, device attachment, compatibility claim, new
+authority model, or patent-candidate mechanism was introduced. This agent
+review does not replace the required independent human dual review.

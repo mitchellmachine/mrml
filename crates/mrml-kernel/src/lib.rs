@@ -176,14 +176,14 @@ pub use virtual_pci::{
     PCI_CONFIGURATION_ADDRESS_PORT, PCI_CONFIGURATION_DATA_PORT, PCI_CONFIGURATION_IO_RULES,
     PCI_TYPE0_CONFIGURATION_BYTES, VirtualPciAttachmentId, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciError, VirtualPciIdentity, VirtualPciIoOutcome,
-    VirtualPciLocation, VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciType0Function,
-    VirtualPciWriteOutcome,
+    VirtualPciLocation, VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciRunError,
+    VirtualPciType0Function, VirtualPciWriteOutcome, run_pci_configuration_once,
 };
 pub use vm::{
     GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,
-    Hypercall, HypercallOperation, HypercallRouter, MAX_GUEST_REGIONS, MappingRevocationError,
-    RevocableVmBackend, RoutedHypercall, VmBackend, VmError, VmExit, VmId, VmRunError, VmState,
-    VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
+    Hypercall, HypercallOperation, HypercallRouter, IoReadCompleter, MAX_GUEST_REGIONS,
+    MappingRevocationError, RevocableVmBackend, RoutedHypercall, VmBackend, VmError, VmExit, VmId,
+    VmRunError, VmState, VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
 };
 pub use vm_dispatch::{
     ExitDisposition, IoDirection, IoPortPolicy, IoPortRule, MAX_IO_PORT_RULES, dispatch_vm_exit,

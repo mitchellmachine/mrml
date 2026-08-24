@@ -699,7 +699,12 @@ canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector
 reserved bits and crossing/misaligned data accesses, and returns width-bounded
 all-ones reads or ignored writes for disabled/absent selections. It does not yet
-participate in a KVM/WHP run loop or advertise a concrete PCI function.
+advertise a concrete PCI function. A backend-neutral one-transaction runner now
+composes native execution, exit accounting, the exact transport allowlist,
+selector/data dispatch, and scalar-input completion. Its narrow completion
+contract binds a result to the exact still-pending vCPU, port, and width;
+completion uncertainty or any non-PCI exit fails the VM. KVM and WHP do not yet
+implement that completion contract, so this remains shared-policy evidence.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

@@ -836,6 +836,13 @@ present accesses with the router. Disabled or absent reads return only the
 appropriate all-ones width and writes are ignored. KVM/WHP runner integration,
 guest register completion for reads, an attached block function, assigned IDs,
 BAR mapping, interrupts, and QEMU comparison remain pending.
+A common one-transaction PCI runner now composes the existing VM exit budget and
+deny-by-default dispatcher with Mechanism #1 and the router. Read outcomes cross
+a narrow backend completion contract carrying exact vCPU, port, width, and
+bounded value; writes never invoke it. Transport failure, completion uncertainty,
+or any other exit fails the VM before another entry. Mock-backend tests cover
+present and absent reads plus failure. Native KVM/WHP implementations of that
+contract and live runner integration remain the next gate.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

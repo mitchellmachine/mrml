@@ -616,6 +616,20 @@ pub trait VmBackend {
     fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> Result<(), Self::Error>;
 }
 
+/// Backend contract for completing one exact scalar input exit before another
+/// vCPU entry. Implementations must bind completion to the still-pending exit's
+/// vCPU, port, and width and must not report success after partial register or
+/// native run-state mutation.
+pub trait IoReadCompleter: VmBackend {
+    fn complete_io_read(
+        &mut self,
+        vcpu: u32,
+        port: u16,
+        size: u8,
+        value: u32,
+    ) -> Result<(), Self::Error>;
+}
+
 /// Backend contract for retiring a complete native second-level mapping.
 /// Implementations must prevent every vCPU from running if native teardown
 /// fails or leaves the mapping state uncertain.

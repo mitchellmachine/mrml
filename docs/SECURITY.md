@@ -312,6 +312,10 @@ dword crossing, BDF, and register arithmetic are validated before router access.
 Disabled or absent selections disclose only a width-sized all-ones value and
 cannot mutate a function. Transport selection remains routing data, not device
 or backend authority.
+PCI scalar-input completion must match the exact still-pending vCPU, port, and
+width before another entry. A backend may not report success after partial
+register or native run-state mutation. Completion failure, transport rejection,
+or an unexpected exit fails the VM rather than resuming ambiguous state.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
