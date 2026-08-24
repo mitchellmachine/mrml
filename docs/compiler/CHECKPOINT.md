@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `40d7544`
-  (`compiler: reject linear use after move`)
+- Compiler checkpoint commit: `df01b9b`
+  (`compiler: retain ownership event origins`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `1e0dc42` (`compiler: order ownership events`),
+- Preceding compiler commits: `40d7544` (`compiler: reject linear use after
+  move`), `1e0dc42` (`compiler: order ownership events`),
   `724f40b` (`compiler: classify call and return
   moves`), `3b8599e` (`compiler: distinguish borrow place
   effects`), `97b275d` (`compiler: classify exact Copy
@@ -107,6 +108,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   duplicates, inversions, or uncounted entries. Event-capacity failure occurs
   before mutating a path, initialization, read, effect, or counter. These event
   IDs do not yet claim CFG-block membership; and
+- insertion-time provenance on every initialization and effect. Parameter roots
+  record `ParameterEntry`; preanalyzed body events record an exact bounded
+  `TopLevelStatement(index)` or verified `Tail`; dynamically appended inlined-
+  helper facts record `EmissionExpansion` and are explicitly excluded from
+  source-order claims. Validation rejects unassigned origins, parameter-origin
+  misuse, statement indexes outside the parsed body, tail origins on bodies
+  without a tail, and invalid local-initialization origins. Conditional branch,
+  edge, nested-action, and loop-operation provenance is not yet refined beyond
+  its containing top-level statement; and
 - bounded initializedness enforcement for functions proven to have exactly one
   reachable top-level basic block and an expression stream with no conditional
   path split. A fixed 1,360-path state map consumes the dense event order.
@@ -269,13 +279,14 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. attach bounded explicit block provenance to ownership events, then compute
-   fixed-point initializedness across existing CFG edges and precise tuple paths;
-2. extend contextual effects for implicit coercions and remaining indirect
+1. refine statement provenance into conditional block/edge, nested-action, and
+   loop-operation origins, then map events to the existing CFG;
+2. compute fixed-point initializedness across CFG edges and precise tuple paths;
+3. extend contextual effects for implicit coercions and remaining indirect
    call/return shapes without treating ambiguous pointee reads as moves;
-3. add array-element paths only after place facts retain exact constant element
+4. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
-4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
+5. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
    and flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
 

@@ -233,7 +233,13 @@ order and rejects a copy, move, borrow, or read-modify-write of an uninitialized
 exact path as `RuntimeUseAfterMove`. Moves clear roots and tuple descendants;
 exact writes restore state and child writes recompute tuple-root completeness.
 Conditional expression nodes disable enforcement even when the structural CFG
-has one block. Events still lack CFG-block membership, so multi-block and
+has one block. Each event now also retains insertion-time origin: parameter
+entry, an exact bounded top-level statement index, a verified final tail, or an
+explicit emission-expansion marker for dynamically appended inline-helper
+facts. Validation rejects unassigned, out-of-body, or otherwise incompatible
+origins. Conditional branch/edge, nested-action, and loop-operation provenance
+is not yet refined beyond its containing statement. Events still lack final
+CFG-block membership, so multi-block and
 multi-path functions remain unenforced rather than being analyzed linearly.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
