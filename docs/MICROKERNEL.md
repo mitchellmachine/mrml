@@ -4752,6 +4752,67 @@ Patent review: `NOT_TRIGGERED` — conventional exact WHP scalar-input register
 completion with fail-closed pending-state validation; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The next controlled integration composes `run_pci_configuration_once` with both
+native launchers and a dedicated signed `pci-configuration-probe` kernel image.
+The guest writes selector `0x80ff_f800`, naming segment 0, bus 255, device 31,
+function 0, register 0, then performs one 32-bit read from `0xcfc`. The trusted
+router remains empty by construction, so the only accepted result is the PCI
+absent-function value `0xffff_ffff`. After native scalar-input completion the
+guest compares that exact value and emits it on dedicated proof port `0x4d66`.
+Each launcher creates a two-exit VM budget, executes the selector and read
+through the common policy/transport/router, checks both typed outcomes, then
+requires the exact proof exit. No PCI identity is assigned, no function is
+attached, and no BAR, interrupt, DMA, block-device, or compatibility authority
+is created.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm passed 412 kernel, 7
+portable KVM, 4 KVM-run, 21 WHP, and 5 WHP-run release tests; one unrelated WHP
+manual performance test was ignored. Arch Linux under WSL2 passed 412 kernel,
+18 native KVM, and 6 KVM-run tests; one unrelated native mapping performance
+test was ignored. Strict scoped Clippy passed on both hosts, both launchers
+compiled without default/CUDA features, and strict nightly UEFI Clippy passed
+for `pci-configuration-probe`. A fresh one-time Lamport key signed the exact
+image. Arch Linux under WSL2/KVM completed the signed probe with
+`verify=17471us prepare=2283us execute=58131us total=99172us`.
+Native Windows WHP completed the same signed bundle with `verify=17636us
+prepare=3333us execute=2453us total=27148us`. These are hosted controlled probes
+of absent-function transport and continuation, not evidence of an attached
+function, enumeration, BAR mapping, interrupt delivery, DMA, block-device
+attachment, QEMU differential behavior, native boot, bare metal, or physical
+hardware. Hosted KVM/WHP remain outside the security boundary against their
+hosts.
+
+The native-runner `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, attestation, DRM, vendor or publisher preference,
+first-party bypass, accessibility restriction, AI authority, persistence, or
+lock-in. The probe publishes only conventional absence and creates no device or
+owner-visible persistent state. The `HOSTILE SECURITY REVIEW` treats signed
+image admission, selector, BDF, port, direction, width, exit count, typed
+outcome, completion value, pending backend state, proof port/value, and every
+error as hostile. The exact two-exit budget and deny-by-default transport bind
+both transactions; the empty router cannot confer device authority; all-ones is
+width checked; any mismatch fails before proof acceptance. Existing capability,
+revocation, rollback-resistance, accessibility, evidence, owner-sovereignty,
+data-minimization, anti-DRM, owner-controlled-attestation, third-party-
+accessibility, AI-containment, and anti-persistence gates remain unchanged. This
+agent review does not replace independent human implementer, reviewer,
+adversary, accessibility, or hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional signed absent-function PCI
+configuration probing through existing native VMM exits; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

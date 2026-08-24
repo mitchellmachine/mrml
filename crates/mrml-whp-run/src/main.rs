@@ -18,8 +18,9 @@ use mrml_kernel::{
     VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
     VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VirtualBlockTransport, VmBackend,
-    VmExit, VmTable, run_virtual_block_transaction_once,
+    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VirtualBlockTransport,
+    VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter, VirtualPciIoOutcome,
+    VmBackend, VmExit, VmTable, run_pci_configuration_once, run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -103,6 +104,10 @@ const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8) as u64;
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(target_os = "windows")]
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
+#[cfg(target_os = "windows")]
+const PCI_PROOF_PORT: u16 = 0x4d66;
+#[cfg(target_os = "windows")]
+const PCI_ABSENT_SELECTOR: u32 = 0x80ff_f800;
 
 #[cfg(target_os = "windows")]
 struct DriverProbeBlock([u8; 8192]);
@@ -379,6 +384,66 @@ fn run_block_guest_driver_probe<'system>(
 }
 
 #[cfg(target_os = "windows")]
+fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
+    let mut vms = VmTable::<1>::new();
+    let vm = vms
+        .create(2)
+        .map_err(|_| anyhow!("failed to create PCI probe VM state"))?;
+    vms.mark_loaded(vm)
+        .and_then(|()| vms.start(vm))
+        .map_err(|_| anyhow!("failed to start PCI probe VM state"))?;
+    let mut hypercalls = HypercallRouter::new(ObjectId(0x311), ObjectId(0x312), ObjectId(0x313));
+    let capabilities = CapabilitySpace::<0>::new();
+    let memory = GuestMemory::<0>::new();
+    let mut transport = VirtualPciConfigurationMechanismOne::new();
+    let mut router = VirtualPciConfigurationRouter::new();
+
+    let selector = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("WHP PCI selector transaction failed: {:?}", error))?;
+    if selector != VirtualPciIoOutcome::AddressRegister(PCI_ABSENT_SELECTOR) {
+        return Err(anyhow!("WHP PCI selector outcome mismatch: {:?}", selector));
+    }
+    let read = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("WHP PCI absent-read transaction failed: {:?}", error))?;
+    if read != VirtualPciIoOutcome::AbsentRead(u32::MAX) {
+        return Err(anyhow!("WHP PCI absent-read outcome mismatch: {:?}", read));
+    }
+    let proof = VmBackend::run(&mut guest, 0)
+        .map_err(|error| anyhow!("WHP PCI proof execution failed: {:?}", error))?;
+    if proof
+        != (VmExit::Io {
+            port: PCI_PROOF_PORT,
+            size: 4,
+            write: true,
+            value: u32::MAX,
+        })
+    {
+        return Err(anyhow!("WHP PCI proof mismatch: {:?}", proof));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn application_main() -> Result<()> {
     let total_started = Instant::now();
     let arguments = mrml_runtime::command_arguments();
@@ -410,6 +475,7 @@ fn application_main() -> Result<()> {
     let timer_mode = arguments.len() == 5 && arguments[4] == "timer-probe";
     let block_guest_driver_mode =
         arguments.len() == 5 && arguments[4] == "block-guest-driver-probe";
+    let pci_configuration_mode = arguments.len() == 5 && arguments[4] == "pci-configuration-probe";
     let preemption_mode = arguments.len() == 5 && arguments[4] == "preemption-probe";
     let vmx_root_mode = arguments.len() == 5 && arguments[4] == "vmx-root-probe";
     let smp_mode = arguments.len() == 5 && arguments[4] == "smp-probe";
@@ -421,6 +487,7 @@ fn application_main() -> Result<()> {
         && !service_artifact_mode
         && !timer_mode
         && !block_guest_driver_mode
+        && !pci_configuration_mode
         && !preemption_mode
         && !vmx_root_mode
         && !smp_mode
@@ -429,7 +496,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-guest-driver-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-guest-driver-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION pci-configuration-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[3]
@@ -495,6 +562,7 @@ fn application_main() -> Result<()> {
     let cuda_bundle = if service_artifact_mode
         || timer_mode
         || block_guest_driver_mode
+        || pci_configuration_mode
         || preemption_mode
         || vmx_root_mode
         || smp_mode
@@ -710,6 +778,17 @@ fn application_main() -> Result<()> {
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
+    if pci_configuration_mode {
+        run_pci_configuration_probe(guest)?;
+        println!(
+            "verified signed absent-function PCI configuration transport under WHP: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
+    }
     if block_guest_driver_mode {
         run_block_guest_driver_probe(
             guest,

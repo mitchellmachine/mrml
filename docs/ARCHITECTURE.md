@@ -707,8 +707,10 @@ completion uncertainty or any non-PCI exit fails the VM. Native KVM revalidates
 and writes the exact pending run-page input; native WHP binds the pending tuple
 to one vCPU and installs the width-correct RAX result plus checked next RIP in
 one register operation. Both refuse vCPU re-entry while completion remains
-pending. Native PCI-runner integration remains unimplemented, so there is still
-no live PCI discovery evidence.
+pending. The signed controlled KVM/WHP probe now composes the common runner with
+both native backends for an intentionally absent BDF, including selector output,
+all-ones scalar-input completion, and guest proof continuation. No function is
+attached or advertised, so there is still no live PCI discovery evidence.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

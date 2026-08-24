@@ -326,6 +326,11 @@ for byte and word inputs, applies x86 zero-extension for a dword input, checks
 the next RIP for overflow and canonicality, and submits RAX and RIP together.
 The tuple remains pending after any register-read, validation, or register-set
 failure, so re-entry and stale or duplicate completion fail closed.
+The native configuration probe selects only a deliberately unattached BDF and
+requires the architectural all-ones absent-function result before continuing.
+Its separate proof exit demonstrates completion without assigning an identity,
+advertising a device, mapping a BAR, or granting interrupt, DMA, or device
+authority.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

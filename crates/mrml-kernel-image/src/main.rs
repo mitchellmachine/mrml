@@ -169,6 +169,10 @@ const BLOCK_QUIESCE_REQUESTS: u32 = (BLOCK_QUIESCE_CYCLE - 1) * 4 + 2;
 const BLOCK_PROBE_OPERATIONS: u32 = BLOCK_PROBE_CYCLES * 4;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_VECTOR: u8 = 48;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_PROOF_PORT: u16 = 0x4d66;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_ABSENT_SELECTOR: u32 = 0x80ff_f800;
 #[cfg(feature = "fault-probe")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
 #[cfg(any(
@@ -2426,6 +2430,39 @@ unsafe fn run_block_guest_driver_probe() -> ! {
     halt()
 }
 
+#[cfg(feature = "pci-configuration-probe")]
+unsafe fn run_pci_configuration_probe() -> ! {
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") 0xcf8u16,
+            in("eax") PCI_ABSENT_SELECTOR,
+            options(nomem, nostack)
+        )
+    };
+    let value: u32;
+    unsafe {
+        asm!(
+            "in eax, dx",
+            in("dx") 0xcfcu16,
+            lateout("eax") value,
+            options(nomem, nostack)
+        )
+    };
+    if value != u32::MAX {
+        halt();
+    }
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") PCI_PROOF_PORT,
+            in("eax") value,
+            options(nomem, nostack)
+        )
+    };
+    halt()
+}
+
 #[cfg(not(feature = "fault-probe"))]
 #[allow(unreachable_code)]
 unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
@@ -2461,6 +2498,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     smp_trace(0x02);
     if region_count != handoff.region_count() {
         halt();
+    }
+    #[cfg(feature = "pci-configuration-probe")]
+    unsafe {
+        run_pci_configuration_probe()
     }
     #[cfg(feature = "block-guest-driver-probe")]
     unsafe {

@@ -847,8 +847,12 @@ vCPU/port/width/count/data-offset identity, and writes only the selected bytes.
 WHP retains the exact per-vCPU port/width/instruction-length tuple and installs
 the architectural-width RAX result with a checked next RIP in one register-set
 operation. Both deny duplicate or mismatched completion and block vCPU re-entry
-while a read remains pending. Composition into an actual native PCI runner and
-live PCI discovery evidence remain pending.
+while a read remains pending. A freshly signed controlled kernel now composes
+the common runner with both native backends: it selects an intentionally absent
+BDF, receives the exact all-ones dword through scalar-input completion, and
+proves continuation. This closes native runner composition without assigning a
+PCI identity or attaching a function. Live function discovery, BAR mapping,
+interrupts, DMA, device attachment, and QEMU comparison remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

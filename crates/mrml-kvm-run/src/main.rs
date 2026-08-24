@@ -15,8 +15,10 @@ use mrml_kernel::{
     VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
     VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VirtualBlockTransport, VmBackend,
-    VmExit, VmTable, run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
+    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VirtualBlockTransport,
+    VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter, VirtualPciIoOutcome,
+    VmBackend, VmExit, VmTable, run_pci_configuration_once, run_virtual_block_transaction_once,
+    verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -103,6 +105,10 @@ const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8) as u64;
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(target_os = "linux")]
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
+#[cfg(target_os = "linux")]
+const PCI_PROOF_PORT: u16 = 0x4d66;
+#[cfg(target_os = "linux")]
+const PCI_ABSENT_SELECTOR: u32 = 0x80ff_f800;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -115,6 +121,7 @@ enum LaunchMode {
     ServiceProbe,
     BlockServiceProbe,
     BlockGuestDriverProbe,
+    PciConfigurationProbe,
     ServiceRestartRequestProbe,
     ServicePreemptionProbe,
     GpuBenchmark,
@@ -137,6 +144,7 @@ impl LaunchMode {
             "service-probe" => Ok(Self::ServiceProbe),
             "block-service-probe" => Ok(Self::BlockServiceProbe),
             "block-guest-driver-probe" => Ok(Self::BlockGuestDriverProbe),
+            "pci-configuration-probe" => Ok(Self::PciConfigurationProbe),
             "service-restart-request-probe" => Ok(Self::ServiceRestartRequestProbe),
             "service-preemption-probe" => Ok(Self::ServicePreemptionProbe),
             "gpu-benchmark" => Ok(Self::GpuBenchmark),
@@ -146,7 +154,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, block-service-probe, block-guest-driver-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -450,6 +458,66 @@ fn run_block_guest_driver_probe(
         })
     {
         return Err(anyhow!("block common-driver proof mismatch: {:?}", proof));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
+    let mut vms = VmTable::<1>::new();
+    let vm = vms
+        .create(2)
+        .map_err(|_| anyhow!("failed to create PCI probe VM state"))?;
+    vms.mark_loaded(vm)
+        .and_then(|()| vms.start(vm))
+        .map_err(|_| anyhow!("failed to start PCI probe VM state"))?;
+    let mut hypercalls = HypercallRouter::new(ObjectId(0x311), ObjectId(0x312), ObjectId(0x313));
+    let capabilities = CapabilitySpace::<0>::new();
+    let memory = GuestMemory::<0>::new();
+    let mut transport = VirtualPciConfigurationMechanismOne::new();
+    let mut router = VirtualPciConfigurationRouter::new();
+
+    let selector = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("KVM PCI selector transaction failed: {:?}", error))?;
+    if selector != VirtualPciIoOutcome::AddressRegister(PCI_ABSENT_SELECTOR) {
+        return Err(anyhow!("KVM PCI selector outcome mismatch: {:?}", selector));
+    }
+    let read = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("KVM PCI absent-read transaction failed: {:?}", error))?;
+    if read != VirtualPciIoOutcome::AbsentRead(u32::MAX) {
+        return Err(anyhow!("KVM PCI absent-read outcome mismatch: {:?}", read));
+    }
+    let proof = VmBackend::run(&mut guest, 0)
+        .map_err(|error| anyhow!("KVM PCI proof execution failed: {:?}", error))?;
+    if proof
+        != (VmExit::Io {
+            port: PCI_PROOF_PORT,
+            size: 4,
+            write: true,
+            value: u32::MAX,
+        })
+    {
+        return Err(anyhow!("KVM PCI proof mismatch: {:?}", proof));
     }
     Ok(())
 }
@@ -793,6 +861,17 @@ fn application_main() -> Result<()> {
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
+    if mode == LaunchMode::PciConfigurationProbe {
+        run_pci_configuration_probe(guest)?;
+        println!(
+            "verified signed absent-function PCI configuration transport under KVM: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
+    }
     if mode == LaunchMode::BlockGuestDriverProbe {
         run_block_guest_driver_probe(
             guest,
@@ -2034,6 +2113,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("block-guest-driver-probe").unwrap(),
             LaunchMode::BlockGuestDriverProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("pci-configuration-probe").unwrap(),
+            LaunchMode::PciConfigurationProbe
         );
         assert_eq!(
             LaunchMode::parse("service-restart-request-probe").unwrap(),

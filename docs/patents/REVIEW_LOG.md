@@ -1876,3 +1876,12 @@ blocks re-entry or stale/duplicate completion. It introduces no new protocol,
 device attachment, compatibility claim, authority model, or patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
+
+# 2026-08-24 — Signed native absent-function PCI configuration probe
+
+**Result: NOT_TRIGGERED.** The change conventionally composes existing native
+scalar-I/O exits with PCI Configuration Mechanism #1, checks the standard all-
+ones response for one deliberately unattached BDF, and emits a bounded proof.
+It assigns no identity, attaches no device, grants no new authority, and
+introduces no patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.
