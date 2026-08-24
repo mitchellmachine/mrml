@@ -85,7 +85,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   repeated-condition per-element planning for direct conditional array literals;
   plus exact prefix-once tuple and prefix-per-element array planning for direct
   sequence-wrapped literals; plus direct, direct-identifier conditional, and
-  sequence-prefix/direct-identifier-tail fat-reference initializer reads; and
+  sequence-prefix/direct-identifier-tail fat-reference initializer reads; plus
+  runtime range-endpoint reads followed by exact slice/string base reads, with
+  a `Subslice` projection for local-array bases; and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
   statements in the emitter's exact scoped order; and
@@ -99,8 +101,8 @@ allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Other wrapped or non-literal conditional aggregates, range-
-derived and otherwise complex fat-reference initializers, fat-reference returns,
+borrow checker. Other wrapped or non-literal conditional aggregates, otherwise
+complex fat-reference initializers, fat-reference returns,
 compound array bases, method/call families, aggregate
 returns/tails, and other body reads remain emission-time facts. Names are still
 resolved during
@@ -142,8 +144,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 596 tests on each host: 328
-library tests, 10 conformance tests, 256 replacement tests, and 2 driver tests.
+The checkpoint source passed 598 tests on each host: 329
+library tests, 10 conformance tests, 257 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

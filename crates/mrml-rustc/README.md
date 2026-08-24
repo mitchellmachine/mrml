@@ -2935,8 +2935,10 @@ different emitter order by planning condition, then element, and else element
 for every materialized index. Wrapped or non-literal conditional aggregates
 remain emission-time fact families. Simple fat-reference initializers now plan
 direct identifier reads, the condition and both direct-identifier branches, or
-a sequence prefix followed by its direct-identifier tail. Range-derived, call-
-derived, and other wrapped fat-reference initializers remain emission-time.
+a sequence prefix followed by its direct-identifier tail. Range-derived slice
+and string initializers now plan runtime start/end reads
+before the base read, retaining the exact `Subslice` projection for a local-
+array base. Call-derived and other wrapped fat-reference forms remain later work.
 Direct sequence-wrapped tuple literals additionally plan their prefix once,
 whereas direct sequence-wrapped array literals plan their prefix before every
 element, preserving the two materializers' actual order.
@@ -3047,6 +3049,13 @@ WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
 six exact parameter/local identities across a direct slice copy, conditional
 slice selection, and sequence-wrapped string copy. Its original replacement
 emits both COFF and ELF64 objects through the same initializer families.
+
+The range-derived fat-reference initializer read milestone passed all 598
+compiler and driver tests on Windows gnullvm and all 598 in release mode on
+native Arch Linux WSL, plus warnings-denied Clippy on both hosts. Its adversarial
+unit test proves runtime start/end reads precede the projected local-array base,
+then an open-ended slice start precedes its reference base. Its original
+replacement emits both COFF and ELF64 objects through those range families.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
