@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and single-path initializedness enforcement exist, but there is no general CFG move enforcement, loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
+| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and fixed-point definite-initialization enforcement across supported statement/loop CFGs exist, but conditional-expression arms still lack exact event points and there is no loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -253,8 +253,16 @@ direct-return, nested-loop-header/action, and ordered nested-control origins.
 These map to exact sourced blocks or return edges. Bounded parser operation
 counts and exact CFG-source matching reject forged operation, arm, action, and
 control coordinates instead of assigning an enclosing block.
-General multi-block and multi-path initializedness remains unenforced rather
-than being analyzed linearly.
+For complete supported statement/loop CFGs, definite initializedness now uses
+a bounded fixed point over exact block and edge events. Two fixed 64-block by
+22-word bitset matrices cover all 1,360 move paths; predecessor states meet by
+intersection, edge transfers precede joins, and convergence is limited to
+`block_count * move_path_count + 1`. Reads are validated only after convergence.
+This accepts mutually exclusive early-return moves while rejecting a use after
+a move on any continuing join path or loop-exit path. Conditional-expression
+arm events still have coarse origins, so any such expression path disables this
+enforcement instead of being treated as sequential or assigned invented CFG
+points.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root

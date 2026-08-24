@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8481749`
-  (`compiler: map loop ownership control points`)
+- Compiler checkpoint commit: `d844548`
+  (`compiler: analyze initializedness across control flow`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `8ddd42f` (`compiler: refine conditional event
@@ -141,17 +141,25 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   origin to resolve. Missing or forged loop/action/control provenance fails
   closed. This mapping is derived from the bounded 64-block/128-edge CFG and
   adds no per-event table; and
-- bounded initializedness enforcement for functions proven to have exactly one
-  reachable top-level basic block and an expression stream with no conditional
-  path split. A fixed 1,360-path state map consumes the dense event order.
+- bounded fixed-point initializedness enforcement across every reachable block
+  and edge of a complete supported statement/loop CFG whose expression events
+  do not contain a still-coarse conditional-expression path split. Two fixed
+  64-block by 22-word bitset matrices retain definite input/output state for
+  all 1,360 move paths. Incoming paths use intersection, entry participates as
+  an explicit predecessor, and exact edge events transfer before successor
+  joins. Convergence is bounded by `block_count * move_path_count + 1`; missing
+  predecessors, malformed dense block IDs, corrupt facts, or non-convergence
+  fail closed. Preconditions are checked only against the converged states, so
+  transient iteration state cannot create a false use-after-move report.
   Parameter/local initialization marks roots and tuple children initialized;
   exact moves clear roots and descendants; copies, moves, shared/mutable borrows,
   and read-modify-write require prior initialization; exact writes restore paths,
   and child writes recompute tuple-root completeness. A second straight-line
-  move reports `RuntimeUseAfterMove`. Conditional expression nodes disable this
-  enforcement even when the structural CFG has one block, closing the observed
-  mutually-exclusive-tail false positive. Multi-block and multi-path functions
-  remain unenforced until events carry explicit block provenance; and
+  move reports `RuntimeUseAfterMove`. Early-return edges remain path-specific,
+  while a move on one continuing conditional arm or before a loop exit poisons
+  the joined path. Conditional expression nodes still disable enforcement
+  because their arm events do not yet have distinct control points, closing the
+  observed mutually-exclusive-tail false positive; and
 - pre-emission typing and stable identity assignment for every declaration form
   represented by the supported runtime body and loop parsers, mirroring pre-loop,
   loop, nested-loop, conditional-arm, and post-loop emission order with exact
@@ -292,7 +300,7 @@ resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths, remaining indirect move/borrow classification,
-general CFG initializedness and use-after-move enforcement, unsupported
+expression-level conditional-arm provenance and initializedness, unsupported
 parser/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
@@ -303,9 +311,10 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. compute fixed-point initializedness across CFG edges and precise tuple paths;
-2. extend contextual effects for implicit coercions and remaining indirect
+1. extend contextual effects for implicit coercions and remaining indirect
    call/return shapes without treating ambiguous pointee reads as moves;
+2. give conditional-expression arms exact program points, then enable the
+   existing fixed-point initializedness pass for those expression paths;
 3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
 4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
@@ -333,8 +342,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 688 tests on each host: 378
-library tests, 10 conformance tests, 298 replacement tests, and 2 driver tests.
+The checkpoint source passed 691 tests on each host: 380
+library tests, 10 conformance tests, 299 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
