@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `d844548`
-  (`compiler: analyze initializedness across control flow`)
+- Compiler checkpoint commit: `8ce26b1`
+  (`compiler: move exact assignment sources`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `8ddd42f` (`compiler: refine conditional event
@@ -84,10 +84,12 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   identifier initialization of a mutable-reference binding records a `Move` on
   the source root. Direct root and precise tuple-field assignments record
   `Write` or `ReadModifyWrite` after their RHS read planning. Assignment reads
-  that resolve to an exact root or tuple-field move path of a proven `Copy`
-  type transactionally record `Copy`; capacity failure cannot retain the read
-  without its effect. Summary indexes, dereferences, and non-`Copy` reads remain
-  unclassified. Direct shared and mutable borrows of an exact root, plus shared
+  derive their effect context from the typed RHS: an exact root of proven
+  non-`Copy` type records `Move` before the destination write, while an exact
+  root or tuple field of proven `Copy` type records `Copy`. Capacity failure
+  cannot retain the read without its effect. Summary indexes, dereferences,
+  projected non-`Copy` reads, and tuple materialization remain unclassified.
+  Direct shared and mutable borrows of an exact root, plus shared
   or mutable reborrows through a direct reference root, record `SharedBorrow` or
   `MutableBorrow` instead of being mislabeled as copies or moves. Reference
   indexing and summary projections remain unclassified. Supported call
@@ -312,7 +314,8 @@ Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
 1. extend contextual effects for implicit coercions and remaining indirect
-   call/return shapes without treating ambiguous pointee reads as moves;
+   call/return and aggregate-materialization shapes without treating ambiguous
+   pointee or projected reads as moves;
 2. give conditional-expression arms exact program points, then enable the
    existing fixed-point initializedness pass for those expression paths;
 3. add array-element paths only after place facts retain exact constant element
@@ -342,7 +345,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 691 tests on each host: 380
+The checkpoint source passed 692 tests on each host: 381
 library tests, 10 conformance tests, 299 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 

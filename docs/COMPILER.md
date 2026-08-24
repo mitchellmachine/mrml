@@ -269,6 +269,12 @@ a separate fixed 256-entry read-expectation table. The pass resolves the root
 base against the exact active scope and retains its projection list and span.
 Emission consumes each expectation through the ordinary identifier-read recorder,
 so projected specialized paths and direct identifiers share the identity check.
+The typed assignment RHS selects value or move context before traversal. An
+exact non-`Copy` root therefore records `Move` before the destination `Write`,
+while exact proven-`Copy` paths retain `Copy`; explicit address-taking still
+records its borrow effect. Projected non-`Copy` reads, dereferences, summary
+indexes, and tuple materialization remain unclassified rather than being
+guessed as moves.
 For scalar assignment RHS expressions, the pass now recursively visits casts,
 type ascriptions, unary wrappers, returns/break values, sequences, binary
 operands, and conditional condition/arms in the emitter's exact source order.
