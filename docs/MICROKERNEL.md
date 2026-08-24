@@ -2938,8 +2938,25 @@ removal retires every associated session, and saturated generations are never
 reused. The service checks nonempty block-aligned lengths and checked volume
 bounds, while backend failures remain failures rather than corruption or
 rollback permission. A scoped `ServicedBlockDevice` connects these checks to
-`BlockVolume`. This is an in-process service-core simulation, not a stable IPC
-codec, isolated service process, device driver, or physical-device result.
+`BlockVolume`.
+
+The control plane now has a canonical version-1 codec rather than a host-native
+structure. Every request is exactly 320 bytes and every response 32 bytes, with
+fixed magic, version, header size, opcode, capability count, request ID, session
+slot/generation, range, payload length, and canonical zero padding. Reads and
+writes carry no bytes or addresses inline: each declares one bounded byte length
+and requires exactly one separately transferred shared-memory capability.
+Flush carries neither, while atomic replacement inlines exactly the 256-byte
+superblock record. The principal is supplied only by authenticated IPC context.
+The bounded dispatcher checks canonicality and buffer shape before dispatch,
+authenticates the current session owner, requires strictly increasing request
+IDs per live handle generation, and consumes an admitted ID before touching the
+backend. Replays therefore fail before I/O. An uncertain write, flush, or atomic
+replacement backend result permanently poisons that generation; read failures
+remain retryable. Backend failure is reported distinctly and never becomes
+corruption or rollback permission. This is still an in-process codec/dispatcher
+simulation: kernel IPC capability transfer, an isolated service process, a
+device driver, and physical-device evidence remain pending.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3048,13 +3065,19 @@ reauthorize before range disclosure, stale generations never revive, revocation
 cover descendants, removal retire all device sessions, transfer arithmetic stay
 bounded, operation rights remain independent, and backend errors remain
 indeterminate failures. Ordinary session APIs do not expose device geometry.
+Protocol review additionally requires exact fixed lengths, supported version and
+opcode, canonical padding, bounded declared transfers, exact capability count,
+no wire principal or pointer, buffer-shape equality, authenticated sender
+binding, per-generation monotonic request IDs, replay rejection before I/O, and
+fail-stop poisoning after uncertain mutation. Dispatcher restart without
+session invalidation is outside the contract and remains forbidden.
 This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-one focused unit tests and strict crate-local clippy pass on Windows
-gnullvm and Arch Linux under WSL2. An isolated block-service process and
-versioned IPC codec, a concrete hosted/physical device backend,
+Ninety-five focused unit tests and strict crate-local clippy pass on Windows
+gnullvm and Arch Linux under WSL2. An isolated block-service process and kernel
+IPC/shared-memory-capability integration, a concrete hosted/physical device backend,
 complete directory hierarchy/lifetime handling, reboot-time capability
 checkpoint/reconstruction, complete crash recovery, snapshots, and
 configuration-checkpoint persistence remain unimplemented.
@@ -3066,7 +3089,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 91 tests, and both strict crate-local clippy
+Both current unit-test runs pass 95 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of metadata/authority and exact-block
 adapter state, not

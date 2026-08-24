@@ -10,6 +10,7 @@
 mod allocation;
 mod authority;
 mod block;
+mod block_protocol;
 mod block_service;
 mod cow;
 mod create;
@@ -32,6 +33,11 @@ pub use authority::{
     StorageObjectKind, StoragePrincipal, StorageRights,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
+pub use block_protocol::{
+    BLOCK_PROTOCOL_VERSION, BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockDispatchBuffer,
+    BlockOpcode, BlockProtocolDispatcher, BlockProtocolError, BlockRequest, BlockResponse,
+    BlockStatus, MAX_BLOCK_TRANSFER_BYTES,
+};
 pub use block_service::{
     BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
     BlockServiceError, BlockSessionHandle, ServicedBlockDevice,

@@ -131,7 +131,10 @@ explicitly and downgrade the status rather than guessing.
   publication. A bounded in-process block-service core now supplies principal-
   bound generational sessions, independent attenuable operation rights,
   transitive revocation, device-removal cleanup, checked transfers, and a scoped
-  exact-block client. No isolated service process/versioned IPC transport,
+  exact-block client. Its canonical v1 control records are fixed-size, carry no
+  raw pointer or principal, bind read/write to one separately authorized buffer,
+  reject replay per session generation, and poison uncertain mutating sessions.
+  No isolated service process or kernel IPC/shared-memory-capability wiring,
   concrete hosted or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,

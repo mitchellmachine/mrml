@@ -80,6 +80,14 @@ pub struct BlockSessionHandle {
 }
 
 impl BlockSessionHandle {
+    pub(crate) const fn from_parts(slot: u32, generation: u32) -> Option<Self> {
+        if generation == 0 {
+            None
+        } else {
+            Some(Self { slot, generation })
+        }
+    }
+
     pub const fn slot(self) -> u32 {
         self.slot
     }
@@ -215,7 +223,7 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
         Ok(revoked)
     }
 
-    fn validate_owner(
+    pub(crate) fn validate_owner(
         &self,
         handle: BlockSessionHandle,
         owner: StoragePrincipal,

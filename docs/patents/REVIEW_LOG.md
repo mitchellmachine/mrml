@@ -1045,6 +1045,18 @@ device protocol, revocation, transport, or persistence technique.
 Patent review: `NOT_TRIGGERED` — conventional capability-controlled block
 service dispatch.
 
+## 2026-08-23 — versioned block-service control codec
+
+MRML source: `crates/mrml-storage/src/block_protocol.rs`.
+
+The service conventionally encodes fixed-size versioned request/response
+records, uses separately authorized buffers for bulk I/O, correlates requests
+with monotonic per-session identifiers, rejects replay, and fail-stops a session
+after uncertain mutating I/O. This adds no novel IPC, serialization, block,
+capability-transfer, replay-protection, or fail-stop technique.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded control protocol.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

@@ -318,9 +318,15 @@ authority; unrelated domains continue.
    reduce rights; parent revocation is transitive; device removal retires all
    sessions; and malformed, unauthorized, stale, or wrong-owner requests fail
    before the backend. A scoped client runs the exact-block volume adapter
-   through this service. An isolated service process, versioned IPC codec,
-   concrete hosted/physical backend, and physical durability evidence remain
-   pending.
+   through this service. A canonical v1 control codec now provides fixed bounded
+   requests/responses with no wire principal or raw address. Read/write requires
+   one separately transferred buffer capability; atomic replacement alone
+   carries its fixed record inline. Dispatch binds the authenticated sender,
+   exact buffer shape, and strictly increasing request ID to the current session
+   generation; replay fails before the backend, while uncertain mutation
+   failures poison that generation. An isolated service process, kernel IPC and
+   shared-memory-capability wiring, concrete hosted/physical backend, and
+   physical durability evidence remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -422,8 +428,8 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, the isolated block-service process and versioned
-   IPC transport, a concrete hosted/physical device backend, and physical
+   checkpoint/reconstruction, the isolated block-service process and kernel IPC
+   transport integration, a concrete hosted/physical device backend, and physical
    power-loss evidence remain pending. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.

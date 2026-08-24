@@ -265,8 +265,15 @@ generational sessions with independently attenuable `READ`, `WRITE`, `FLUSH`,
 and `REPLACE_SUPERBLOCK` rights. Every operation reauthorizes before validating
 or disclosing ranges; revocation is transitive, device removal retires every
 session, and a scoped client connects the service to the exact-block adapter.
-There is not yet an isolated service process, versioned IPC codec, or physical
-device implementation, persistent allocation/free engine, complete COW tree, or
+The canonical v1 control protocol now uses fixed 320-byte requests and 32-byte
+responses, carries no principal or raw address, requires exactly one separately
+transferred buffer capability for reads/writes, and inlines only the bounded
+superblock record for atomic replacement. A bounded dispatcher authenticates
+the IPC-derived principal, binds the exact buffer length, rejects noncanonical
+records and replayed per-generation request IDs, and fail-stops a session after
+an uncertain mutating backend result. There is not yet an isolated service
+process, kernel IPC/shared-memory-capability wiring, or physical device
+implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
@@ -422,7 +429,7 @@ successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The exact-block
 metadata and file-data adapters plus the bounded block-service core are
-implemented, but the isolated service process/versioned IPC transport, physical
+implemented, but the isolated service process and kernel IPC/capability-transfer wiring, physical
 device backend, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
