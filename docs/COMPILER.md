@@ -322,9 +322,11 @@ provenance, including parser-resolved inner and outer break/continue targets,
 conditional returns, entry-condition exits, and divergent backedges without
 replaying preceding outer-body operations. The parser's immediately-breaking
 nested unit-loop form stays within the enclosing operation range, matching its
-existing no-op emitter semantics. Action lists containing statements after a
-return and post-terminal loop-operation suffixes remain explicitly incomplete.
-This runtime place/CFG
+existing no-op emitter semantics. Operations after unconditional direct,
+conditional-block, or nested-loop terminals now begin disconnected unreachable
+blocks; syntactic exits in those suffixes do not make the enclosing continuation
+reachable. Conditional-assignment action lists containing statements after a
+return remain explicitly incomplete. This runtime place/CFG
 foundation is therefore an incremental prerequisite, not a claim of ownership
 checking.
 

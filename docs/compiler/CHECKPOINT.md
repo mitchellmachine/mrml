@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `b78571e`
-  (`compiler: complete unit break loop CFG`)
+- Compiler checkpoint commit: `22b54a3`
+  (`compiler: model unreachable loop CFG suffixes`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -177,8 +177,10 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   missing, or out-of-range control-order metadata fails closed. The parser's
   dedicated immediately-breaking `NestedUnitLoop` form remains inside the
   enclosing contiguous operation range, matching its existing no-op emitter
-  semantics. Operation suffixes after an unconditional terminal remain
-  explicitly incomplete.
+  semantics. Direct, conditional-block, and nested-loop operations after an
+  unconditional terminal now begin disconnected unreachable blocks. Syntactic
+  exits in those blocks do not make an enclosing continuation reachable.
+  Conditional-assignment actions after a return remain explicitly incomplete.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -204,7 +206,7 @@ compatibility gaps:
 1. complete bounded read-place preanalysis for supported
    aggregate/materialization families in exact emission order;
 2. extend explicit basic blocks and control-flow edges through remaining
-   unreachable terminal suffixes;
+   conditional-assignment post-return action suffixes;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
@@ -230,8 +232,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 665 tests on each host: 367
-library tests, 10 conformance tests, 286 replacement tests, and 2 driver tests.
+The checkpoint source passed 668 tests on each host: 368
+library tests, 10 conformance tests, 288 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
