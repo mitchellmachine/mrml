@@ -2897,6 +2897,30 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         for _ in 0..reads {
                             push_read(facts, locals, function, place, assignment_span)?;
                         }
+                    } else if runtime_return_array_preanalysis_supported(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        base,
+                        count,
+                        depth + 1,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: assignment_span,
+                    })? {
+                        preanalyze_runtime_return_array_reads(
+                            facts,
+                            locals,
+                            function,
+                            resolver,
+                            tree,
+                            base,
+                            count,
+                            depth + 1,
+                            assignment_span,
+                        )?;
                     }
                     recurse(
                         facts,
@@ -21941,6 +21965,45 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 16384, 6, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_compound_array_index_bases() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, prefix: usize, index: usize) -> usize { let selected = ({ prefix; if index == 0 { make_array(first, second, third) } else { [third, second, first] } })[index]; selected }";
+        let module = Parser::new(source).parse_module::<1, 5>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<5>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 5, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 10);
+        for (fact, parameter) in facts.assignment_reads[..9]
+            .iter()
+            .zip([3, 4, 0, 1, 2, 2, 1, 0, 4])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+        let tail = facts.assignment_reads[9].unwrap();
+        assert_eq!(tail.base, RuntimePlaceIdentity::Local(RuntimeLocalId(0)));
+        assert_eq!(tail.projections, RuntimePlaceProjections::EMPTY);
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 5, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
