@@ -3790,6 +3790,49 @@ Patent review: `NOT_TRIGGERED` — conventional stopped-vCPU checkpointing,
 canonical page decoding, bounded ring reconstruction, and monotonic continuation;
 see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The live checkpoint now occurs after requests 13 and 14 have been consumed and
+their protected completions published, but before the guest retires either one.
+The stopped host requires request producer/consumed and completion-published
+watermarks 14, completion-consumer watermark 12, and both history anchors 14
+before publishing the page. The guest then reconstructs two pending ownership
+records from the complete canonical page and exact physical request slots,
+accepts and acknowledges both already-published completions in order, and
+continues through request 32. This deliberately does not claim backend-in-flight
+recovery: both backend mutations are complete at the checkpoint.
+
+Fresh one-time Lamport-signed version-1 KVM execution on 2026-08-24 completed
+the path and reported `verify=17084us prepare=2724us execute=748us
+total=42076us`. Arch Linux/WSL2 passed all 387 kernel tests and all 6 KVM-run
+tests. Package-focused strict `--no-deps` Clippy passed for the kernel, KVM
+runner, and UEFI block probe. A broader dependency Clippy invocation stopped on
+pre-existing unrelated warnings in `mrml-linux` and `mrml-crypto`. The WHP
+runner has the matching checkpoint state transition, but this increment has no
+new Windows build, unit, or live evidence because the available Windows shell
+lacked `link.exe`; earlier idle-checkpoint WHP evidence is not promoted into
+evidence for this change. No crash, VM rebuild, backend-in-flight recovery,
+persistence, durability, PCI, native boot, bare metal, or physical hardware was
+exercised.
+
+The pending-ownership `DIGITAL-RIGHTS REVIEW` found no identity, content
+collection, retention, correlation, disclosure, attestation mandate, DRM,
+vendor/publisher veto, first-party bypass, accessibility restriction, AI
+authority, or persistent owner-state change. The page and checkpoint remain
+bounded volatile local mechanics and grant no authority. The `HOSTILE SECURITY
+REVIEW` treats signed-artifact admission, the exact stop scalar and exit budget,
+stopped-vCPU ordering, every page and zero-tail byte, configuration/generation,
+all counters and ID anchors, physical slots, pending ownership, protected
+completion order, acknowledgements, payloads, and backend results as hostile.
+The published/consumer divergence must be exactly two, reconstruction retries
+nothing, and any mismatch or uncertainty fails closed. Existing capability,
+revocation, rollback-resistance, accessibility, evidence, owner-sovereignty,
+data-minimization, anti-DRM, owner-controlled-attestation, AI-containment, and
+anti-persistence gates remain unchanged. This agent review does not replace the
+required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional reconstruction of two bounded
+completed-but-unretired ring entries and ordered completion retirement; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

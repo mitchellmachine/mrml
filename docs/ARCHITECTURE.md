@@ -707,11 +707,18 @@ presentation is now implemented as a distinct queue- and configuration-
 disjoint page. KVM and WHP initialize it from the canonical fresh state, map it
 read-only/NX to the guest, and retain device-path writes; the common bridge can
 recapture and publish the complete zero-padded page and poisons on uncertain
-publication. The signed KVM/WHP guest now requests one exact policy-accounted
-stop after operation 16, discards its local driver state, reconstructs from the
-complete page and physical request slots, and continues through operation 32
-without ID or counter reuse. Crash orchestration, pending-work reconstruction
-in a live signed guest, unbounded progress, and PCI discovery remain pending. One freshly
+publication. The signed guest now requests one exact policy-accounted stop
+after requests 13 and 14 have been consumed and their protected completions
+published, but before either completion is retired. The host requires producer,
+consumed, and published watermarks 14, consumer watermark 12, and both history
+anchors 14. The guest discards its local driver state, reconstructs two pending
+ownership records from the complete page and physical request slots, retires
+both already-published completions in order, and continues through operation 32
+without ID or counter reuse. Fresh signed KVM execution covers this pending-
+ownership checkpoint; the WHP path has matching source but was not rebuilt or
+executed for this increment because the available Windows shell lacked its
+linker. Crash/VM-rebuild orchestration, backend-in-flight recovery, unbounded
+progress, and PCI discovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

@@ -96,7 +96,11 @@ const BLOCK_PROBE_CYCLES: usize = 8;
 #[cfg(target_os = "linux")]
 const BLOCK_PROBE_OPERATIONS: u32 = (BLOCK_PROBE_CYCLES * 4) as u32;
 #[cfg(target_os = "linux")]
-const BLOCK_QUIESCE_OPERATIONS: u32 = (BLOCK_PROBE_CYCLES as u32 / 2) * 4;
+const BLOCK_QUIESCE_WINDOW: usize = BLOCK_PROBE_CYCLES - 2;
+#[cfg(target_os = "linux")]
+const BLOCK_QUIESCE_REQUESTS: u32 = (BLOCK_QUIESCE_WINDOW * 2 + 2) as u32;
+#[cfg(target_os = "linux")]
+const BLOCK_QUIESCE_RETIRED: u32 = BLOCK_QUIESCE_REQUESTS - 2;
 #[cfg(target_os = "linux")]
 const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8 + 1) as u64;
 #[cfg(target_os = "linux")]
@@ -270,50 +274,6 @@ fn run_block_guest_driver_probe(
     let mut scratch = [0; 4096];
 
     for window in 0..(BLOCK_PROBE_CYCLES * 2) {
-        if window == BLOCK_PROBE_CYCLES {
-            let checkpoint = run_vm_once(
-                guest,
-                0,
-                &mut vms,
-                vm,
-                &mut router,
-                &capabilities,
-                &guest_memory,
-                &io_policy,
-            )
-            .map_err(|error| anyhow!("block quiescence exit failed: {:?}", error))?;
-            if checkpoint
-                != (ExitDisposition::Io {
-                    port: BLOCK_QUIESCE_PORT,
-                    size: 4,
-                    write: true,
-                    value: BLOCK_QUIESCE_OPERATIONS,
-                })
-            {
-                return Err(anyhow!("block quiescence tuple mismatch: {:?}", checkpoint));
-            }
-            let configuration = device
-                .configuration()
-                .map_err(|_| anyhow!("block configuration unavailable at quiescence"))?;
-            let configuration_page =
-                VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
-                    .map_err(|_| anyhow!("invalid block configuration at quiescence"))?;
-            let resume_page = VirtualBlockResumePage::fresh(BLOCK_RESUME_BASE, configuration_page)
-                .map_err(|_| anyhow!("invalid block resume page at quiescence"))?;
-            let published = bridge
-                .publish_resume_page(guest, &device, resume_page)
-                .map_err(|error| anyhow!("block resume publication failed: {:?}", error))?;
-            let state = published.state();
-            if state.request_producer() != u64::from(BLOCK_QUIESCE_OPERATIONS)
-                || state.request_consumed() != u64::from(BLOCK_QUIESCE_OPERATIONS)
-                || state.completion_published() != u64::from(BLOCK_QUIESCE_OPERATIONS)
-                || state.completion_consumer() != u64::from(BLOCK_QUIESCE_OPERATIONS)
-                || state.last_admitted_request_id() != u64::from(BLOCK_QUIESCE_OPERATIONS)
-                || state.last_published_request_id() != u64::from(BLOCK_QUIESCE_OPERATIONS)
-            {
-                return Err(anyhow!("block quiescence state mismatch"));
-            }
-        }
         for offset in 0..2 {
             let operation = window * 2 + offset;
             let outcome = match run_virtual_block_doorbell_once(
@@ -359,6 +319,50 @@ fn run_block_guest_driver_probe(
                     "block operation {} was not completed",
                     operation + 1
                 ));
+            }
+        }
+        if window == BLOCK_QUIESCE_WINDOW {
+            let checkpoint = run_vm_once(
+                guest,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io_policy,
+            )
+            .map_err(|error| anyhow!("block quiescence exit failed: {:?}", error))?;
+            if checkpoint
+                != (ExitDisposition::Io {
+                    port: BLOCK_QUIESCE_PORT,
+                    size: 4,
+                    write: true,
+                    value: BLOCK_QUIESCE_REQUESTS,
+                })
+            {
+                return Err(anyhow!("block quiescence tuple mismatch: {:?}", checkpoint));
+            }
+            let configuration = device
+                .configuration()
+                .map_err(|_| anyhow!("block configuration unavailable at quiescence"))?;
+            let configuration_page =
+                VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
+                    .map_err(|_| anyhow!("invalid block configuration at quiescence"))?;
+            let resume_page = VirtualBlockResumePage::fresh(BLOCK_RESUME_BASE, configuration_page)
+                .map_err(|_| anyhow!("invalid block resume page at quiescence"))?;
+            let published = bridge
+                .publish_resume_page(guest, &device, resume_page)
+                .map_err(|error| anyhow!("block resume publication failed: {:?}", error))?;
+            let state = published.state();
+            if state.request_producer() != u64::from(BLOCK_QUIESCE_REQUESTS)
+                || state.request_consumed() != u64::from(BLOCK_QUIESCE_REQUESTS)
+                || state.completion_published() != u64::from(BLOCK_QUIESCE_REQUESTS)
+                || state.completion_consumer() != u64::from(BLOCK_QUIESCE_RETIRED)
+                || state.last_admitted_request_id() != u64::from(BLOCK_QUIESCE_REQUESTS)
+                || state.last_published_request_id() != u64::from(BLOCK_QUIESCE_REQUESTS)
+            {
+                return Err(anyhow!("block quiescence state mismatch"));
             }
         }
         for offset in 0..2 {

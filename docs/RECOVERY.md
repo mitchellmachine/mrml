@@ -407,13 +407,19 @@ explicitly and downgrade the status rather than guessing.
   configuration- and queue-bound, completely zero-padded, mapped read-only/NX
   to KVM and WHP guests, and writable only through the device path. The common
   bridge recaptures live state before publication and poisons on uncertain
-  writes. A signed KVM/WHP workload now stops after 16 fully retired operations,
-  lets the host publish the exact nonzero page while execution is stopped,
-  discards its local driver state, reconstructs from the complete page and two
-  physical request slots, and continues through operation 32. This is bounded
-  live reinitialization, not crash recovery. Crash/restart orchestration,
-  pending-work live reconstruction, unbounded progress, and PCI transport
-  remain pending. A common
+  writes. The signed workload now stops after requests 13 and 14 have been
+  consumed and their protected completions published, but before either is
+  retired by the guest. The host requires producer/consumed/published
+  watermarks 14, consumer watermark 12, and both history anchors 14 before it
+  publishes the exact nonzero page while execution is stopped. The guest
+  discards its local driver state, reconstructs two pending ownership records
+  from the complete page and physical request slots, retires the two already-
+  published completions in order, and continues through operation 32. Fresh
+  signed KVM execution covers this bounded live reinitialization. WHP source
+  parity is present, but the current increment has no new WHP build or execution
+  evidence because the available Windows shell lacked its linker. This is not
+  crash recovery. Crash/VM-rebuild orchestration, backend-in-flight recovery,
+  unbounded progress, and PCI transport remain pending. A common
   unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer

@@ -166,6 +166,8 @@ const BLOCK_PROBE_CYCLES: u32 = 8;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_QUIESCE_CYCLE: u32 = BLOCK_PROBE_CYCLES / 2;
 #[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_QUIESCE_REQUESTS: u32 = (BLOCK_QUIESCE_CYCLE - 1) * 4 + 2;
+#[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROBE_OPERATIONS: u32 = BLOCK_PROBE_CYCLES * 4;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_VECTOR: u8 = 48;
@@ -2324,6 +2326,30 @@ unsafe fn run_block_guest_driver_probe() -> ! {
                 .publish_submission(&mut transport, write)
                 .unwrap_or_else(|_| halt());
         }
+        if cycle + 1 == BLOCK_QUIESCE_CYCLE {
+            unsafe {
+                asm!(
+                    "out dx, eax",
+                    in("dx") BLOCK_QUIESCE_PORT,
+                    in("eax") BLOCK_QUIESCE_REQUESTS,
+                    options(nomem, nostack)
+                )
+            };
+            let mut resume_page = [0; PAGE_SIZE as usize];
+            for (offset, byte) in resume_page.iter_mut().enumerate() {
+                *byte = unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
+            }
+            let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+            for (slot, request) in requests.iter_mut().enumerate() {
+                let base =
+                    queue.request_base() + 128 + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
+                for (offset, byte) in request.iter_mut().enumerate() {
+                    *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
+                }
+            }
+            driver = VirtualBlockGuestDriver::reconstruct_from_page(&resume_page, &requests)
+                .unwrap_or_else(|_| halt());
+        }
         for _ in 0..2 {
             let write_completion = driver
                 .prepare_completion_from_transport(&mut transport)
@@ -2369,30 +2395,6 @@ unsafe fn run_block_guest_driver_probe() -> ! {
                     halt();
                 }
             }
-        }
-        if cycle + 1 == BLOCK_QUIESCE_CYCLE {
-            unsafe {
-                asm!(
-                    "out dx, eax",
-                    in("dx") BLOCK_QUIESCE_PORT,
-                    in("eax") BLOCK_QUIESCE_CYCLE * 4,
-                    options(nomem, nostack)
-                )
-            };
-            let mut resume_page = [0; PAGE_SIZE as usize];
-            for (offset, byte) in resume_page.iter_mut().enumerate() {
-                *byte = unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
-            }
-            let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
-            for (slot, request) in requests.iter_mut().enumerate() {
-                let base =
-                    queue.request_base() + 128 + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
-                for (offset, byte) in request.iter_mut().enumerate() {
-                    *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
-                }
-            }
-            driver = VirtualBlockGuestDriver::reconstruct_from_page(&resume_page, &requests)
-                .unwrap_or_else(|_| halt());
         }
     }
     unsafe {

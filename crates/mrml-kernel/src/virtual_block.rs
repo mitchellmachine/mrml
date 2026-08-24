@@ -3302,6 +3302,15 @@ mod tests {
         VirtualBlockRequest::read(1, 40, 0, 1, 0x80_0000, 4096).encode(&mut requests[1]);
         VirtualBlockRequest::write(1, 50, 1, 1, 0x81_0000, 4096).encode(&mut requests[0]);
         let mut driver = VirtualBlockGuestDriver::reconstruct(&encoded_state, &requests).unwrap();
+        let configuration_page =
+            VirtualBlockConfigurationPage::new(0x30_0000, configuration).unwrap();
+        let page = VirtualBlockResumePage::new(0x31_0000, configuration_page, state).unwrap();
+        let mut encoded_page = [0; PAGE_SIZE as usize];
+        page.encode_page(&mut encoded_page);
+        assert_eq!(
+            VirtualBlockGuestDriver::reconstruct_from_page(&encoded_page, &requests),
+            Ok(driver.clone())
+        );
         assert_eq!(driver.configuration(), configuration);
         assert_eq!(driver.request_producer(), 5);
         assert_eq!(driver.completion_consumer(), 3);
