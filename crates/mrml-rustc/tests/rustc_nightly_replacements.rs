@@ -3999,7 +3999,7 @@ fn rustc_single_block_initializedness_rejects_second_moves_and_accepts_writes() 
 #[test]
 fn rustc_cfg_initializedness_rejects_branch_and_loop_exit_use_after_move() {
     let rejected = [
-        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(second: &mut u16, choose: bool) -> &mut u16 { if choose { identity(second); } second }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = second; } second }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { loop { let moved: &mut u16 = identity(input); break; } input }",
     ];
     for source in rejected {
@@ -4012,6 +4012,10 @@ fn rustc_cfg_initializedness_rejects_branch_and_loop_exit_use_after_move() {
             );
         }
     }
+
+    let restored = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut slot: &mut u16 = first; let mut source: &mut u16 = second; slot = source; source = &mut *slot; *source }";
+    assert_eq!(compile_wide(restored, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(restored, ObjectFormat::Coff), Ok(()));
 }
 
 #[test]

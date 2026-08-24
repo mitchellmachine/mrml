@@ -5198,12 +5198,25 @@ fn preanalyze_runtime_assignment_reads<
             kind: CodegenErrorKind::Expression(error.kind),
             span: translate_span(assignment.value_span.start, error.span),
         })?;
-    preanalyze_runtime_expression_reads(
+    let ty = runtime_expression_type_with_locals(function, resolver, locals, &tree, tree.root(), 0)
+        .map_err(|kind| CodegenError {
+            kind,
+            span: assignment.value_span,
+        })?;
+    let context = if runtime_type_is_copy(ty) {
+        RuntimeReadEffectContext::Value
+    } else {
+        RuntimeReadEffectContext::Move
+    };
+    preanalyze_runtime_expression_at_reads_with_tuple(
         facts,
         locals,
         function,
         resolver,
         &tree,
+        tree.root(),
+        context,
+        matches!(ty, RuntimeExpressionType::Tuple { .. }).then_some(ty),
         assignment.value_span,
     )
 }
@@ -24777,8 +24790,8 @@ mod tests {
 
     #[test]
     fn runtime_cfg_initializedness_rejects_moves_on_only_one_join_path() {
-        let source = "fn value(second: &mut u16, choose: bool) -> &mut u16 { if choose { identity(second); } second }";
-        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let source = "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = second; } second }";
+        let module = Parser::new(source).parse_module::<3, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
@@ -24786,7 +24799,7 @@ mod tests {
         let mut facts = RuntimeBodyFacts::EMPTY;
         let result = preanalyze_runtime_body_declarations::<_, 4, 16>(
             &function,
-            &MutableReferenceCallResolver,
+            &NoConstants,
             &body,
             "&mut u16",
             function.body_expression_span.start,
@@ -24820,6 +24833,60 @@ mod tests {
             .kind,
             CodegenErrorKind::RuntimeUseAfterMove
         );
+    }
+
+    #[test]
+    fn runtime_assignment_rhs_moves_precede_destination_writes_and_can_be_restored() {
+        let source = "fn value(first: &mut u16, second: &mut u16) -> &mut u16 { let mut slot: &mut u16 = first; let mut source: &mut u16 = second; slot = source; source = &mut *slot; source }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 16>(
+                &function,
+                &NoConstants,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap(),
+            2
+        );
+        let source_path = facts
+            .find_move_path(
+                RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
+                RuntimePlaceProjections::EMPTY,
+            )
+            .unwrap();
+        let slot_path = facts
+            .find_move_path(
+                RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+                RuntimePlaceProjections::EMPTY,
+            )
+            .unwrap();
+        let rhs_move = facts.effects[..facts.effect_count]
+            .iter()
+            .flatten()
+            .find(|effect| {
+                effect.path == source_path
+                    && effect.kind == RuntimePlaceEffectKind::Move
+                    && effect.location == RuntimeOwnershipEventLocation::TopLevelStatement(2)
+            })
+            .unwrap();
+        let destination_write = facts.effects[..facts.effect_count]
+            .iter()
+            .flatten()
+            .find(|effect| {
+                effect.path == slot_path
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.location == RuntimeOwnershipEventLocation::TopLevelStatement(2)
+            })
+            .unwrap();
+        assert!(rhs_move.event.0 < destination_write.event.0);
     }
 
     #[test]
