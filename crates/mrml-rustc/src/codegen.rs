@@ -4679,7 +4679,13 @@ fn preanalyze_runtime_local_binding<
                 .map(|expression| expression.kind),
             Some(ExprKind::Identifier(_))
         );
-        let coercion_root = direct_identifier
+        let direct_place = discover_runtime_read_place(&tree, tree.root())
+            .map_err(|kind| CodegenError {
+                kind,
+                span: local.initializer_span,
+            })?
+            .is_some();
+        let coercion_root = direct_place
             || matches!(
                 tree.expression(tree.root())
                     .map(|expression| expression.kind),
@@ -6232,14 +6238,21 @@ fn preanalyze_runtime_assignment_reads<
             kind,
             span: assignment.value_span,
         })?;
+    let direct_place = discover_runtime_read_place(&tree, tree.root())
+        .map_err(|kind| CodegenError {
+            kind,
+            span: assignment.value_span,
+        })?
+        .is_some();
     let assignment_reborrow = if assignment.projection.is_none()
         && assignment.binding_name() != "_"
         && assignment.operator == crate::AssignmentOperator::Assign
-        && matches!(
-            tree.expression(tree.root())
-                .map(|expression| expression.kind),
-            Some(ExprKind::Identifier(_) | ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
-        ) {
+        && (direct_place
+            || matches!(
+                tree.expression(tree.root())
+                    .map(|expression| expression.kind),
+                Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+            )) {
         let target =
             resolve_runtime_assignment_place(function, locals, assignment).map_err(|kind| {
                 CodegenError {
@@ -27723,6 +27736,43 @@ mod tests {
         for source in [
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = &mut *first; let child: &mut u16 = if choose { parent } else { &mut *second }; *child += 1; *parent }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = &mut *first; let mut child: &mut u16 = &mut *second; child = if choose { parent } else { &mut *second }; *child += 1; *parent }",
+        ] {
+            analyze(source).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_projected_reference_places_use_expected_reborrow_context() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (first, second); let child: &mut u16 = pair.0; let competing: &mut u16 = pair.0; *competing += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16) -> u16 { let pair = (first, second); let mut child: &mut u16 = third; child = pair.0; let competing: &mut u16 = pair.0; *competing += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (first, second); let child: &mut u16 = pair.0; *child += 1; let next: &mut u16 = pair.0; *next }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16) -> u16 { let pair = (first, second); let mut child: &mut u16 = third; child = pair.0; *child += 1; let next: &mut u16 = pair.0; *next }",
         ] {
             analyze(source).unwrap();
         }
