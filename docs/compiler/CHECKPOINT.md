@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `6812ef8`
-  (`compiler: invalidate call reborrow ancestors`)
+- Compiler checkpoint commit: `4d90166`
+  (`compiler: invalidate shared call ancestors`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -460,8 +460,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 746 tests on each host: 408
-library tests, 10 conformance tests, 326 replacement tests, and 2 driver tests.
+The checkpoint source passed 748 tests on each host: 409
+library tests, 10 conformance tests, 327 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

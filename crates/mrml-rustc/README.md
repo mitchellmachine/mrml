@@ -3630,3 +3630,15 @@ the legal old-pointee generation cycle. The pinned future-edition oracle rejecte
 the live call reborrow with E0502 and accepted the post-last-use control. This
 does not claim arbitrary interprocedural effects or unrestricted regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The shared-call ancestor-invalidation milestone passed all 748 compiler and
+driver tests on Windows gnullvm and all 748 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
+rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. A shared
+call-scoped reborrow through a local reference now also checks intermediate
+ancestry when the active child is mutable. Shared-on-shared remains compatible,
+and bounded reachability restores the ancestor after the mutable child’s last
+use. The pinned future-edition oracle rejected the live shared call reborrow
+with E0502 and accepted the post-last-use control. This does not claim arbitrary
+interprocedural effects or unrestricted regions. The
+`no_std`/allocation/unsafe hygiene scan remained empty.
