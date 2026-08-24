@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `daf9fb9`
-  (`compiler: connect conditional expression flow`)
+- Compiler checkpoint commit: `40a035c`
+  (`compiler: analyze initializedness through expressions`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `cbc6cc5` (`compiler: map conditional expression
+- Preceding compiler commits: `daf9fb9` (`compiler: connect conditional
+  expression flow`), `cbc6cc5` (`compiler: map conditional expression
   program points`), `7003640` (`compiler: identify conditional
   expression occurrences`), `8ddd42f` (`compiler: refine conditional event
   origins`), `df01b9b` (`compiler: retain ownership event
@@ -150,9 +151,14 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   budget. Validation rejects holes, count mismatches, edge substitution or
   reordering, invalid endpoints, and disagreement with occurrence facts. Every
   expression point's ownership location must resolve to an existing
-  statement/loop block, edge, or explicit unreachable point. The initializedness
-  pass does not yet consume this expression subgraph, so conditional-expression
-  initializedness remains gated;
+  statement/loop block, edge, or explicit unreachable point. Supported
+  same-location expression graphs now require one root and sink and an exact
+  point for every initialization/effect event. A structured bounded traversal
+  follows straight-line points iteratively, descends only through the 64-level
+  conditional nesting bound, intersects both arm states at each join, and feeds
+  the sink state into the enclosing statement/loop control point. It uses no
+  global per-point state matrix. Cross-location, incomplete, cyclic, duplicate,
+  or otherwise unsupported shapes fail closed rather than disabling analysis;
   and
 - parser-shape-validated conditional program points. Conditional-return events
   distinguish each branch condition from its true-return value and final else
@@ -178,9 +184,8 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   closed. This mapping is derived from the bounded 64-block/128-edge CFG and
   adds no per-event table; and
 - bounded fixed-point initializedness enforcement across every reachable block
-  and edge of a complete supported statement/loop CFG whose expression events
-  do not contain a conditional-expression path split that is not yet mapped
-  into that CFG. Two fixed
+  and edge of a complete supported statement/loop CFG, composed with the
+  supported conditional-expression subgraphs described above. Two fixed
   64-block by 22-word bitset matrices retain definite input/output state for
   all 1,360 move paths. Incoming paths use intersection, entry participates as
   an explicit predecessor, and exact edge events transfer before successor
@@ -337,8 +342,7 @@ resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths, remaining indirect move/borrow classification,
-expression-level conditional-arm provenance and initializedness, unsupported
-parser/control-flow forms, borrows, loans, regions,
+unsupported expression/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -351,13 +355,9 @@ compatibility gaps:
 1. extend contextual effects for implicit coercions and remaining indirect
    call/return and aggregate-materialization shapes without treating ambiguous
    pointee or projected reads as moves;
-2. execute bounded initializedness transfer and intersection over the retained
-   expression roots, conditions, arms, exits, and joins, compose the resulting
-   state with the enclosing statement/loop control point, and remove the
-   conditional-expression gate only after accepted/rejected probes pass;
-3. add array-element paths only after place facts retain exact constant element
+2. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
-4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
+3. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
    and flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
 
@@ -382,7 +382,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 693 tests on each host: 381
+The checkpoint source passed 694 tests on each host: 382
 library tests, 10 conformance tests, 300 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 

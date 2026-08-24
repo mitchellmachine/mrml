@@ -227,13 +227,12 @@ initializations and 768 effects. Event IDs are assigned at insertion time, so
 RHS effects precede the successful initialization of their destination local.
 Validation requires the initialization and effect tables to merge into one
 dense monotonic sequence without holes, duplicates, inversions, or corrupt
-counts. For functions proven to have one reachable top-level block and no
-conditional expression paths, a fixed 1,360-path state map now consumes this
+counts. For functions with a complete supported control-flow graph, a fixed
+1,360-path state map now consumes this
 order and rejects a copy, move, borrow, or read-modify-write of an uninitialized
 exact path as `RuntimeUseAfterMove`. Moves clear roots and tuple descendants;
 exact writes restore state and child writes recompute tuple-root completeness.
-Conditional expression nodes disable enforcement even when the structural CFG
-has one block. Each event now also retains insertion-time origin: parameter
+Each event now also retains insertion-time origin: parameter
 entry, an exact bounded top-level statement index, a verified final tail, or an
 explicit emission-expansion marker for dynamically appended inline-helper
 facts. Validation rejects unassigned, out-of-body, or otherwise incompatible
@@ -282,9 +281,17 @@ join. Construction preflights the complete edge budget, and validation rejects
 holes, count mismatches, substitution, reordering, invalid endpoints, or edges
 that disagree with the occurrence facts. Every point's ownership location must
 also resolve to an existing statement/loop block, edge, or explicit unreachable
-point. The initializedness fixed point does not yet consume this expression
-subgraph, so conditional-expression paths remain gated rather than being
-treated as linear.
+point. The initializedness fixed point does not consume this expression
+subgraph as linear control flow. Instead, supported same-location expression
+graphs require one root and sink and an exact program point for every event.
+A bounded structured traversal processes straight-line edges iteratively,
+recurses only through the parser's 64-level conditional nesting bound, meets
+then/else states by intersection at each join, and composes the sink state with
+the enclosing statement or loop control point. The global 6,400-point capacity
+does not allocate a per-point state matrix. Unsupported cross-location or
+incomplete expression graphs fail closed as `RuntimeExpressionUnsupported`.
+Original accepted/rejected probes preserve initializedness when neither arm
+moves a reference and reject its later use when exactly one arm moves it.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root
