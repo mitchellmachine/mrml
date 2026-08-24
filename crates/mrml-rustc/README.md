@@ -3604,3 +3604,17 @@ last use. The pinned future-edition oracle rejected the live mutation with
 E0506 and the live owner move with E0505, and accepted both post-last-use
 controls. This does not claim indirect alias invalidation or general regions.
 The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The nested-reborrow ancestor-invalidation milestone passed all 744 compiler and
+driver tests on Windows gnullvm and all 744 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
+rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Mutable and shared
+grandchild reborrows now suspend every mutable ancestor for mutation-through-
+alias conflicts, not only their immediate parent. The bounded ancestry walk
+distinguishes ultimate-owner paths from intermediate reference paths and never
+treats a loan as borrowing its own borrower binding. That preserves legal
+reference-generation replacement cycles while rejecting a live grandchild
+followed by ancestor mutation. The pinned future-edition oracle rejected both
+live mutable/shared grandchild cases with E0503 and accepted both post-last-use
+controls. This does not claim unrestricted regions or arbitrary alias analysis.
+The `no_std`/allocation/unsafe hygiene scan remained empty.

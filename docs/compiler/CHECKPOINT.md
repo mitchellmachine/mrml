@@ -9,8 +9,9 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e740ee2`
-  (`compiler: reject shared loan owner moves`)
+- Compiler checkpoint commit: `0b3d0df`
+  (`compiler: invalidate nested reborrow ancestors`), followed by formatting-
+  only cleanup `86a4f7e` (`compiler: preserve checkpoint formatting`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -428,8 +429,8 @@ compatibility gaps:
    move paths until a supported legal operation such as bounded destructuring
    requires them, and never turn summary runtime indexes into exact paths;
 2. extend indirect alias invalidation and full reborrow semantics beyond the
-   now-complete direct shared-loan conflict set, then stage flow-sensitive
-   outlives reasoning with independent accepted/rejected
+   direct shared-loan conflict set and bounded multi-level mutable-ancestor
+   suspension, then stage flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
 
 Return coercion sites now apply the declared shared or mutable reference context
@@ -460,8 +461,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 742 tests on each host: 406
-library tests, 10 conformance tests, 324 replacement tests, and 2 driver tests.
+The checkpoint source passed 744 tests on each host: 407
+library tests, 10 conformance tests, 325 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
