@@ -6157,6 +6157,68 @@ The planned compatibility, host-share, accessibility-device, browser,
 JavaScript/Wasm, and media scopes remain `TRIGGERED`. Agent review does not
 replace independent human dual review.
 
+### Negotiated PCI-MMIO block flush completion
+
+The signed attached-block probe now advertises and negotiates the existing
+MRML-native flush feature in both its guest-visible configuration page and the
+host device. After the two writes and two reads have completed and their exact
+protected acknowledgements have retired, the canonical guest driver publishes
+one payload-free flush request. The common runner independently reauthorizes the
+exact backend object's `FLUSH` right, the controlled backend records exactly one
+flush, and the guest retires the zero-byte protected completion before emitting
+proof. Scalar block probes continue to negotiate no flush feature. The exact VM
+budget is nineteen exits: nine configuration transactions and ten MMIO
+doorbell/acknowledgement transactions for five block operations.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features virtual_block
+  PASS: 69
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features virtual_pci
+  PASS: 28
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kvm-run -p mrml-whp-run --release --no-default-features
+  PASS: KVM-run 4; WHP-run 6
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel -p mrml-kvm -p mrml-whp -p mrml-kvm-run -p mrml-whp-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel-image --target x86_64-unknown-uefi --release --no-default-features --features pci-configuration-probe -- -D warnings -A clippy::result_unit_err
+  PASS
+wsl.exe -d archlinux --cd /mnt/c/Users/Mitch/Documents/mrml -- bash -lc 'export CARGO_TARGET_DIR=/tmp/mrml-flush-target; cargo test -p mrml-kernel --release --no-default-features virtual_block && cargo test -p mrml-kernel --release --no-default-features virtual_pci && cargo test -p mrml-kvm-run --release --no-default-features && cargo clippy -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err'
+  PASS: block 69; PCI 28; KVM-run 7; strict Clippy passed
+target/pci-flush-kvm/release/mrml-kvm-run target/pci-flush-evidence/kernel.signed target/pci-flush-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=16758us prepare=2218us execute=39635us total=79755us
+target/pci-flush-evidence/release/mrml-whp-run.exe target/pci-flush-evidence/kernel.signed target/pci-flush-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=18627us prepare=3892us execute=2769us total=29085us
+```
+
+The first KVM attempt failed closed at transaction nine because the host device
+negotiated flush while the separately materialized guest configuration page did
+not. No flush was submitted. Configuration construction was then bound to the
+same transport-specific feature value, a regression assertion preserved zero
+features for scalar transport, and both native probes passed with the identical
+fresh UEFI artifact. One fresh Lamport key signed that artifact once and its
+private key was consumed.
+
+This is unit/simulation and hosted controlled KVM/WHP evidence for one volatile
+backend flush call. It is not durable-storage, power-loss, production backend,
+VirtIO, QEMU, physical-device, bare-metal, or host-resistant-isolation evidence.
+
+DIGITAL-RIGHTS REVIEW: no host path, ambient storage, telemetry, retention,
+remote disclosure, attestation, DRM, vendor/publisher authority, secret export,
+AI-only interface, accessibility restriction, or persistence is added. The
+owner retains exact independently revocable backend and operation authority.
+
+HOSTILE SECURITY REVIEW: feature bits, configuration pages, requests, queue
+counters, completion lengths, attachment generations, BAR state, backend
+identity, and rights are hostile. Flush requires matching explicit negotiation,
+the exact live attachment/queue path, and independent `FLUSH` reauthorization;
+malformed, stale, attenuated, mismatched, or uncertain state fails closed.
+
+Patent review: `NOT_TRIGGERED` — this conventionally exercises the already
+implemented MRML-native flush operation through the existing queue and protected
+completion. It adds no compatibility, host-share, accessibility-device,
+browser, JavaScript/Wasm, or media mechanism. Those planned scopes remain
+`TRIGGERED`; agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

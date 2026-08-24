@@ -366,7 +366,10 @@ The native configuration probe originally selected only a deliberately
 unattached BDF and required the architectural all-ones result. It now uses the
 same bounded path to read two dwords from one deliberately test-only attached
 block-class function, assigns its one BAR, enables memory decode through an
-exact mapper, and completes a bounded two-write/two-read queue cycle. The fixed
+exact mapper, and completes a bounded two-write/two-read/one-flush queue cycle.
+The flush feature must match in the guest-visible configuration and host device,
+the request carries no payload or host selector, and backend execution
+independently requires the exact object's `FLUSH` right. The fixed
 identity, BDF, BAR, and request data remain non-authorizing; the backend object,
 operation rights, mapping, and legacy interrupt delivery remain separately
 capability checked. This assigns no production identity, MSI/MSI-X, DMA, or

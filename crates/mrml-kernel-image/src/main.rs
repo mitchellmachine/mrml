@@ -200,7 +200,7 @@ const PCI_TEST_VENDOR_DEVICE: u32 = 0x5678_1234;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_CLASS: u32 = 0x0180_0001;
 #[cfg(feature = "pci-configuration-probe")]
-const PCI_BLOCK_PROBE_OPERATIONS: u32 = 4;
+const PCI_BLOCK_PROBE_OPERATIONS: u32 = 5;
 #[cfg(feature = "fault-probe")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
 #[cfg(any(
@@ -2636,6 +2636,21 @@ unsafe fn run_pci_configuration_probe() -> ! {
             .acknowledge_completion_with_transport(&mut queue_transport, completion)
             .unwrap_or_else(|_| halt());
     }
+    let flush = driver.prepare_flush().unwrap_or_else(|_| halt());
+    driver
+        .publish_submission(&mut queue_transport, flush)
+        .unwrap_or_else(|_| halt());
+    let completion = driver
+        .prepare_completion_from_transport(&mut queue_transport)
+        .unwrap_or_else(|_| halt());
+    if completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+        || completion.transferred() != 0
+    {
+        halt();
+    }
+    driver
+        .acknowledge_completion_with_transport(&mut queue_transport, completion)
+        .unwrap_or_else(|_| halt());
     for (block, pattern) in patterns.into_iter().enumerate() {
         let base = BLOCK_PAYLOAD_BASE + block as u64 * PAGE_SIZE;
         for offset in 0..PAGE_SIZE as usize {

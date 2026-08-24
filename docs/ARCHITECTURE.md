@@ -734,11 +734,12 @@ The signed test-only guest now discovers that exact attached function's vendor/
 device and block-class configuration dwords, assigns BAR0, enables memory
 decode through the exact attachment mapper, and uses the canonical driver for
 two writes, two protected acknowledgements, two reads, two more
-acknowledgements, and complete payload verification through native KVM and WHP.
+acknowledgements, one negotiated flush with a zero-length protected completion,
+and complete payload verification through native KVM and WHP.
 Initial page-table builders install a first-level MMIO leaf without second-level
 RAM backing, and native completion blocks re-entry until each exact accepted
 write is retired. This is hosted controlled evidence for configuration, trapped
-routing, four bounded block operations against a volatile capability-selected
+routing, five bounded block operations against a volatile capability-selected
 backend, existing legacy interrupt injection, and protected MMIO retirement. It
 is not a production native PCI interrupt adapter, durable block backend,
 MSI/MSI-X, DMA, VirtIO, production identity, physical device, or host-resistant
@@ -747,7 +748,9 @@ The legacy completion path now binds delivery to the exact live routed PCI
 generation and command state. Interrupt-disable masks injection while retaining
 the pending latch; explicit unmask of the same generation permits the separately
 capability-authorized vector delivery. The signed KVM/WHP probe exercises this
-sequence within an exact seventeen-exit budget.
+sequence within an exact nineteen-exit budget. The flush is admitted only when
+the guest-visible configuration and host device both negotiate the existing
+feature, and backend access independently reauthorizes `FLUSH`.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector

@@ -2012,6 +2012,19 @@ protocol, or new patent-candidate mechanism. The previously recorded planned
 mechanisms remain `TRIGGERED`; this agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Negotiated MRML-native PCI-MMIO block flush probe
+
+**Result: NOT_TRIGGERED.** The change conventionally exercises the already
+implemented MRML-native block flush request through the existing PCI-MMIO queue,
+protected completion, and capability-selected backend. It requires the existing
+feature bit in both guest-visible and host configuration, independently checks
+the existing `FLUSH` right, and adds no durability claim, VirtIO compatibility,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or new patent-candidate
+mechanism. The planned compatibility, host-share, accessibility-device,
+browser, JavaScript/Wasm, and media scopes remain `TRIGGERED`; this agent review
+does not replace the required independent human dual review.
+
 # 2026-08-24 — Mutable-reference tuple-field initializedness
 
 **Result: NOT_TRIGGERED.** The change conventionally retains thin scalar

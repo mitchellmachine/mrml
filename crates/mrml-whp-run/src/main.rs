@@ -15,15 +15,15 @@ use mrml_kernel::{
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciCleanupRecord, VirtualBlockPciMemoryMapper,
-    VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockTransactionOutcome,
-    VirtualBlockTransport, VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter,
-    VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation, VirtualPciMemoryBar,
-    VirtualPciNativeResourceError, VirtualPciType0Function, VmBackend, VmExit, VmTable,
-    run_pci_configuration_once, run_pci_configuration_once_with_mapper,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockBackendAuthority, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciCleanupRecord,
+    VirtualBlockPciMemoryMapper, VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage,
+    VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualPciConfigurationMechanismOne,
+    VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
+    VirtualPciMemoryBar, VirtualPciNativeResourceError, VirtualPciType0Function, VmBackend, VmExit,
+    VmTable, run_pci_configuration_once, run_pci_configuration_once_with_mapper,
     run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
@@ -125,12 +125,12 @@ const PCI_TEST_COMMAND_SELECTOR: u32 = PCI_TEST_SELECTOR + 4;
 #[cfg(target_os = "windows")]
 const PCI_TEST_MMIO_BASE: u64 = 0x00c0_0000;
 #[cfg(target_os = "windows")]
-const PCI_BLOCK_PROBE_OPERATIONS: u32 = 4;
+const PCI_BLOCK_PROBE_OPERATIONS: u32 = 5;
 #[cfg(target_os = "windows")]
-const PCI_PROBE_POLICY_EXITS: u64 = 17;
+const PCI_PROBE_POLICY_EXITS: u64 = 19;
 
 #[cfg(target_os = "windows")]
-struct DriverProbeBlock([u8; 8192]);
+struct DriverProbeBlock([u8; 8192], usize);
 
 #[cfg(target_os = "windows")]
 struct PreinstalledPciMmioWindow {
@@ -218,6 +218,10 @@ unsafe impl VirtualBlockBackend for DriverProbeBlock {
     }
 
     fn flush(&mut self) -> core::result::Result<(), VirtualBlockMutationError<Self::Error>> {
+        self.1 = self
+            .1
+            .checked_add(1)
+            .ok_or(VirtualBlockMutationError::Rejected(()))?;
         Ok(())
     }
 }
@@ -227,10 +231,15 @@ fn block_configuration(
     layout: VirtualBlockQueueLayout,
     transport: VirtualBlockTransport,
 ) -> Result<mrml_kernel::VirtualBlockConfiguration> {
-    let mut device = VirtualBlockDevice::<2>::new_with_transport(4096, 2, 0, transport)
+    let features = if transport == VirtualBlockTransport::MrmlSpecificPciMmio {
+        VIRTUAL_BLOCK_FEATURE_FLUSH
+    } else {
+        0
+    };
+    let mut device = VirtualBlockDevice::<2>::new_with_transport(4096, 2, features, transport)
         .map_err(|_| anyhow!("invalid block probe geometry"))?;
     device
-        .negotiate(0)
+        .negotiate(features)
         .and_then(|_| device.activate(layout, 48))
         .map_err(|_| anyhow!("invalid block probe configuration"))?;
     device
@@ -284,7 +293,7 @@ fn run_block_guest_driver_probe<'system>(
         .map_err(|_| anyhow!("failed to activate block device"))?;
     let mut bridge = VirtualBlockQueueBridge::<2>::new(layout)
         .map_err(|_| anyhow!("failed to bind block queue bridge"))?;
-    let mut storage = DriverProbeBlock([0; 8192]);
+    let mut storage = DriverProbeBlock([0; 8192], 0);
     let mut scratch = [0; 4096];
 
     for window in 0..(BLOCK_PROBE_CYCLES * 2) {
@@ -497,12 +506,12 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
     let mut device = VirtualBlockDevice::<2>::new_with_transport(
         4096,
         2,
-        0,
+        VIRTUAL_BLOCK_FEATURE_FLUSH,
         VirtualBlockTransport::MrmlSpecificPciMmio,
     )
     .map_err(|_| anyhow!("invalid PCI block device"))?;
     device
-        .negotiate(0)
+        .negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH)
         .and_then(|_| device.activate(layout, 48))
         .map_err(|_| anyhow!("failed to activate PCI block device"))?;
     let mut bridge = VirtualBlockQueueBridge::<2>::new(layout)
@@ -681,9 +690,9 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
     interrupt_policy
         .allow(48)
         .map_err(|_| anyhow!("failed to allow PCI block interrupt"))?;
-    let mut backend = DriverProbeBlock([0; 8192]);
+    let mut backend = DriverProbeBlock([0; 8192], 0);
     let mut scratch = [0u8; 4096];
-    for transaction in 0..8usize {
+    for transaction in 0..10usize {
         let mmio = run_virtual_block_mmio_transaction_once(
             &mut guest,
             &mut backend,
@@ -711,7 +720,7 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
                 error
             )
         })?;
-        let expected_doorbell = matches!(transaction, 0 | 1 | 4 | 5);
+        let expected_doorbell = matches!(transaction, 0 | 1 | 4 | 5 | 8);
         if (expected_doorbell
             && !matches!(
                 mmio,
@@ -761,6 +770,9 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
     }
     if backend.0[..4096] != [0x5a; 4096] || backend.0[4096..] != [0xa5; 4096] {
         return Err(anyhow!("WHP PCI-MMIO block backend payload mismatch"));
+    }
+    if backend.1 != 1 {
+        return Err(anyhow!("WHP PCI-MMIO block flush count mismatch"));
     }
     let proof = VmBackend::run(&mut guest, 0)
         .map_err(|error| anyhow!("WHP PCI proof execution failed: {:?}", error))?;
@@ -2275,7 +2287,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn block_probe_backend_rejects_every_out_of_range_access() {
-        let mut backend = DriverProbeBlock([0; 8192]);
+        let mut backend = DriverProbeBlock([0; 8192], 0);
         let mut block = [0; 4096];
         assert!(backend.read_blocks(2, &mut block).is_err());
         assert!(backend.read_blocks(u64::MAX, &mut block).is_err());
@@ -2306,11 +2318,17 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn pci_block_probe_budget_covers_configuration_and_exact_queue_transactions() {
-        assert_eq!(PCI_BLOCK_PROBE_OPERATIONS, 4);
+        assert_eq!(PCI_BLOCK_PROBE_OPERATIONS, 5);
         assert_eq!(
             PCI_PROBE_POLICY_EXITS,
             9 + 2 * u64::from(PCI_BLOCK_PROBE_OPERATIONS)
         );
+        let layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 2).unwrap();
+        let pci = block_configuration(layout, VirtualBlockTransport::MrmlSpecificPciMmio).unwrap();
+        let scalar =
+            block_configuration(layout, VirtualBlockTransport::MrmlSpecificScalarIo).unwrap();
+        assert_eq!(pci.negotiated_features(), VIRTUAL_BLOCK_FEATURE_FLUSH);
+        assert_eq!(scalar.negotiated_features(), 0);
     }
 
     #[test]

@@ -542,8 +542,9 @@ explicitly and downgrade the status rather than guessing.
 
 Before extending that inventory, read
 `docs/PARAVIRTUAL_DEVICES.md`. Preserve the MRML-native block transport and its
-generation, protected-completion, exact-acknowledgement, suspension, canonical-
-restart, poison-on-uncertainty, and bounded-runner evidence. VirtIO and QEMU are
+generation, negotiated-flush, protected-completion, exact-acknowledgement,
+suspension, canonical-restart, poison-on-uncertainty, and bounded-runner
+evidence. VirtIO and QEMU are
 compatibility/testing layers, not authority. Host shares use exact capability
 roots rather than raw paths, and accessibility emulators remain distinct from
 physical-device and user evidence.
@@ -552,7 +553,9 @@ active-block generations, queue/vector state, capability-selected backend range,
 confirmed BAR mapping, and revoke-before-reset/removal cleanup. Signed hosted KVM
 and WHP probes discover a test-only attached identity/class through
 Configuration Mechanism #1, assign and enable its BAR, and complete one bounded
-two-write/two-read queue cycle with protected MMIO acknowledgement. Do not
+two-write/two-read/one-flush queue cycle with protected MMIO acknowledgement.
+The guest-visible configuration and host device must both negotiate flush, and
+backend execution still requires independent `FLUSH` authority. Do not
 recover that narrow result as production BAR lifecycle/revocation, durable
 block I/O, native PCI interrupts, MSI/MSI-X, DMA, VirtIO, physical evidence, or
 an assigned production PCI identity.

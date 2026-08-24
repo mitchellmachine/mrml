@@ -192,10 +192,11 @@ transport also has two fixed write-only PCI-MMIO notification registers in one
 exact generational BAR window. A signed test-only guest discovers the attached
 identity, assigns and enables the BAR through Configuration Mechanism #1, then
 uses the canonical guest driver to publish two writes, retire their protected
-completions, reuse both slots for reads, retire those completions, and verify
-both complete payload pages. KVM and WHP run the same common transaction path
+completions, reuse both slots for reads, retire those completions, publish one
+explicitly negotiated flush, retire its zero-length completion, and verify both
+complete payload pages. KVM and WHP run the same common transaction path
 and block re-entry until each exact accepted write is retired. This is hosted
-controlled evidence for PCI configuration, trapped MMIO routing, four bounded
+controlled evidence for PCI configuration, trapped MMIO routing, five bounded
 block operations, capability-selected volatile backend access, existing
 capability-authorized legacy interrupt injection, and protected MMIO
 acknowledgement. It is not production block I/O or evidence for durability,
