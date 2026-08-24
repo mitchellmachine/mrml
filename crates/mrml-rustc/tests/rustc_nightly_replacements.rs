@@ -4127,6 +4127,20 @@ fn rustc_conditional_reference_generation_joins_match_the_oracle() {
     let accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; if choose { parent = &mut *second; } else { parent = &mut *third; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
     assert_eq!(compile_wide(accepted, ObjectFormat::Elf64), Ok(()));
     assert_eq!(compile_wide(accepted, ObjectFormat::Coff), Ok(()));
+
+    let child_rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; if choose { parent = &mut *second; } let child: &u16 = &*parent; let changed: &mut u16 = &mut *first; *changed += 1; *child }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(child_rejected, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeBorrowConflict
+            ))
+        );
+    }
+
+    let child_accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; if choose { parent = &mut *second; } else { parent = &mut *third; } let child: &u16 = &*parent; let changed: &mut u16 = &mut *first; *changed += 1; *child }";
+    assert_eq!(compile_wide(child_accepted, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(child_accepted, ObjectFormat::Coff), Ok(()));
 }
 
 #[test]
