@@ -289,9 +289,12 @@ request bytes cannot nominate a binding. There is not yet an isolated service
 process, block-specific syscall/receive loop, or physical device
 implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. The syscall decoder admits bounded capability-
-selected shared-buffer copy operations without binding IDs or shared addresses,
-but kernel-image execution and its opaque-resource backend remain unimplemented
-and fail closed. Bounded in-memory directory state now requires exact
+selected shared-buffer copy operations without binding IDs or shared addresses.
+A generic executor binds those requests to the current task capability space,
+kernel-known VM/task identity, exact live binding, direction-validated user-copy
+backend, opaque resource backend, and erased bounded scratch. Concrete kernel-
+image user-copy/resource adapters remain unimplemented and fail closed. Bounded
+in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke

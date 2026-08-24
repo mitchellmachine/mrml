@@ -3018,7 +3018,8 @@ is still in-process transport simulation over an already-received message; a
 real isolated service image, concrete receive/syscall loop, device driver, and
 physical-device evidence remain pending.
 
-The next syscall prerequisite is decoded but not executed. Operations 7 and 8
+The next syscall prerequisite is decoded and has a generic executor, but is not
+yet wired into a kernel image. Operations 7 and 8
 describe service reads from and writes to one capability-selected shared buffer.
 They carry the opaque generational capability, checked byte offset, userspace
 copy address, and nonzero length capped at 1 MiB. The decoder rejects invalid
@@ -3027,9 +3028,22 @@ ranges crossing the 47-bit userspace boundary, and oversized transfers. Access
 is implicit in the operation so request data cannot choose an arbitrary rights
 set: reads require the later executor to enforce exact `MAP|READ`, while writes
 require exact `MAP|READ|WRITE`. No binding ID, mapping ID, host handle, or shared
-address enters the ABI. The service-probe kernel-image dispatcher currently
-halts on both operations; resource resolution, validated user-copy execution,
-and an isolated block-service loop remain unimplemented.
+address enters the ABI.
+
+`SharedBufferSyscallExecutor` binds an accepted request to the current
+`TaskRuntime` capability space and kernel-supplied VM/task identities. Before
+bulk access it validates the complete userspace range in the correct direction,
+constructs an exact single-capability authorization, and resolves the unique
+live shared binding. Service reads revalidate and copy from the opaque resource
+before copying to validated userspace; service writes copy from validated
+userspace before revalidating and copying to the opaque resource. The entire
+caller-provided scratch region is erased on every success or failure, and user
+or resource backend uncertainty remains distinct. Tests cover both directions,
+undersized scratch, rejected userspace, revoked authority, and backend failure,
+including proof that rejected userspace and revoked authority touch no bulk
+backend. The service-probe kernel-image dispatcher still halts on both
+operations; concrete active-page-table user copy, opaque-resource adapters, and
+an isolated block-service loop remain unimplemented.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3156,7 +3170,7 @@ This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-nine focused storage tests and 316 focused kernel tests plus strict
+Ninety-nine focused storage tests and 319 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
 block-service process and concrete receive/syscall integration, a
 concrete hosted/physical device backend,
@@ -3171,15 +3185,16 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 99 tests, both kernel runs pass 316 tests, and
+Both storage unit-test runs pass 99 tests, both kernel runs pass 319 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
-kernel capability-transfer state, opaque-handle bounded buffer I/O, and
-in-process block transport composition, not
+kernel capability-transfer state, opaque-handle bounded buffer I/O, generic
+shared-buffer syscall execution, and in-process block transport composition,
+not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
-Patent review: `NOT_TRIGGERED` — conventional bounded syscall decoding for
-capability-selected buffer copies; see
+Patent review: `NOT_TRIGGERED` — conventional validated user-copy composition
+with capability-selected opaque resource I/O; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The ancestry, successor-construction, and object-ID allocator increments also passed the two

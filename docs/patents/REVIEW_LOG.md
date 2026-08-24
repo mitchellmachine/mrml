@@ -1158,3 +1158,15 @@ or overflowing ranges, and leaves unsupported execution fail-closed. This adds
 no novel syscall, capability, shared-memory, or bounded-copy technique.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded syscall validation.
+
+## 2026-08-23 — shared-buffer syscall execution composition
+
+MRML source: `crates/mrml-kernel/src/shared_buffer_syscall.rs` and
+`task_runtime.rs`.
+
+The kernel conventionally combines task-local capability lookup, live binding
+resolution, direction-validated userspace copies, opaque-handle resource I/O,
+and erased bounded scratch. This adds no novel syscall, capability, user-copy,
+shared-memory, or buffer-erasure technique.
+
+Patent review: `NOT_TRIGGERED` — conventional authorized copy composition.

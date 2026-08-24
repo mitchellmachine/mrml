@@ -459,6 +459,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .ok_or(TaskRuntimeError::MissingTask)
     }
 
+    pub fn capabilities(&self, task: TaskId) -> Result<&CapabilitySpace<CAPS>, TaskRuntimeError> {
+        self.domains
+            .iter()
+            .flatten()
+            .find(|domain| domain.task == task)
+            .map(|domain| &domain.capabilities)
+            .ok_or(TaskRuntimeError::MissingTask)
+    }
+
     /// Resolves one opaque task-local handle against its exact generation,
     /// requested rights, and expected object without exposing capability-space
     /// contents to userspace.

@@ -345,8 +345,12 @@ authority; unrelated domains continue.
    The syscall decoder now admits capability-selected shared-buffer reads and
    writes with implicit exact access modes, nonempty transfers capped at 1 MiB,
    checked shared offsets, complete canonical user ranges, and zero reserved
-   registers. Kernel-image execution and its concrete opaque-resource backend
-   remain pending and fail closed rather than returning a handle or address.
+   registers. A generic executor now composes the current task capability space,
+   exact selected binding, direction-validated user copy, opaque resource I/O,
+   and fully erased caller scratch. It revalidates immediately before resource
+   use and preserves user/resource backend errors. Concrete kernel-image user-
+   copy and opaque-resource adapters remain pending and fail closed rather than
+   returning a handle or address.
    Service-side binding selection is implemented: the exact transferred
    capability and kernel-known VM/task identity must select exactly one live
    binding of the required access, while missing, ambiguous, and stale
