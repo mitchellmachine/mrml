@@ -325,8 +325,11 @@ nested unit-loop form stays within the enclosing operation range, matching its
 existing no-op emitter semantics. Operations after unconditional direct,
 conditional-block, or nested-loop terminals now begin disconnected unreachable
 blocks; syntactic exits in those suffixes do not make the enclosing continuation
-reachable. Conditional-assignment action lists containing statements after a
-return remain explicitly incomplete. This runtime place/CFG
+reachable. Conditional-assignment actions after a return likewise occupy
+bounded, separately sourced, disconnected unreachable blocks with no incoming
+edge; their return or join edge cannot make the enclosing continuation
+reachable. This closes the known CFG-suffix gap for runtime forms admitted by
+the supported parser. This runtime place/CFG
 foundation is therefore an incremental prerequisite, not a claim of ownership
 checking.
 

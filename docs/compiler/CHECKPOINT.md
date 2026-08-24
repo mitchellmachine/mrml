@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `22b54a3`
-  (`compiler: model unreachable loop CFG suffixes`)
+- Compiler checkpoint commit: `6864b57`
+  (`compiler: model post-return action CFG`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -160,9 +160,7 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   explicit top-level continuation block. Conditional action branches similarly
   route through explicit action and join blocks, and all-path final returns mark
   later top-level blocks unreachable. The tables are capped at 64 blocks and
-  128 edges with explicit capacity errors. Nested action lists with statements
-  after a return leave the CFG tables empty and `control_flow_complete` false
-  rather than inventing edges.
+  128 edges with explicit capacity errors.
   Initial top-level loop facts additionally represent `while` true/false
   headers, unconditional-loop entries, exact contiguous operation ranges,
   backedges, and ordered simple or conditional break/continue/return targets.
@@ -180,7 +178,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   semantics. Direct, conditional-block, and nested-loop operations after an
   unconditional terminal now begin disconnected unreachable blocks. Syntactic
   exits in those blocks do not make an enclosing continuation reachable.
-  Conditional-assignment actions after a return remain explicitly incomplete.
+  Conditional-assignment actions after a return now receive the same explicit
+  treatment: bounded, separately sourced suffix blocks are disconnected and
+  unreachable, have no incoming edge, and preserve their own return or join
+  edge without making an enclosing continuation reachable. This closes the
+  known CFG-suffix gap for runtime forms admitted by the supported parser.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -195,7 +197,7 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Initialization/move paths, complete loop/branch CFG coverage, borrows, loans,
+Initialization/move paths, unsupported parser/control-flow forms, borrows, loans,
 regions, Polonius-style analysis, and a general trait solver are unimplemented.
 
 ## Next compiler work
@@ -203,12 +205,9 @@ regions, Polonius-style analysis, and a general trait solver are unimplemented.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. complete bounded read-place preanalysis for supported
-   aggregate/materialization families in exact emission order;
-2. extend explicit basic blocks and control-flow edges through remaining
-   conditional-assignment post-return action suffixes;
-3. add initialization and move-path facts;
-4. then stage shared loans, mutable loans/invalidation, reborrows, and
+1. add initialization and move-path facts over the existing stable place and
+   CFG identities;
+2. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
 
 Modern trait solving, naked functions/`naked_asm!`, inline assembly, security
@@ -232,8 +231,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 668 tests on each host: 368
-library tests, 10 conformance tests, 288 replacement tests, and 2 driver tests.
+The checkpoint source passed 669 tests on each host: 368
+library tests, 10 conformance tests, 289 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
