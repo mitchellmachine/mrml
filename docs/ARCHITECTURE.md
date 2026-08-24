@@ -259,8 +259,14 @@ extent before copying a requested subrange. A bounded one-use file-write session
 binds one exact predecessor, reconstructs successor blocks from verified old
 data, holes, and the caller patch, rejects active/reserved/overlapping ranges,
 verifies each complete staged extent by readback and the complete logical-file
-digest, then flushes data before metadata publication. There is not yet a block service or physical device
-implementation, persistent allocation/free engine, complete COW tree, or
+digest, then flushes data before metadata publication. A fixed-capacity in-process block-service core now
+registers non-authorizing device identities and issues principal-bound
+generational sessions with independently attenuable `READ`, `WRITE`, `FLUSH`,
+and `REPLACE_SUPERBLOCK` rights. Every operation reauthorizes before validating
+or disclosing ranges; revocation is transitive, device removal retires every
+session, and a scoped client connects the service to the exact-block adapter.
+There is not yet an isolated service process, versioned IPC codec, or physical
+device implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
@@ -415,8 +421,9 @@ is present in the COW plan and its one-use receipt is consumed. Directory
 successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The exact-block
-metadata and file-data adapters are implemented, but their block service/device
-implementation, snapshots, physical power-loss testing, and persistent anti-rollback state
+metadata and file-data adapters plus the bounded block-service core are
+implemented, but the isolated service process/versioned IPC transport, physical
+device backend, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import

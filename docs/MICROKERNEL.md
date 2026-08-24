@@ -2926,6 +2926,21 @@ synthesizes holes as zeroes, verifies the exact file-length digest, and only the
 requests device durability. This remains an adapter tested with simulated
 storage, not a real block service, device driver, or physical durability result.
 
+The next service boundary is now implemented as a fixed-capacity in-process
+core. `BlockDeviceId` identifies a registered device but authorizes nothing.
+Supervisor-issued generational sessions bind one principal, device, and explicit
+combination of read, write, flush, and atomic-superblock-replacement rights.
+Derivation revalidates the exact parent owner and can only preserve or reduce
+rights; each operation revalidates the handle generation, principal, device
+liveness, and exact independent right before checking ranges or invoking the
+unsafe backend. Parent revocation retires the complete descendant tree, device
+removal retires every associated session, and saturated generations are never
+reused. The service checks nonempty block-aligned lengths and checked volume
+bounds, while backend failures remain failures rather than corruption or
+rollback permission. A scoped `ServicedBlockDevice` connects these checks to
+`BlockVolume`. This is an in-process service-core simulation, not a stable IPC
+codec, isolated service process, device driver, or physical-device result.
+
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
 self-ownership. Extent lists now use a separate canonical block-aligned image
@@ -3027,12 +3042,19 @@ checked patch intersections, zeroed holes and tails, disjoint unreachable output
 complete readback, whole-file digest verification, output erasure by the file
 API on backend failure, and one-use flush state. No name or stable object ID
 authorizes either path.
+Block-service review additionally requires that identity never grant I/O,
+derivation authenticate the parent owner, rights only attenuate, every request
+reauthorize before range disclosure, stale generations never revive, revocation
+cover descendants, removal retire all device sessions, transfer arithmetic stay
+bounded, operation rights remain independent, and backend errors remain
+indeterminate failures. Ordinary session APIs do not expose device geometry.
 This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Eighty-six focused unit tests and strict crate-local clippy pass on Windows
-gnullvm and Arch Linux under WSL2. A concrete block service/device,
+Ninety-one focused unit tests and strict crate-local clippy pass on Windows
+gnullvm and Arch Linux under WSL2. An isolated block-service process and
+versioned IPC codec, a concrete hosted/physical device backend,
 complete directory hierarchy/lifetime handling, reboot-time capability
 checkpoint/reconstruction, complete crash recovery, snapshots, and
 configuration-checkpoint persistence remain unimplemented.
@@ -3044,7 +3066,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 86 tests, and both strict crate-local clippy
+Both current unit-test runs pass 91 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of metadata/authority and exact-block
 adapter state, not

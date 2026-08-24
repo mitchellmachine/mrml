@@ -128,8 +128,12 @@ explicitly and downgrade the status rather than guessing.
   verify complete extents before copying, while a bounded file-write session
   reconstructs successor blocks from an exact verified predecessor, verifies
   complete extent and logical-file digests, and flushes before metadata
-  publication. No concrete block service/device, persistent allocation/free
-  engine, complete COW tree, snapshot, or physical crash evidence exists yet.
+  publication. A bounded in-process block-service core now supplies principal-
+  bound generational sessions, independent attenuable operation rights,
+  transitive revocation, device-removal cleanup, checked transfers, and a scoped
+  exact-block client. No isolated service process/versioned IPC transport,
+  concrete hosted or physical device backend, persistent allocation/free engine,
+  complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and
@@ -202,7 +206,7 @@ explicitly and downgrade the status rather than guessing.
   single-candidate fallback. Validator uncertainty aborts rather than becoming
   rollback. The complete reachable-tree validator can now consume exact reads
   through the block-volume adapter, but tests still use simulated storage; a
-  real block service/device, physical power-loss evidence,
+  real isolated block-service/device backend, physical power-loss evidence,
   repair, and authenticated anti-rollback state do not yet exist. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
@@ -210,7 +214,7 @@ explicitly and downgrade the status rather than guessing.
   image binds volume, publication generation, record geometry, full-image
   digest, and zero padding, and decode rebuilds the index. It is traversed by
   the immutable in-memory recovery backend and the generic exact-block adapter,
-  but not yet a real block service/device. Allocation
+  but not yet a real isolated block-service/device backend. Allocation
   image ownership is now distinct and exactly root/publication-generation bound.
   Canonical extent-list images bind file identity, object generation, logical
   length, record geometry, full-image digest, and zero padding, then rebuild

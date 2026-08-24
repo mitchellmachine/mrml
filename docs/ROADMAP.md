@@ -311,7 +311,16 @@ authority; unrelated domains continue.
    from the exact verified predecessor plus holes and patch bytes, independently
    rejects reserved, active, and overlapping physical ranges, verifies complete
    staged extents and the complete logical-file digest, and flushes once before
-   metadata publication. The concrete block service/device remains pending.
+   metadata publication. A fixed-capacity block-service core now registers
+   non-authorizing device identities and grants principal-bound generational
+   sessions with separately attenuable read, write, flush, and atomic-
+   replacement rights. Derived sessions preserve device identity and can only
+   reduce rights; parent revocation is transitive; device removal retires all
+   sessions; and malformed, unauthorized, stale, or wrong-owner requests fail
+   before the backend. A scoped client runs the exact-block volume adapter
+   through this service. An isolated service process, versioned IPC codec,
+   concrete hosted/physical backend, and physical durability evidence remain
+   pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -413,8 +422,9 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, the concrete block service/device implementation,
-   and physical power-loss evidence remain pending. The bounded exact-block
+   checkpoint/reconstruction, the isolated block-service process and versioned
+   IPC transport, a concrete hosted/physical device backend, and physical
+   power-loss evidence remain pending. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.
 4. Add snapshot objects and capability enforcement, then system-generation and

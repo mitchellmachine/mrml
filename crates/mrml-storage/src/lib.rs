@@ -3,12 +3,14 @@
 //! Capability-native stable object and metadata foundation for MRML storage.
 //!
 //! Names and stable object IDs identify resources but never authorize access.
-//! The storage service owns bounded generational handles and canonical metadata;
-//! allocation, COW mutation, transactions, and device I/O are later layers.
+//! The storage service owns bounded generational handles, canonical metadata,
+//! COW transactions, and a capability-controlled exact-block service boundary.
+//! Physical device drivers and durability evidence remain later layers.
 
 mod allocation;
 mod authority;
 mod block;
+mod block_service;
 mod cow;
 mod create;
 mod directory;
@@ -30,6 +32,10 @@ pub use authority::{
     StorageObjectKind, StoragePrincipal, StorageRights,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
+pub use block_service::{
+    BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
+    BlockServiceError, BlockSessionHandle, ServicedBlockDevice,
+};
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
     CowPublishError,

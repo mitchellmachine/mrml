@@ -1032,6 +1032,19 @@ copy-on-write, block-I/O, hashing, reconstruction, or persistence technique.
 
 Patent review: `NOT_TRIGGERED` — conventional verified file-data adaptation.
 
+## 2026-08-23 — capability-bound block-service core
+
+MRML source: `crates/mrml-storage/src/block_service.rs`.
+
+The service conventionally registers device descriptors, authorizes exact block
+operations with principal-bound generational handles and attenuable rights,
+revokes derived sessions transitively, validates aligned bounded transfers, and
+adapts calls to a device backend. This adds no novel capability, block-service,
+device protocol, revocation, transport, or persistence technique.
+
+Patent review: `NOT_TRIGGERED` — conventional capability-controlled block
+service dispatch.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and
