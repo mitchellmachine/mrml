@@ -2946,7 +2946,8 @@ an array accepted by the bounded recursive element planner, or a supported
 literal/conditional/wrapped tuple. The array planner covers identifiers,
 contextual defaults, literals, repeats, integer-to-byte arrays, direct and
 wrapped array-producing calls, conditionals, transparent return/break/inline-
-const wrappers, and nested sequences. Sequence prefixes remain
+const wrappers, and nested sequences. Tuple-producing calls and their supported
+whole-value wrappers are planned once. Sequence prefixes remain
 ahead of those arguments. Identifier-backed arrays plan one `Index` read per
 element and tuples plan numbered `TupleField` reads. Direct conditional arrays
 plan condition, then element, and else element separately for every index.
@@ -2956,8 +2957,8 @@ retain exact `Index` reads and defaults add no false place read. Direct root
 repeats retain their separate single-evaluation rule. Integer-to-byte arrays
 repeat their scalar base reads once for each emitted byte. Direct array-producing
 calls plan their arguments once, while calls under per-element wrappers repeat
-their complete argument schedule for every index. Unsupported tuple and
-aggregate-leaf call arguments remain later work because their specialized
+their complete argument schedule for every index. Unsupported aggregate-leaf
+call arguments remain later work because their specialized
 materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
@@ -3179,6 +3180,14 @@ facts: one complete direct inner-call argument list, then three repetitions of a
 wrapped prefix, condition, and both inner-call argument lists, followed by the
 outer tuple and scalar arguments. Its original replacement emits both COFF and
 ELF64 objects through the same direct and wrapped array-returning helpers.
+
+The tuple-producing call-argument milestone passed all 624 compiler and driver
+tests on Windows gnullvm and all 624 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves the
+direct inner tuple call once, a sequence prefix and conditional once, both
+branch call-argument lists once, the trailing scalar arguments, and two stable
+final-tail local reads. Its original replacement emits both COFF and ELF64
+objects through the same whole-tuple helper paths.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
