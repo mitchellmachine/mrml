@@ -493,6 +493,31 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(())
     }
 
+    /// Resolves one task-local handle only when its authority is exactly the
+    /// requested rights set. This rejects otherwise-valid overbroad handles at
+    /// narrow boot and service boundaries.
+    pub fn authorize_capability_exact(
+        &self,
+        task: TaskId,
+        capability: Capability,
+        rights: Rights,
+        expected: ObjectId,
+    ) -> Result<(), TaskRuntimeError> {
+        let object = self
+            .domains
+            .iter()
+            .flatten()
+            .find(|domain| domain.task == task)
+            .ok_or(TaskRuntimeError::MissingTask)?
+            .capabilities
+            .authorize_exact(capability, rights)
+            .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
+        if object != expected {
+            return Err(TaskRuntimeError::Ipc(IpcError::Unauthorized));
+        }
+        Ok(())
+    }
+
     /// Revokes one exact capability and every capability transitively derived
     /// from it through this runtime's IPC transfer path. Descendants are
     /// removed before the source handle, so no surviving task can observe a

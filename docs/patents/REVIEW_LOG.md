@@ -2482,3 +2482,14 @@ accessibility device, browser semantic interface, JavaScript/WebAssembly
 runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
 Existing planned scopes remain `TRIGGERED`; this agent review does not replace
 independent human dual review.
+
+# 2026-08-24 — Capability-scoped recovery metadata delivery
+
+**Result: NOT_TRIGGERED.** The change conventionally authorizes one fixed boot
+metadata copy for an exact task generation and exact non-delegable capability,
+revokes the capability before copy, and consumes the record after success. It
+adds no attestation, compatibility transport, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
+Existing planned scopes remain `TRIGGERED`; this agent review does not replace
+independent human dual review.

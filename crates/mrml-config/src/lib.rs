@@ -4575,11 +4575,7 @@ mod tests {
                 )
                 .unwrap();
             let mut state_store = RecoveryStateStore::new(8, 1);
-            let recovery_metadata = mrml_kernel::RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
-            let mut boot_store = BootRecoveryAdmission::new(recovery_metadata)
-                .unwrap()
-                .bind(&mut state_store);
-            let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+            let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
             let task = runtime
                 .create(
                     Priority::NORMAL,
@@ -4591,6 +4587,24 @@ mod tests {
                     .unwrap(),
                 )
                 .unwrap();
+            let recovery_object = ObjectId(0xb0);
+            let recovery_capability = runtime
+                .capabilities_mut(task)
+                .unwrap()
+                .insert(recovery_object, Rights::READ)
+                .unwrap();
+            let recovery_metadata = mrml_kernel::RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+            let mut delivery =
+                mrml_kernel::BootRecoveryDelivery::new(task, recovery_object, recovery_metadata)
+                    .unwrap();
+            let mut delivered = [0xa5; mrml_kernel::HANDOFF_RECOVERY_STATE_BYTES];
+            delivery
+                .deliver(&mut runtime, task, recovery_capability, &mut delivered)
+                .unwrap();
+            let delivered = mrml_kernel::RecoveryStateMetadata::decode(&delivered).unwrap();
+            let mut boot_store = BootRecoveryAdmission::new(delivered)
+                .unwrap()
+                .bind(&mut state_store);
             let mut supervisor = ServiceSupervisor::<1>::new();
             let mut recovered_bytes = [0xa5; 512];
             let configuration_validator =

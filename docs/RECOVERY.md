@@ -353,7 +353,14 @@ explicitly and downgrade the status rather than guessing.
   proves this wrapper composes with owner-approved checkpoint proof,
   capability-authorized checkpoint I/O, dependent validation, monotonic commit,
   and final service registration. This remains hosted deterministic composition,
-  not delivery to a live booted storage service. Dependent
+  not delivery to a live booted storage service. A kernel mechanism now binds
+  delivery to one exact service task generation, object, and exact non-
+  delegable `READ` capability; it revokes before copying and consumes the
+  metadata. Wrong-service, wrong-object, overbroad/stale capability, replay, and
+  replacement-task tests fail closed with zero output. The deterministic full
+  recovery test now traverses this delivery mechanism before the authenticated-
+  store wrapper. Syscall/user-copy wiring in a booted service remains pending.
+  Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator
   reads the exact selected configuration file,

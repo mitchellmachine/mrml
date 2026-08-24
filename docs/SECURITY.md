@@ -214,6 +214,12 @@ state, and backend uncertainty fail closed and erase exposed state bytes. This
 binding does not bypass owner-approved checkpoint proof, exact capability-
 authorized file selection, attenuation checks, dependent validation, or the
 monotonic publication gate.
+Kernel delivery is independently bound to one exact live task generation, one
+object, and an exact non-delegable `READ` capability. The capability and tracked
+descendants are revoked before the fixed metadata record is copied; successful
+copy consumes the record. Wrong task/object, excess rights, stale generation,
+replay, and service replacement return zero bytes. This is a narrow mechanism,
+not an ambient recovery-state query or kernel-owned storage policy.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

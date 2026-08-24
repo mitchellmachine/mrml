@@ -78,6 +78,16 @@ impl RecoveryStateMetadata {
     pub const fn accepted_root_generation(self) -> u64 {
         self.accepted_root_generation
     }
+
+    pub fn encode(self) -> [u8; HANDOFF_RECOVERY_STATE_BYTES] {
+        let mut output = [0; HANDOFF_RECOVERY_STATE_BYTES];
+        encode_recovery_state(self, &mut output);
+        output
+    }
+
+    pub fn decode(input: &[u8; HANDOFF_RECOVERY_STATE_BYTES]) -> Result<Self, HandoffError> {
+        decode_recovery_state(input, 0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -503,13 +503,22 @@ substitution, malformed state, store error, or reentrant use erases caller
 output and releases nothing. Handoff data still does not authenticate itself:
 the existing owner-approved checkpoint proof, capability-authorized exact file
 selection, dependent validation, and monotonic commit remain mandatory.
+The kernel mechanism layer now also has a one-use delivery object bound to one
+exact service task generation, one exact object, and an exact non-delegable
+`READ` capability. Delivery revokes that capability before copying the fixed
+record and then consumes the metadata. Wrong task, wrong object, overbroad or
+stale capability, replay, and replacement-task attempts receive zero output.
+The full deterministic configuration recovery path exercises delivery,
+canonical service-side decoding, authenticated-store binding, owner proof,
+capability-selected I/O, monotonic commit, and service registration in order.
+No ambient kernel inspection API or storage policy is added.
 Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, native UEFI-target linkage, delivery into a live storage
-service recovery path, and physical evidence remain pending. A consumed dependent-
+provisioning/recovery, native UEFI-target linkage, syscall/user-copy wiring in a
+live booted storage service, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

@@ -666,16 +666,21 @@ authority; unrelated domains continue.
    is emitted. Tests prove this metadata can exist while artifact rollback
    evidence remains false. It creates no recovery token, capability, or
    authority table. Actual owner-policy provisioning/recovery, native UEFI-
-   target linkage, live storage-service delivery, and physical testing remain
-   pending. A storage-side one-use wrapper now binds the handed metadata to the
+   target linkage, booted storage-service syscall/user-copy wiring, and physical
+   testing remain pending. A storage-side one-use wrapper now binds the handed metadata to the
    independently authenticated state store: one exact load and one exact
    compare-and-store are permitted, with replay, field substitution, malformed
    state, or store uncertainty releasing nothing and erasing output. The full
    configuration recovery simulation uses this binding before owner-approved
    checkpoint proof, capability-authorized I/O, dependent validation, monotonic
-   commit, and service registration release results.
+   commit, and service registration release results. A kernel delivery object
+   now additionally requires one exact task generation, object, and exact non-
+   delegable `READ` capability, revokes before copy, and consumes metadata after
+   success. Wrong-service, wrong-object, overbroad/stale capability, replay, and
+   replacement-task tests expose no data. The full configuration simulation
+   traverses this delivery object before authenticated-store binding.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 445 kernel tests, all 16 `mrml-uefi` library tests, all 116
+   each pass all 447 kernel tests, all 16 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict
    Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
    enabled; strict Linux crate-local Clippy also passes. An

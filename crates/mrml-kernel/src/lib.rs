@@ -8,6 +8,7 @@
 pub mod arch;
 mod artifact;
 mod boot;
+mod boot_recovery;
 mod capability;
 mod early;
 mod framebuffer;
@@ -43,6 +44,7 @@ pub use artifact::{
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
+pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
