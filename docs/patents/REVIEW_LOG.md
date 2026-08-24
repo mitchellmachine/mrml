@@ -1208,3 +1208,15 @@ and invalidates local translations. This adds no novel page-table, revocation,
 capability, or service-lifecycle technique.
 
 Patent review: `NOT_TRIGGERED` — conventional exact mapping teardown.
+
+## 2026-08-23 — hosted observation of kernel-side leaf retirement
+
+MRML source: `crates/mrml-kernel/src/arch/x86_64/page_table.rs` and
+`crates/mrml-{kvm,whp}/src/native/launch.rs`.
+
+KVM and WHP conventionally verify that every leaf in one recorded service
+mapping is absent before updating host live/re-arm bookkeeping after kernel-side
+retirement. This adds no novel page-table, revocation, synchronization, or
+service-lifecycle technique.
+
+Patent review: `NOT_TRIGGERED` — conventional absent-mapping verification.

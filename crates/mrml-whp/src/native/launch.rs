@@ -251,6 +251,28 @@ impl<'system> PreparedWhpGuest<'system> {
         Ok(())
     }
 
+    /// Accepts kernel-side retirement only after the stopped service's exact
+    /// shared leaf is observably absent. Host bookkeeping changes after the
+    /// complete read-only verification succeeds.
+    pub fn observe_service_shared_page_revoked(&mut self, slot: usize) -> Result<(), WhpError> {
+        let mapping = self.service_shared.ok_or(WhpError::InvalidMapping)?;
+        if slot >= 2 || !self.service_shared_live[slot] {
+            return Err(WhpError::InvalidMapping);
+        }
+        let instance = self.service_instance[slot].ok_or(WhpError::InvalidMapping)?;
+        let root = self.service_root[slot].ok_or(WhpError::InvalidMapping)?;
+        let store = WhpPageTableStore::open_existing(
+            &mut self.partition,
+            instance.table_physical,
+            instance.table_pages,
+        )?;
+        PageTableBuilder::from_existing_root(store, root)
+            .verify_unmapped(mapping)
+            .map_err(|_| WhpError::PageTable)?;
+        self.service_shared_live[slot] = false;
+        Ok(())
+    }
+
     pub fn restore_service_shared_page(&mut self, slot: usize) -> Result<(), WhpError> {
         let mapping = self.service_shared.ok_or(WhpError::InvalidMapping)?;
         if slot >= 2 || self.service_shared_live[slot] {

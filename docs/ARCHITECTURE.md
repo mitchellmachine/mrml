@@ -304,7 +304,10 @@ executor failure cancels an unconsumed ticket. Shared cleanup now depends only
 on a narrow native-mapping revoker rather than full VMM authority. An active
 x86-64 service adapter exact-matches CR3, virtual and physical extent, and old
 permissions before removing all leaves and invalidating their local TLB entries.
-This is the revocation prerequisite for kernel-image resource wiring. Bounded
+KVM and WHP can now observe that kernel-side retirement only by verifying the
+complete expected leaf range is absent before changing their live/re-arm
+bookkeeping; they do not attempt a second unmap. This is the revocation
+prerequisite for kernel-image resource wiring. Bounded
 in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to

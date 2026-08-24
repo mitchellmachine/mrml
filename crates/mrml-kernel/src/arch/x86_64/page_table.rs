@@ -339,6 +339,19 @@ impl<S: PageTableStore> PageTableBuilder<S> {
         Ok(())
     }
 
+    /// Verifies that every leaf in an exact expected range is absent without
+    /// changing page-table state.
+    pub fn verify_unmapped(&self, expected: Mapping) -> Result<(), PageTableBuildError> {
+        for page in 0..expected.pages() {
+            let (virtual_address, _) = mapping_page(expected, page)?;
+            let (table, index) = self.leaf_location(virtual_address)?;
+            if self.store.read(table, index)? & 1 != 0 {
+                return Err(PageTableBuildError::AlreadyMapped);
+            }
+        }
+        Ok(())
+    }
+
     fn leaf_location(
         &self,
         virtual_address: VirtAddr,
@@ -952,10 +965,34 @@ mod tests {
             Ok(())
         );
         assert_eq!(builder.unmap_exact(mapping), Ok(()));
+        assert_eq!(builder.verify_unmapped(mapping), Ok(()));
         assert_eq!(
             builder.unmap_exact(mapping),
             Err(PageTableBuildError::NotMapped)
         );
+    }
+
+    #[test]
+    fn absent_range_verification_rejects_any_live_leaf() {
+        let store = Tables {
+            pages: [[0; 512]; 8],
+            used: 0,
+        };
+        let mut builder = PageTableBuilder::new(store).unwrap();
+        let mapping = Mapping::new(
+            VirtAddr::new(0x10_0000).unwrap(),
+            PhysAddr::new(0x20_0000).unwrap(),
+            2,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        builder.map(mapping).unwrap();
+        assert_eq!(
+            builder.verify_unmapped(mapping),
+            Err(PageTableBuildError::AlreadyMapped)
+        );
+        builder.unmap_exact(mapping).unwrap();
+        assert_eq!(builder.verify_unmapped(mapping), Ok(()));
     }
 
     #[test]

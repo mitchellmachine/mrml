@@ -164,7 +164,9 @@ explicitly and downgrade the status rather than guessing.
   an unsafe supervisor-only boundary. Shared cleanup now uses a minimal native-
   mapping revoker; its active x86-64 service implementation requires exact CR3,
   virtual/physical extent, and permissions before all-or-nothing leaf removal
-  and local TLB invalidation. Concrete kernel-image lifecycle wiring is still
+  and local TLB invalidation. KVM/WHP host bookkeeping can observe that removal
+  only after verifying the whole expected leaf range is absent; only then may
+  that exact slot be re-armed. Concrete kernel-image lifecycle wiring is still
   absent, so the hosted service probe halts on those operations.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its

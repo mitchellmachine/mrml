@@ -360,6 +360,9 @@ authority; unrelated domains continue.
    minimal native-mapping revoker instead of requiring full VMM authority. The
    active x86-64 service adapter removes only an exact expected CR3/mapping and
    invalidates local translations, enabling task retirement to precede reuse.
+   KVM and WHP now accept kernel-side removal only after a complete read-only
+   absent-leaf verification, then mark precisely that service slot eligible for
+   re-arm; live leaves, invalid slots, and repeated observation fail closed.
    Wiring user copy, active mapping cleanup, and opaque resources into the
    kernel-image syscall/lifecycle handlers remains pending.
    Service-side binding selection is implemented: the exact transferred

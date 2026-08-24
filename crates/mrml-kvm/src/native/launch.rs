@@ -256,6 +256,28 @@ impl<const N: usize> PreparedKvmGuest<N> {
         Ok(())
     }
 
+    /// Accepts kernel-side retirement only after the stopped service's exact
+    /// shared leaf is observably absent. Host bookkeeping changes after the
+    /// complete read-only verification succeeds.
+    pub fn observe_service_shared_page_revoked(&mut self, slot: usize) -> Result<(), KvmError> {
+        let mapping = self.service_shared.ok_or(KvmError::InvalidMapping)?;
+        if slot >= 2 || !self.service_shared_live[slot] {
+            return Err(KvmError::InvalidMapping);
+        }
+        let instance = self.service_instance[slot].ok_or(KvmError::InvalidMapping)?;
+        let root = self.service_root[slot].ok_or(KvmError::InvalidMapping)?;
+        let store = KvmPageTableStore::open_existing(
+            &mut self.backend.memory,
+            instance.table_physical,
+            instance.table_pages,
+        )?;
+        PageTableBuilder::from_existing_root(store, root)
+            .verify_unmapped(mapping)
+            .map_err(|_| KvmError::PageTable)?;
+        self.service_shared_live[slot] = false;
+        Ok(())
+    }
+
     /// Re-arms the exact leaf only for a freshly created task generation.
     pub fn restore_service_shared_page(&mut self, slot: usize) -> Result<(), KvmError> {
         let mapping = self.service_shared.ok_or(KvmError::InvalidMapping)?;

@@ -3085,6 +3085,16 @@ and permission before the first write; successful removal invalidates every
 local translation and is one-use. This prerequisite does not yet wire shared-
 buffer syscalls into the service-probe lifecycle.
 
+Hosted KVM and WHP service state now has a distinct observation transition for
+kernel-side shared-leaf retirement. The host opens only the selected service's
+existing authenticated page-table arena and performs a read-only check that
+every leaf in the exact recorded mapping is absent. Only after full-range
+success does it mark that slot non-live and eligible for the existing exact
+restore path. A still-present leaf, missing mapping/root/instance, invalid slot,
+or repeated observation changes no bookkeeping. This prevents a double-unmap
+while retaining fail-closed host/guest agreement; it is compiled and unit-
+policy-tested, not yet exercised by a newly signed hosted service probe.
+
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
 self-ownership. Extent lists now use a separate canonical block-aligned image
@@ -3210,7 +3220,7 @@ This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-nine focused storage tests and 330 focused kernel tests plus strict
+Ninety-nine focused storage tests and 331 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
 block-service process and concrete receive/syscall integration, a
 concrete hosted/physical device backend,
@@ -3225,12 +3235,13 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 99 tests, both kernel runs pass 330 tests, and
+Both storage unit-test runs pass 99 tests, both kernel runs pass 331 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
 kernel capability-transfer state, opaque-handle bounded buffer I/O, generic
 shared-buffer syscall execution, monotonic opaque-resource retirement, active
-service mapping-revocation validation, and
+service mapping-revocation validation, host-side absent-leaf observation policy,
+and
 in-process block transport composition,
 not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3249,7 +3260,10 @@ arithmetic and declared extents precede backend access; live aliases, stale
 handles, empty transfers, exhaustion, and uncertain backend outcomes fail
 closed. Active service cleanup additionally exact-matches CR3, virtual extent,
 physical leaves, permissions, and one-use state before mutation; mismatch leaves
-policy identity live. Registration and active page-table ownership remain
+policy identity live. Host observation additionally requires the complete
+recorded leaf range to remain absent before changing one slot's re-arm state;
+live or partially removed ranges and repeated observations fail closed.
+Registration and active page-table ownership remain
 explicit unsafe boundaries, and final-reference cleanup uses the existing
 revocation path. This agent review
 does not replace the constitution's independent human dual review.
