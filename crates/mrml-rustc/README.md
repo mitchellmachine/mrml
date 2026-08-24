@@ -3536,3 +3536,18 @@ still fail the proof closed. The updated Arch nightly commit
 build crashed inside LLVM `PromotePass`; it is not promoted to oracle or passing
 evidence. General loop flow, regions, and return coercions remain unimplemented.
 The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The direct loop-return call-result origin milestone passed all 733 compiler and
+driver tests on Windows gnullvm and all 733 in release mode on native Arch Linux
+WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned rustc
+commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The bounded callee proof now
+visits direct and conditional return operations in top-level `while` and `loop`
+bodies and requires those results, all other returns, and any reachable tail to
+resolve to the same compatible reference parameter. Break and continue paths do
+not manufacture origins. Initializer and assignment probes match the oracle's
+E0499 conflict while the returned child is live and restore the owner after its
+last use. Loop-local declarations, assignments, expression statements,
+conditional action blocks, nested loops, differing origins, and malformed or
+over-capacity bodies still fail closed. This does not claim general loop dataflow,
+regions, or return coercions. The `no_std`/allocation/unsafe hygiene scan remained
+empty.
