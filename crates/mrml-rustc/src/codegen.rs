@@ -3108,6 +3108,11 @@ fn preanalyze_runtime_expression_at_reads<
                             tree.expression(argument).map(|expression| expression.kind)
                     {
                         match tree.expression(then).map(|expression| expression.kind) {
+                            Some(ExprKind::DefaultValue) => {
+                                for _ in 0..count {
+                                    visit!(first)?;
+                                }
+                            }
                             Some(ExprKind::Identifier(name)) => {
                                 let span = tree
                                     .expression(then)
@@ -4595,7 +4600,15 @@ fn runtime_call_arguments_preanalysis_supported<
             *argument,
             depth + 1,
         )?;
-        if !runtime_types_compatible(actual, expected) {
+        if !runtime_types_compatible(actual, expected)
+            && !matches!(
+                (actual, expected),
+                (
+                    RuntimeExpressionType::Default,
+                    RuntimeExpressionType::Array { .. }
+                )
+            )
+        {
             return Ok(false);
         }
         if runtime_type_stack_slots(expected) == 1 {
@@ -4748,6 +4761,7 @@ fn runtime_wrapped_array_call_argument_preanalysis_supported<const MAX_NODES: us
     count: usize,
 ) -> bool {
     match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::DefaultValue) => true,
         Some(ExprKind::Identifier(_)) => true,
         Some(ExprKind::Array {
             elements,
@@ -20233,6 +20247,45 @@ mod tests {
             };
             assert_eq!(fact.base, base);
             assert_eq!(fact.projections, projections);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_sequence_wrapped_default_array_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: usize, right: usize, prefix: usize, bias: usize) -> usize { let selected: &[usize] = choose_wrapped({ prefix; Default::default() }, (left, right), bias); selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 6);
+        for (fact, identity) in facts.assignment_reads[..6].iter().zip([
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(3),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
