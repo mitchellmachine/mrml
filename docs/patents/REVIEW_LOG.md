@@ -1857,3 +1857,12 @@ completion and unexpected-exit handling are standard defensive VMM techniques.
 No native backend implementation, device attachment, compatibility claim, new
 authority model, or patent-candidate mechanism was introduced. This agent
 review does not replace the required independent human dual review.
+
+# 2026-08-24 — Exact native KVM scalar-input completion
+
+**Result: NOT_TRIGGERED.** The change conventionally revalidates one pending
+`KVM_EXIT_IO` input, bounds its kernel-provided data offset, copies only the
+selected scalar width into the shared run page, and blocks re-entry or stale/
+duplicate completion. It introduces no new protocol, device attachment,
+compatibility claim, authority model, or patent-candidate mechanism. This agent
+review does not replace the required independent human dual review.

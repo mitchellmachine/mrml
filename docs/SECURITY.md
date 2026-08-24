@@ -316,6 +316,10 @@ PCI scalar-input completion must match the exact still-pending vCPU, port, and
 width before another entry. A backend may not report success after partial
 register or native run-state mutation. Completion failure, transport rejection,
 or an unexpected exit fails the VM rather than resuming ambiguous state.
+For KVM, completion revalidates the complete `KVM_EXIT_IO` input record and
+kernel-provided data offset before mutating only the exact selected bytes. The
+vCPU retains one pending tuple and refuses another `KVM_RUN` until exact
+completion succeeds; mismatch or duplicate completion fails closed.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

@@ -7,11 +7,11 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    BootHandoff, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend,
-    VerifiedExecutable, VmBackend, VmExit,
+    BootHandoff, IoReadCompleter, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr,
+    RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
 };
 
-use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, decode_run_page};
+use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
 
 mod launch;
 pub use launch::{KvmLaunchLayout, KvmPageWalk, KvmServiceEraser, PreparedKvmGuest};
@@ -318,6 +318,7 @@ impl KvmVm {
             file,
             run,
             run_bytes: self.run_bytes,
+            pending_io_read: None,
         })
     }
 }
@@ -326,6 +327,7 @@ pub(crate) struct KvmVcpu {
     file: OwnedFd,
     run: NonNull<u8>,
     run_bytes: usize,
+    pending_io_read: Option<(u16, u8)>,
 }
 
 // SAFETY: the descriptor and run mapping have one owner. Moving them to a
@@ -387,11 +389,34 @@ impl KvmVcpu {
     }
 
     pub(crate) fn run(&mut self) -> Result<VmExit, KvmError> {
+        if self.pending_io_read.is_some() {
+            return Err(KvmError::InvalidRegisterState);
+        }
         if unsafe { ioctl(self.file.0, KVM_RUN, 0 as c_ulong) } < 0 {
             return Err(KvmError::SystemCall);
         }
         let bytes = unsafe { slice::from_raw_parts(self.run.as_ptr(), self.run_bytes) };
-        decode_run_page(bytes)
+        let exit = decode_run_page(bytes)?;
+        if let VmExit::Io {
+            port,
+            size,
+            write: false,
+            ..
+        } = exit
+        {
+            self.pending_io_read = Some((port, size));
+        }
+        Ok(exit)
+    }
+
+    fn complete_io_read(&mut self, port: u16, size: u8, value: u32) -> Result<(), KvmError> {
+        if self.pending_io_read != Some((port, size)) {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        let bytes = unsafe { slice::from_raw_parts_mut(self.run.as_ptr(), self.run_bytes) };
+        complete_io_read(bytes, port, size, value)?;
+        self.pending_io_read = None;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1374,6 +1399,21 @@ impl<const N: usize> RevocableVmBackend for KvmBackend<N> {
         }
         let _ = self.memory.remove_slot(slot)?;
         Ok(())
+    }
+}
+
+impl<const N: usize> IoReadCompleter for KvmBackend<N> {
+    fn complete_io_read(
+        &mut self,
+        vcpu: u32,
+        port: u16,
+        size: u8,
+        value: u32,
+    ) -> Result<(), Self::Error> {
+        if vcpu != self.vcpu_id {
+            return Err(KvmError::InvalidVcpu);
+        }
+        self.vcpu.complete_io_read(port, size, value)
     }
 }
 

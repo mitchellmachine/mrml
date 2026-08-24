@@ -815,6 +815,18 @@ impl<const N: usize> VmBackend for PreparedKvmGuest<N> {
     }
 }
 
+impl<const N: usize> mrml_kernel::IoReadCompleter for PreparedKvmGuest<N> {
+    fn complete_io_read(
+        &mut self,
+        vcpu: u32,
+        port: u16,
+        size: u8,
+        value: u32,
+    ) -> Result<(), Self::Error> {
+        self.backend.complete_io_read(vcpu, port, size, value)
+    }
+}
+
 impl<const N: usize> RevocableVmBackend for PreparedKvmGuest<N> {
     fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
         self.backend.revoke_guest_mapping(guest_address, bytes)

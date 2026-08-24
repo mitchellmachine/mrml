@@ -4635,6 +4635,67 @@ Patent review: `NOT_TRIGGERED` — conventional one-exit dispatch and exact scal
 input completion contract; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+Native KVM now implements that completion boundary. `KvmVcpu::run` refuses entry
+while an earlier scalar input remains pending. After `KVM_RUN`, it decodes the
+complete run page and records the exact port/width only for a one-element input
+exit. Completion requires the same pending tuple, revalidates the run-page
+header, exit reason, input direction, port, width, count, kernel-provided data
+offset, checked end, and complete mapped range before mutation, then copies only
+the low selected 1/2/4 native-endian bytes. The pending state clears only after
+the infallible bounded copy completes. A mismatch, output exit, malformed page,
+truncated range, duplicate completion, wrong vCPU, or re-entry-before-completion
+fails closed. `PreparedKvmGuest` delegates the same exact trait implementation.
+
+The allocation-free ABI test fills adjacent data bytes with a sentinel, proves
+a 16-bit completion changes exactly two bytes, and verifies wrong port, smaller
+or larger width, and output direction preserve the complete run page. Native
+Linux compilation covers the pending-state integration, but no guest executes a
+PCI input instruction through the common runner in this increment. WHP remains
+without completion parity.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm passed all 412 release
+kernel tests and 7 portable KVM ABI tests. Arch Linux under WSL2 passed the same
+412 kernel tests plus 18 native KVM tests; one unrelated manual live mapping
+performance gate remained ignored. Strict scoped Windows Clippy/check passed for
+kernel, portable KVM, WHP, and WHP-run targets. Strict scoped Linux Clippy passed
+for kernel, KVM, and KVM-run, and strict nightly UEFI Clippy passed for the
+block-probe image. Linux used isolated
+`CARGO_TARGET_DIR=target/kvm-pci-input`. This is unit and native compile/lint
+evidence, not live PCI input, signed runtime, enumeration, QEMU differential,
+nested-virtualization, native-boot, bare-metal, or physical-hardware evidence.
+
+The KVM-completion `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, attestation, DRM, vendor/publisher preference, first-
+party bypass, accessibility restriction, AI authority, persistence, or lock-in.
+Only guest-requested public configuration data can be returned through the
+separately authorized VMM path. The `HOSTILE SECURITY REVIEW` treats the shared
+run page, header, exit reason, direction, port, width, count, offset, range,
+value, pending tuple, vCPU identity, duplicate call, and subsequent entry as
+hostile. Complete validation precedes the exact-width copy; pending state blocks
+resume and clears only on success; mismatches preserve bytes and state; and
+common policy fails the VM on adapter error. This does not authenticate a hosted
+KVM host or establish host-resistant integrity. Existing capability, revocation,
+rollback-resistance, accessibility, evidence, owner-sovereignty, data-
+minimization, anti-DRM, owner-controlled-attestation, third-party-accessibility,
+AI-containment, and anti-persistence requirements remain unchanged. This agent
+review does not replace independent human implementer, reviewer, adversary,
+accessibility, or hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional KVM run-page scalar-input
+completion with exact pending-state validation; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

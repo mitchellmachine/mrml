@@ -143,6 +143,32 @@ pub fn decode_run_page(run: &[u8]) -> Result<VmExit, KvmError> {
     }
 }
 
+/// Completes one exact pending `KVM_EXIT_IO` input in the kernel-owned run
+/// page. Every header, direction, tuple, count, offset, and range check occurs
+/// before the selected bytes are mutated.
+pub fn complete_io_read(run: &mut [u8], port: u16, size: u8, value: u32) -> Result<(), KvmError> {
+    validate_run_header(run)?;
+    if u32_at(run, 8)? != EXIT_IO
+        || byte(run, 32)? != 0
+        || byte(run, 33)? != size
+        || u16_at(run, 34)? != port
+        || u32_at(run, 36)? != 1
+        || !matches!(size, 1 | 2 | 4)
+    {
+        return Err(KvmError::MalformedExit);
+    }
+    let offset = usize::try_from(u64_at(run, 40)?).map_err(|_| KvmError::MalformedExit)?;
+    if offset < 48 {
+        return Err(KvmError::MalformedExit);
+    }
+    let end = offset
+        .checked_add(usize::from(size))
+        .ok_or(KvmError::MalformedExit)?;
+    let output = run.get_mut(offset..end).ok_or(KvmError::TruncatedRun)?;
+    output.copy_from_slice(&value.to_ne_bytes()[..usize::from(size)]);
+    Ok(())
+}
+
 fn decode_io(run: &[u8]) -> Result<VmExit, KvmError> {
     let direction = byte(run, 32)?;
     let size = byte(run, 33)?;
@@ -316,6 +342,36 @@ mod tests {
         run[36..40].copy_from_slice(&1u32.to_ne_bytes());
         run[40..48].copy_from_slice(&40u64.to_ne_bytes());
         assert_eq!(decode_run_page(&run), Err(KvmError::MalformedExit));
+    }
+
+    #[test]
+    fn io_input_completion_is_exact_and_transactional() {
+        let mut run = [0u8; 128];
+        run[8..12].copy_from_slice(&EXIT_IO.to_ne_bytes());
+        run[32] = 0;
+        run[33] = 2;
+        run[34..36].copy_from_slice(&0xcfcu16.to_ne_bytes());
+        run[36..40].copy_from_slice(&1u32.to_ne_bytes());
+        run[40..48].copy_from_slice(&96u64.to_ne_bytes());
+        run[96..100].copy_from_slice(&[0xa5; 4]);
+        complete_io_read(&mut run, 0xcfc, 2, 0x1234_5678).unwrap();
+        assert_eq!(&run[96..100], &[0x78, 0x56, 0xa5, 0xa5]);
+
+        for (port, size) in [(0xcfdu16, 2u8), (0xcfcu16, 1u8), (0xcfcu16, 4u8)] {
+            let before = run;
+            assert_eq!(
+                complete_io_read(&mut run, port, size, u32::MAX),
+                Err(KvmError::MalformedExit)
+            );
+            assert_eq!(run, before);
+        }
+        run[32] = 1;
+        let before = run;
+        assert_eq!(
+            complete_io_read(&mut run, 0xcfc, 2, 0),
+            Err(KvmError::MalformedExit)
+        );
+        assert_eq!(run, before);
     }
 
     #[test]

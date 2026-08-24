@@ -842,7 +842,12 @@ a narrow backend completion contract carrying exact vCPU, port, width, and
 bounded value; writes never invoke it. Transport failure, completion uncertainty,
 or any other exit fails the VM before another entry. Mock-backend tests cover
 present and absent reads plus failure. Native KVM/WHP implementations of that
-contract and live runner integration remain the next gate.
+contract and live runner integration remain the next gate. The native KVM half
+is now implemented: the mapped run page is completely re-decoded as one input
+exit, exact vCPU/port/width/count/data-offset identity is required, only the
+selected 1/2/4 bytes are written, duplicate or mismatched completion is denied,
+and vCPU re-entry is blocked while a read remains pending. Native WHP parity and
+composition into an actual PCI runner remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
