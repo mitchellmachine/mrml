@@ -3600,17 +3600,18 @@ unit/simulation evidence for the broad adversarial matrix. A freshly generated
 one-time Lamport key additionally signed the exact compiled
 `block-guest-driver-probe` image. The current probe uses a two-slot queue, two
 disjoint 4 KiB payload mappings, and a volatile two-block launcher backend. It
-publishes both writes before preparing either completion, validates and
-acknowledges both in protected consumer order, clears both payload pages,
-publishes both reads before retirement, drains them in order, and compares both
-complete pages against distinct fixed patterns. Thus producer and completion
-watermarks advance through a full two-entry in-flight window before both slots
-are reused; this is not a longer sequence of single-entry round trips.
+repeats eight cycles. Every cycle publishes both writes before preparing either
+completion, validates and acknowledges both in protected consumer order, clears
+both payload pages, publishes both reads before retirement, drains them in
+order, and compares both complete pages against distinct cycle-specific
+patterns. Producer and completion watermarks therefore reach 32 while the two
+physical slots wrap 16 times. This is bounded multi-window progress, not an
+unbounded-progress claim.
 
 One freshly generated one-time Lamport key signed the exact compiled image used
 on both hosted backends. Arch Linux/WSL2 KVM reported
-`verify=17226us prepare=2163us execute=326us total=49285us`; Windows WHP reported
-`verify=17309us prepare=3627us execute=243us total=24921us`. Each image decoded
+`verify=17143us prepare=3332us execute=677us total=50472us`; Windows WHP reported
+`verify=16768us prepare=3793us execute=442us total=24575us`. Each image decoded
 the read-only configuration, discovered four zero counters, executed native
 `OUT`, crossed the shared fail-closed doorbell and acknowledgement runners, and
 received vector 48 only through the exact `SIGNAL` capability and allowlist.
@@ -3646,7 +3647,10 @@ identity, persistence, attestation, accessibility surface, authority model, or
 parser; it uses the same hostile-input set and fail-closed common policy as the
 KVM path. The two-slot extension additionally treats framebuffer extent, both
 block indices, payload ranges and patterns, capacity, producer/completion
-watermarks, slot reuse, and acknowledgement order as hostile. The launch
+watermarks, slot reuse and wrap, cycle index, and acknowledgement order as
+hostile. The probe VM policy admits exactly 64 runner exits—one doorbell and one
+protected acknowledgement for each of 32 requests—while ordinary launch budgets
+remain unchanged. The launch
 handoff admits exactly one or two framebuffer pages and rejects every other
 count; no payload aliases queue memory, and the volatile backend independently
 checks block multiplication, range addition, exact length, and slice bounds.

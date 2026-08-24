@@ -155,6 +155,10 @@ const BLOCK_PAYLOAD_BASE: u64 = 0x00a0_0000;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_PROBE_CYCLES: u32 = 8;
+#[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_PROBE_OPERATIONS: u32 = BLOCK_PROBE_CYCLES * 4;
+#[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_VECTOR: u8 = 48;
 #[cfg(feature = "fault-probe")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
@@ -2294,68 +2298,67 @@ unsafe fn run_block_guest_driver_probe() -> ! {
     let mut transport =
         unsafe { X86VirtualBlockGuestQueueTransport::new(NativeX86VirtualBlockPortIo) };
 
-    for (base, value) in [
-        (BLOCK_PAYLOAD_BASE, 0x6du8),
-        (BLOCK_PAYLOAD_BASE + 4096, 0xa7),
-    ] {
-        for offset in 0..4096usize {
-            unsafe { ((base as *mut u8).add(offset)).write_volatile(value) };
-        }
-    }
     unsafe { asm!("sti", options(nomem, nostack)) };
-    for block in 0..2u64 {
-        let write = driver
-            .prepare_write(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
-            .unwrap_or_else(|_| halt());
-        driver
-            .publish_submission(&mut transport, write)
-            .unwrap_or_else(|_| halt());
-    }
-    for _ in 0..2 {
-        let write_completion = driver
-            .prepare_completion_from_transport(&mut transport)
-            .unwrap_or_else(|_| halt());
-        if write_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
-            || write_completion.transferred() != 4096
-        {
-            halt();
+    for cycle in 0..BLOCK_PROBE_CYCLES {
+        let patterns = [0x40u8 + cycle as u8, 0x90u8 + cycle as u8];
+        for (block, value) in patterns.into_iter().enumerate() {
+            let base = BLOCK_PAYLOAD_BASE + block as u64 * 4096;
+            for offset in 0..4096usize {
+                unsafe { ((base as *mut u8).add(offset)).write_volatile(value) };
+            }
         }
-        driver
-            .acknowledge_completion_with_transport(&mut transport, write_completion)
-            .unwrap_or_else(|_| halt());
-    }
-
-    for offset in 0..8192usize {
-        unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0) };
-    }
-    for block in 0..2u64 {
-        let read = driver
-            .prepare_read(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
-            .unwrap_or_else(|_| halt());
-        driver
-            .publish_submission(&mut transport, read)
-            .unwrap_or_else(|_| halt());
-    }
-    for _ in 0..2 {
-        let read_completion = driver
-            .prepare_completion_from_transport(&mut transport)
-            .unwrap_or_else(|_| halt());
-        if read_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
-            || read_completion.transferred() != 4096
-        {
-            halt();
+        for block in 0..2u64 {
+            let write = driver
+                .prepare_write(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
+                .unwrap_or_else(|_| halt());
+            driver
+                .publish_submission(&mut transport, write)
+                .unwrap_or_else(|_| halt());
         }
-        driver
-            .acknowledge_completion_with_transport(&mut transport, read_completion)
-            .unwrap_or_else(|_| halt());
-    }
-    for (base, value) in [
-        (BLOCK_PAYLOAD_BASE, 0x6du8),
-        (BLOCK_PAYLOAD_BASE + 4096, 0xa7),
-    ] {
-        for offset in 0..4096usize {
-            if unsafe { ((base as *const u8).add(offset)).read_volatile() } != value {
+        for _ in 0..2 {
+            let write_completion = driver
+                .prepare_completion_from_transport(&mut transport)
+                .unwrap_or_else(|_| halt());
+            if write_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+                || write_completion.transferred() != 4096
+            {
                 halt();
+            }
+            driver
+                .acknowledge_completion_with_transport(&mut transport, write_completion)
+                .unwrap_or_else(|_| halt());
+        }
+
+        for offset in 0..8192usize {
+            unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0) };
+        }
+        for block in 0..2u64 {
+            let read = driver
+                .prepare_read(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
+                .unwrap_or_else(|_| halt());
+            driver
+                .publish_submission(&mut transport, read)
+                .unwrap_or_else(|_| halt());
+        }
+        for _ in 0..2 {
+            let read_completion = driver
+                .prepare_completion_from_transport(&mut transport)
+                .unwrap_or_else(|_| halt());
+            if read_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+                || read_completion.transferred() != 4096
+            {
+                halt();
+            }
+            driver
+                .acknowledge_completion_with_transport(&mut transport, read_completion)
+                .unwrap_or_else(|_| halt());
+        }
+        for (block, value) in patterns.into_iter().enumerate() {
+            let base = BLOCK_PAYLOAD_BASE + block as u64 * 4096;
+            for offset in 0..4096usize {
+                if unsafe { ((base as *const u8).add(offset)).read_volatile() } != value {
+                    halt();
+                }
             }
         }
     }
@@ -2363,7 +2366,7 @@ unsafe fn run_block_guest_driver_probe() -> ! {
         asm!(
             "out dx, eax",
             in("dx") BLOCK_PROOF_PORT,
-            in("eax") 4u32,
+            in("eax") BLOCK_PROBE_OPERATIONS,
             options(nomem, nostack)
         )
     };

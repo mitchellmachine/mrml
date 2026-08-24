@@ -87,6 +87,12 @@ const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
 #[cfg(target_os = "windows")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
+#[cfg(target_os = "windows")]
+const BLOCK_PROBE_CYCLES: usize = 8;
+#[cfg(target_os = "windows")]
+const BLOCK_PROBE_OPERATIONS: u32 = (BLOCK_PROBE_CYCLES * 4) as u32;
+#[cfg(target_os = "windows")]
+const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8) as u64;
 
 #[cfg(target_os = "windows")]
 struct DriverProbeBlock([u8; 8192]);
@@ -183,7 +189,7 @@ fn run_block_guest_driver_probe(
         .map_err(|_| anyhow!("failed to install block I/O policy"))?;
     let mut vms = VmTable::<1>::new();
     let vm = vms
-        .create(8)
+        .create(BLOCK_PROBE_POLICY_EXITS)
         .map_err(|_| anyhow!("failed to create block VM state"))?;
     vms.mark_loaded(vm)
         .and_then(|()| vms.start(vm))
@@ -201,7 +207,7 @@ fn run_block_guest_driver_probe(
     let mut storage = DriverProbeBlock([0; 8192]);
     let mut scratch = [0; 4096];
 
-    for window in 0..2 {
+    for window in 0..(BLOCK_PROBE_CYCLES * 2) {
         for offset in 0..2 {
             let operation = window * 2 + offset;
             let outcome = run_virtual_block_doorbell_once(
@@ -255,7 +261,10 @@ fn run_block_guest_driver_probe(
             }
         }
     }
-    if storage.0[..4096] != [0x6d; 4096] || storage.0[4096..] != [0xa7; 4096] {
+    let final_cycle = (BLOCK_PROBE_CYCLES - 1) as u8;
+    if storage.0[..4096] != [0x40 + final_cycle; 4096]
+        || storage.0[4096..] != [0x90 + final_cycle; 4096]
+    {
         return Err(anyhow!("block backend payload mismatch"));
     }
     let proof = VmBackend::run(guest, 0)
@@ -265,7 +274,7 @@ fn run_block_guest_driver_probe(
             port: BLOCK_PROOF_PORT,
             size: 4,
             write: true,
-            value: 4,
+            value: BLOCK_PROBE_OPERATIONS,
         })
     {
         return Err(anyhow!("block common-driver proof mismatch: {:?}", proof));
@@ -602,7 +611,7 @@ fn application_main() -> Result<()> {
     if block_guest_driver_mode {
         run_block_guest_driver_probe(&mut guest, block_layout)?;
         println!(
-            "verified signed compiled two-slot common block guest driver under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed compiled eight-cycle two-slot common block guest driver under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),
@@ -1731,6 +1740,24 @@ mod tests {
         assert!(backend.write_blocks(2, &block).is_err());
         assert!(backend.write_blocks(u64::MAX, &block).is_err());
         assert!(backend.write_blocks(0, &block[..4095]).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn block_probe_exit_budget_is_exact_and_fail_closed() {
+        assert_eq!(BLOCK_PROBE_OPERATIONS, 32);
+        assert_eq!(BLOCK_PROBE_POLICY_EXITS, 64);
+        let mut vms = VmTable::<1>::new();
+        let vm = vms.create(BLOCK_PROBE_POLICY_EXITS).unwrap();
+        vms.mark_loaded(vm).unwrap();
+        vms.start(vm).unwrap();
+        for _ in 0..BLOCK_PROBE_POLICY_EXITS {
+            assert!(vms.account_exit(vm).is_ok());
+        }
+        assert_eq!(
+            vms.account_exit(vm),
+            Err(mrml_kernel::VmError::ExitBudgetExceeded)
+        );
     }
 
     #[test]

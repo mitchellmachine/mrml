@@ -639,19 +639,17 @@ the common deny-by-default I/O dispatcher, exact doorbell validation, one queue
 transaction, and capability-authorized completion interruption. A notification
 already pending is delivered before another vCPU entry, and any runner-stage
 error fails the VM. It has no production hosted or physical block backend or
-PCI transport. Controlled signed KVM and WHP probes now emit
-the exact native doorbell into this runner. The bounded probe first produces a
-canonical 4 KiB write, validates and acknowledges its completion, then reuses
-the single queue slot for a canonical read of the same block. Each request is
-published separately and receives a separately authorized notification. Both
-signed images contain the matching two-step consumer: signed read-only GDT/IDT
-data handles the vector, `iretq` restores state, and signed code validates each
-protected completion before acknowledgement. The host verifies the complete
-read-back payload.
-The KVM path is live-tested; the corresponding WHP path is implemented and
-type-checked but lacks new execution evidence in the current environment. This
-is bounded two-request evidence, not a reusable block driver, general interrupt
-framework, or unbounded flow.
+PCI transport. Controlled signed KVM and WHP probes now emit exact native
+doorbells into this runner. The bounded probe repeats eight cycles over a two-
+slot queue. Each cycle publishes two disjoint writes before retiring either,
+drains both protected completions in order, reuses both slots for reads, and
+verifies both complete payload pages before continuing. Distinct per-cycle
+patterns expose stale payload reuse. Each request receives separately
+capability-authorized notification and acknowledgement handling through signed
+read-only GDT/IDT data and `iretq`. The probe VM admits exactly the 64 runner
+exits required by 32 requests; other launch modes retain their existing budgets.
+Both KVM and WHP paths have live controlled evidence. This is bounded multi-
+window progress, not a general interrupt framework or unbounded flow.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path
@@ -666,8 +664,8 @@ position and updates the protected header through the device-only memory path.
 Acknowledgement is accepted only for the active bound queue after completion
 notification was confirmed delivered; empty, premature, mismatched-state, or
 uncertain acknowledgements fail the device and poison the bridge. Scalar data
-grants no authority. A reusable guest completion consumer and multi-request
-runner remain pending.
+grants no authority. The reusable guest completion consumer now has bounded
+multi-window hosted evidence; an unbounded/general runner loop remains pending.
 A canonical 128-byte MRML-specific active-device configuration record now binds
 the live generation, block geometry, supported and negotiated features, exact
 queue ranges and page count, slot count, interrupt vector, fixed scalar ports,
@@ -678,9 +676,9 @@ revalidation against the live device. Reset makes an old record stale.
 Dedicated KVM and WHP block launch builders now require a typed page binding,
 reject queue substitution and all configuration-page overlap, publish the
 complete zero-padded page through the host/device path, and identity-map it
-read-only/NX to the guest. Both KVM and WHP paths have live controlled-probe
-evidence. Signed-guest integration, PCI presentation, and any other transport
-remain pending.
+read-only/NX to the guest. Signed guests on both KVM and WHP now discover the
+mapped record in live controlled probes. PCI presentation and any other
+transport remain pending.
 A backend-neutral allocation-free initial guest-driver state now strictly
 decodes that record only against a completely fresh idle queue snapshot. It
 derives slots and request geometry from the configuration, prepares requests
@@ -696,12 +694,13 @@ request-ID exhaustion record an explicit terminal cause. Only reset may recover:
 rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal
 state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
-queue resume, unbounded progress, and PCI discovery remain pending. Freshly one-
-time-signed compiled KVM and WHP images now discover this common state from the
-mapped configuration page. A two-slot queue publishes writes to two disjoint
-blocks and payload pages before draining either completion in order, then reuses
-both retired slots for the corresponding reads against a volatile two-page
-backend.
+queue resume, unbounded progress, and PCI discovery remain pending. One freshly
+one-time-signed compiled image now discovers this common state from the mapped
+configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
+queue publishes writes to two disjoint blocks and payload pages before draining
+either completion in order, then reuses both retired slots for the corresponding
+reads against a volatile two-page backend. Producer and consumer watermarks
+reach 32 while physical slots wrap 16 times.
 A backend-neutral unsafe guest queue-transport contract now composes those
 transactions with canonical queue addresses and exact configured I/O tuples.
 Request publication copies the exact slot, release-publishes its producer, and

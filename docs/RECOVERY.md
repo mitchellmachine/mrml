@@ -392,9 +392,11 @@ explicitly and downgrade the status rather than guessing.
   reset records its terminal cause and can rediscover only the exact canonical
   successor generation with four zero counters; rejection changes nothing,
   while removal and sequence exhaustion remain permanent. Fresh signed KVM and
-  WHP images now fill a two-entry window with disjoint writes, drain it in
-  order, and reuse both slots for reads. Nonzero restart history, unbounded
-  progress, and PCI transport remain pending. A common unsafe guest queue-
+  WHP images now repeat eight two-entry windows with disjoint writes, drain each
+  in order, and reuse both slots for reads. The 32 requests and 32 protected
+  acknowledgements exercise repeated counter and slot wrap against volatile
+  storage only. Nonzero restart history, unbounded progress, and PCI transport
+  remain pending. A common unsafe guest queue-
   transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer

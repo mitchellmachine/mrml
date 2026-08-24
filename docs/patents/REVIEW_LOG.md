@@ -1657,3 +1657,11 @@ the retired slots. Two checked payload mappings and an independently bounded
 volatile backend are standard controlled-integration techniques. No new
 protocol, authority model, or patent-candidate mechanism was identified. This
 agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Bounded multi-window block guest progress
+
+**Result: NOT_TRIGGERED.** The change conventionally repeats the existing two-
+entry ring transaction for eight cycles with monotonically advancing counters,
+slot wrap, distinct test patterns, and an exact finite VM-exit budget. It adds no
+new protocol, authority model, storage format, or patent-candidate mechanism.
+This agent review does not replace the required independent human dual review.

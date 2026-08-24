@@ -653,14 +653,13 @@ exit accounting, common I/O dispatch, exact doorbell handling, one queue
 transaction, and capability-authorized notification delivery. It delivers an
 already pending notification before another vCPU entry and fails the VM on any
 runner-stage error. Both prepared native guest types satisfy its memory
-contract. Controlled signed KVM and WHP images now implement a bounded two-
-request sequence over one slot: write one fixed 4 KiB payload, validate and
-acknowledge its completion, overwrite the retired slot with a read request, and
-validate and acknowledge the second completion. The host verifies the complete
-read-back page. Signed read-only descriptor data supports exact interrupt entry
-and return. This is live-verified on KVM and implemented but not newly host-
-executed on WHP. The guest still lacks reusable discovery/driver state, a
-general interrupt framework, and unbounded progress.
+contract. Controlled signed KVM and WHP images now execute eight bounded write/
+read cycles over a two-slot queue. Every cycle fills both slots before
+retirement, drains both protected completions in order, reuses both slots for
+reads, and compares two complete pages with distinct per-cycle patterns. Signed
+read-only descriptor data supports exact interrupt entry and return. This is
+live-verified on both hosted backends. The guest still lacks a general interrupt
+framework and unbounded progress.
 Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the
@@ -678,9 +677,9 @@ instead of trusting a guest write into the read-only completion page. An exact
 completion only after confirmed interrupt delivery and updates the protected
 header through the device path. Every scalar is rechecked before state or
 memory access; empty, premature, wrong-queue, terminal, or uncertain accepted
-acknowledgements fail closed. This remains shared unit/simulation policy: the
-signed KVM/WHP images now contain the matching bounded two-step consumer and
-single-slot reuse, with new live execution evidence only for KVM.
+acknowledgements fail closed. Signed KVM/WHP images now contain the matching
+consumer and exercise 32 protected acknowledgements across repeated two-slot
+reuse, with live controlled evidence on both backends.
 
 The next reusable-driver prerequisite is now a canonical 128-byte active-device
 configuration record. It is explicitly MRML-specific and binds generation,
@@ -691,9 +690,9 @@ match the current live device; reset makes the old generation stale. The record
 carries no authority. A typed page binding now additionally requires one
 page-aligned, queue-disjoint GPA and the exact configuration/queue pair. The KVM
 and WHP block launch builders publish the fully zeroed page through their
-host/device-only paths and identity-map it read-only/NX. Both KVM and WHP have
-live controlled-probe evidence. Signed-guest integration and PCI or another
-transport remain pending.
+host/device-only paths and identity-map it read-only/NX. Signed guests on both
+KVM and WHP now discover this record in live controlled probes. PCI or another
+transport remains pending.
 
 The first reusable guest-driver state is now implemented as allocation-free
 backend-neutral policy. Discovery requires the canonical record plus four exact
@@ -712,11 +711,13 @@ exhaustion fail closed. Reset rediscovery now records the exact terminal cause,
 accepts only a canonical exact-successor generation with four zero queue
 counters, and leaves all state unchanged on rejection. Removal and request-ID
 exhaustion cannot be rediscovered. One-time-signed compiled KVM and WHP images
-now discover and execute this common driver with a two-entry in-flight window:
-two disjoint writes publish before either completion retires, both drain in
-order, and both slots are then reused for the corresponding reads against a
-volatile two-page backend. Unbounded progress, nonzero-queue restart, and PCI
-transport remain pending.
+now discover and execute this common driver across eight bounded cycles. Each
+cycle publishes two disjoint writes before either completion retires, drains
+both in order, and reuses both slots for corresponding reads against a volatile
+two-page backend. The exact probe budget covers 32 requests and their 32
+protected acknowledgements; counters advance beyond queue capacity while the
+two physical slots repeatedly wrap. Unbounded progress, nonzero-queue restart,
+and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
