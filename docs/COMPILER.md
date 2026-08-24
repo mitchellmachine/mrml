@@ -220,8 +220,13 @@ non-`Copy` reads, and indirect borrow shapes remain unclassified rather than
 guessed. Direct shared
 and mutable borrows of exact roots, including reborrows through a direct
 reference root, now record distinct `SharedBorrow` or `MutableBorrow` effects;
-they do not yet claim loan lifetime or conflict enforcement. The facts do not
-claim that unreachable or divergent declarations execute.
+an allocation-free derived view can associate the latest matching same-origin
+borrow effect with the initialized reference local, giving it a stable loan ID
+equal to that initialization's dense index plus the borrower, borrowed path,
+kind, and issuance-effect index. This direct issuance identity adds no fact
+arena and does not yet claim completeness, loan lifetime, liveness, conflict
+enforcement, invalidation, or NLL semantics. The facts do not claim that
+unreachable or divergent declarations execute.
 A derived fixed 1,280-event ownership order now spans the maximum 512
 initializations and 768 effects. Event IDs are assigned at insertion time, so
 RHS effects precede the successful initialization of their destination local.

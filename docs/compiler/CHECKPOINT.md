@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `5c53eb9`
-  (`compiler: track mutable tuple field moves`)
+- Compiler checkpoint commit: `f51a785`
+  (`compiler: derive direct loan identities`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `480a198` (`compiler: identify constant array
+- Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
+  moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
   through expressions`), `daf9fb9` (`compiler: connect conditional
   expression flow`), `cbc6cc5` (`compiler: map conditional expression
@@ -106,7 +107,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   Direct shared and mutable borrows of an exact root, plus shared
   or mutable reborrows through a direct reference root, record `SharedBorrow` or
   `MutableBorrow` instead of being mislabeled as copies or moves. Reference
-  indexing and summary projections remain unclassified. Supported call
+  indexing and summary projections remain unclassified. A zero-arena-growth
+  derived view associates the latest matching same-origin borrow effect with a
+  reference-local initialization and exposes a stable identity (the dense
+  initialization index), borrower, borrowed move path, borrow kind, and issue-
+  effect index. This is bounded direct issuance evidence, not complete loan
+  discovery, lifetime, conflict, invalidation, region, or NLL enforcement.
+  Supported call
   arguments are classified from the resolved parameter type: exact non-`Copy`
   roots record `Move`, while explicit borrow syntax retains its borrow effect.
   Supported non-`Copy` returned source expressions propagate the same move
@@ -353,7 +360,8 @@ resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths, implicit reborrow and remaining indirect move/borrow classification,
-unsupported expression/control-flow forms, borrows, loans, regions,
+unsupported expression/control-flow forms, complete loans, loan liveness,
+conflicts, invalidation, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -363,7 +371,8 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. stage shared-loan and mutable-loan/invalidation facts before admitting
+1. turn the derived direct issuance identity into bounded shared-loan liveness,
+   then mutable-loan invalidation facts before admitting
    implicit coercion reborrows; do not mislabel an explicit expected-reference
    binding as an inferred move or accept overlapping aliases without loans;
 2. exact constant owned-array element identity is now retained. Add array move

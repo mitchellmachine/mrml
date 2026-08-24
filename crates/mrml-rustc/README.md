@@ -79,8 +79,11 @@ overflow fails with `TooManyRuntimePlaceProjections`.
 Final emission validates their identity, projection/type, and mutability
 invariants and fails explicitly on capacity exhaustion or inconsistent facts.
 These ephemeral place-access tables are groundwork for typed ownership and CFG
-analysis. General nested read-place discovery, dereference-read projection,
-moves, borrows, loans, and regions are not yet represented.
+analysis. Bounded move, borrow, and initializedness facts now exist, and direct
+reference-local initialization can derive a stable issuance identity from the
+matching same-origin borrow effect without another fixed arena. General loan
+liveness, conflicts, invalidation, regions, and complete nested place discovery
+remain unimplemented.
 
 Conditional action blocks retain up to four source-ordered local declarations,
 assignments, discarded scalar expressions, or value returns in each selected
@@ -2434,6 +2437,16 @@ stack regression from an overbroad reference target; narrowing the retained
 tuple reference to its actual scalar scope restored the ordinary gate without
 raising stack limits. Implicit coercion reborrows remain a loan-analysis
 dependency and are not claimed as moves.
+
+The direct loan-identity foundation at `f51a785` passed all 697 compiler and
+driver tests on Windows gnullvm and all 697 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. A derived, allocation-free view
+links each tested direct shared borrow, mutable borrow, and direct mutable
+reborrow to the initialized reference local, borrowed move path, borrow kind,
+and issuance-effect index; its stable ID is the dense initialization index.
+Parameter initialization does not derive a loan. This is issuance identity
+only: it does not claim complete loan discovery, liveness, invalidation,
+conflict checking, regions, NLL, or acceptance of overlapping aliases.
 
 Security review searched both crates for direct `std`/`alloc` imports and unsafe
 blocks and found none. `cargo tree -p mrml-rustc-driver --offline` showed only
