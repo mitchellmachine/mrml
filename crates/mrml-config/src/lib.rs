@@ -51,6 +51,17 @@ pub trait CapabilityAuthorizer {
     ) -> Result<(), ConfigError>;
 }
 
+/// The supervision service asks the kernel to combine an opaque service token
+/// with an independently delivered capability. Rejection deliberately exposes
+/// no object, generation, rights, or lifecycle detail.
+pub trait ServiceStateAuthorizer {
+    fn query_state(
+        &self,
+        capability: Capability,
+        service: ServiceId,
+    ) -> Result<ServiceState, ConfigError>;
+}
+
 impl<const CAPS: usize> CapabilityAuthorizer for CapabilitySpace<CAPS> {
     fn authorize_exact(
         &self,
@@ -1538,6 +1549,35 @@ impl SupervisionResponse {
     }
 }
 
+/// Dispatches the query-only portion of the canonical supervision protocol at
+/// the userspace service boundary. Restart remains a distinct trusted kernel
+/// transition because its launch context cannot come from request bytes.
+pub fn dispatch_supervision_query_envelope<A: ServiceStateAuthorizer + ?Sized>(
+    authorizer: &A,
+    payload: &[u8],
+    capabilities: &[Capability],
+    output: &mut [u8; SUPERVISION_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let message =
+        Message::new(payload, capabilities).map_err(|_| ConfigError::InvalidAuthorityEnvelope)?;
+    let request = SupervisionRequest::decode_message(&message)?;
+    if request.operation != SupervisionOperation::Query {
+        return Err(ConfigError::InvalidProtocol);
+    }
+    let (status, state) = match authorizer.query_state(request.capability, request.service) {
+        Ok(state) => (ResponseStatus::Ok, state.into()),
+        Err(_) => (ResponseStatus::Rejected, SupervisionState::Exited),
+    };
+    SupervisionResponse {
+        request_id: request.request_id,
+        status,
+        service: request.service,
+        state,
+        detail: 0,
+    }
+    .encode(output)
+}
+
 /// Composes a kernel-derived management capability with the existing bounded
 /// supervisor. The caller supplies a trusted fresh launch context; no address,
 /// priority, or executable choice is accepted from the untrusted request.
@@ -2136,6 +2176,114 @@ mod tests {
         assert_eq!(
             SupervisionRequest::decode_message(&forged),
             Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+    }
+
+    #[test]
+    fn supervision_query_envelope_uses_only_delivered_read_authority() {
+        struct QueryAuthorizer {
+            capability: Capability,
+            service: ServiceId,
+        }
+
+        impl ServiceStateAuthorizer for QueryAuthorizer {
+            fn query_state(
+                &self,
+                capability: Capability,
+                service: ServiceId,
+            ) -> Result<ServiceState, ConfigError> {
+                if capability == self.capability && service == self.service {
+                    Ok(ServiceState::Running)
+                } else {
+                    Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+                }
+            }
+        }
+
+        let capability = Capability::from_token((8u64 << 32) | 3);
+        let service = ServiceId::from_token((4u64 << 32) | 2);
+        let authorizer = QueryAuthorizer {
+            capability,
+            service,
+        };
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::Query,
+            request_id: 52,
+            service,
+            capability: Capability::from_token(0),
+            now: 0,
+        };
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode(&mut wire).unwrap();
+        let mut response = [0; SUPERVISION_RESPONSE_BYTES];
+        dispatch_supervision_query_envelope(&authorizer, &wire, &[capability], &mut response)
+            .unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response),
+            Ok(SupervisionResponse {
+                request_id: 52,
+                status: ResponseStatus::Ok,
+                service,
+                state: SupervisionState::Running,
+                detail: 0,
+            })
+        );
+
+        assert_eq!(
+            dispatch_supervision_query_envelope(&authorizer, &wire, &[], &mut response),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        assert_eq!(
+            dispatch_supervision_query_envelope(
+                &authorizer,
+                &wire,
+                &[capability, capability],
+                &mut response,
+            ),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        let mut forged = wire;
+        forged[32..40].copy_from_slice(&capability.token().to_le_bytes());
+        assert_eq!(
+            dispatch_supervision_query_envelope(&authorizer, &forged, &[capability], &mut response,),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        let wrong = Capability::from_token((9u64 << 32) | 3);
+        dispatch_supervision_query_envelope(&authorizer, &wire, &[wrong], &mut response).unwrap();
+        let rejected = SupervisionResponse::decode(&response).unwrap();
+        assert_eq!(rejected.status, ResponseStatus::Rejected);
+        assert_eq!(rejected.state, SupervisionState::Exited);
+        assert_eq!(rejected.detail, 0);
+    }
+
+    #[test]
+    fn userspace_supervision_dispatch_refuses_restart_requests() {
+        struct RejectAll;
+        impl ServiceStateAuthorizer for RejectAll {
+            fn query_state(
+                &self,
+                _: Capability,
+                _: ServiceId,
+            ) -> Result<ServiceState, ConfigError> {
+                panic!("restart must be rejected before querying the kernel")
+            }
+        }
+
+        let capability = Capability::from_token((2u64 << 32) | 1);
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        SupervisionRequest {
+            operation: SupervisionOperation::Restart,
+            request_id: 53,
+            service: ServiceId::from_token((3u64 << 32) | 1),
+            capability: Capability::from_token(0),
+            now: 9,
+        }
+        .encode(&mut wire)
+        .unwrap();
+        let mut response = [0; SUPERVISION_RESPONSE_BYTES];
+        assert_eq!(
+            dispatch_supervision_query_envelope(&RejectAll, &wire, &[capability], &mut response),
+            Err(ConfigError::InvalidProtocol)
         );
     }
 

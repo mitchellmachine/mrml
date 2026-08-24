@@ -3443,8 +3443,8 @@ Nested KVM reported
 `verify=18059us prepare=2407us execute=1044us total=22746us`; WHP reported
 `verify=18086us prepare=4022us execute=780us total=26549us`. These are hosted
 controlled probes, not physical-hardware, host-resistant isolation, persistent
-configuration, or bare-metal evidence. Canonical supervision messages and
-authorized restart have not yet executed through this CPL3 path.
+configuration, or bare-metal evidence. Authorized restart messages have not yet
+executed through this CPL3 path.
 
 Syscall operation 9 now provides the narrow kernel mechanism for supervision
 query. The register ABI accepts one opaque generational service token and one
@@ -3453,21 +3453,31 @@ calls `ServiceSupervisor::state_authorized`; names identify, while exact READ
 authority authorizes. Success returns only Running, Exited, or Faulted, and
 rejection returns no state or distinguishing detail. It accepts no executable,
 entry point, stack, priority, time, restart policy, or host-reprovisioning input.
-The signed CPL3 receiver queries the current sender before configuration work in
-both generations. Fresh runs reported KVM `verify=21067us prepare=2475us
-execute=1365us total=48815us` and WHP `verify=18659us prepare=3851us
-execute=826us total=27070us`. This proves the hosted query mechanism, not the
-canonical supervision envelope or restart path.
+The canonical query path is now end to end. After configuration commit, the
+CPL3 client encodes a fixed 48-byte query with a zero capability placeholder and
+delegates exactly READ from a READ|DELEGATE source. Kernel IPC installs the
+derived receiver-space capability; the service rejects missing, extra, or
+payload-forged authority, invokes operation 9 through a narrow authorizer, and
+returns a canonical 48-byte response with zero detail. Query-only userspace
+dispatch rejects restart before invoking the kernel, because fresh execution
+context must remain trusted. Both signed generations independently verify the
+request identity, exact opaque service token, Running state, and zero detail.
+Fresh runs reported KVM `verify=21698us prepare=2585us execute=1695us
+total=46730us` and WHP `verify=18771us prepare=4102us execute=835us
+total=27424us`. This proves the hosted canonical query envelope, not authorized
+restart, persistent supervision policy, host-resistant isolation, or bare metal.
 
 For this query increment, the `DIGITAL-RIGHTS REVIEW` found no new collection,
 retention, correlation, remote disclosure, DRM or publisher veto,
 owner-attestation restriction, accessibility exclusion, AI authority, or
 persistence. The local authorized result is deliberately coarse and neither a
 service name nor its token conveys authority. The `HOSTILE SECURITY REVIEW`
-treats the capability, service token, generation, and every reserved register as
-hostile: only an exact live task-local READ capability for the exact live
-service succeeds; stale, guessed, mismatched, attenuated, or malformed inputs
-fail without state or distinguishing detail. The operation accepts no restart
+treats request bytes, capability descriptors, counts, capability, service token,
+generation, response fields, and every reserved register as hostile. Missing,
+extra, payload-forged, stale, guessed, mismatched, attenuated, or malformed
+authority fails without state or distinguishing detail; restart is rejected at
+the userspace boundary. Only an exact live receiver-space READ capability for
+the exact live service reaches the query. The operation accepts no restart
 context and cannot mutate lifecycle state. This agent review does not replace
 the constitution's independent human dual review.
 
@@ -3490,8 +3500,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 15 configuration, 333 kernel, and 19 WHP tests with one ignored;
-Linux passed 15 configuration, 333 kernel, and 16 KVM tests with one ignored.
+Windows passed 17 configuration, 333 kernel, and 19 WHP tests with one ignored;
+Linux passed 17 configuration, 333 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

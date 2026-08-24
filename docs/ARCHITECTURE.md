@@ -671,11 +671,14 @@ numeric setting IDs, and service handles never authorize. A bounded CPL3
 service-state syscall now exposes only the adapter's query mechanism: an exact
 task-local READ capability authorizes one opaque generational service token,
 reserved registers must be zero, and the result is limited to Running, Exited,
-or Faulted. It cannot restart a service or supply execution context. Canonical
-supervision-message dispatch and trusted host reprovisioning remain pending.
-The bounded CPL3 request-buffer ABI decodes fixed payload/capability-buffer
-descriptors and
-validates every active user leaf before a directional copy. The signed service
+or Faulted. The canonical query envelope now crosses buffered IPC with exactly
+one sender-derived READ capability; the userspace service rejects missing,
+extra, or payload-forged authority, invokes the syscall, and returns only a
+fixed detail-free response. It cannot restart a service or supply execution
+context. Restart-message dispatch and trusted host reprovisioning remain
+pending. The bounded CPL3 request-buffer ABI decodes fixed payload/capability-
+buffer descriptors and validates every active user leaf before a directional
+copy. The signed service
 probe now executes real `mrml-config` schema admission and atomic commit
 dispatch under both WHP and KVM. Each generation begins with a trusted root
 identity and no settings. A canonical admission request identifies a bounded

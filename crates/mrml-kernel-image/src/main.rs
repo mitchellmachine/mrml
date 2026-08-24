@@ -2287,10 +2287,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             .unwrap_or_else(|_| halt());
         let resource_capabilities = provision_service_resource(&mut runtime, receiver);
         let supervision_capability = runtime
-            .capabilities_mut(receiver)
+            .capabilities_mut(sender)
             .and_then(|space| {
                 space
-                    .insert(ObjectId(0xa1), Rights::READ)
+                    .insert(ObjectId(0xa1), Rights::READ.union(Rights::DELEGATE))
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
@@ -2327,13 +2327,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         receiver_context.r14 = sender.token();
         receiver_context.r15 = resource_capabilities[0].token();
         receiver_context.rbx = resource_capabilities[1].token();
-        receiver_context.rbp = supervision_capability.token();
-        receiver_context.r10 = service_b.token();
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
         sender_context.r15 = root_capability.token();
         sender_context.rbx = setting_capability.token();
+        sender_context.rbp = supervision_capability.token();
+        sender_context.r10 = service_b.token();
         if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver)
         {
             halt();
@@ -2974,10 +2974,10 @@ unsafe fn restart_service_pair(
         .unwrap_or_else(|_| halt());
     let resource_capabilities = unsafe { provision_service_resource(runtime, receiver) };
     let supervision_capability = runtime
-        .capabilities_mut(receiver)
+        .capabilities_mut(sender)
         .and_then(|space| {
             space
-                .insert(ObjectId(0xa1), Rights::READ)
+                .insert(ObjectId(0xa1), Rights::READ.union(Rights::DELEGATE))
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
@@ -3014,13 +3014,13 @@ unsafe fn restart_service_pair(
     receiver_context.r14 = sender.token();
     receiver_context.r15 = resource_capabilities[0].token();
     receiver_context.rbx = resource_capabilities[1].token();
-    receiver_context.rbp = supervision_capability.token();
-    receiver_context.r10 = sender_service.token();
     let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
     sender_context.r13 = capability.token();
     sender_context.r14 = receiver.token();
     sender_context.r15 = root_capability.token();
     sender_context.rbx = setting_capability.token();
+    sender_context.rbp = supervision_capability.token();
+    sender_context.r10 = sender_service.token();
     unsafe { service_restart_stage(0x37) };
     match runtime.start() {
         ScheduleOutcome::Switch { from: None, to } if to == receiver => {}

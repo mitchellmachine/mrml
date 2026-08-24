@@ -7,11 +7,13 @@ use core::arch::{asm, global_asm};
 use mrml_config::{
     CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError, ConfigTransaction, ConfigUpdate,
     ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
-    ResponseStatus, SettingId, SettingSchema, dispatch_configuration_envelope,
+    ResponseStatus, SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES, ServiceStateAuthorizer,
+    SettingId, SettingSchema, SupervisionOperation, SupervisionRequest, SupervisionResponse,
+    SupervisionState, dispatch_configuration_envelope, dispatch_supervision_query_envelope,
     encode_commit_message_request, encode_schema_message_request,
 };
 #[cfg(not(feature = "preemption-probe"))]
-use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights};
+use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights, ServiceId, ServiceState};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
@@ -31,9 +33,6 @@ global_asm!(
             mov rdx, r12
             mov rcx, r15
             mov r8, rbx
-            mov r9, rbp
-            sub rsp, 16
-            mov [rsp], r10
             call mrml_configuration_receiver
             ud2
 
@@ -47,6 +46,9 @@ global_asm!(
             mov rdx, r15
             mov rcx, rbx
             mov r8, r12
+            mov r9, rbp
+            sub rsp, 16
+            mov [rsp], r10
             call mrml_configuration_sender
             ud2
     "#
@@ -93,6 +95,40 @@ impl CapabilityAuthorizer for KernelAuthorizer {
 }
 
 #[cfg(not(feature = "preemption-probe"))]
+impl ServiceStateAuthorizer for KernelAuthorizer {
+    fn query_state(
+        &self,
+        capability: Capability,
+        service: ServiceId,
+    ) -> Result<ServiceState, ConfigError> {
+        let mut status = 9u64;
+        let state: u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") capability.token(),
+                in("rsi") service.token(),
+                inlateout("rdx") 0u64 => state,
+                inlateout("r10") 0u64 => _,
+                inlateout("r8") 0u64 => _,
+                inlateout("r9") 0u64 => _,
+                options(nostack)
+            )
+        };
+        if status != 0 {
+            return Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied));
+        }
+        match state {
+            1 => Ok(ServiceState::Running),
+            2 => Ok(ServiceState::Exited),
+            3 => Ok(ServiceState::Faulted),
+            _ => Err(ConfigError::InvalidProtocol),
+        }
+    }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
@@ -100,10 +136,7 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     generation: u64,
     shared_write: u64,
     shared_read: u64,
-    supervision_read: u64,
-    supervised_service: u64,
 ) -> ! {
-    unsafe { verify_service_query(supervision_read, supervised_service) };
     unsafe { verify_shared_buffer_syscalls(shared_write, shared_read, generation) };
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
@@ -130,30 +163,13 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     };
     let commit_request_id = generation.checked_mul(2).unwrap_or_else(|| halt());
     unsafe { dispatch_next_request(configuration, endpoint, sender, commit_request_id, 1, None) };
+    let supervision_request_id = generation
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(100))
+        .unwrap_or_else(|| halt());
+    unsafe { dispatch_supervision_query(endpoint, sender, supervision_request_id) };
     unsafe { yield_now() };
     unsafe { asm!("int3", options(noreturn, nostack)) }
-}
-
-#[cfg(not(feature = "preemption-probe"))]
-unsafe fn verify_service_query(capability: u64, service: u64) {
-    let mut status = 9u64;
-    let state: u64;
-    unsafe {
-        asm!(
-            "int 0x80",
-            inlateout("rax") status,
-            in("rdi") capability,
-            in("rsi") service,
-            inlateout("rdx") 0u64 => state,
-            inlateout("r10") 0u64 => _,
-            inlateout("r8") 0u64 => _,
-            inlateout("r9") 0u64 => _,
-            options(nostack)
-        )
-    };
-    if status != 0 || state != 1 {
-        halt();
-    }
 }
 
 #[cfg(not(feature = "preemption-probe"))]
@@ -212,6 +228,29 @@ unsafe fn verify_shared_buffer_syscalls(write: u64, read: u64, generation: u64) 
     if status != 0 || output != input {
         halt();
     }
+}
+
+#[cfg(not(feature = "preemption-probe"))]
+unsafe fn dispatch_supervision_query(endpoint: u64, sender: u64, request_id: u64) {
+    let mut request = [0u8; SUPERVISION_REQUEST_BYTES];
+    let mut capability_tokens = [0u64; 1];
+    let (length, count) = unsafe { receive_buffer(&mut request, &mut capability_tokens) };
+    if length != SUPERVISION_REQUEST_BYTES || count != 1 {
+        halt();
+    }
+    let capability = Capability::from_token(capability_tokens[0]);
+    let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
+    dispatch_supervision_query_envelope(&KernelAuthorizer, &request, &[capability], &mut response)
+        .unwrap_or_else(|_| halt());
+    let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
+    if decoded.request_id != request_id
+        || decoded.status != ResponseStatus::Ok
+        || decoded.state != SupervisionState::Running
+        || decoded.detail != 0
+    {
+        halt();
+    }
+    unsafe { send_buffer(endpoint, sender, &response, &[]) };
 }
 
 #[cfg(not(feature = "preemption-probe"))]
@@ -299,6 +338,8 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     root_capability: u64,
     setting_capability: u64,
     generation: u64,
+    supervision_read: u64,
+    supervised_service: u64,
 ) -> ! {
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let schema = SettingSchema::boolean(setting, CONFIG_SETTING_OBJECT).unwrap_or_else(|_| halt());
@@ -350,6 +391,44 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         halt();
     }
     unsafe { verify_response(&response, commit_request_id, 1, None) };
+    let supervision_request_id = generation
+        .checked_mul(3)
+        .and_then(|value| value.checked_add(100))
+        .unwrap_or_else(|| halt());
+    let mut supervision_request = [0u8; SUPERVISION_REQUEST_BYTES];
+    SupervisionRequest {
+        operation: SupervisionOperation::Query,
+        request_id: supervision_request_id,
+        service: ServiceId::from_token(supervised_service),
+        capability: Capability::from_token(0),
+        now: 0,
+    }
+    .encode(&mut supervision_request)
+    .unwrap_or_else(|_| halt());
+    let supervision_descriptor = capability_descriptor(supervision_read, Rights::READ);
+    unsafe {
+        send_buffer(
+            endpoint,
+            receiver,
+            &supervision_request,
+            &supervision_descriptor,
+        )
+    };
+    let mut supervision_response = [0u8; SUPERVISION_RESPONSE_BYTES];
+    let (length, count) =
+        unsafe { receive_buffer(&mut supervision_response, &mut no_capabilities) };
+    if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
+        halt();
+    }
+    let decoded = SupervisionResponse::decode(&supervision_response).unwrap_or_else(|_| halt());
+    if decoded.request_id != supervision_request_id
+        || decoded.status != ResponseStatus::Ok
+        || decoded.service != ServiceId::from_token(supervised_service)
+        || decoded.state != SupervisionState::Running
+        || decoded.detail != 0
+    {
+        halt();
+    }
     if generation == 2 {
         unsafe { receive_buffer(&mut response, &mut no_capabilities) };
         halt();

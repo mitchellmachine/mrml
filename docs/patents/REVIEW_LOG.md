@@ -1276,3 +1276,17 @@ closed. This adds no novel capability, lookup, syscall, or lifecycle technique.
 
 Patent review: `NOT_TRIGGERED` — conventional capability-gated generational
 lookup and bounded status enumeration.
+
+## 2026-08-24 — canonical userspace supervision query envelope
+
+MRML source: `crates/mrml-config/src/lib.rs`,
+`crates/mrml-service-image/src/main.rs`,
+`crates/mrml-kernel-image/src/main.rs`, and the KVM/WHP hosted runners.
+
+The client conventionally sends a fixed query record with one separately
+attenuated capability. The service validates the envelope, invokes the existing
+authorized state syscall, and returns a fixed detail-free status record. This
+adds no novel IPC, capability-transfer, service-query, or response technique.
+
+Patent review: `NOT_TRIGGERED` — conventional fixed-record request/response IPC
+with least-authority capability transfer.

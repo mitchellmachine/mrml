@@ -169,9 +169,12 @@ authority; unrelated domains continue.
    Syscall operation 9 now exposes only that authorized state query to CPL3: it
    accepts an opaque generational service token plus an exact task-local READ
    capability, rejects nonzero reserved registers, and returns only a detail-
-   free Running/Exited/Faulted code. Fresh signed KVM and WHP probes query the
-   live peer in both generations. Canonical supervision-message dispatch and
-   authorized restart through trusted host reprovisioning remain pending.
+   free Running/Exited/Faulted code. Canonical 48-byte query requests now cross
+   the real buffered IPC path with one sender-derived READ capability, and the
+   userspace service invokes operation 9 before returning a canonical 48-byte
+   detail-free response. Fresh signed KVM and WHP probes repeat that exchange in
+   both generations. Restart-message dispatch through trusted host
+   reprovisioning remains pending.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-

@@ -181,10 +181,12 @@ explicitly and downgrade the status rather than guessing.
   The kernel image also exposes service-state query operation 9: one exact
   task-local READ capability authorizes one opaque generational service token,
   reserved registers must be zero, and success reveals only Running, Exited, or
-  Faulted. Fresh signed KVM and WHP runs exercised the query in both generations.
-  It neither mutates lifecycle state nor persists policy, and it does not
-  implement canonical supervision-message dispatch or trusted restart
-  reprovisioning.
+  Faulted. A canonical query now crosses buffered IPC with one derived READ
+  capability; the userspace service rejects authority in payload bytes or the
+  wrong capability count before invoking the syscall and returns a fixed
+  detail-free response. Fresh signed KVM and WHP runs exercised that exchange in
+  both generations. It neither mutates lifecycle state nor persists policy, and
+  it does not implement restart-message dispatch or trusted reprovisioning.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and
