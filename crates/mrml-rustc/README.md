@@ -3435,3 +3435,18 @@ The pinned oracle confirmed E0499 for both bypass cases and acceptance for both
 mandatory-replacement cases. This does not claim per-iteration regions,
 expression-conditional generations, or broader coercion sites. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The expression-conditional loan-origin milestone passed all 719 compiler and
+driver tests on Windows gnullvm and all 719 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using rustc
+workspace commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Direct local
+initializers and direct assignments whose value is a conditional reference now
+retain one bounded alternative loan origin per final branch value, all sharing
+the destination initialization or write generation. Nested branches are
+preserved, mutually exclusive siblings do not manufacture conflicts, and
+sequence-prefix temporary borrows are not promoted into destination origins.
+The pinned oracle confirmed E0499 for branch alternatives that may borrow the
+later-mutated owner and acceptance when every alternative borrows another
+owner, for both initialization and reassignment. This does not claim indirect
+reference moves, non-direct destinations, general coercion-site coverage, or
+regions. The `no_std`/allocation/unsafe hygiene scan remained empty.

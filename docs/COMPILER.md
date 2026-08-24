@@ -589,9 +589,14 @@ conditional loop actions, and nested loop actions now use the same bounded
 reaching-definition analysis. A possible zero-iteration path retains the
 pre-loop generation, while replacement crossed before every exit kills it;
 repeated dynamic issuances at one static assignment are represented
-conservatively by that assignment's bounded generation identity. Expression-
-conditional reference replacements remain unclassified, and indirect
-reference-value moves are not loan origins.
+conservatively by that assignment's bounded generation identity. A conditional
+reference expression used as a direct local initializer or direct assignment
+now retains each final branch borrow as an alternative origin sharing the
+destination generation event. Nested alternatives remain distinct, sibling
+origins do not conflict merely because their fact IDs are ordered, and
+sequence-prefix temporaries are excluded from the destination origins.
+Non-direct conditional destinations and indirect reference-value moves remain
+unclassified loan origins.
 A plain assignment of a direct reference identifier into an existing typed
 reference binding now uses the destination type as coercion context and records
 a shared or mutable implicit reborrow before the destination write. For mutable
@@ -618,9 +623,8 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is expression-conditional
-generation dataflow, followed by broader coercion sites before region
-reasoning.
+The highest-value next major implementation task is broader coercion-site
+reborrowing before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

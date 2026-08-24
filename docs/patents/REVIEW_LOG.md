@@ -1439,6 +1439,17 @@ JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Expression-conditional loan origins
+
+**Result: NOT_TRIGGERED.** The compiler conventionally associates each final
+branch borrow of a conditional reference expression with one shared bounded
+destination generation and excludes mutually exclusive sibling origins from
+sequential conflict treatment. It adds no new arena, optimization, authority
+model, device or compatibility protocol, host-share mechanism, accessibility
+interface, browser semantic interface, JavaScript/WebAssembly runtime, media
+mechanism, or other patent-candidate mechanism. This agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Service policy-replacement syscall foundation
 
 **Result: NOT_TRIGGERED.** The change adds a conventional pointer-free syscall
