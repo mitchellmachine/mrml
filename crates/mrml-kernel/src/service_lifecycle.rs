@@ -82,6 +82,18 @@ impl RestartPolicy {
         })
     }
 
+    pub const fn maximum_restarts(self) -> u32 {
+        self.maximum_restarts
+    }
+
+    pub const fn base_backoff_ticks(self) -> u64 {
+        self.base_backoff_ticks
+    }
+
+    pub const fn maximum_backoff_ticks(self) -> u64 {
+        self.maximum_backoff_ticks
+    }
+
     fn delay(self, completed_restarts: u32) -> u64 {
         let shift = completed_restarts.min(63);
         self.base_backoff_ticks

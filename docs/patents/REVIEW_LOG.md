@@ -2184,3 +2184,15 @@ semantic interface, JavaScript/WebAssembly runtime, media mechanism, production
 PCI identity, DMA protocol, or new authority model. The previously recorded
 planned scopes remain `TRIGGERED`; this agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Signed CPL3 supervision-policy replacement
+
+**Result: NOT_TRIGGERED.** The change composes the existing canonical persisted
+restart-policy record, ordered IPC capability attenuation, trusted service-object
+binding, and bounded pointer-free policy syscall. Exact setting READ and
+separate service CONTROL remain independently revocable, while policy data
+grants no authority. It adds no VirtIO compatibility, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
+The previously recorded planned scopes remain `TRIGGERED`; this agent review
+does not replace the required independent human dual review.

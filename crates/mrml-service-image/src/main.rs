@@ -9,15 +9,18 @@ use core::arch::{asm, global_asm};
 use mrml_config::{
     CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError, ConfigTransaction, ConfigUpdate,
     ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
-    ResponseStatus, SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES,
+    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, ResponseStatus,
+    SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES, ServicePolicyAuthorizer,
     ServiceRestartAuthorizer, ServiceStateAuthorizer, SettingId, SettingSchema,
     SupervisionOperation, SupervisionRequest, SupervisionResponse, SupervisionState,
-    dispatch_configuration_envelope, dispatch_supervision_query_envelope,
-    dispatch_supervision_restart_envelope, encode_commit_message_request,
-    encode_schema_message_request,
+    dispatch_configuration_envelope, dispatch_supervision_policy_envelope,
+    dispatch_supervision_query_envelope, dispatch_supervision_restart_envelope,
+    encode_commit_message_request, encode_schema_message_request,
 };
 #[cfg(not(feature = "preemption-probe"))]
-use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights, ServiceId, ServiceState};
+use mrml_kernel::{
+    Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
+};
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
     BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockDeviceDescriptor, BlockDeviceId, BlockRequest,
@@ -180,6 +183,36 @@ impl ServiceRestartAuthorizer for KernelAuthorizer {
     }
 }
 
+#[cfg(not(feature = "preemption-probe"))]
+impl ServicePolicyAuthorizer for KernelAuthorizer {
+    fn replace_policy(
+        &self,
+        capability: Capability,
+        service: ServiceId,
+        policy: RestartPolicy,
+    ) -> Result<(), ConfigError> {
+        let mut status = 11u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") capability.token(),
+                in("rsi") service.token(),
+                in("rdx") u64::from(policy.maximum_restarts()),
+                in("r10") policy.base_backoff_ticks(),
+                in("r8") policy.maximum_backoff_ticks(),
+                in("r9") 0u64,
+                options(nostack)
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+        }
+    }
+}
+
 #[cfg(all(not(feature = "preemption-probe"), not(feature = "block-service-loop")))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_receiver(
@@ -221,6 +254,17 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         .and_then(|value| value.checked_add(100))
         .unwrap_or_else(|| halt());
     unsafe { dispatch_supervision_query(endpoint, sender, supervision_request_id) };
+    let policy_request_id = supervision_request_id
+        .checked_add(1)
+        .unwrap_or_else(|| halt());
+    unsafe {
+        dispatch_supervision_policy(
+            (*configuration).as_ref().unwrap_or_else(|| halt()),
+            endpoint,
+            sender,
+            policy_request_id,
+        )
+    };
     unsafe { yield_now() };
     if restart_manager != 0 {
         unsafe { send_buffer(endpoint, restart_manager, b"restart-ready", &[]) };
@@ -494,6 +538,45 @@ unsafe fn dispatch_supervision_restart(endpoint: u64, sender: u64, request_id: u
 }
 
 #[cfg(not(feature = "preemption-probe"))]
+unsafe fn dispatch_supervision_policy(
+    configuration: &ConfigurationService<1, 2>,
+    endpoint: u64,
+    sender: u64,
+    request_id: u64,
+) {
+    let mut request = [0u8; SUPERVISION_REQUEST_BYTES];
+    let mut capability_tokens = [0u64; 2];
+    let (length, count) = unsafe { receive_buffer(&mut request, &mut capability_tokens) };
+    if length != SUPERVISION_REQUEST_BYTES || count != 2 {
+        halt();
+    }
+    let capabilities = [
+        Capability::from_token(capability_tokens[0]),
+        Capability::from_token(capability_tokens[1]),
+    ];
+    let mut response = [0u8; SUPERVISION_RESPONSE_BYTES];
+    dispatch_supervision_policy_envelope(
+        configuration,
+        &KernelAuthorizer,
+        &KernelAuthorizer,
+        ObjectId(0xa1),
+        &request,
+        &capabilities,
+        &mut response,
+    )
+    .unwrap_or_else(|_| halt());
+    let decoded = SupervisionResponse::decode(&response).unwrap_or_else(|_| halt());
+    if decoded.request_id != request_id
+        || decoded.status != ResponseStatus::Ok
+        || decoded.state != SupervisionState::Running
+        || decoded.detail != 0
+    {
+        halt();
+    }
+    unsafe { send_buffer(endpoint, sender, &response, &[]) };
+}
+
+#[cfg(not(feature = "preemption-probe"))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_restart_manager(
     endpoint: u64,
@@ -514,6 +597,8 @@ unsafe extern "sysv64" fn mrml_restart_manager(
         request_id: 0x501,
         service: retired,
         capability: Capability::from_token(0),
+        setting: None,
+        setting_capability: Capability::from_token(0),
     }
     .encode(&mut request)
     .unwrap_or_else(|_| halt());
@@ -625,7 +710,12 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     supervised_service: u64,
 ) -> ! {
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
-    let schema = SettingSchema::boolean(setting, CONFIG_SETTING_OBJECT).unwrap_or_else(|_| halt());
+    let schema = SettingSchema::bytes(
+        setting,
+        CONFIG_SETTING_OBJECT,
+        PERSISTED_RESTART_POLICY_BYTES as u8,
+    )
+    .unwrap_or_else(|_| halt());
     let mut schema_request = [0u8; MAX_CONFIG_REQUEST_BYTES];
     let schema_request_id = generation
         .checked_mul(2)
@@ -651,12 +741,15 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     }
     unsafe { verify_response(&response, schema_request_id, 0, Some(setting)) };
 
+    let policy = PersistedRestartPolicy::new(ObjectId(0xa1), 2, 0, 0).unwrap_or_else(|_| halt());
+    let mut encoded_policy = [0; PERSISTED_RESTART_POLICY_BYTES];
+    policy.encode(&mut encoded_policy);
     let mut transaction = ConfigTransaction::<1>::new(0);
     transaction
         .push(ConfigUpdate::new(
             setting,
             Capability::from_token(0),
-            ConfigValue::boolean(generation == 1),
+            ConfigValue::bytes(&encoded_policy).unwrap_or_else(|_| halt()),
         ))
         .unwrap_or_else(|_| halt());
     let mut request = [0u8; MAX_CONFIG_REQUEST_BYTES];
@@ -666,7 +759,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
             .unwrap_or_else(|_| halt());
     let descriptors = capability_descriptors(
         (root_capability, Rights::CONTROL),
-        (setting_capability, Rights::WRITE),
+        (setting_capability, Rights::READ.union(Rights::WRITE)),
     );
     unsafe { send_buffer(endpoint, receiver, &request[..request_length], &descriptors) };
     let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
@@ -684,6 +777,8 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         request_id: supervision_request_id,
         service: ServiceId::from_token(supervised_service),
         capability: Capability::from_token(0),
+        setting: None,
+        setting_capability: Capability::from_token(0),
     }
     .encode(&mut supervision_request)
     .unwrap_or_else(|_| halt());
@@ -704,6 +799,38 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     }
     let decoded = SupervisionResponse::decode(&supervision_response).unwrap_or_else(|_| halt());
     if decoded.request_id != supervision_request_id
+        || decoded.status != ResponseStatus::Ok
+        || decoded.service != ServiceId::from_token(supervised_service)
+        || decoded.state != SupervisionState::Running
+        || decoded.detail != 0
+    {
+        halt();
+    }
+    let policy_request_id = supervision_request_id
+        .checked_add(1)
+        .unwrap_or_else(|| halt());
+    SupervisionRequest {
+        operation: SupervisionOperation::ReplacePolicy,
+        request_id: policy_request_id,
+        service: ServiceId::from_token(supervised_service),
+        capability: Capability::from_token(0),
+        setting: Some(setting),
+        setting_capability: Capability::from_token(0),
+    }
+    .encode(&mut supervision_request)
+    .unwrap_or_else(|_| halt());
+    let descriptors = capability_descriptors(
+        (setting_capability, Rights::READ),
+        (supervision_read, Rights::CONTROL),
+    );
+    unsafe { send_buffer(endpoint, receiver, &supervision_request, &descriptors) };
+    let (length, count) =
+        unsafe { receive_buffer(&mut supervision_response, &mut no_capabilities) };
+    if length != SUPERVISION_RESPONSE_BYTES || count != 0 {
+        halt();
+    }
+    let decoded = SupervisionResponse::decode(&supervision_response).unwrap_or_else(|_| halt());
+    if decoded.request_id != policy_request_id
         || decoded.status != ResponseStatus::Ok
         || decoded.service != ServiceId::from_token(supervised_service)
         || decoded.state != SupervisionState::Running

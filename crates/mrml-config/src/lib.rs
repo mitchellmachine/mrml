@@ -77,6 +77,15 @@ pub trait ServiceRestartAuthorizer {
     ) -> Result<ServiceId, ConfigError>;
 }
 
+pub trait ServicePolicyAuthorizer {
+    fn replace_policy(
+        &self,
+        capability: Capability,
+        service: ServiceId,
+        policy: RestartPolicy,
+    ) -> Result<(), ConfigError>;
+}
+
 impl<const CAPS: usize> CapabilityAuthorizer for CapabilitySpace<CAPS> {
     fn authorize_exact(
         &self,
@@ -1853,6 +1862,7 @@ pub fn dispatch_configuration_envelope<
 pub enum SupervisionOperation {
     Query = 1,
     Restart = 2,
+    ReplacePolicy = 3,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1861,13 +1871,20 @@ pub struct SupervisionRequest {
     pub request_id: u64,
     pub service: ServiceId,
     pub capability: Capability,
+    pub setting: Option<SettingId>,
+    pub setting_capability: Capability,
 }
 
 impl SupervisionRequest {
     pub fn encode(self, output: &mut [u8; SUPERVISION_REQUEST_BYTES]) -> Result<(), ConfigError> {
-        if self.request_id == 0 {
+        if self.request_id == 0 || self.setting_capability.token() != 0 {
             return Err(ConfigError::NonCanonical);
         }
+        let target = match (self.operation, self.setting) {
+            (SupervisionOperation::Query | SupervisionOperation::Restart, None) => 0,
+            (SupervisionOperation::ReplacePolicy, Some(setting)) => setting.get(),
+            _ => return Err(ConfigError::NonCanonical),
+        };
         *output = [0; SUPERVISION_REQUEST_BYTES];
         output[..4].copy_from_slice(&SUPERVISION_REQUEST_MAGIC);
         write_u16(output, 4, SYSTEM_PROTOCOL_VERSION)?;
@@ -1875,7 +1892,8 @@ impl SupervisionRequest {
         write_u16(output, 8, SUPERVISION_REQUEST_BYTES as u16)?;
         write_u64(output, 16, self.request_id)?;
         write_u64(output, 24, self.service.token())?;
-        write_u64(output, 32, self.capability.token())
+        write_u64(output, 32, self.capability.token())?;
+        write_u32(output, 40, target)
     }
 
     pub fn decode(input: &[u8]) -> Result<Self, ConfigError> {
@@ -1885,7 +1903,7 @@ impl SupervisionRequest {
         if input[..4] != SUPERVISION_REQUEST_MAGIC
             || read_u16(input, 8)? as usize != input.len()
             || input[10..16].iter().any(|byte| *byte != 0)
-            || input[40..48].iter().any(|byte| *byte != 0)
+            || input[44..48].iter().any(|byte| *byte != 0)
         {
             return Err(ConfigError::NonCanonical);
         }
@@ -1895,17 +1913,26 @@ impl SupervisionRequest {
         let operation = match read_u16(input, 6)? {
             1 => SupervisionOperation::Query,
             2 => SupervisionOperation::Restart,
+            3 => SupervisionOperation::ReplacePolicy,
             _ => return Err(ConfigError::InvalidProtocol),
         };
         let request_id = read_u64(input, 16)?;
         if request_id == 0 {
             return Err(ConfigError::NonCanonical);
         }
+        let target = read_u32(input, 40)?;
+        let setting = match operation {
+            SupervisionOperation::Query | SupervisionOperation::Restart if target == 0 => None,
+            SupervisionOperation::ReplacePolicy => Some(SettingId::new(target)?),
+            _ => return Err(ConfigError::NonCanonical),
+        };
         Ok(Self {
             operation,
             request_id,
             service: ServiceId::from_token(read_u64(input, 24)?),
             capability: Capability::from_token(read_u64(input, 32)?),
+            setting,
+            setting_capability: Capability::from_token(0),
         })
     }
 
@@ -1915,21 +1942,39 @@ impl SupervisionRequest {
     ) -> Result<(), ConfigError> {
         let mut request = self;
         request.capability = Capability::from_token(0);
+        request.setting_capability = Capability::from_token(0);
         request.encode(output)
     }
 
     pub fn decode_message(message: &Message) -> Result<Self, ConfigError> {
         if message.payload().len() != SUPERVISION_REQUEST_BYTES
             || message.payload()[32..40].iter().any(|byte| *byte != 0)
-            || message.capability_count() != 1
         {
             return Err(ConfigError::InvalidAuthorityEnvelope);
         }
         let mut request = Self::decode(message.payload())?;
-        request.capability = message
-            .capabilities()
-            .next()
-            .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+        let mut capabilities = message.capabilities();
+        match request.operation {
+            SupervisionOperation::Query | SupervisionOperation::Restart
+                if message.capability_count() == 1 =>
+            {
+                request.capability = capabilities
+                    .next()
+                    .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+            }
+            SupervisionOperation::ReplacePolicy if message.capability_count() == 2 => {
+                request.setting_capability = capabilities
+                    .next()
+                    .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+                request.capability = capabilities
+                    .next()
+                    .ok_or(ConfigError::InvalidAuthorityEnvelope)?;
+            }
+            _ => return Err(ConfigError::InvalidAuthorityEnvelope),
+        }
+        if capabilities.next().is_some() {
+            return Err(ConfigError::InvalidAuthorityEnvelope);
+        }
         Ok(request)
     }
 }
@@ -2066,6 +2111,65 @@ pub fn dispatch_supervision_restart_envelope<A: ServiceRestartAuthorizer + ?Size
     .encode(output)
 }
 
+/// Re-reads one exact service-bound policy through the IPC-delivered setting
+/// READ capability, then asks the kernel to apply it through the separately
+/// delivered service CONTROL capability. The trusted userspace service supplies
+/// the expected service object; a generational service token is never decoded
+/// into or substituted for that object identity.
+pub fn dispatch_supervision_policy_envelope<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    C: CapabilityAuthorizer + ?Sized,
+    K: ServicePolicyAuthorizer + ?Sized,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    configuration_authorizer: &C,
+    kernel: &K,
+    expected_service_object: ObjectId,
+    payload: &[u8],
+    capabilities: &[Capability],
+    output: &mut [u8; SUPERVISION_RESPONSE_BYTES],
+) -> Result<(), ConfigError> {
+    let message =
+        Message::new(payload, capabilities).map_err(|_| ConfigError::InvalidAuthorityEnvelope)?;
+    let request = SupervisionRequest::decode_message(&message)?;
+    if request.operation != SupervisionOperation::ReplacePolicy {
+        return Err(ConfigError::InvalidProtocol);
+    }
+    let setting = request.setting.ok_or(ConfigError::NonCanonical)?;
+    let applied = match load_persisted_restart_policy(
+        configuration,
+        configuration_authorizer,
+        request.setting_capability,
+        setting,
+        expected_service_object,
+    ) {
+        Ok(bound) => match bound.policy.restart_policy() {
+            Ok(policy) => kernel
+                .replace_policy(request.capability, request.service, policy)
+                .is_ok(),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    };
+    SupervisionResponse {
+        request_id: request.request_id,
+        status: if applied {
+            ResponseStatus::Ok
+        } else {
+            ResponseStatus::Rejected
+        },
+        service: request.service,
+        state: if applied {
+            SupervisionState::Running
+        } else {
+            SupervisionState::Exited
+        },
+        detail: 0,
+    }
+    .encode(output)
+}
+
 /// Composes a kernel-derived management capability with the existing bounded
 /// supervisor. The caller supplies a trusted fresh launch context; no address,
 /// priority, or executable choice is accepted from the untrusted request.
@@ -2113,6 +2217,11 @@ pub fn dispatch_supervision_message<
                 SupervisionState::Exited,
             ),
         },
+        SupervisionOperation::ReplacePolicy => (
+            ResponseStatus::Rejected,
+            request.service,
+            SupervisionState::Exited,
+        ),
     };
     SupervisionResponse {
         request_id: request.request_id,
@@ -2562,6 +2671,8 @@ mod tests {
             request_id: 4,
             service: ServiceId::from_token((3u64 << 32) | 2),
             capability: root,
+            setting: None,
+            setting_capability: Capability::from_token(0),
         };
         let mut wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode(&mut wire).unwrap();
@@ -2640,6 +2751,8 @@ mod tests {
             request_id: 31,
             service: retired_service,
             capability: control,
+            setting: None,
+            setting_capability: Capability::from_token(0),
         };
         let mut request_wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode_message(&mut request_wire).unwrap();
@@ -2710,6 +2823,8 @@ mod tests {
             request_id: 52,
             service,
             capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
         };
         let mut wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode(&mut wire).unwrap();
@@ -2774,6 +2889,8 @@ mod tests {
             request_id: 53,
             service: ServiceId::from_token((3u64 << 32) | 1),
             capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
         }
         .encode(&mut wire)
         .unwrap();
@@ -2819,6 +2936,8 @@ mod tests {
             request_id: 54,
             service: retired,
             capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
         };
         let mut wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode(&mut wire).unwrap();
@@ -2895,6 +3014,8 @@ mod tests {
             request_id: 55,
             service: ServiceId::from_token((8u64 << 32) | 1),
             capability: Capability::from_token(0),
+            setting: None,
+            setting_capability: Capability::from_token(0),
         }
         .encode(&mut wire)
         .unwrap();
@@ -4030,6 +4151,168 @@ mod tests {
             Err(PersistedRestartPolicyError::Configuration(
                 ConfigError::Unauthorized(CapabilityError::Invalid)
             ))
+        );
+    }
+
+    #[test]
+    fn policy_envelope_requires_ordered_read_and_control_authorities() {
+        struct Kernel {
+            control: Capability,
+            service: ServiceId,
+            policy: RestartPolicy,
+        }
+        impl ServicePolicyAuthorizer for Kernel {
+            fn replace_policy(
+                &self,
+                capability: Capability,
+                service: ServiceId,
+                policy: RestartPolicy,
+            ) -> Result<(), ConfigError> {
+                if capability == self.control && service == self.service && policy == self.policy {
+                    Ok(())
+                } else {
+                    Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+                }
+            }
+        }
+
+        let setting = SettingId::new(11).unwrap();
+        let root_object = ObjectId(100);
+        let policy_object = ObjectId(101);
+        let service_object = ObjectId(102);
+        let schema =
+            SettingSchema::bytes(setting, policy_object, PERSISTED_RESTART_POLICY_BYTES as u8)
+                .unwrap();
+        let mut configuration = ConfigurationService::<1, 2>::new(root_object, &[schema]).unwrap();
+        let mut configuration_capabilities = CapabilitySpace::<2>::new();
+        let root = configuration_capabilities
+            .insert(root_object, Rights::CONTROL)
+            .unwrap();
+        let setting_read = configuration_capabilities
+            .insert(policy_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let persisted = PersistedRestartPolicy::new(service_object, 2, 5, 20).unwrap();
+        let mut encoded = [0; PERSISTED_RESTART_POLICY_BYTES];
+        persisted.encode(&mut encoded);
+        let mut transaction = ConfigTransaction::<1>::new(0);
+        transaction
+            .push(ConfigUpdate::new(
+                setting,
+                setting_read,
+                ConfigValue::bytes(&encoded).unwrap(),
+            ))
+            .unwrap();
+        configuration
+            .commit(&configuration_capabilities, root, &transaction)
+            .unwrap();
+
+        let service = ServiceId::from_token((17u64 << 32) | 2);
+        let control = Capability::from_token((18u64 << 32) | 3);
+        let kernel = Kernel {
+            control,
+            service,
+            policy: persisted.restart_policy().unwrap(),
+        };
+        let request = SupervisionRequest {
+            operation: SupervisionOperation::ReplacePolicy,
+            request_id: 56,
+            service,
+            capability: control,
+            setting: Some(setting),
+            setting_capability: setting_read,
+        };
+        let mut wire = [0; SUPERVISION_REQUEST_BYTES];
+        request.encode_message(&mut wire).unwrap();
+        assert!(wire[32..40].iter().all(|byte| *byte == 0));
+        assert_eq!(read_u32(&wire, 40), Ok(setting.get()));
+        let decoded_request = SupervisionRequest::decode_message(
+            &Message::new(&wire, &[setting_read, control]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(decoded_request, request);
+
+        let mut malformed = wire;
+        malformed[32] = 1;
+        assert_eq!(
+            SupervisionRequest::decode_message(
+                &Message::new(&malformed, &[setting_read, control]).unwrap()
+            ),
+            Err(ConfigError::InvalidAuthorityEnvelope)
+        );
+        malformed = wire;
+        malformed[44] = 1;
+        assert_eq!(
+            SupervisionRequest::decode(&malformed),
+            Err(ConfigError::NonCanonical)
+        );
+        malformed = wire;
+        write_u16(&mut malformed, 6, SupervisionOperation::Query as u16).unwrap();
+        assert_eq!(
+            SupervisionRequest::decode(&malformed),
+            Err(ConfigError::NonCanonical)
+        );
+        let mut response = [0; SUPERVISION_RESPONSE_BYTES];
+        dispatch_supervision_policy_envelope(
+            &configuration,
+            &configuration_capabilities,
+            &kernel,
+            service_object,
+            &wire,
+            &[setting_read, control],
+            &mut response,
+        )
+        .unwrap();
+        let decoded = SupervisionResponse::decode(&response).unwrap();
+        assert_eq!(decoded.status, ResponseStatus::Ok);
+        assert_eq!(decoded.service, service);
+        assert_eq!(decoded.state, SupervisionState::Running);
+        assert_eq!(decoded.detail, 0);
+
+        for authorities in [
+            &[][..],
+            &[setting_read][..],
+            &[setting_read, control, control][..],
+        ] {
+            assert_eq!(
+                dispatch_supervision_policy_envelope(
+                    &configuration,
+                    &configuration_capabilities,
+                    &kernel,
+                    service_object,
+                    &wire,
+                    authorities,
+                    &mut response,
+                ),
+                Err(ConfigError::InvalidAuthorityEnvelope)
+            );
+        }
+        dispatch_supervision_policy_envelope(
+            &configuration,
+            &configuration_capabilities,
+            &kernel,
+            service_object,
+            &wire,
+            &[control, setting_read],
+            &mut response,
+        )
+        .unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response).unwrap().status,
+            ResponseStatus::Rejected
+        );
+        dispatch_supervision_policy_envelope(
+            &configuration,
+            &configuration_capabilities,
+            &kernel,
+            ObjectId(103),
+            &wire,
+            &[setting_read, control],
+            &mut response,
+        )
+        .unwrap();
+        assert_eq!(
+            SupervisionResponse::decode(&response).unwrap().status,
+            ResponseStatus::Rejected
         );
     }
 }

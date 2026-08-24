@@ -5781,6 +5781,47 @@ generation. KVM reported `verify=20816us prepare=2469us execute=1449us
 total=49915us`; WHP reported `verify=18522us prepare=3679us execute=799us
 total=26838us`. These remain hosted controlled probes.
 
+The next bounded supervision increment extends the canonical 48-byte request
+with operation 3 (`ReplacePolicy`) and one nonzero setting ID. Payload authority
+remains zero. The IPC envelope must contain exactly two capabilities in order:
+the schema-bound setting's attenuated READ handle and a separately attenuated
+CONTROL handle for the live service. Userspace re-reads the canonical persisted
+policy through the first handle, rejects malformed or wrong-service data against
+its trusted `ObjectId(0xa1)` registration, and invokes pointer-free syscall 11
+through the second. The kernel again checks CONTROL against the live
+generational service entry, preserves consumed budget and deadlines, advances
+the bounded policy generation, and returns only success or rejection. Missing,
+extra, reordered, stale, payload-forged, or wrong-object authority fails closed.
+The controlled probe's per-task capability capacity is nine because the two new
+derived handles coexist with three initial and four earlier message-derived
+handles until task retirement; the increase adds storage capacity, not rights,
+and domain retirement still revokes the complete derived lineage.
+
+One newly generated one-use key signed the exact kernel image and a distinct
+one-use key signed the exact service image; both private keys were consumed.
+The identical signed bundles completed policy replacement followed by the
+authorized restart under KVM (`verify=21451us prepare=2322us execute=1304us
+total=50561us`) and WHP (`verify=19660us prepare=4107us execute=924us
+total=28314us`). This is signed hosted controlled-probe evidence, not live
+stable-storage restoration, reboot reconstruction, bare metal, physical-device,
+power-loss, or host-resistant evidence.
+
+For this increment, the `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, DRM, publisher veto, owner-attestation restriction,
+accessibility exclusion, AI authority, or persistence. Policy data remains data
+and cannot create authority. The `HOSTILE SECURITY REVIEW` treats operation,
+setting and service identities, generations, payload placeholders, capability
+count/order/rights, policy bytes and bounds, reserved fields, runtime capacity,
+and every response field as hostile. Exact setting READ and exact service
+CONTROL are independently revalidated, and all denial remains detail-free.
+This agent review does not replace independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — this composes conventional fixed-record IPC,
+ordered capability attenuation, configuration re-read, and a bounded
+capability-authorized syscall. It enters none of the recorded `TRIGGERED`
+compatibility, host-share, accessibility-device, browser semantic,
+JavaScript/WebAssembly, AI, or media scopes.
+
 Focused verification after the live integration used:
 
 ```text
@@ -5793,8 +5834,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 19 configuration, 337 kernel, and 19 WHP tests with one ignored;
-Linux passed 19 configuration, 337 kernel, and 16 KVM tests with one ignored.
+Windows passed 25 configuration, 442 kernel, and 22 WHP tests with one ignored;
+Linux passed 25 configuration, 442 kernel, and 18 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

@@ -229,7 +229,7 @@ authority; unrelated domains continue.
    exact authenticated-recovery-selected file generation; corruption and I/O
    uncertainty fail rather than searching an older generation. This is focused
    in-memory simulation evidence. Live block-service/device integration,
-   physical power-loss evidence, dynamic supervision-policy replacement, and
+   physical power-loss evidence, live stable-storage policy restoration, and
    reboot-time capability reconstruction remain pending, so this item is not
    complete. A
    canonical persistent restart-policy record now binds one service object to a
@@ -249,9 +249,14 @@ authority; unrelated domains continue.
    supervisor independently requires exact service CONTROL. Each successful
    replacement advances a bounded policy generation and stales prepared restart
    plans without resetting consumed budget or shortening an existing deadline;
-   generation exhaustion changes nothing. Signed CPL3 replacement, live stable-
-   storage/block-service restoration, and reboot-time capability reconstruction
-   remain pending, so this item remains partial.
+   generation exhaustion changes nothing. The versioned CPL3 protocol now
+   requires exactly two ordered IPC-derived capabilities: setting READ followed
+   by service CONTROL. The service re-reads the canonical service-bound record,
+   uses a trusted service-object mapping, and invokes operation 11 separately.
+   Fresh identical signed artifacts completed this path and the subsequent
+   authorized restart on KVM and WHP. Live stable-storage/block-service
+   restoration and reboot-time capability reconstruction remain pending, so
+   this item remains partial.
    The next protocol dependency is now implemented at the kernel ABI boundary:
    operation 11 accepts only an opaque service generation, one task-local
    capability, bounded restart count/backoff scalars, and a zero reserved
@@ -260,7 +265,8 @@ authority; unrelated domains continue.
    object and returns a detail-free result. It accepts no setting identity,
    service-object claim, pointer, context, priority, executable, time, or
    persistence claim. The versioned userspace supervision request, trusted
-   service-object mapping, and signed CPL3 KVM/WHP execution remain pending.
+   service-object mapping, and signed CPL3 KVM/WHP execution are now implemented
+   as described above.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
    **IMPLEMENTED:** `mrml-storage` supplies stable nonzero volume/object IDs,

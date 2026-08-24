@@ -128,9 +128,12 @@ authority. The kernel decodes a finite valid restart policy, rejects every
 reserved or overflowing scalar, and then authorizes exact CONTROL in the
 calling task's capability space against the supervisor's live service object.
 Completion exposes one success bit and no object, generation, rights, policy,
-budget, timing, or denial detail. It accepts no configuration-setting claim;
-the future userspace protocol must preserve its own trusted service-object
-mapping and revalidate setting READ before invoking this mechanism.
+budget, timing, or denial detail. It accepts no configuration-setting claim.
+The userspace protocol keeps a trusted service-object mapping, revalidates the
+canonical record through an IPC-derived exact setting READ capability, and
+requires a second ordered IPC-derived exact service CONTROL capability before
+invoking this mechanism. Missing, extra, reordered, stale, or payload-forged
+authority fails closed.
 
 ## Persistent state and boot
 
