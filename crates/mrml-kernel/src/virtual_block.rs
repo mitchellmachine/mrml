@@ -2542,6 +2542,19 @@ mod tests {
         policy
     }
 
+    fn block_transaction_io_policy() -> IoPortPolicy<2> {
+        let mut policy = IoPortPolicy::deny_all();
+        for port in [
+            VIRTUAL_BLOCK_DOORBELL_PORT,
+            VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+        ] {
+            policy
+                .allow(crate::IoPortRule::new(port, 4, crate::IoDirection::Write).unwrap())
+                .unwrap();
+        }
+        policy
+    }
+
     #[test]
     fn shared_ack_runner_accounts_exact_exit_and_updates_protected_counter() {
         let (mut vms, vm) = runner_vm();
@@ -2620,6 +2633,98 @@ mod tests {
         assert_eq!(device.state(), VirtualBlockDeviceState::Active);
         assert!(!bridge.is_poisoned());
         assert_eq!(bridge.completion_consumed, 0);
+    }
+
+    #[test]
+    fn shared_runners_reuse_one_slot_for_bounded_write_then_read() {
+        let interrupt_object = ObjectId(68);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(69), ObjectId(70), ObjectId(71));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_transaction_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+
+        for (sequence, request) in [
+            VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096),
+            VirtualBlockRequest::read(1, 2, 0, 1, 0x4000, 4096),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let sequence = sequence as u64 + 1;
+            if sequence == 1 {
+                vmm.bytes[0x4000..0x5000].fill(0x65);
+            } else {
+                vmm.bytes[0x4000..0x5000].fill(0);
+            }
+            vmm.write_guest(0x1000 + QUEUE_HEADER_BYTES, &encoded(request))
+                .unwrap();
+            vmm.write_guest(0x1000, &sequence.to_le_bytes()).unwrap();
+            vmm.next_exit = Some(VmExit::Io {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            });
+            assert!(matches!(
+                run_virtual_block_doorbell_once(
+                    &mut vmm,
+                    &mut backend,
+                    0,
+                    &mut vms,
+                    vm,
+                    &mut router,
+                    &capabilities,
+                    &guest_memory,
+                    &io,
+                    &interrupts,
+                    interrupt_capability,
+                    interrupt_object,
+                    &mut device,
+                    &mut bridge,
+                    &mut scratch,
+                ),
+                Ok(VirtualBlockProcessOutcome::Completed(_))
+            ));
+            vmm.next_exit = Some(VmExit::Io {
+                port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            });
+            assert_eq!(
+                run_virtual_block_completion_ack_once(
+                    &mut vmm,
+                    0,
+                    &mut vms,
+                    vm,
+                    &mut router,
+                    &capabilities,
+                    &guest_memory,
+                    &io,
+                    &mut device,
+                    &mut bridge,
+                ),
+                Ok(sequence)
+            );
+        }
+
+        assert_eq!((backend.writes, backend.reads), (1, 1));
+        assert!(vmm.bytes[0x4000..0x5000].iter().all(|byte| *byte == 0x65));
+        assert_eq!(bridge.request_consumed, 2);
+        assert_eq!(bridge.completion_published, 2);
+        assert_eq!(bridge.completion_consumed, 2);
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
     }
 
     #[test]

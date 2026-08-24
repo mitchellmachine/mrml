@@ -370,9 +370,9 @@ explicitly and downgrade the status rather than guessing.
   protected completion acknowledgement now lets the bridge retire exactly one
   published completion through the device-only write path after confirmed
   notification delivery; the guest-read-only mapping is preserved. The signed
-  one-shot probes validate the protected record before issuing it; KVM has live
-  execution evidence for this path while the WHP implementation is currently
-  type-checked only. A
+  probes now reuse one retired slot for a bounded write/read pair, validating
+  and acknowledging both protected records; KVM has live execution evidence
+  for this path while the WHP implementation is currently type-checked only. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

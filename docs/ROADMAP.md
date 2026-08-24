@@ -653,15 +653,14 @@ exit accounting, common I/O dispatch, exact doorbell handling, one queue
 transaction, and capability-authorized notification delivery. It delivers an
 already pending notification before another vCPU entry and fails the VM on any
 runner-stage error. Both prepared native guest types satisfy its memory
-contract. Controlled signed KVM and WHP probes now emit the exact native
-doorbell after writing one fixed 4 KiB payload, canonical request record, and
-producer counter through their guest mappings. The common runner publishes its
-completion and injects the authorized notification. This is hosted controlled-
-probe evidence. The signed one-shot probe now installs a minimal one-vector
-interrupt table, validates its exact completion, and acknowledges it; this is
-live-verified on KVM and implemented but not newly host-executed on WHP. The
-guest does not yet provide a reusable driver, general interrupt return, or
-multi-request flow.
+contract. Controlled signed KVM and WHP images now implement a bounded two-
+request sequence over one slot: write one fixed 4 KiB payload, validate and
+acknowledge its completion, overwrite the retired slot with a read request, and
+validate and acknowledge the second completion. The host verifies the complete
+read-back page. Signed read-only descriptor data supports exact interrupt entry
+and return. This is live-verified on KVM and implemented but not newly host-
+executed on WHP. The guest still lacks reusable discovery/driver state, a
+general interrupt framework, and unbounded progress.
 Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the
@@ -669,9 +668,9 @@ ordinary guest-write path and remains writable by the isolated device path.
 Dedicated kernel-block launch builders now install the same directionality in
 the initial guest page tables: request ranges are identity-mapped RW/NX and
 completion ranges R/NX. Controlled live tests cover both backends, including
-overlap rejection and KVM native-slot undercapacity. The signed doorbell probe
-now exercises these mappings as a one-request guest producer through the common
-runner.
+overlap rejection and KVM native-slot undercapacity. The signed probe now
+exercises these mappings as the bounded write/read producer-consumer pair
+through the common runners.
 
 The backend-neutral completion bridge now owns its monotonic consumer position
 instead of trusting a guest write into the read-only completion page. An exact
@@ -680,8 +679,8 @@ completion only after confirmed interrupt delivery and updates the protected
 header through the device path. Every scalar is rechecked before state or
 memory access; empty, premature, wrong-queue, terminal, or uncertain accepted
 acknowledgements fail closed. This remains shared unit/simulation policy: the
-signed KVM/WHP images now contain the matching one-shot consumer, with new live
-execution evidence only for KVM.
+signed KVM/WHP images now contain the matching bounded two-step consumer and
+single-slot reuse, with new live execution evidence only for KVM.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

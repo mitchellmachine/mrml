@@ -1528,12 +1528,17 @@ mod tests {
         }
     }
 
-    fn emit_completion_ack(code: &mut [u8; 512], at: &mut usize) {
+    fn emit_completion_ack(code: &mut [u8; 512], at: &mut usize, request_id: u32) {
         emit_mov(code, at, 0xbf, 0x60_2080);
         let mut failures = [0usize; 4];
-        for (index, (offset, expected)) in [(0, 0x0000_0001_4342_524d), (8, 1), (16, 1), (24, 4096)]
-            .into_iter()
-            .enumerate()
+        for (index, (offset, expected)) in [
+            (0, 0x0000_0001_4342_524d),
+            (8, 1),
+            (16, u64::from(request_id)),
+            (24, 4096),
+        ]
+        .into_iter()
+        .enumerate()
         {
             if offset == 0 {
                 emit(code, at, &[0x48, 0x8b, 0x07]);
@@ -1567,47 +1572,61 @@ mod tests {
             ],
         );
         let failure = *at;
-        emit(code, at, &[0xf4]);
+        emit(code, at, &[0xeb, 1, 0xf4]);
         for displacement in failures {
-            code[displacement] = u8::try_from(failure - (displacement + 1)).unwrap();
+            code[displacement] = u8::try_from(failure + 2 - (displacement + 1)).unwrap();
         }
     }
 
-    fn emit_interrupt_table(code: &mut [u8; 512], at: &mut usize, handler: u64) {
-        emit_mov(code, at, 0xbf, 0x60_17d8);
-        emit_mov(code, at, 0xb8, 0x00af_9b00_0000_ffff);
-        emit_store_rax(code, at, 0);
-        emit_mov(code, at, 0xbf, 0x60_17e0);
-        emit_mov(code, at, 0xb8, 0x00cf_9300_0000_ffff);
-        emit_store_rax(code, at, 0);
-        emit_mov(code, at, 0xbf, 0x60_17c0);
-        emit_mov(code, at, 0xb8, (0x60_17d0 << 16) | 23);
-        emit_store_rax(code, at, 0);
-        emit(code, at, &[0x0f, 0x01, 0x17]);
+    const GDT_OFFSET: usize = 0x1b0;
+    const GDT_DESCRIPTOR_OFFSET: usize = 0x1c8;
+    const IDT_GATE_OFFSET: usize = 0x1d8;
+    const IDT_DESCRIPTOR_OFFSET: usize = 0x1e8;
+    const INTERRUPT_HANDLER_OFFSET: usize = 0x1f8;
+
+    fn emit_descriptor_load(code: &mut [u8; 512], at: &mut usize, operation: u8, target: usize) {
+        let following = *at + 7;
+        emit(code, at, &[0x0f, 0x01, operation]);
+        emit(
+            code,
+            at,
+            &i32::try_from(target as isize - following as isize)
+                .unwrap()
+                .to_le_bytes(),
+        );
+    }
+
+    fn install_interrupt_tables(code: &mut [u8; 512], entry: u64) {
+        code[GDT_OFFSET + 8..GDT_OFFSET + 16]
+            .copy_from_slice(&0x00af_9b00_0000_ffffu64.to_le_bytes());
+        code[GDT_OFFSET + 16..GDT_OFFSET + 24]
+            .copy_from_slice(&0x00cf_9300_0000_ffffu64.to_le_bytes());
+        code[GDT_DESCRIPTOR_OFFSET..GDT_DESCRIPTOR_OFFSET + 2]
+            .copy_from_slice(&23u16.to_le_bytes());
+        code[GDT_DESCRIPTOR_OFFSET + 2..GDT_DESCRIPTOR_OFFSET + 10]
+            .copy_from_slice(&(entry + GDT_OFFSET as u64).to_le_bytes());
+
+        let handler = entry + INTERRUPT_HANDLER_OFFSET as u64;
         let gate_low =
             (handler & 0xffff) | (8 << 16) | (0x8e << 40) | (((handler >> 16) & 0xffff) << 48);
-        emit_mov(code, at, 0xbf, 0x60_1800);
-        emit_mov(code, at, 0xb8, gate_low);
-        emit_store_rax(code, at, 0);
-        emit_mov(code, at, 0xb8, handler >> 32);
-        emit_store_rax(code, at, 8);
-        emit_mov(code, at, 0xbf, 0x60_17f0);
-        emit_mov(code, at, 0xb8, (0x60_1500 << 16) | 0x30f);
-        emit_store_rax(code, at, 0);
-        emit(code, at, &[0x0f, 0x01, 0x1f]);
+        code[IDT_GATE_OFFSET..IDT_GATE_OFFSET + 8].copy_from_slice(&gate_low.to_le_bytes());
+        code[IDT_GATE_OFFSET + 8..IDT_GATE_OFFSET + 16]
+            .copy_from_slice(&(handler >> 32).to_le_bytes());
+        code[IDT_DESCRIPTOR_OFFSET..IDT_DESCRIPTOR_OFFSET + 2]
+            .copy_from_slice(&0x30fu16.to_le_bytes());
+        let idt_base = entry + IDT_GATE_OFFSET as u64 - (48 * 16);
+        code[IDT_DESCRIPTOR_OFFSET + 2..IDT_DESCRIPTOR_OFFSET + 10]
+            .copy_from_slice(&idt_base.to_le_bytes());
+        code[INTERRUPT_HANDLER_OFFSET..INTERRUPT_HANDLER_OFFSET + 2].copy_from_slice(&[0x48, 0xcf]);
     }
 
     fn producer_pe() -> [u8; 1024] {
         let mut pe = framebuffer_pe();
         let mut code = [0; 512];
         let mut at = 0;
-        const INTERRUPT_HANDLER_OFFSET: usize = 0x1f0;
-
-        emit_interrupt_table(
-            &mut code,
-            &mut at,
-            0xffff_8001_4000_1000 + INTERRUPT_HANDLER_OFFSET as u64,
-        );
+        let entry = 0xffff_8001_4000_1000;
+        emit_descriptor_load(&mut code, &mut at, 0x15, GDT_DESCRIPTOR_OFFSET);
+        emit_descriptor_load(&mut code, &mut at, 0x1d, IDT_DESCRIPTOR_OFFSET);
 
         // Fill one mapped page with the probe payload.
         emit_mov(&mut code, &mut at, 0xbf, 0xa0000);
@@ -1646,13 +1665,29 @@ mod tests {
             &mut at,
             &[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef],
         );
-        emit_completion_ack(&mut code, &mut at);
-        assert!(at < INTERRUPT_HANDLER_OFFSET);
-        code[INTERRUPT_HANDLER_OFFSET..INTERRUPT_HANDLER_OFFSET + 2].copy_from_slice(&[0x48, 0xcf]);
-        pe[0x200..0x400].fill(0);
-        pe[0x200..0x200 + at].copy_from_slice(&code[..at]);
-        pe[0x200 + INTERRUPT_HANDLER_OFFSET..0x200 + INTERRUPT_HANDLER_OFFSET + 2]
-            .copy_from_slice(&code[INTERRUPT_HANDLER_OFFSET..INTERRUPT_HANDLER_OFFSET + 2]);
+        emit_completion_ack(&mut code, &mut at, 1);
+
+        // Reuse slot zero only after acknowledgement, then read the same block.
+        emit_mov(&mut code, &mut at, 0xbf, 0xa0000);
+        emit(&mut code, &mut at, &[0x31, 0xc0]);
+        emit_store_rax(&mut code, &mut at, 0);
+        emit_mov(&mut code, &mut at, 0xbf, 0x60_0080);
+        emit_mov(&mut code, &mut at, 0xb8, 0x0000_0101_5142_524d);
+        emit_store_rax(&mut code, &mut at, 0);
+        emit_mov(&mut code, &mut at, 0xb8, 2);
+        emit_store_rax(&mut code, &mut at, 16);
+        emit(&mut code, &mut at, &[0x48, 0x81, 0xef, 0x80, 0, 0, 0]);
+        emit_mov(&mut code, &mut at, 0xb8, 2);
+        emit_store_rax(&mut code, &mut at, 0);
+        emit(
+            &mut code,
+            &mut at,
+            &[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef],
+        );
+        emit_completion_ack(&mut code, &mut at, 2);
+        assert!(at < GDT_OFFSET);
+        install_interrupt_tables(&mut code, entry);
+        pe[0x200..0x400].copy_from_slice(&code);
         let section = 0x98 + 240;
         pe[section + 8..section + 12].copy_from_slice(&0x200u32.to_le_bytes());
         pe
@@ -1908,7 +1943,7 @@ mod tests {
     }
 
     #[test]
-    fn live_signed_guest_produces_one_virtual_block_transaction() {
+    fn live_signed_guest_reuses_one_virtual_block_slot_for_write_and_read() {
         let system = match KvmSystem::open() {
             Ok(system) => system,
             Err(KvmError::SystemCall) => return,
@@ -1939,8 +1974,8 @@ mod tests {
             false,
         )
         .unwrap();
-        let layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 64).unwrap();
-        let overlapping = VirtualBlockQueueLayout::new(0x20_0000, 0x60_2000, 64).unwrap();
+        let layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 1).unwrap();
+        let overlapping = VirtualBlockQueueLayout::new(0x20_0000, 0x60_2000, 1).unwrap();
         assert!(matches!(
             system.prepare_kernel_block_guest::<9>(
                 0,
@@ -2002,10 +2037,10 @@ mod tests {
         vms.start(vm).unwrap();
         let mut router = HypercallRouter::new(ObjectId(0x202), ObjectId(0x203), ObjectId(0x204));
         let guest_memory = GuestMemory::<0>::new();
-        let mut device = VirtualBlockDevice::<64>::new(4096, 1, 0).unwrap();
+        let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0).unwrap();
         device.negotiate(0).unwrap();
         device.activate(layout, 48).unwrap();
-        let mut bridge = VirtualBlockQueueBridge::<64>::new(layout).unwrap();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout).unwrap();
         let mut storage = ProbeBlock([0; 4096]);
         let mut scratch = [0; 4096];
 
@@ -2065,14 +2100,73 @@ mod tests {
             &mut bridge,
         );
         assert_eq!(acknowledgement, Ok(1));
-        let mut completion_consumed = [0; 8];
+
+        assert!(matches!(
+            run_virtual_block_doorbell_once(
+                &mut guest,
+                &mut storage,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io_policy,
+                &interrupt_policy,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockProcessOutcome::Completed(_))
+        ));
+        VmBackend::read_guest(&guest, layout.request_base() + 128, &mut encoded_request).unwrap();
+        assert_eq!(
+            VirtualBlockRequest::decode(&encoded_request).unwrap(),
+            VirtualBlockRequest::read(1, 2, 0, 1, 0xa0000, 4096)
+        );
+        VmBackend::read_guest(&guest, layout.request_base(), &mut counters).unwrap();
+        assert_eq!(u64::from_le_bytes(counters[..8].try_into().unwrap()), 2);
+        assert_eq!(u64::from_le_bytes(counters[64..].try_into().unwrap()), 2);
+        let mut payload = [0; 4096];
+        VmBackend::read_guest(&guest, 0xa0000, &mut payload).unwrap();
+        assert_eq!(payload, [0x6d; 4096]);
         VmBackend::read_guest(
             &guest,
-            layout.completion_base() + 64,
-            &mut completion_consumed,
+            layout.completion_base() + 128,
+            &mut encoded_completion,
         )
         .unwrap();
-        assert_eq!(u64::from_le_bytes(completion_consumed), 1);
+        let completion = VirtualBlockCompletion::decode(&encoded_completion).unwrap();
+        assert_eq!(completion.request_id(), 2);
+        assert_eq!(completion.status(), VirtualBlockCompletionStatus::Ok);
+        assert_eq!(completion.transferred(), 4096);
+        assert_eq!(
+            run_virtual_block_completion_ack_once(
+                &mut guest,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io_policy,
+                &mut device,
+                &mut bridge,
+            ),
+            Ok(2)
+        );
+        let mut completion_counters = [0; 72];
+        VmBackend::read_guest(&guest, layout.completion_base(), &mut completion_counters).unwrap();
+        assert_eq!(
+            u64::from_le_bytes(completion_counters[..8].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            u64::from_le_bytes(completion_counters[64..].try_into().unwrap()),
+            2
+        );
         assert_eq!(vms.state(vm), Ok(mrml_kernel::VmState::Running));
     }
 }

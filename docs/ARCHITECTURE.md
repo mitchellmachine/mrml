@@ -640,16 +640,18 @@ transaction, and capability-authorized completion interruption. A notification
 already pending is delivered before another vCPU entry, and any runner-stage
 error fails the VM. It has no concrete hosted or physical block backend, PCI
 transport, or guest driver yet. Controlled signed KVM and WHP probes now emit
-the exact native doorbell into this runner after producing one fixed canonical
-write request, its 4 KiB payload, and the producer counter through guest
-mappings. They publish its completion and inject the authorized notification.
-Both signed probe images now contain a fixed one-shot completion consumer: they
-install a minimal GDT and one-vector IDT, receive the injected notification,
-validate the exact protected completion fields, and emit the acknowledgement.
+the exact native doorbell into this runner. The bounded probe first produces a
+canonical 4 KiB write, validates and acknowledges its completion, then reuses
+the single queue slot for a canonical read of the same block. Each request is
+published separately and receives a separately authorized notification. Both
+signed images contain the matching two-step consumer: signed read-only GDT/IDT
+data handles the vector, `iretq` restores state, and signed code validates each
+protected completion before acknowledgement. The host verifies the complete
+read-back payload.
 The KVM path is live-tested; the corresponding WHP path is implemented and
 type-checked but lacks new execution evidence in the current environment. This
-is not a reusable block driver, general interrupt-return path, or multi-request
-flow.
+is bounded two-request evidence, not a reusable block driver, general interrupt
+framework, or unbounded flow.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

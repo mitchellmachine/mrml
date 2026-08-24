@@ -1376,6 +1376,15 @@ to prevent reuse after partial failure is a standard defensive resource-
 construction technique. No patent-candidate mechanism was identified. This
 agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Bounded virtual-block single-slot reuse
+
+**Result: NOT_TRIGGERED.** The change conventionally performs one write and one
+read through the same fixed queue slot, reusing it only after the first exact
+completion acknowledgement. Signed read-only descriptor tables and host-side
+full-page comparison are standard controlled-probe techniques. No new patent-
+candidate mechanism was identified. This agent review does not replace the
+required independent human dual review.
+
 # 2026-08-24 — Signed native virtual-block completion consumer
 
 **Result: NOT_TRIGGERED.** The change conventionally composes a second native
