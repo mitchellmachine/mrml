@@ -282,6 +282,9 @@ fn run_block_guest_driver_probe(
                     .map_err(|_| anyhow!("invalid block configuration at quiescence"))?;
             let resume_page = VirtualBlockResumePage::fresh(BLOCK_RESUME_BASE, configuration_page)
                 .map_err(|_| anyhow!("invalid block resume page at quiescence"))?;
+            device
+                .suspend()
+                .map_err(|_| anyhow!("block device did not quiesce exactly"))?;
             let published = bridge
                 .publish_resume_page(guest, &device, resume_page)
                 .map_err(|error| anyhow!("block resume publication failed: {:?}", error))?;
@@ -295,6 +298,9 @@ fn run_block_guest_driver_probe(
             {
                 return Err(anyhow!("block quiescence state mismatch"));
             }
+            device
+                .resume()
+                .map_err(|_| anyhow!("block device did not resume exactly"))?;
         }
         for offset in 0..2 {
             let operation = window * 2 + offset;

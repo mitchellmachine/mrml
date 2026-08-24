@@ -3833,6 +3833,47 @@ Patent review: `NOT_TRIGGERED` — conventional reconstruction of two bounded
 completed-but-unretired ring entries and ordered completion retirement; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+Resume capture now enforces the lifecycle condition previously stated only in
+documentation. `VirtualBlockQueueBridge::resume_state` accepts configuration
+only from an explicitly `Suspended` device. Active-state capture fails before
+reading queue memory. Device suspension itself already rejects every live
+in-flight slot and pending completion interrupt, so a stopped vCPU cannot be
+mistaken for complete device quiescence. KVM and WHP runners suspend after the
+exact checkpoint tuple, publish and validate while suspended, and resume only
+after every state check succeeds; any failure drops the run without returning
+the device to active use. The canonical page remains data and carries no
+lifecycle authority.
+
+Fresh one-time Lamport-signed version-1 KVM execution on 2026-08-24 completed
+the `Active -> Suspended -> capture/publish -> Active` path and reported
+`verify=17067us prepare=2505us execute=729us total=40773us`. Arch Linux/WSL2
+passed all 387 release kernel tests and all 6 release KVM-run tests. Package-
+focused strict `--no-deps` Clippy passed for the kernel, KVM runner, and UEFI
+block probe. WHP source parity is present, but no new Windows build or execution
+evidence is claimed because the available shell still lacked `link.exe`. This
+is hosted controlled-probe evidence, not VM-destruction/rebuild, crash,
+backend-in-flight, persistence, durability, bare-metal, or physical-hardware
+evidence.
+
+The quiescence `DIGITAL-RIGHTS REVIEW` found no new identity, collection,
+retention, correlation, disclosure, attestation mandate, DRM, vendor/publisher
+control, first-party bypass, accessibility restriction, AI authority, or
+persistent owner-state change. Suspension is local volatile lifecycle
+mechanism and grants no authority. The `HOSTILE SECURITY REVIEW` treats the
+signed artifact, exact checkpoint tuple and budget, vCPU stop, device state,
+in-flight slots, interrupt latch, configuration, queue bytes and counters,
+publication, validation, and resume result as hostile. Active capture is
+rejected before memory access, suspension rejects residual device work, and no
+failure path resumes uncertain state. Existing capability, revocation,
+rollback-resistance, accessibility, evidence, owner-sovereignty, data-
+minimization, anti-DRM, owner-controlled-attestation, AI-containment, and anti-
+persistence gates remain unchanged. This agent review does not replace the
+required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional explicit device suspension before
+bounded canonical state capture and resume after successful publication; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

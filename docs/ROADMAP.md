@@ -734,8 +734,11 @@ and validates that exit, requires producer/consumed/published watermarks 14 and
 consumer watermark 12, and publishes nonzero state while the vCPU is stopped.
 The guest reconstructs two pending ownership records from the complete page
 plus both request slots, retires the already-published completions in order,
-and continues through operation 32. Fresh signed KVM execution covers this
-checkpoint. WHP source parity is present, but this increment has no new WHP
+and continues through operation 32. Canonical capture/publication now requires
+an explicit device `Suspended` state in addition to the stopped vCPU. Suspension
+admits no device in-flight slot or pending interrupt, and the device resumes
+only after publication and all state checks succeed. Fresh signed KVM execution
+covers this checkpoint. WHP source parity is present, but this increment has no new WHP
 build or execution evidence because the available Windows shell lacked its
 linker. Crash orchestration, backend-in-flight recovery, hosted VM restart
 execution, unbounded progress, and PCI transport remain pending.

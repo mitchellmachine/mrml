@@ -415,7 +415,10 @@ explicitly and downgrade the status rather than guessing.
   discards its local driver state, reconstructs two pending ownership records
   from the complete page and physical request slots, retires the two already-
   published completions in order, and continues through operation 32. Fresh
-  signed KVM execution covers this bounded live reinitialization. WHP source
+  capture now requires both a stopped vCPU and the device's explicit
+  `Suspended` state; suspension rejects device in-flight slots and pending
+  interrupts, while resume occurs only after exact publication and validation.
+  Signed KVM execution covers this bounded live reinitialization. WHP source
   parity is present, but the current increment has no new WHP build or execution
   evidence because the available Windows shell lacked its linker. This is not
   crash recovery. Crash/VM-rebuild orchestration, backend-in-flight recovery,

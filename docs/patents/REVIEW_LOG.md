@@ -1580,6 +1580,15 @@ new authority model, persistent format, device protocol, or patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Suspended virtual-block resume capture
+
+**Result: NOT_TRIGGERED.** The change conventionally requires an explicit
+device-suspended lifecycle state before reading and publishing bounded queue
+resume data, then returns to active use only after exact validation. It adds no
+new authority model, persistent format, device protocol, or patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Virtual-block queue transaction processor
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights producer/

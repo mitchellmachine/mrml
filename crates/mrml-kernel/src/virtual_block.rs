@@ -1664,7 +1664,21 @@ impl<const N: usize> VirtualBlockDevice<N> {
     }
 
     pub fn configuration(&self) -> Result<VirtualBlockConfiguration, VirtualBlockError> {
-        if self.state != VirtualBlockDeviceState::Active {
+        self.configuration_in(VirtualBlockDeviceState::Active)
+    }
+
+    /// Returns the exact mechanics of a successfully quiesced device. This
+    /// record is data rather than authority; callers must retain the separate
+    /// lifecycle authority needed to resume the device.
+    pub fn suspended_configuration(&self) -> Result<VirtualBlockConfiguration, VirtualBlockError> {
+        self.configuration_in(VirtualBlockDeviceState::Suspended)
+    }
+
+    fn configuration_in(
+        &self,
+        expected_state: VirtualBlockDeviceState,
+    ) -> Result<VirtualBlockConfiguration, VirtualBlockError> {
+        if self.state != expected_state {
             return Err(VirtualBlockError::InvalidState);
         }
         Ok(VirtualBlockConfiguration {
@@ -2206,9 +2220,11 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         self.layout
     }
 
-    /// Captures canonical data for a quiesced active device/bridge pair. A
-    /// backend read failure poisons the bridge, and the returned record carries
-    /// no authority to resume or access the device.
+    /// Captures canonical data only for an explicitly suspended device/bridge
+    /// pair. Suspension proves that no device request or notification is live;
+    /// a stopped vCPU alone is insufficient. A backend read failure poisons the
+    /// bridge, and the returned record carries no authority to resume or access
+    /// the device.
     pub fn resume_state<B: VirtualBlockVmmMemory>(
         &mut self,
         backend: &B,
@@ -2216,7 +2232,7 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
     ) -> Result<VirtualBlockResumeState, VirtualBlockQueueError<B::Error>> {
         self.require_live()?;
         let configuration = device
-            .configuration()
+            .suspended_configuration()
             .map_err(VirtualBlockQueueError::Protocol)?;
         if configuration.queue() != self.layout {
             return Err(VirtualBlockQueueError::Protocol(
@@ -4075,8 +4091,22 @@ mod tests {
         let mut bridge = VirtualBlockQueueBridge::<2>::new(queue).unwrap();
         let first = VirtualBlockRequest::read(1, 10, 0, 1, 0x4000, 4096);
         let second = VirtualBlockRequest::write(1, 20, 1, 1, 0x4000, 4096);
-        device.admit(&encoded(first)).unwrap();
-        device.admit(&encoded(second)).unwrap();
+        let first_admitted = device.admit(&encoded(first)).unwrap();
+        let second_admitted = device.admit(&encoded(second)).unwrap();
+        device
+            .complete(
+                first_admitted.ticket(),
+                VirtualBlockCompletionStatus::Ok,
+                4096,
+            )
+            .unwrap();
+        device
+            .complete(
+                second_admitted.ticket(),
+                VirtualBlockCompletionStatus::Ok,
+                4096,
+            )
+            .unwrap();
         bridge.request_consumed = 2;
         bridge.completion_published = 2;
         bridge.completion_consumed = 1;
@@ -4091,8 +4121,16 @@ mod tests {
         vmm.bytes[second_address..second_address + VIRTUAL_BLOCK_REQUEST_BYTES]
             .copy_from_slice(&encoded(second));
 
+        assert_eq!(
+            bridge.resume_state(&vmm, &device),
+            Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidState
+            ))
+        );
+        let active_configuration = device.configuration().unwrap();
+        device.suspend().unwrap();
         let state = bridge.resume_state(&vmm, &device).unwrap();
-        assert_eq!(state.configuration(), device.configuration().unwrap());
+        assert_eq!(state.configuration(), active_configuration);
         assert_eq!(state.request_producer(), 2);
         assert_eq!(state.request_consumed(), 2);
         assert_eq!(state.completion_published(), 2);
@@ -4108,7 +4146,7 @@ mod tests {
         assert_eq!(driver.completion_consumer(), 1);
 
         let configuration_page =
-            VirtualBlockConfigurationPage::new(0x5000, device.configuration().unwrap()).unwrap();
+            VirtualBlockConfigurationPage::new(0x5000, active_configuration).unwrap();
         let resume_page = VirtualBlockResumePage::fresh(0x4000, configuration_page).unwrap();
         let published = bridge
             .publish_resume_page(&mut vmm, &device, resume_page)

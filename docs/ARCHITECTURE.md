@@ -714,7 +714,11 @@ consumed, and published watermarks 14, consumer watermark 12, and both history
 anchors 14. The guest discards its local driver state, reconstructs two pending
 ownership records from the complete page and physical request slots, retires
 both already-published completions in order, and continues through operation 32
-without ID or counter reuse. Fresh signed KVM execution covers this pending-
+without ID or counter reuse. Resume capture now additionally requires the
+device's explicit `Suspended` lifecycle state; stopping the vCPU alone is not
+sufficient. Suspension succeeds only with no device in-flight slot or pending
+interrupt, and the runners resume the device only after exact publication and
+state validation succeed. Fresh signed KVM execution covers this pending-
 ownership checkpoint; the WHP path has matching source but was not rebuilt or
 executed for this increment because the available Windows shell lacked its
 linker. Crash/VM-rebuild orchestration, backend-in-flight recovery, unbounded
