@@ -2004,6 +2004,11 @@ executables are admitted through the resulting single `VerifiedRelease`; a new
 transition is committed after both signatures and PE formats pass but before
 PCR 11 extension, keeping the journal's read and publication policy coherent.
 Later boot preparation failure retries through the installed receipt.
+`PendingBootRelease` owns this sequencing: it records only successful exact
+kernel/service admissions, rejects publication until both are present, retains
+state across a compare-and-store conflict for retry, skips counter publication
+for an already installed manifest, and erases predecessor/successor bytes after
+success or drop.
 Required mode fails closed without the configuration, while optional mode keeps
 the legacy independent-root path for development.
 The loader expects `\EFI\MRML\RELEASE.MANIFEST`; a new transition additionally

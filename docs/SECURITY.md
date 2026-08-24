@@ -223,6 +223,12 @@ extension so the journal's read/write PCR policy remains coherent. Complete
 release and recovery layouts must be index-disjoint. Required mode rejects an
 absent or partial release configuration; optional development mode still uses
 the legacy independent embedded roots.
+The typed pending-release transaction makes incomplete publication fail closed:
+neither manifest authentication alone nor one valid executable can advance the
+journal. A state conflict retains the pending transition for a serialized retry;
+repeat admission of the installed manifest performs no counter write. Exact
+predecessor and successor bytes are erased when the transaction is consumed or
+dropped.
 The handoff represents manifest admission with its own canonical flag rather
 than inferring it from version or PCR success. Production `BootPolicy` rejects
 the legacy path even if Secure Boot, measurement, and a rollback counter are

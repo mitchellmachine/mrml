@@ -42,6 +42,7 @@ pub enum ArtifactError {
     MalformedContainer,
     WrongArtifactKind,
     ReleaseMismatch,
+    IncompleteReleaseAdmission,
 }
 
 pub const SIGNED_ARTIFACT_HEADER_BYTES: usize = 112;
@@ -472,6 +473,120 @@ pub struct VerifiedRelease {
     manifest: ReleaseManifest,
 }
 
+const BOOT_KERNEL_ADMITTED: u8 = 1;
+const BOOT_SERVICE_ADMITTED: u8 = 1 << 1;
+const REQUIRED_BOOT_ADMISSIONS: u8 = BOOT_KERNEL_ADMITTED | BOOT_SERVICE_ADMITTED;
+
+/// Typed release transaction that cannot publish a new manifest transition
+/// until the exact kernel and service artifacts have both been admitted.
+pub struct PendingBootRelease {
+    release: VerifiedRelease,
+    expected: [u8; BOOTSTRAP_STATE_BYTES],
+    replacement: [u8; BOOTSTRAP_STATE_BYTES],
+    manifest_digest: [u8; 64],
+    admitted: u8,
+    needs_publication: bool,
+}
+
+impl PendingBootRelease {
+    pub fn installed(
+        authenticated_state: [u8; BOOTSTRAP_STATE_BYTES],
+        encoded_manifest: &[u8],
+    ) -> Result<Self, ArtifactError> {
+        let current = BootstrapState::decode_authenticated(&authenticated_state)?;
+        let release = current.admit_installed_release(encoded_manifest)?;
+        Ok(Self {
+            release,
+            expected: authenticated_state,
+            replacement: authenticated_state,
+            manifest_digest: Sha3_512::digest(encoded_manifest),
+            admitted: 0,
+            needs_publication: false,
+        })
+    }
+
+    pub fn transition(
+        authenticated_state: [u8; BOOTSTRAP_STATE_BYTES],
+        encoded_manifest: &[u8],
+        root_public_key: &[u8],
+        signature: &[u8],
+    ) -> Result<Self, ArtifactError> {
+        let current = BootstrapState::decode_authenticated(&authenticated_state)?;
+        let (release, next) =
+            current.verify_release(encoded_manifest, root_public_key, signature)?;
+        Ok(Self {
+            release,
+            expected: authenticated_state,
+            replacement: next.encode(),
+            manifest_digest: Sha3_512::digest(encoded_manifest),
+            admitted: 0,
+            needs_publication: true,
+        })
+    }
+
+    pub fn verify_artifact(
+        &mut self,
+        artifact: &SignedArtifact<'_>,
+        expected_kind: ArtifactKind,
+    ) -> Result<VerifiedArtifact, ArtifactError> {
+        let verified = self.release.verify_artifact(artifact, expected_kind)?;
+        self.record_boot_kind(expected_kind);
+        Ok(verified)
+    }
+
+    pub fn verify_executable<'a>(
+        &mut self,
+        artifact: &SignedArtifact<'a>,
+        expected_kind: ArtifactKind,
+    ) -> Result<VerifiedExecutable<'a>, ExecutableArtifactError> {
+        let verified = self.release.verify_executable(artifact, expected_kind)?;
+        self.record_boot_kind(expected_kind);
+        Ok(verified)
+    }
+
+    pub fn publish<S: MonotonicStateStore>(&mut self, store: &mut S) -> Result<(), ArtifactError> {
+        if self.admitted & REQUIRED_BOOT_ADMISSIONS != REQUIRED_BOOT_ADMISSIONS {
+            return Err(ArtifactError::IncompleteReleaseAdmission);
+        }
+        if self.needs_publication {
+            store.compare_and_store(&self.expected, &self.replacement)?;
+            self.needs_publication = false;
+        }
+        self.expected.fill(0);
+        self.replacement.fill(0);
+        Ok(())
+    }
+
+    pub const fn release(&self) -> u64 {
+        self.release.release()
+    }
+
+    pub const fn manifest_digest(&self) -> [u8; 64] {
+        self.manifest_digest
+    }
+
+    pub const fn needs_publication(&self) -> bool {
+        self.needs_publication
+    }
+
+    fn record_boot_kind(&mut self, kind: ArtifactKind) {
+        self.admitted |= match kind {
+            ArtifactKind::Kernel => BOOT_KERNEL_ADMITTED,
+            ArtifactKind::ServiceImage => BOOT_SERVICE_ADMITTED,
+            ArtifactKind::VmImage | ArtifactKind::CudaKernelBundle | ArtifactKind::LaunchPolicy => {
+                0
+            }
+        };
+    }
+}
+
+impl Drop for PendingBootRelease {
+    fn drop(&mut self) {
+        self.expected.fill(0);
+        self.replacement.fill(0);
+    }
+}
+
 impl VerifiedRelease {
     fn trust_root(&self, kind: ArtifactKind) -> TrustRoot {
         TrustRoot::new(
@@ -671,6 +786,136 @@ mod tests {
             BootstrapState::verify_and_commit(&mut store, &manifest, &public, &signature).err(),
             Some(ArtifactError::RollbackDetected)
         );
+    }
+
+    #[test]
+    fn pending_boot_release_requires_both_artifacts_and_repeats_without_republication() {
+        let mut transition_private = [0x19; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut transition_public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        lamport_public_key(&transition_private, &mut transition_public).unwrap();
+
+        let kernel_payload = b"kernel";
+        let mut kernel_private = [0x2a; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut kernel_public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        let mut kernel_signature = [0; LAMPORT_SIGNATURE_BYTES];
+        lamport_public_key(&kernel_private, &mut kernel_public).unwrap();
+        lamport_sign(
+            &kernel_private,
+            &artifact_statement(
+                ArtifactKind::Kernel,
+                7,
+                kernel_payload.len() as u64,
+                Sha3_512::digest(kernel_payload),
+            ),
+            &mut kernel_signature,
+        )
+        .unwrap();
+
+        let service_payload = b"service";
+        let mut service_private = [0x3b; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut service_public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        let mut service_signature = [0; LAMPORT_SIGNATURE_BYTES];
+        lamport_public_key(&service_private, &mut service_public).unwrap();
+        lamport_sign(
+            &service_private,
+            &artifact_statement(
+                ArtifactKind::ServiceImage,
+                7,
+                service_payload.len() as u64,
+                Sha3_512::digest(service_payload),
+            ),
+            &mut service_signature,
+        )
+        .unwrap();
+
+        let manifest = ReleaseManifest::new(
+            7,
+            [0x91; 64],
+            [
+                Sha3_512::digest(&kernel_public),
+                [0x52; 64],
+                Sha3_512::digest(&service_public),
+                [0x54; 64],
+                [0x55; 64],
+            ],
+        )
+        .unwrap()
+        .encode();
+        let mut transition_signature = [0; LAMPORT_SIGNATURE_BYTES];
+        lamport_sign(
+            &transition_private,
+            &artifact_statement(
+                ArtifactKind::LaunchPolicy,
+                7,
+                manifest.len() as u64,
+                Sha3_512::digest(&manifest),
+            ),
+            &mut transition_signature,
+        )
+        .unwrap();
+        transition_private.fill(0);
+        kernel_private.fill(0);
+        service_private.fill(0);
+
+        let initial = BootstrapState::genesis(Sha3_512::digest(&transition_public), 7).encode();
+        let mut store = TestStateStore {
+            state: initial,
+            force_conflict: false,
+        };
+        let mut pending = PendingBootRelease::transition(
+            initial,
+            &manifest,
+            &transition_public,
+            &transition_signature,
+        )
+        .unwrap();
+        assert_eq!(
+            pending.publish(&mut store),
+            Err(ArtifactError::IncompleteReleaseAdmission)
+        );
+        let kernel = SignedArtifact {
+            kind: ArtifactKind::Kernel,
+            version: 7,
+            payload: kernel_payload,
+            public_key: &kernel_public,
+            signature: &kernel_signature,
+        };
+        pending
+            .verify_artifact(&kernel, ArtifactKind::Kernel)
+            .unwrap();
+        assert_eq!(
+            pending.publish(&mut store),
+            Err(ArtifactError::IncompleteReleaseAdmission)
+        );
+        let service = SignedArtifact {
+            kind: ArtifactKind::ServiceImage,
+            version: 7,
+            payload: service_payload,
+            public_key: &service_public,
+            signature: &service_signature,
+        };
+        pending
+            .verify_artifact(&service, ArtifactKind::ServiceImage)
+            .unwrap();
+        store.force_conflict = true;
+        assert_eq!(
+            pending.publish(&mut store),
+            Err(ArtifactError::StateConflict)
+        );
+        assert!(pending.needs_publication());
+        store.force_conflict = false;
+        pending.publish(&mut store).unwrap();
+        assert!(!pending.needs_publication());
+
+        let mut repeat = PendingBootRelease::installed(store.state, &manifest).unwrap();
+        repeat
+            .verify_artifact(&kernel, ArtifactKind::Kernel)
+            .unwrap();
+        repeat
+            .verify_artifact(&service, ArtifactKind::ServiceImage)
+            .unwrap();
+        store.force_conflict = true;
+        repeat.publish(&mut store).unwrap();
     }
 
     #[test]

@@ -90,6 +90,11 @@ for both its read and publication operations. Later boot preparation failure is
 retryable through the installed-manifest receipt. A required-mode
 flag fails closed when the complete release configuration is absent. The legacy
 independent-root path remains available only when required mode is disabled.
+The loader now uses a kernel-owned `PendingBootRelease` transaction rather than
+manually sequencing these steps. It records successful exact kernel and service
+admissions and refuses journal publication until both exist; state bytes are
+erased after success or drop. An already installed release still requires both
+admissions but performs no second monotonic publication.
 The canonical handoff carries a distinct coherent-release evidence bit only
 when this manifest path was used. Kernel production policy requires that bit in
 addition to Secure Boot, measured boot, and rollback protection; development

@@ -3,13 +3,13 @@
 
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
-use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, Sha3_512};
+use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootstrapState, FramebufferInfo, MAX_HANDOFF_BYTES,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, FramebufferInfo, MAX_HANDOFF_BYTES,
     MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MemoryKind,
-    MemoryRegion, MonotonicStateStore, PeImage, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
-    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
-    TrustRoot, VerifiedRelease,
+    MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr, PixelFormat,
+    RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch,
+    SignedArtifact, TrustRoot,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
@@ -118,11 +118,7 @@ struct FirmwareRng {
 
 struct PreparedRelease {
     journal: PcrReleaseStateJournal<FirmwareTpm, FirmwareRng>,
-    verified: VerifiedRelease,
-    expected: [u8; BOOTSTRAP_STATE_BYTES],
-    replacement: [u8; BOOTSTRAP_STATE_BYTES],
-    manifest_digest: [u8; 64],
-    transition: bool,
+    admission: PendingBootRelease,
 }
 
 const MAX_TPM_COMMAND_BYTES: usize = 256;
@@ -372,9 +368,9 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         core::slice::from_raw_parts(kernel_file.address as *const u8, kernel_file.length)
     };
     let signed = SignedArtifact::decode(kernel_bytes).map_err(|_| LOAD_ERROR)?;
-    let verified = if let Some(release) = prepared_release.as_ref() {
+    let verified = if let Some(release) = prepared_release.as_mut() {
         release
-            .verified
+            .admission
             .verify_executable(&signed, ArtifactKind::Kernel)
             .map_err(|_| LOAD_ERROR)?
     } else {
@@ -429,9 +425,9 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         core::slice::from_raw_parts(service_file.address as *const u8, service_file.length)
     };
     let service_signed = SignedArtifact::decode(service_bytes).map_err(|_| LOAD_ERROR)?;
-    let service_verified = if let Some(release) = prepared_release.as_ref() {
+    let service_verified = if let Some(release) = prepared_release.as_mut() {
         release
-            .verified
+            .admission
             .verify_executable(&service_signed, ArtifactKind::ServiceImage)
             .map_err(|_| LOAD_ERROR)?
     } else {
@@ -448,14 +444,10 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     };
     loader_trace(0xa4);
     if let Some(release) = prepared_release.as_mut() {
-        if release.transition {
-            release
-                .journal
-                .compare_and_store(&release.expected, &release.replacement)
-                .map_err(|_| LOAD_ERROR)?;
-        }
-        release.expected.fill(0);
-        release.replacement.fill(0);
+        release
+            .admission
+            .publish(&mut release.journal)
+            .map_err(|_| LOAD_ERROR)?;
     }
     let kernel_measured =
         measure_artifact(services, signed.payload(), b"MRML authenticated kernel PE")?;
@@ -469,8 +461,8 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     )?;
     let artifact_set_measured = if let Some(release) = prepared_release.as_ref() {
         let artifact_set = encode_selected_release_artifact_set(
-            release.verified.release(),
-            release.manifest_digest,
+            release.admission.release(),
+            release.admission.manifest_digest(),
             *verified.artifact().digest(),
             *service_verified.artifact().digest(),
         )
@@ -851,7 +843,6 @@ unsafe fn prepare_configured_release(
     let manifest = unsafe {
         core::slice::from_raw_parts(manifest_file.address as *const u8, manifest_file.length)
     };
-    let manifest_digest = Sha3_512::digest(manifest);
 
     let mut protocol_pointer = core::ptr::null_mut();
     check(unsafe {
@@ -871,16 +862,8 @@ unsafe fn prepare_configured_release(
     journal
         .load_authenticated(&mut expected)
         .map_err(|_| LOAD_ERROR)?;
-    let current = BootstrapState::decode_authenticated(&expected).map_err(|_| LOAD_ERROR)?;
-    if let Ok(verified) = current.admit_installed_release(manifest) {
-        return Ok(Some(PreparedRelease {
-            journal,
-            verified,
-            expected,
-            replacement: expected,
-            manifest_digest,
-            transition: false,
-        }));
+    if let Ok(admission) = PendingBootRelease::installed(expected, manifest) {
+        return Ok(Some(PreparedRelease { journal, admission }));
     }
 
     let public_file = unsafe {
@@ -912,17 +895,9 @@ unsafe fn prepare_configured_release(
     let signature = unsafe {
         core::slice::from_raw_parts(signature_file.address as *const u8, signature_file.length)
     };
-    let (verified, next) = current
-        .verify_release(manifest, public, signature)
+    let admission = PendingBootRelease::transition(expected, manifest, public, signature)
         .map_err(|_| LOAD_ERROR)?;
-    Ok(Some(PreparedRelease {
-        journal,
-        verified,
-        expected,
-        replacement: next.encode(),
-        manifest_digest,
-        transition: true,
-    }))
+    Ok(Some(PreparedRelease { journal, admission }))
 }
 
 fn admit_configured_recovery_journal(
