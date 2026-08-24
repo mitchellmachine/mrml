@@ -3714,6 +3714,13 @@ fn rustc_simple_fat_reference_initializer_reads_reach_native_objects() {
 }
 
 #[test]
+fn rustc_call_derived_fat_reference_initializer_reads_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &[usize], prefix: usize, start: usize, end: usize, bias: usize) -> usize { let selected: &[usize] = { prefix; choose(input, start, end, bias) }; selected.len() } fn choose(values: &[usize], start: usize, end: usize, bias: usize) -> &[usize] { if bias == 0 { &values[start..end] } else { values } }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_range_derived_fat_reference_initializer_reads_reach_native_objects() {
     let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &[usize], start: usize, end: usize, left: usize) -> usize { let local = [10usize, 20usize, 30usize, 40usize]; let from_local: &[usize] = &local[start..end]; let from_input: &[usize] = &input[left..]; from_local.len() + from_input.len() }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

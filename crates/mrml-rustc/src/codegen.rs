@@ -2462,7 +2462,19 @@ fn preanalyze_runtime_local_binding<
         _ => None,
     };
     let simple_fat_reference = runtime_type_is_fat_reference(ty)
-        && runtime_fat_reference_preanalysis_supported(&tree, tree.root(), 0);
+        && (runtime_fat_reference_preanalysis_supported(&tree, tree.root(), 0)
+            || runtime_fat_reference_call_preanalysis_supported(
+                function,
+                resolver,
+                &locals[..*local_count],
+                &tree,
+                tree.root(),
+                0,
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: local.initializer_span,
+            })?);
     let simple_fat_sequence = if runtime_type_is_fat_reference(ty)
         && let Some(ExprKind::Sequence { first, then }) = tree
             .expression(tree.root())
@@ -3053,6 +3065,15 @@ fn preanalyze_runtime_expression_at_reads<
                 }
             }
             ExprKind::ArrayRepeat { element, .. } => visit!(element)?,
+            ExprKind::Call {
+                arguments,
+                argument_count,
+                ..
+            } => {
+                for argument in arguments[..argument_count].iter().flatten() {
+                    visit!(*argument)?;
+                }
+            }
             // Inline const operands cannot capture runtime locals. Other compound
             // expression families remain outside this bounded preanalysis slice.
             _ => {}
@@ -4218,6 +4239,112 @@ fn runtime_fat_reference_preanalysis_supported<const MAX_NODES: usize>(
             runtime_fat_reference_preanalysis_supported(tree, then, depth + 1)
         }
         _ => false,
+    }
+}
+
+fn runtime_fat_reference_call_preanalysis_supported<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'_>>],
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    depth: usize,
+) -> Result<bool, CodegenErrorKind> {
+    if depth == 64 {
+        return Ok(false);
+    }
+    match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Call {
+            callee,
+            arguments,
+            argument_count,
+        }) => {
+            if resolver
+                .resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)
+                .is_none()
+                || arguments[..argument_count].iter().any(Option::is_none)
+            {
+                return Ok(false);
+            }
+            for argument in arguments[..argument_count].iter().flatten().copied() {
+                let ty = runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    argument,
+                    depth + 1,
+                )?;
+                if runtime_type_stack_slots(ty) == 1 {
+                    continue;
+                }
+                if !runtime_type_is_fat_reference(ty)
+                    || !(runtime_fat_reference_preanalysis_supported(tree, argument, depth + 1)
+                        || runtime_fat_reference_call_preanalysis_supported(
+                            function,
+                            resolver,
+                            locals,
+                            tree,
+                            argument,
+                            depth + 1,
+                        )?)
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Some(
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            },
+        ) => Ok(runtime_fat_reference_call_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then_branch,
+            depth + 1,
+        )? && runtime_fat_reference_call_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            else_branch,
+            depth + 1,
+        )?),
+        Some(
+            ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::InlineConst { operand },
+        ) => runtime_fat_reference_call_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            operand,
+            depth + 1,
+        ),
+        Some(ExprKind::Sequence { then, .. }) => runtime_fat_reference_call_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then,
+            depth + 1,
+        ),
+        _ => Ok(false),
     }
 }
 
@@ -18134,7 +18261,51 @@ fn runtime_width(ty: &str) -> Option<RuntimeWidth> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Item, NoConstants, Parser, TargetLayout, analyze_constants};
+    use crate::{
+        CallArrayElement, Item, NoConstants, Parser, RuntimeCallParameter, RuntimeCallTarget,
+        ScalarType, TargetLayout, analyze_constants,
+    };
+
+    struct FatCallResolver;
+
+    impl ConstantResolver for FatCallResolver {
+        fn resolve(&self, _: &str) -> Option<u128> {
+            None
+        }
+
+        fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+            &self,
+            name: &str,
+            argument_count: usize,
+        ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+            if name != "choose" || argument_count != 4 || MAX_PARAMETERS < 4 {
+                return None;
+            }
+            let slice = ScalarType::SliceReference {
+                element: CallArrayElement::Integer(crate::IntegerType::Usize),
+                mutable: false,
+            };
+            let mut parameters = [None; MAX_PARAMETERS];
+            parameters[0] = Some(RuntimeCallParameter {
+                name: "values",
+                ty: slice,
+            });
+            for (index, name) in ["start", "end", "bias"].iter().enumerate() {
+                parameters[index + 1] = Some(RuntimeCallParameter {
+                    name,
+                    ty: ScalarType::Integer(crate::IntegerType::Usize),
+                });
+            }
+            Some(RuntimeCallTarget {
+                name: "choose",
+                parameters,
+                parameter_count: 4,
+                return_type: slice,
+                return_type_name: "&[usize]",
+                body_expression: "{ if bias == 0 { &values[start..end] } else { values } }",
+            })
+        }
+    }
 
     #[test]
     fn runtime_place_ids_survive_shadowing_and_scope_cleanup() {
@@ -19288,6 +19459,44 @@ mod tests {
             RuntimePlaceIdentity::Parameter(1),
             RuntimePlaceIdentity::Parameter(4),
             RuntimePlaceIdentity::Parameter(2),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_call_derived_fat_reference_initializers() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &[usize], prefix: usize, start: usize, end: usize, bias: usize) -> usize { let selected: &[usize] = { prefix; choose(input, start, end, bias) }; selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 5);
+        for (fact, identity) in facts.assignment_reads[..5].iter().zip([
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(4),
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
