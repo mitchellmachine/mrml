@@ -3383,3 +3383,16 @@ survival, and new-child E0506 cases. Conditional, expression-conditional, and
 loop-carried replacements are deliberately excluded until path-sensitive
 generation joins exist; moved reference values are not yet indirect loan
 origins. The hygiene scan remained empty.
+
+The typed reference-assignment reborrow milestone passed all 713 compiler and
+driver tests on Windows gnullvm and all 713 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using rustc
+workspace commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. A plain direct
+reference identifier assigned into an existing typed reference binding now
+uses the destination reference type as coercion context and records its implicit
+borrow before the destination write. The pinned oracle confirmed E0503 while a
+reassigned mutable child remains live and accepted parent use after the child’s
+last use. Existing branch-only use-after-move coverage now uses a call-derived
+move, because the oracle confirms direct typed reference assignment is a
+reborrow. Projected, compound, conditional-RHS, and call-derived assignments do
+not claim this coercion behavior. The hygiene scan remained empty.

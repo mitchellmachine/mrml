@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `5e3798e`
-  (`compiler: bound reassigned loan generations`)
+- Compiler checkpoint commit: `909f0d9`
+  (`compiler: reborrow typed reference assignments`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -139,6 +139,12 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   conditional, and loop-carried replacements remain excluded until generation
   joins become path-sensitive; moved reference values are not indirect loan
   origins. This is not general coercion-site reborrowing.
+  A plain direct reference identifier assigned into an existing typed reference
+  binding uses the destination reference type as coercion context and records a
+  shared or mutable reborrow before the destination write. Mutable parent
+  suspension and last-use restoration then apply to the reassigned child.
+  Projected, compound, conditional-RHS, and call-derived assignments remain
+  outside this coercion-site classification.
   A direct identifier initializing an explicitly typed expected reference now
   records the corresponding shared or mutable implicit reborrow. The same
   identifier in an inferred mutable-reference binding remains a move, preserving
@@ -435,8 +441,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 711 tests on each host: 391
-library tests, 10 conformance tests, 308 replacement tests, and 2 driver tests.
+The checkpoint source passed 713 tests on each host: 392
+library tests, 10 conformance tests, 309 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

@@ -580,6 +580,12 @@ Uses resolve to the latest generation, while a child created before replacement
 remains tied to the old generation. Conditional, expression-conditional, and
 loop-carried reference replacements remain unclassified until generation joins
 are path-sensitive; indirect reference-value moves are also not loan origins.
+A plain assignment of a direct reference identifier into an existing typed
+reference binding now uses the destination type as coercion context and records
+a shared or mutable implicit reborrow before the destination write. For mutable
+references this preserves parent suspension until the reassigned child’s last
+use and restores the parent afterward. Projected, compound, conditional-RHS,
+and call-derived assignments retain their existing classifications.
 
 ## Roadmap selection
 
