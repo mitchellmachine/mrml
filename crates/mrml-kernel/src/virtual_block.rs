@@ -164,7 +164,7 @@ impl VirtualBlockRequest {
         let generation = u32::from_le_bytes(input[8..12].try_into().unwrap());
         let request_id = u64::from_le_bytes(input[16..24].try_into().unwrap());
         if generation == 0 || request_id == 0 {
-            return Err(VirtualBlockError::InvalidCompletion);
+            return Err(VirtualBlockError::MalformedRequest);
         }
         Ok(Self {
             generation,
@@ -500,7 +500,10 @@ impl<const N: usize> VirtualBlockDevice<N> {
         ) {
             return Err(VirtualBlockError::InvalidState);
         }
-        self.preflight_invalidation()?;
+        if let Err(error) = self.preflight_invalidation() {
+            self.state = VirtualBlockDeviceState::Failed;
+            return Err(error);
+        }
         let invalidated = self.invalidate_inflight();
         self.state = VirtualBlockDeviceState::Failed;
         Ok(invalidated)
@@ -607,20 +610,7 @@ impl<const N: usize> VirtualBlockDevice<N> {
         if self.state != VirtualBlockDeviceState::Active {
             return Err(VirtualBlockError::InvalidState);
         }
-        let index = usize::from(ticket.slot);
-        let entry = self
-            .slots
-            .get(index)
-            .copied()
-            .flatten()
-            .ok_or(VirtualBlockError::StaleTicket)?;
-        if entry.slot_generation != ticket.slot_generation
-            || entry.device_generation != ticket.device_generation
-            || entry.request_id != ticket.request_id
-            || ticket.device_generation != self.generation
-        {
-            return Err(VirtualBlockError::StaleTicket);
-        }
+        let (index, entry) = self.inflight(ticket)?;
         let expected = if entry.operation == VirtualBlockOperation::Flush {
             0
         } else {
@@ -642,6 +632,24 @@ impl<const N: usize> VirtualBlockDevice<N> {
             status,
             transferred,
         })
+    }
+
+    fn inflight(&self, ticket: VirtualBlockTicket) -> Result<(usize, InFlight), VirtualBlockError> {
+        let index = usize::from(ticket.slot);
+        let entry = self
+            .slots
+            .get(index)
+            .copied()
+            .flatten()
+            .ok_or(VirtualBlockError::StaleTicket)?;
+        if entry.slot_generation != ticket.slot_generation
+            || entry.device_generation != ticket.device_generation
+            || entry.request_id != ticket.request_id
+            || ticket.device_generation != self.generation
+        {
+            return Err(VirtualBlockError::StaleTicket);
+        }
+        Ok((index, entry))
     }
 
     fn validate_request(&self, request: VirtualBlockRequest) -> Result<(), VirtualBlockError> {
@@ -725,8 +733,60 @@ pub enum VirtualBlockQueueError<E> {
     Poisoned,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockMutationError<E> {
+    Rejected(E),
+    Uncertain(E),
+}
+
+/// Exact block operations behind one separately provisioned virtual device.
+///
+/// # Safety
+///
+/// A successful operation must transfer the complete supplied buffer at the
+/// exact block without redirection or shortening. `Rejected` means no durable
+/// or externally visible mutation occurred. Any write or flush failure for
+/// which that statement cannot be guaranteed must be returned as `Uncertain`.
+pub unsafe trait VirtualBlockBackend {
+    type Error;
+
+    fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error>;
+    fn write_blocks(
+        &mut self,
+        block: u64,
+        input: &[u8],
+    ) -> Result<(), VirtualBlockMutationError<Self::Error>>;
+    fn flush(&mut self) -> Result<(), VirtualBlockMutationError<Self::Error>>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockExecutionOutcome<E> {
+    Completed(VirtualBlockCompletion),
+    BackendRejected {
+        completion: VirtualBlockCompletion,
+        error: E,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockExecutionError<M, D> {
+    Protocol(VirtualBlockError),
+    GuestMemory {
+        error: VirtualBlockQueueError<M>,
+        invalidated: Result<usize, VirtualBlockError>,
+    },
+    BackendUncertain {
+        error: D,
+        invalidated: Result<usize, VirtualBlockError>,
+    },
+}
+
+pub type VirtualBlockExecutionResult<M, D> =
+    Result<VirtualBlockExecutionOutcome<D>, VirtualBlockExecutionError<M, D>>;
+
 /// VMM memory authority for the MRML-specific block transport. Request pages
-/// are guest-writable; completion pages are writable only by this device path.
+/// are guest-writable; completion slots and read-result payloads are writable
+/// only by this device path.
 pub trait VirtualBlockVmmMemory: VmBackend {
     fn write_virtual_block(&mut self, guest_address: u64, input: &[u8]) -> Result<(), Self::Error>;
 }
@@ -756,6 +816,30 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
 
     pub const fn is_poisoned(&self) -> bool {
         self.poisoned
+    }
+
+    pub const fn layout(&self) -> VirtualBlockQueueLayout {
+        self.layout
+    }
+
+    pub fn read_payload<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &B,
+        guest_address: u64,
+        output: &mut [u8],
+    ) -> Result<(), VirtualBlockQueueError<B::Error>> {
+        self.require_live()?;
+        self.read(backend, guest_address, output)
+    }
+
+    pub fn write_payload<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &mut B,
+        guest_address: u64,
+        input: &[u8],
+    ) -> Result<(), VirtualBlockQueueError<B::Error>> {
+        self.require_live()?;
+        self.write(backend, guest_address, input)
     }
 
     pub fn consume_request<B: VirtualBlockVmmMemory>(
@@ -843,6 +927,10 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         }
     }
 
+    fn fail_stop(&mut self) {
+        self.poisoned = true;
+    }
+
     fn read_counter<B: VmBackend>(
         &mut self,
         backend: &B,
@@ -887,6 +975,127 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
                 VirtualBlockQueueError::Backend(error)
             })
     }
+}
+
+/// Executes one already admitted request through private bounded scratch.
+/// Queue consumption and completion publication remain separate so transports
+/// can preserve their own ordering and interrupt semantics.
+pub fn execute_virtual_block_request<const N: usize, M, D>(
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    memory: &mut M,
+    backend: &mut D,
+    admitted: AdmittedVirtualBlockRequest,
+    scratch: &mut [u8],
+) -> VirtualBlockExecutionResult<M::Error, D::Error>
+where
+    M: VirtualBlockVmmMemory,
+    D: VirtualBlockBackend,
+{
+    let request = admitted.request();
+    scratch.fill(0);
+    if device.state() != VirtualBlockDeviceState::Active || bridge.is_poisoned() {
+        return Err(VirtualBlockExecutionError::Protocol(
+            VirtualBlockError::InvalidState,
+        ));
+    }
+    if device.queue() != Some(bridge.layout()) {
+        return Err(VirtualBlockExecutionError::Protocol(
+            VirtualBlockError::InvalidQueue,
+        ));
+    }
+    let (_, inflight) = device
+        .inflight(admitted.ticket())
+        .map_err(VirtualBlockExecutionError::Protocol)?;
+    if inflight.operation != request.operation()
+        || inflight.transfer_bytes != request.buffer_length()
+        || inflight.device_generation != request.generation()
+        || inflight.request_id != request.request_id()
+    {
+        return Err(VirtualBlockExecutionError::Protocol(
+            VirtualBlockError::StaleTicket,
+        ));
+    }
+    let transfer_bytes = usize::try_from(request.buffer_length())
+        .map_err(|_| VirtualBlockExecutionError::Protocol(VirtualBlockError::InvalidBuffer))?;
+    if scratch.len() < transfer_bytes {
+        return Err(VirtualBlockExecutionError::Protocol(
+            VirtualBlockError::InvalidBuffer,
+        ));
+    }
+    let work = &mut scratch[..transfer_bytes];
+
+    let rejection = match request.operation() {
+        VirtualBlockOperation::Read => match backend.read_blocks(request.block(), work) {
+            Ok(()) => match bridge.write_payload(memory, request.buffer_address(), work) {
+                Ok(()) => None,
+                Err(error) => {
+                    work.fill(0);
+                    return Err(VirtualBlockExecutionError::GuestMemory {
+                        error,
+                        invalidated: device.fail(),
+                    });
+                }
+            },
+            Err(error) => Some(error),
+        },
+        VirtualBlockOperation::Write => {
+            if let Err(error) = bridge.read_payload(memory, request.buffer_address(), work) {
+                work.fill(0);
+                return Err(VirtualBlockExecutionError::GuestMemory {
+                    error,
+                    invalidated: device.fail(),
+                });
+            }
+            match backend.write_blocks(request.block(), work) {
+                Ok(()) => None,
+                Err(VirtualBlockMutationError::Rejected(error)) => Some(error),
+                Err(VirtualBlockMutationError::Uncertain(error)) => {
+                    work.fill(0);
+                    bridge.fail_stop();
+                    return Err(VirtualBlockExecutionError::BackendUncertain {
+                        error,
+                        invalidated: device.fail(),
+                    });
+                }
+            }
+        }
+        VirtualBlockOperation::Flush => match backend.flush() {
+            Ok(()) => None,
+            Err(VirtualBlockMutationError::Rejected(error)) => Some(error),
+            Err(VirtualBlockMutationError::Uncertain(error)) => {
+                bridge.fail_stop();
+                return Err(VirtualBlockExecutionError::BackendUncertain {
+                    error,
+                    invalidated: device.fail(),
+                });
+            }
+        },
+    };
+
+    work.fill(0);
+    let status = if rejection.is_some() {
+        VirtualBlockCompletionStatus::DeviceError
+    } else {
+        VirtualBlockCompletionStatus::Ok
+    };
+    let transferred = if status == VirtualBlockCompletionStatus::Ok {
+        request.buffer_length()
+    } else {
+        0
+    };
+    let completion = match device.complete(admitted.ticket(), status, transferred) {
+        Ok(completion) => completion,
+        Err(error) => {
+            bridge.fail_stop();
+            let _ = device.fail();
+            return Err(VirtualBlockExecutionError::Protocol(error));
+        }
+    };
+    Ok(match rejection {
+        Some(error) => VirtualBlockExecutionOutcome::BackendRejected { completion, error },
+        None => VirtualBlockExecutionOutcome::Completed(completion),
+    })
 }
 
 fn slot_address(
@@ -941,6 +1150,12 @@ mod tests {
         assert_eq!(
             VirtualBlockRequest::decode(&bytes),
             Err(VirtualBlockError::UnsupportedOperation)
+        );
+        bytes = encoded(request);
+        bytes[8..12].fill(0);
+        assert_eq!(
+            VirtualBlockRequest::decode(&bytes),
+            Err(VirtualBlockError::MalformedRequest)
         );
 
         let mut device = active::<2>();
@@ -1017,6 +1232,29 @@ mod tests {
                 .complete(admitted.ticket(), VirtualBlockCompletionStatus::Ok, 4096,)
                 .map(|completion| completion.request_id()),
             Ok(1)
+        );
+    }
+
+    #[test]
+    fn fail_exhaustion_is_terminal_instead_of_returning_to_active_use() {
+        let mut device = active::<1>();
+        let admitted = device
+            .admit(&encoded(VirtualBlockRequest::read(
+                1, 1, 0, 1, 0x8000, 4096,
+            )))
+            .unwrap();
+        device.slot_generations[0] = u32::MAX;
+        assert_eq!(device.fail(), Err(VirtualBlockError::SequenceExhausted));
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
+        assert_eq!(
+            device.complete(admitted.ticket(), VirtualBlockCompletionStatus::Ok, 4096),
+            Err(VirtualBlockError::InvalidState)
+        );
+        assert_eq!(
+            device.admit(&encoded(VirtualBlockRequest::read(
+                1, 2, 1, 1, 0x9000, 4096,
+            ))),
+            Err(VirtualBlockError::InvalidState)
         );
     }
 
@@ -1116,6 +1354,312 @@ mod tests {
                 .copy_from_slice(input);
             Ok(())
         }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum MockMutation {
+        Complete,
+        Reject,
+        Uncertain,
+    }
+
+    struct MockBlock {
+        bytes: [u8; 0x4000],
+        mutation: MockMutation,
+        reads: usize,
+        writes: usize,
+        flushes: usize,
+    }
+
+    impl MockBlock {
+        fn new() -> Self {
+            Self {
+                bytes: [0; 0x4000],
+                mutation: MockMutation::Complete,
+                reads: 0,
+                writes: 0,
+                flushes: 0,
+            }
+        }
+
+        fn range(&self, block: u64, bytes: usize) -> Result<core::ops::Range<usize>, MockError> {
+            let start = usize::try_from(block)
+                .ok()
+                .and_then(|block| block.checked_mul(4096))
+                .ok_or(MockError::Bounds)?;
+            let end = start.checked_add(bytes).ok_or(MockError::Bounds)?;
+            self.bytes.get(start..end).ok_or(MockError::Bounds)?;
+            Ok(start..end)
+        }
+    }
+
+    unsafe impl VirtualBlockBackend for MockBlock {
+        type Error = MockError;
+
+        fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+            let range = self.range(block, output.len())?;
+            self.reads += 1;
+            output.copy_from_slice(&self.bytes[range]);
+            Ok(())
+        }
+
+        fn write_blocks(
+            &mut self,
+            block: u64,
+            input: &[u8],
+        ) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+            let range = self
+                .range(block, input.len())
+                .map_err(VirtualBlockMutationError::Rejected)?;
+            self.writes += 1;
+            match self.mutation {
+                MockMutation::Complete => {
+                    self.bytes[range].copy_from_slice(input);
+                    Ok(())
+                }
+                MockMutation::Reject => {
+                    Err(VirtualBlockMutationError::Rejected(MockError::Injected))
+                }
+                MockMutation::Uncertain => {
+                    self.bytes[range.start] = input[0];
+                    Err(VirtualBlockMutationError::Uncertain(MockError::Injected))
+                }
+            }
+        }
+
+        fn flush(&mut self) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+            self.flushes += 1;
+            match self.mutation {
+                MockMutation::Complete => Ok(()),
+                MockMutation::Reject => {
+                    Err(VirtualBlockMutationError::Rejected(MockError::Injected))
+                }
+                MockMutation::Uncertain => {
+                    Err(VirtualBlockMutationError::Uncertain(MockError::Injected))
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn executor_copies_reads_and_writes_privately_and_flushes() {
+        let mut device = active::<2>();
+        let mut bridge = VirtualBlockQueueBridge::<2>::new(layout::<2>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        backend.bytes[4096..8192].fill(0x5a);
+
+        let read = device
+            .admit(&encoded(VirtualBlockRequest::read(
+                1, 1, 1, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        let outcome = execute_virtual_block_request(
+            &mut device,
+            &mut bridge,
+            &mut vmm,
+            &mut backend,
+            read,
+            &mut scratch,
+        )
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            VirtualBlockExecutionOutcome::Completed(_)
+        ));
+        assert!(vmm.bytes[0x4000..0x5000].iter().all(|byte| *byte == 0x5a));
+        assert!(scratch.iter().all(|byte| *byte == 0));
+
+        vmm.bytes[0x4000..0x5000].fill(0x3c);
+        let write = device
+            .admit(&encoded(VirtualBlockRequest::write(
+                1, 2, 2, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        execute_virtual_block_request(
+            &mut device,
+            &mut bridge,
+            &mut vmm,
+            &mut backend,
+            write,
+            &mut scratch,
+        )
+        .unwrap();
+        assert!(backend.bytes[8192..12_288].iter().all(|byte| *byte == 0x3c));
+        assert!(scratch.iter().all(|byte| *byte == 0));
+        assert_eq!(
+            execute_virtual_block_request(
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                write,
+                &mut scratch,
+            ),
+            Err(VirtualBlockExecutionError::Protocol(
+                VirtualBlockError::StaleTicket
+            ))
+        );
+        assert_eq!(backend.writes, 1);
+
+        let flush = device
+            .admit(&encoded(VirtualBlockRequest::flush(1, 3)))
+            .unwrap();
+        execute_virtual_block_request(
+            &mut device,
+            &mut bridge,
+            &mut vmm,
+            &mut backend,
+            flush,
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (1, 1, 1));
+        assert_eq!(device.state(), VirtualBlockDeviceState::Active);
+    }
+
+    #[test]
+    fn executor_distinguishes_clean_rejection_from_uncertain_mutation() {
+        let mut device = active::<2>();
+        let mut bridge = VirtualBlockQueueBridge::<2>::new(layout::<2>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        vmm.bytes[0x4000..0x5000].fill(0x7b);
+
+        backend.mutation = MockMutation::Reject;
+        let rejected = device
+            .admit(&encoded(VirtualBlockRequest::write(
+                1, 1, 0, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        assert_eq!(
+            execute_virtual_block_request(
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                rejected,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockExecutionOutcome::BackendRejected {
+                completion: VirtualBlockCompletion {
+                    generation: 1,
+                    request_id: 1,
+                    status: VirtualBlockCompletionStatus::DeviceError,
+                    transferred: 0,
+                },
+                error: MockError::Injected,
+            })
+        );
+        assert_eq!(device.state(), VirtualBlockDeviceState::Active);
+        assert!(!bridge.is_poisoned());
+
+        backend.mutation = MockMutation::Uncertain;
+        let uncertain = device
+            .admit(&encoded(VirtualBlockRequest::write(
+                1, 2, 1, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        assert_eq!(
+            execute_virtual_block_request(
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                uncertain,
+                &mut scratch,
+            ),
+            Err(VirtualBlockExecutionError::BackendUncertain {
+                error: MockError::Injected,
+                invalidated: Ok(1),
+            })
+        );
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
+        assert!(bridge.is_poisoned());
+        assert!(scratch.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn executor_guest_memory_uncertainty_precedes_backend_mutation() {
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        let admitted = device
+            .admit(&encoded(VirtualBlockRequest::write(
+                1, 1, 0, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        vmm.fail_read = true;
+        assert_eq!(
+            execute_virtual_block_request(
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                admitted,
+                &mut scratch,
+            ),
+            Err(VirtualBlockExecutionError::GuestMemory {
+                error: VirtualBlockQueueError::Backend(MockError::Injected),
+                invalidated: Ok(1),
+            })
+        );
+        assert_eq!(backend.writes, 0);
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
+        assert!(bridge.is_poisoned());
+        assert!(scratch.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn executor_rejects_wrong_queue_and_scratch_before_backend_access() {
+        let mut device = active::<1>();
+        let wrong_layout = VirtualBlockQueueLayout::new(0x5000, 0x7000, 1).unwrap();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(wrong_layout).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let admitted = device
+            .admit(&encoded(VirtualBlockRequest::read(
+                1, 1, 0, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        let mut scratch = [0xa5; 4096];
+        assert_eq!(
+            execute_virtual_block_request(
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                admitted,
+                &mut scratch,
+            ),
+            Err(VirtualBlockExecutionError::Protocol(
+                VirtualBlockError::InvalidQueue
+            ))
+        );
+        assert!(scratch.iter().all(|byte| *byte == 0));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
+
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut short_scratch = [0xa5; 4095];
+        assert_eq!(
+            execute_virtual_block_request(
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+                &mut backend,
+                admitted,
+                &mut short_scratch,
+            ),
+            Err(VirtualBlockExecutionError::Protocol(
+                VirtualBlockError::InvalidBuffer
+            ))
+        );
+        assert!(short_scratch.iter().all(|byte| *byte == 0));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
     }
 
     #[test]

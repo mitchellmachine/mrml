@@ -623,9 +623,12 @@ read/write plus negotiated flush, monotonic request IDs, bounded GPA/length
 validation, generational in-flight tickets, explicit lifecycle transitions,
 and reset/removal invalidation. The backend-neutral VMM copy bridge returns no
 request until it publishes consumption and permanently poisons on uncertain
-guest-memory I/O. Backend execution, doorbells, interrupt delivery, PCI
-transport, KVM/WHP attachment, a guest driver, QEMU comparison, and fuzzing
-remain pending. This is not VirtIO-compatible.
+guest-memory I/O. A backend-neutral executor copies reads and writes through
+erased bounded private scratch, issues flush only after admission, returns a
+detail-free device error for a backend-guaranteed clean rejection, and fails the
+device plus bridge after uncertain mutation. A concrete hosted/physical backend,
+doorbells, interrupt delivery, PCI transport, KVM/WHP attachment, a guest driver,
+QEMU comparison, and fuzzing remain pending. This is not VirtIO-compatible.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

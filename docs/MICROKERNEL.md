@@ -3174,7 +3174,7 @@ tests cover canonical parsing, hidden fields, feature/range/buffer rejection,
 monotonic admission, capacity, forged tickets, lifecycle order, reset/removal,
 transactional generation exhaustion, disjoint queue layout, hostile indices,
 copy-before-consume ordering, and permanent poison after VMM memory uncertainty.
-This is unit/simulation evidence only. Backend execution, doorbells, interrupt
+This is unit/simulation evidence only. A concrete backend, doorbells, interrupt
 delivery, PCI transport, KVM/WHP attachment, a guest driver, QEMU differential
 testing, and physical-device behavior remain unimplemented.
 
@@ -3186,6 +3186,38 @@ request, completion, GPA, length, slot, generation, and VMM memory result as
 hostile. Validation precedes admission, reset invalidates stale work, and
 uncertainty poisons rather than retries ambiguously. This agent review does not
 replace the required independent human dual review.
+
+The backend-neutral execution boundary now accepts only an already admitted
+request, the exact active queue layout, one separately provisioned unsafe exact-
+block backend, and caller-owned bounded scratch. Reads complete privately before
+any guest write. Writes complete the guest copy before any backend call. Flush
+has no payload and remains available only through the negotiated request path.
+The complete scratch allocation is erased at entry and after use. A backend may
+report a guaranteed no-mutation rejection, which becomes a detail-free device-
+error completion while the device remains live. Any uncertain write or flush,
+or any guest-memory uncertainty, poisons the bridge, fails the device, and
+invalidates its in-flight tickets. Queue consumption and completion publication
+remain separate from execution so later transports cannot conflate device logic,
+interrupt policy, and PCI presentation.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 350 `mrml-kernel` release tests and scoped strict Clippy. The 13
+focused virtual-block tests additionally cover exact queue/executor binding,
+private read/write transfer, pre-I/O admitted-ticket replay rejection, flush,
+complete scratch erasure, undersized scratch, clean backend rejection, uncertain
+partial mutation, terminal failure on invalidation-generation exhaustion, and
+guest-memory failure before backend mutation. This remains unit/simulation
+evidence: no KVM/WHP
+device attachment, concrete hosted or physical backend, interrupt, guest driver,
+durability, or hardware behavior was exercised.
+
+The follow-up `DIGITAL-RIGHTS REVIEW` again found no collection, retention,
+tracking, DRM, attestation, remote disclosure, vendor veto, accessibility veto,
+or persistent owner-state change. The `HOSTILE SECURITY REVIEW` additionally
+treats scratch capacity, exact queue binding, backend classification, partial
+mutation, and payload-memory results as hostile. Data never creates authority;
+uncertain mutation cannot be retried through a live bridge. This agent review
+does not replace the required independent human dual review.
 
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one

@@ -618,8 +618,12 @@ completion rings, exact feature negotiation, monotonic request admission,
 generational in-flight tickets, and explicit create/negotiate/activate/operate/
 suspend/resume/fail/reset/remove/destroy state. Reset and removal invalidate all
 in-flight work and advance the device generation; VMM memory uncertainty poisons
-the queue bridge. It has no backend execution, doorbell, interrupt delivery,
-PCI transport, KVM/WHP attachment, or guest driver yet. **PLANNED:** guest
+the queue bridge. A backend-neutral executor now requires an exact separately
+provisioned block backend, copies reads and writes through erased caller-owned
+bounded scratch, and distinguishes clean mutation rejection from uncertainty;
+uncertainty fails the device and poisons its bridge. It has no concrete hosted
+or physical backend, doorbell, interrupt delivery, PCI transport, KVM/WHP
+attachment, or guest driver yet. **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No
 VirtIO-compatible MRML device currently exists.

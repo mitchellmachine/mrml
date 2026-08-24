@@ -1376,6 +1376,16 @@ service slots to have no task or pending cleanup before success is standard
 defensive lifecycle verification. No patent-candidate mechanism was identified.
 This agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Virtual-block backend execution boundary
+
+**Result: NOT_TRIGGERED.** The change conventionally copies exact block reads
+and writes through bounded erased scratch, distinguishes guaranteed clean
+rejection from uncertain mutation, and fails the device after uncertainty.
+Separating queue transport, backend execution, and completion publication is a
+standard defensive virtual-device structure. No patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — MRML-specific virtual-block queue foundation
 
 **Result: NOT_TRIGGERED.** The change uses conventional fixed request and

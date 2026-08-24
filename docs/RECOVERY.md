@@ -339,9 +339,12 @@ explicitly and downgrade the status rather than guessing.
   repair, and authenticated anti-rollback state do not yet exist. A
   separate MRML-specific virtual-block foundation now supplies canonical
   fixed requests/completions, disjoint bounded queue layouts, explicit device
-  lifecycle, and generation-invalidating reset/removal. It is unit-tested
-  shared policy only: no KVM/WHP attachment, backend execution, interrupt path,
-  guest driver, or durability evidence exists yet. A
+  lifecycle, generation-invalidating reset/removal, and backend-neutral exact
+  read/write/flush execution through erased bounded scratch. Clean mutation
+  rejection remains distinguishable from uncertainty; uncertainty fails the
+  device and poisons its bridge. It is unit-tested shared policy only: no
+  concrete hosted/physical backend, KVM/WHP attachment, interrupt path, guest
+  driver, or durability evidence exists yet. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned
@@ -386,10 +389,11 @@ explicitly and downgrade the status rather than guessing.
   machinery. None is a compositor, surface protocol, display backend, fence
   model, or accelerated desktop implementation.
 - VMM device inventory: inspect `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`,
-  `virtual_gpu.rs`, and both native backends. Currently the common lifecycle,
+  `virtual_block.rs`, `virtual_gpu.rs`, and both native backends. Currently the common lifecycle,
   guest-memory, exit, I/O-policy, hypercall, and interrupt mechanisms are
-  implemented; the MRML-specific mediated GPU queues are partial. No MRML
-  VirtIO, PCI device transport, UART device, block, NIC, input, sound, USB, or
+  implemented; the MRML-specific mediated GPU queues and virtual-block
+  queue/lifecycle/execution policy are partial. No MRML VirtIO, PCI device
+  transport, UART device, attached block backend, NIC, input, sound, USB, or
   general display device is implemented. QEMU VirtIO devices appearing in boot
   commands are external test infrastructure, not MRML VMM implementations.
 
