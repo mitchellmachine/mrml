@@ -2940,8 +2940,10 @@ Range-derived slice and string initializers plan runtime start/end reads
 before the base read, retaining the exact `Subslice` projection for a local-
 array base. Recursion is capped at 64 levels. Call-derived fat-reference
 initializers additionally plan left-to-right call-argument reads when every
-argument is a one-slot scalar or another supported fat reference. Sequence
-prefixes remain ahead of those arguments. Aggregate call arguments remain
+argument is a one-slot scalar, another supported fat reference, or a direct
+identifier-backed array or tuple. Sequence prefixes remain ahead of those
+arguments. Identifier-backed arrays plan one `Index` read per element and
+tuples plan numbered `TupleField` reads. Other aggregate call arguments remain
 later work because their specialized materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
@@ -2960,8 +2962,8 @@ blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
 Nested-loop blocks additionally mirror entry conditions and every stored control
 at its exact action boundary and control order before activating the following
 local or action.
-Method/call families beyond that bounded initializer slice, aggregate call-
-argument materialization, unsupported fat-reference returns,
+Method/call families beyond that bounded initializer slice, non-identifier
+aggregate call-argument materialization, unsupported fat-reference returns,
 aggregate tails,
 remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
@@ -3089,6 +3091,14 @@ proves a sequence prefix followed by four scalar/fat-reference call arguments
 in exact left-to-right order before inlined helper emission. Its original
 replacement emits both COFF and ELF64 objects through the same call-derived
 slice-reference initializer.
+
+The identifier-aggregate call-argument milestone passed all 606 compiler and
+driver tests on Windows gnullvm and all 606 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+five initializer reads followed by a sequence prefix, three projected local-
+array reads, two distinctly numbered local-tuple-field reads, and the trailing
+scalar argument. Its original replacement emits both COFF and ELF64 objects
+through the same inlined helper call.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
