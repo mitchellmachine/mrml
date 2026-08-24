@@ -612,8 +612,16 @@ VM lifecycle, bounded guest memory, exit decoding, interrupt injection policy,
 allowlisted scalar I/O, and MRML hypercalls. **PARTIALLY IMPLEMENTED:** the
 MRML-specific mediated GPU has authenticated bounded command/completion and
 resource queues plus reset/watchdog behavior, but is not a VirtIO GPU or general
-display device. **PLANNED:** guest console, block, network, input, graphics, and
-sound devices; PCI transport; and any required compatibility emulation. No
+display device. An MRML-specific virtual-block foundation now has canonical
+fixed read/write/flush requests and completions, disjoint bounded request and
+completion rings, exact feature negotiation, monotonic request admission,
+generational in-flight tickets, and explicit create/negotiate/activate/operate/
+suspend/resume/fail/reset/remove/destroy state. Reset and removal invalidate all
+in-flight work and advance the device generation; VMM memory uncertainty poisons
+the queue bridge. It has no backend execution, doorbell, interrupt delivery,
+PCI transport, KVM/WHP attachment, or guest driver yet. **PLANNED:** guest
+console, complete block integration, network, input, graphics, and sound
+devices; PCI transport; and any required compatibility emulation. No
 VirtIO-compatible MRML device currently exists.
 
 Each device is explicitly classified as **VirtIO-compatible**,

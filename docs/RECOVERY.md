@@ -337,6 +337,11 @@ explicitly and downgrade the status rather than guessing.
   device backend, physical
   power-loss evidence,
   repair, and authenticated anti-rollback state do not yet exist. A
+  separate MRML-specific virtual-block foundation now supplies canonical
+  fixed requests/completions, disjoint bounded queue layouts, explicit device
+  lifecycle, and generation-invalidating reset/removal. It is unit-tested
+  shared policy only: no KVM/WHP attachment, backend execution, interrupt path,
+  guest driver, or durability evidence exists yet. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

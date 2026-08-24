@@ -617,6 +617,16 @@ emulation only as required. Establish common queue, lifecycle/reset, interrupt,
 PCI-transport separation, and QEMU differential harnesses before broad device
 coverage. Every applicable device must behave consistently under KVM and WHP.
 
+**PARTIALLY IMPLEMENTED:** the first MRML-specific virtual-block device core
+defines canonical fixed requests/completions, disjoint bounded shared rings,
+read/write plus negotiated flush, monotonic request IDs, bounded GPA/length
+validation, generational in-flight tickets, explicit lifecycle transitions,
+and reset/removal invalidation. The backend-neutral VMM copy bridge returns no
+request until it publishes consumption and permanently poisons on uncertain
+guest-memory I/O. Backend execution, doorbells, interrupt delivery, PCI
+transport, KVM/WHP attachment, a guest driver, QEMU comparison, and fuzzing
+remain pending. This is not VirtIO-compatible.
+
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,
 then a VirtIO-net-compatible device and QEMU comparison. Multiqueue, offloads,

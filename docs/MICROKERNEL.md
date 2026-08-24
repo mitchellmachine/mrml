@@ -3147,6 +3147,46 @@ tickets, mappings, resources, and host-visible stage order as hostile; any
 mismatch halts or fails the runner before success. This agent review does not
 replace the required independent human dual review.
 
+The next backend-neutral storage-device layer is now an explicitly
+**MRML-specific** virtual-block foundation, not a VirtIO-compatible device.
+Canonical 64-byte requests bind version, operation, live device generation,
+strictly increasing request ID, block range, and a bounded aligned guest buffer;
+canonical 32-byte completions bind the same generation and request ID to an
+exact status and transfer length. Reserved bytes, unknown operations/features,
+zero or overflowing ranges, inconsistent lengths, stale generations, replay,
+queue saturation, and forged completion tickets fail before authority state is
+advanced. Read and write transfers are capped at 1 MiB; flush is available only
+after exact feature negotiation.
+
+The device core implements create, negotiate, activate, operate, suspend,
+resume, fail, reset, remove, and destroy states. In-flight slots have independent
+generations. Reset and removal preflight exhaustion, invalidate every live slot,
+advance the device generation, discard queue/interrupt configuration, and make
+old requests and tickets permanently stale. The VMM bridge uses disjoint,
+page-aligned fixed-capacity request and completion rings. It copies a request to
+private memory but returns it only after publishing the consumed position; any
+guest-memory read or device-only completion write uncertainty erases or
+withholds output and permanently poisons that bridge.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 345 `mrml-kernel` release tests and scoped strict Clippy. Focused
+tests cover canonical parsing, hidden fields, feature/range/buffer rejection,
+monotonic admission, capacity, forged tickets, lifecycle order, reset/removal,
+transactional generation exhaustion, disjoint queue layout, hostile indices,
+copy-before-consume ordering, and permanent poison after VMM memory uncertainty.
+This is unit/simulation evidence only. Backend execution, doorbells, interrupt
+delivery, PCI transport, KVM/WHP attachment, a guest driver, QEMU differential
+testing, and physical-device behavior remain unimplemented.
+
+The `DIGITAL-RIGHTS REVIEW` found no collection, retention, tracking,
+attestation, DRM, vendor veto, or persistent owner-state change; the device
+exists only when separately provisioned and its protocol data carries no host
+authority. The `HOSTILE SECURITY REVIEW` treats every feature, state, counter,
+request, completion, GPA, length, slot, generation, and VMM memory result as
+hostile. Validation precedes admission, reset invalidates stale work, and
+uncertainty poisons rather than retries ambiguously. This agent review does not
+replace the required independent human dual review.
+
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one
 capability-selected shared buffer.

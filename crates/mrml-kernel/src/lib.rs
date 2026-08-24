@@ -28,6 +28,7 @@ mod shared_buffer_syscall;
 mod shared_memory;
 mod syscall;
 mod task_runtime;
+mod virtual_block;
 mod virtual_gpu;
 mod vm;
 mod vm_dispatch;
@@ -123,6 +124,14 @@ pub use task_runtime::{
     MAX_TASK_DELEGATIONS, PeerDeath, PeerDeathReason, PeriodicDomainBalancer, ReceivedMessage,
     TASK_CONTROL_PEERS, TASK_INBOX_MESSAGES, TaskRuntime, TaskRuntimeError, TaskTermination,
     TimerDomainBalanceOutcome,
+};
+pub use virtual_block::{
+    AdmittedVirtualBlockRequest, MAX_VIRTUAL_BLOCK_QUEUE_SLOTS, MAX_VIRTUAL_BLOCK_TRANSFER_BYTES,
+    VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_FEATURE_FLUSH, VIRTUAL_BLOCK_REQUEST_BYTES,
+    VirtualBlockCompletion, VirtualBlockCompletionStatus, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockOperation, VirtualBlockQueueBridge,
+    VirtualBlockQueueError, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockTicket,
+    VirtualBlockVmmMemory,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,
