@@ -2942,14 +2942,15 @@ array base. Recursion is capped at 64 levels. Call-derived fat-reference
 initializers additionally plan left-to-right call-argument reads when every
 argument is a one-slot scalar, another supported fat reference, a direct
 identifier-backed array or tuple, an array literal or single-evaluation repeat,
-a direct conditional array with literal branches, a sequence-wrapped array
-literal/repeat/direct conditional with literal branches, or a supported literal/
-conditional/wrapped tuple. Sequence prefixes remain
+a direct conditional array with literal branches, a sequence-wrapped identifier-
+backed array/literal/repeat/direct conditional with literal branches, or a
+supported literal/conditional/wrapped tuple. Sequence prefixes remain
 ahead of those arguments. Identifier-backed arrays plan one `Index` read per
 element and tuples plan numbered `TupleField` reads. Direct conditional arrays
 plan condition, then element, and else element separately for every index.
 Supported sequence-wrapped arrays plan their prefix before every materialized
-element, including every repeat or direct conditional branch element. Other
+element, including every identifier `Index` read, repeat, or direct conditional
+branch element. Other
 wrapped or non-literal aggregate call arguments remain later work because their
 specialized materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
@@ -3131,6 +3132,14 @@ the array materializer's exact order: prefix, condition, then element, and else
 element repeated for each of three indexes before the later tuple and scalar
 arguments. Its original replacement emits both COFF and ELF64 objects through
 the same inlined helper call.
+
+The sequence-wrapped identifier-array call-argument milestone passed all 614
+compiler and driver tests on Windows gnullvm and all 614 in release mode on
+native Arch Linux WSL, plus warnings-denied Clippy on both hosts. Its adversarial
+unit test proves three initializer reads followed by three repetitions of the
+prefix and the same stable local-array identity with an `Index` projection,
+before the tuple and trailing scalar arguments. Its original replacement emits
+both COFF and ELF64 objects through the same inlined helper call.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
