@@ -1397,6 +1397,16 @@ The architecture review introduces no implementation and makes no clearance or
 infringement conclusion. See
 [`docs/PARAVIRTUAL_DEVICES.md`](../PARAVIRTUAL_DEVICES.md).
 
+# 2026-08-24 — Accessible browser semantic architecture
+
+**Result: TRIGGERED.** Planned canonical browser semantic protocols, no-JIT
+JavaScript and WebAssembly execution/admission, incremental accessibility/AI
+views, and scoped media-description flows are substantial future mechanisms.
+Before implementation, search actual claim limitations and worldwide families
+and verify every material right in authoritative territorial registers. This
+documentation adds no runtime mechanism and makes no clearance or infringement
+claim. See [`docs/BROWSER_SEMANTICS.md`](../BROWSER_SEMANTICS.md).
+
 # 2026-08-24 — Read-only virtual-block configuration page
 
 **Result: NOT_TRIGGERED.** The change conventionally validates a page-aligned

@@ -89,6 +89,10 @@ Architectural invariants:
 - WebAssembly remains browser content, the browser remains no-JIT/W^X, and
   neither web content nor browser possession silently delegates hardware
   authority;
+- follow `docs/BROWSER_SEMANTICS.md`: blind users and text-only AI receive the
+  same sanitized generational semantic truth under consumer-specific capability
+  scopes; no AI-only DOM/control interface, hidden JIT, automatic media export,
+  or accessibility-fingerprint disclosure is permitted;
 - the compositor owns trusted display surfaces, semantic GUI state is primary
   for accessibility and automation, and raw input or visual access remains a
   separately privileged fallback.

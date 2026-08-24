@@ -78,6 +78,10 @@ not each need a special kernel authority model.
 
 ## Braille output and input
 
+Browser-specific semantic identity, Braille/speech projection, blind-human and
+text-only-AI parity, media description, and ABI evidence gates are specified in
+[BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md).
+
 The planned VMM accessibility bus and deterministic Braille/input emulators are
 specified in [PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md). They permit CI and
 development across 14/20/32/40/64/80-cell configurations without claiming

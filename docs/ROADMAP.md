@@ -984,6 +984,14 @@ cannot bypass secret redaction or grant universal observation/input authority.
 
 ## Phase 4 — Browser and AI application control
 
+The canonical dependency order and acceptance gates are in
+[BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md): Semantic Scene Graph; browser tree;
+focus/keyboard; Braille/speech; trusted chrome; bounded text-only AI; no-JIT
+JavaScript and dynamic semantics; browser-only no-JIT WebAssembly and semantic
+bridge; scoped media/multimodal inspection; monitor-off and blind-user testing;
+then semantic ABI stabilization. Earlier script execution never establishes
+accessibility completeness.
+
 1. Build the browser as isolated services with no JIT and strict W^X.
 2. Keep WebAssembly inside the browser boundary and mediate every sensitive API
    per origin and capability.

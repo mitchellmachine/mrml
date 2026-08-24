@@ -111,6 +111,11 @@ explicitly and downgrade the status rather than guessing.
   obligation to reproduce old editions or arbitrary historical rustc behavior.
 - Host browser automation: `crates/mrml-tools/src/browser.rs` and `web.rs`; this
   is not an MRML browser engine, compositor, or OS application implementation.
+- Future browser work must read `docs/BROWSER_SEMANTICS.md`: blind humans,
+  Braille, speech, keyboard, and text-only AI share one sanitized generational
+  tree; there is no AI-only DOM/control path; JavaScript/Wasm remain no-JIT/W^X;
+  media is separately authorized; and monitor-off/blind-user evidence precedes
+  ABI stabilization.
 - Application/GUI/browser OS work: search the whole tree; absence is meaningful
   and planned documentation must not be promoted to implementation status.
 - Native filesystem: `crates/mrml-storage` contains the first userspace-service

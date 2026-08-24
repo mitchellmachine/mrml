@@ -12,6 +12,9 @@ complexity rules are in
 inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy. Relevant
 predecessors and deliberately bounded comparison claims are recorded in
 [HISTORY_AND_PRIOR_ART.md](HISTORY_AND_PRIOR_ART.md).
+The browser's canonical accessibility/AI semantic interface, no-JIT script/Wasm
+rules, origin model, and media boundary are in
+[BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md).
 The reusable VMM queue, lifecycle, transport, capability-backend, host-share,
 and accessibility-emulation rules are canonical in
 [PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md).

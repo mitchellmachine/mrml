@@ -216,6 +216,11 @@ confused inputs; normal tests alone do not harden a parser.
 
 ## Application and GUI boundary
 
+Browser semantic state is capability-bound, origin/generation validated, and
+redacted before accessibility/AI fan-out according to
+[BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md). No AI-only DOM/control path exists;
+media inspection, semantic inspection/interaction, and raw input remain separate.
+
 The native application model is memory-safe by default. A safe-language label
 alone is insufficient: ordinary application admission must eventually exclude
 unsafe code, native FFI, and memory-unsafe dependencies unless the application

@@ -105,6 +105,10 @@ conceptual API. VM transport must not manufacture, widen, or confuse authority.
 
 ## WebAssembly and browser execution
 
+The normative browser semantic tree, accessibility parity, JavaScript/Wasm
+runtime constraints, and media-inspection model are in
+[BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md).
+
 WebAssembly is browser content, not an MRML native application format. There is
 no system-wide WASI/WebAssembly runtime unless a future explicit architecture
 and security decision changes this rule. Browser-hosted WebAssembly receives
@@ -349,6 +353,9 @@ exception. Indicators use system state rather than application claims and remain
 revocable where temporary.
 
 ### Browser semantic interface
+
+This section is summarized by and must remain consistent with the canonical
+contract in [BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md).
 
 The browser exposes a sanitized interactive document tree combining document
 structure, accessibility semantics, actual layout, visibility, hit testing, and
