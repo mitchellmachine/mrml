@@ -243,9 +243,15 @@ authority; unrelated domains continue.
    apply the result; the record carries no authority and
    every restart still requires exact service CONTROL. Focused tests prove
    checkpoint restoration, stale-capability denial, service substitution
-   rejection, backoff, and budget enforcement. Dynamic policy replacement,
-   live stable-storage/block-service restoration, and reboot-time capability
-   reconstruction remain pending, so this item remains partial.
+   rejection, backoff, and budget enforcement. Dynamic policy replacement is
+   now implemented in host-side unit/simulation code. Application explicitly
+   rechecks setting READ and exact value/global/setting revisions, while the
+   supervisor independently requires exact service CONTROL. Each successful
+   replacement advances a bounded policy generation and stales prepared restart
+   plans without resetting consumed budget or shortening an existing deadline;
+   generation exhaustion changes nothing. Signed CPL3 replacement, live stable-
+   storage/block-service restoration, and reboot-time capability reconstruction
+   remain pending, so this item remains partial.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
    **IMPLEMENTED:** `mrml-storage` supplies stable nonzero volume/object IDs,

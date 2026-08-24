@@ -112,6 +112,16 @@ authority unless the principal separately holds the narrow persistent-object
 capability for startup, service replacement, configuration, executable trust,
 credentials, boot state, or firmware.
 
+Dynamic supervision-policy replacement treats cached configuration as data,
+not authority. Application requires an explicitly supplied live READ
+capability for the exact schema-bound setting and rechecks its value plus global
+and setting revisions immediately before mutation. The supervisor separately
+requires exact CONTROL for the service object. A bounded policy generation
+invalidates restart plans prepared before a change; generation exhaustion is
+non-mutating. Replacement preserves consumed restart count and an already-
+computed eligibility deadline, so rewriting policy cannot manufacture retries
+or shorten pending backoff.
+
 ## Persistent state and boot
 
 Signed images alone do not prevent rollback. TPM-backed or equivalent

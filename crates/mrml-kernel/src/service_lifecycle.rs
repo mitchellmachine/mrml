@@ -120,6 +120,7 @@ pub struct ServiceRecovery {
 pub struct ServiceRestartPlan {
     service: ServiceId,
     object: ObjectId,
+    policy_generation: u32,
     priority: Priority,
     context: UserContext,
     now: u64,
@@ -186,6 +187,7 @@ struct ServiceSlot {
     state: ServiceState,
     occupied: bool,
     restart_policy: RestartPolicy,
+    policy_generation: u32,
     completed_restarts: u32,
     next_restart_tick: u64,
     cleanup: Option<ServiceCleanupTicket>,
@@ -199,6 +201,7 @@ impl ServiceSlot {
         state: ServiceState::Exited,
         occupied: false,
         restart_policy: RestartPolicy::ONCE_IMMEDIATE,
+        policy_generation: 1,
         completed_restarts: 0,
         next_restart_tick: 0,
         cleanup: None,
@@ -244,6 +247,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         entry.state = ServiceState::Running;
         entry.occupied = true;
         entry.restart_policy = restart_policy;
+        entry.policy_generation = 1;
         entry.completed_restarts = 0;
         entry.next_restart_tick = 0;
         entry.cleanup = None;
@@ -287,6 +291,38 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         service: ServiceId,
     ) -> Result<Option<ServiceCleanupTicket>, ServiceError> {
         Ok(self.slot(service)?.cleanup)
+    }
+
+    /// Replaces restart policy only through exact service CONTROL authority.
+    /// Consumed restart budget and an already-computed eligibility deadline are
+    /// retained; replacement cannot manufacture retries or shorten a pending
+    /// backoff. Advancing the policy generation invalidates every restart plan
+    /// prepared under the prior policy.
+    pub fn replace_restart_policy<const MANAGEMENT_CAPS: usize>(
+        &mut self,
+        service: ServiceId,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        control: Capability,
+        restart_policy: RestartPolicy,
+    ) -> Result<(), ServiceError> {
+        let entry = self.slot(service)?;
+        let authorized = management
+            .authorize(control, crate::Rights::CONTROL)
+            .map_err(ServiceError::Unauthorized)?;
+        if authorized != entry.object {
+            return Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let next_policy_generation = entry
+            .policy_generation
+            .checked_add(1)
+            .filter(|generation| *generation != 0)
+            .ok_or(ServiceError::GenerationExhausted)?;
+        let slot = service.slot as usize;
+        self.slots[slot].restart_policy = restart_policy;
+        self.slots[slot].policy_generation = next_policy_generation;
+        Ok(())
     }
 
     pub fn exit_current<const TASKS: usize, const CAPS: usize>(
@@ -532,6 +568,7 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         Ok(ServiceRestartPlan {
             service,
             object: entry.object,
+            policy_generation: entry.policy_generation,
             priority,
             context: fresh_context,
             now,
@@ -551,6 +588,9 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let entry = self.restartable_entry(service, plan.now)?;
         if entry.object != plan.object {
             return Err(ServiceError::InvalidObject);
+        }
+        if entry.policy_generation != plan.policy_generation {
+            return Err(ServiceError::InvalidRestartPolicy);
         }
         let generation = entry
             .generation
@@ -961,6 +1001,136 @@ mod tests {
         );
         assert_eq!(supervisor.state(service), Ok(ServiceState::Exited));
         assert!(runtime.current().is_none());
+    }
+
+    #[test]
+    fn policy_replacement_requires_control_invalidates_plans_and_preserves_history() {
+        let object = ObjectId(0x84);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor
+            .register_with_policy(object, task, RestartPolicy::new(2, 10, 10).unwrap())
+            .unwrap();
+        let retirement = supervisor.exit_current_at(&mut runtime, 100).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
+
+        let mut management = CapabilitySpace::<2>::new();
+        let wrong = management.insert(ObjectId(0x85), Rights::CONTROL).unwrap();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let fresh = context(0x30_0000, 0x50_0000);
+        let stale_plan = supervisor
+            .prepare_restart_at(service, &management, control, Priority::NORMAL, fresh, 110)
+            .unwrap();
+        assert_eq!(
+            supervisor.replace_restart_policy(
+                service,
+                &management,
+                wrong,
+                RestartPolicy::new(3, 0, 0).unwrap(),
+            ),
+            Err(ServiceError::Unauthorized(
+                CapabilityError::PermissionDenied
+            ))
+        );
+        supervisor
+            .replace_restart_policy(
+                service,
+                &management,
+                control,
+                RestartPolicy::new(3, 0, 0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            supervisor.commit_restart(stale_plan, &mut runtime),
+            Err(ServiceError::InvalidRestartPolicy)
+        );
+        assert_eq!(
+            supervisor.restart_at(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                fresh,
+                109,
+            ),
+            Err(ServiceError::RestartBackoff { eligible_at: 110 })
+        );
+        let replacement = supervisor
+            .restart_at(
+                service,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                fresh,
+                110,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { .. }));
+        let retirement = supervisor.exit_current_at(&mut runtime, 200).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
+        supervisor
+            .replace_restart_policy(
+                replacement,
+                &management,
+                control,
+                RestartPolicy::new(1, 0, 0).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            supervisor.restart_at(
+                replacement,
+                &management,
+                control,
+                &mut runtime,
+                Priority::NORMAL,
+                context(0x40_0000, 0x60_0000),
+                200,
+            ),
+            Err(ServiceError::RestartLimit)
+        );
+    }
+
+    #[test]
+    fn policy_generation_exhaustion_preserves_policy_and_restart_plan() {
+        let object = ObjectId(0x86);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
+        supervisor.slots[service.slot as usize].policy_generation = u32::MAX;
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let plan = supervisor
+            .prepare_restart_at(
+                service,
+                &management,
+                control,
+                Priority::NORMAL,
+                context(0x30_0000, 0x50_0000),
+                0,
+            )
+            .unwrap();
+        assert_eq!(
+            supervisor.replace_restart_policy(
+                service,
+                &management,
+                control,
+                RestartPolicy::new(2, 0, 0).unwrap(),
+            ),
+            Err(ServiceError::GenerationExhausted)
+        );
+        assert!(supervisor.commit_restart(plan, &mut runtime).is_ok());
     }
 
     #[test]

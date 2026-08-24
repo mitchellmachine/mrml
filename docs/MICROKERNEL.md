@@ -2694,6 +2694,52 @@ limit. This is service-library simulation, not live stable-device restoration,
 dynamic policy replacement, reboot-time capability reconstruction, or physical
 hardware evidence.
 
+Dynamic supervision-policy replacement now closes the configuration-to-
+lifecycle update boundary. `BoundRestartPolicy` carries policy data and source
+revisions but no capability; registration and replacement take the live setting
+READ capability explicitly and re-read the exact setting immediately before
+trusted mutation. Replacement separately requires exact service CONTROL.
+`ServiceSupervisor` advances a checked nonzero policy generation on each
+successful replacement, and `ServiceRestartPlan` snapshots it so a plan created
+before host reprovisioning cannot commit after policy drift. Replacement keeps
+the completed-restart counter and any deadline computed at retirement, so a
+policy rewrite cannot replenish budget or shorten pending backoff. Wrong-object
+CONTROL, revoked READ, configuration or setting drift, stale plans, and policy-
+generation exhaustion all preserve lifecycle state or fail before task
+creation.
+
+Recorded verification on 2026-08-24: Windows nightly gnullvm and Arch Linux
+under WSL2 each passed all 440 release kernel tests; the 13 focused
+`service_lifecycle` tests; all 24 `mrml-config` tests; and scoped strict Clippy
+for `mrml-kernel` plus `mrml-config`. The commands were `cargo
++nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release
+--no-default-features`, the same kernel command with the `service_lifecycle`
+filter, `cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-config
+--release`, and `cargo +nightly-x86_64-pc-windows-gnullvm clippy -p
+mrml-kernel -p mrml-config --release --no-default-features --lib --no-deps --
+-D warnings -A clippy::result_unit_err`; Arch used the equivalent default-
+toolchain commands with `CARGO_TARGET_DIR=target/dynamic-supervision-policy`.
+This is unit/simulation evidence only, not signed CPL3 execution, live stable-
+storage restoration, reboot-time capability reconstruction, native boot,
+bare-metal, physical-hardware, or user evidence.
+
+The dynamic-policy `DIGITAL-RIGHTS REVIEW` found no identity collection,
+retention, disclosure, attestation mandate, DRM, publisher control, first-party
+bypass, accessibility restriction, AI authority, persistence, or owner-state
+dispossession. Owner-delegated setting READ and service CONTROL remain separate
+and independently revocable; cached data carries no capability. The `HOSTILE
+SECURITY REVIEW` treats every capability, service ID, record field, revision,
+policy generation, budget, deadline, and prepared plan as hostile. Complete
+reauthorization and revision checks precede mutation; replacement cannot reset
+history or shorten a deadline; stale plans fail before task creation; and epoch
+exhaustion is transactional. Existing rollback-resistance, accessibility,
+evidence, owner-sovereignty, data-minimization, anti-DRM, owner-controlled-
+attestation, third-party-accessibility, AI-containment, anti-persistence, and
+dual-review gates remain unchanged. Patent review is `NOT_TRIGGERED` because
+this is conventional bounded configuration/lifecycle revalidation, not a new
+compatibility, accessibility, browser, AI, media, or device mechanism. This
+agent review does not replace required independent human review.
+
 Recorded verification for this gate on 2026-08-24: Windows gnullvm
 `cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-config --release --no-default-features --target x86_64-pc-windows-gnullvm`
 passed 23 tests, and the corresponding scoped `clippy --no-deps -- -D warnings`

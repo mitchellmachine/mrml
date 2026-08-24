@@ -458,7 +458,24 @@ pub struct BoundRestartPolicy {
     configuration_revision: u64,
     setting_revision: u64,
     setting: SettingId,
-    capability: Capability,
+}
+
+/// Explicitly labeled inputs to dynamic policy application. These handles are
+/// reauthorized by their respective configuration and supervisor domains;
+/// merely constructing this value grants nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RestartPolicyApplicationAuthority {
+    setting_read: Capability,
+    service_control: Capability,
+}
+
+impl RestartPolicyApplicationAuthority {
+    pub const fn new(setting_read: Capability, service_control: Capability) -> Self {
+        Self {
+            setting_read,
+            service_control,
+        }
+    }
 }
 
 impl BoundRestartPolicy {
@@ -483,13 +500,14 @@ impl BoundRestartPolicy {
         self,
         configuration: &ConfigurationService<SETTINGS, AUDIT>,
         capabilities: &A,
+        policy_capability: Capability,
         supervisor: &mut ServiceSupervisor<SERVICES>,
         task: TaskId,
     ) -> Result<ServiceId, PersistedRestartPolicyError> {
         let current = load_persisted_restart_policy(
             configuration,
             capabilities,
-            self.capability,
+            policy_capability,
             self.setting,
             self.policy.service,
         )?;
@@ -498,6 +516,44 @@ impl BoundRestartPolicy {
         }
         supervisor
             .register_with_policy(self.policy.service, task, self.policy.restart_policy()?)
+            .map_err(PersistedRestartPolicyError::Service)
+    }
+
+    /// Revalidates the exact setting capability and both revisions immediately
+    /// before replacing an existing service's restart policy. The separate
+    /// service CONTROL capability remains the authority for mutation.
+    pub fn replace<
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const SERVICES: usize,
+        const MANAGEMENT_CAPS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
+        self,
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        supervisor: &mut ServiceSupervisor<SERVICES>,
+        service: ServiceId,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        authority: RestartPolicyApplicationAuthority,
+    ) -> Result<(), PersistedRestartPolicyError> {
+        let current = load_persisted_restart_policy(
+            configuration,
+            capabilities,
+            authority.setting_read,
+            self.setting,
+            self.policy.service,
+        )?;
+        if current != self {
+            return Err(PersistedRestartPolicyError::PolicyChanged);
+        }
+        supervisor
+            .replace_restart_policy(
+                service,
+                management,
+                authority.service_control,
+                self.policy.restart_policy()?,
+            )
             .map_err(PersistedRestartPolicyError::Service)
     }
 }
@@ -533,7 +589,6 @@ pub fn load_persisted_restart_policy<
         configuration_revision: configuration.revision(),
         setting_revision: record.revision,
         setting,
-        capability: policy_capability,
     })
 }
 
@@ -3747,7 +3802,13 @@ mod tests {
         let task = runtime.create(Priority::NORMAL, context).unwrap();
         let mut supervisor = ServiceSupervisor::<1>::new();
         let service = bound
-            .register(&recovered, &capabilities, &mut supervisor, task)
+            .register(
+                &recovered,
+                &capabilities,
+                policy_capability,
+                &mut supervisor,
+                task,
+            )
             .unwrap();
         assert_eq!(supervisor.state(service), Ok(ServiceState::Running));
         assert!(matches!(
@@ -3820,7 +3881,13 @@ mod tests {
 
         capabilities.revoke(policy_capability).unwrap();
         assert!(matches!(
-            bound.register(&recovered, &capabilities, &mut supervisor, task),
+            bound.register(
+                &recovered,
+                &capabilities,
+                policy_capability,
+                &mut supervisor,
+                task,
+            ),
             Err(PersistedRestartPolicyError::Configuration(
                 ConfigError::Unauthorized(CapabilityError::Invalid)
             ))
@@ -3837,5 +3904,132 @@ mod tests {
                 ConfigError::Unauthorized(CapabilityError::Invalid)
             ))
         ));
+    }
+
+    #[test]
+    fn dynamic_restart_policy_revalidates_revisions_read_and_service_control() {
+        let setting = SettingId::new(10).unwrap();
+        let root_object = ObjectId(90);
+        let policy_object = ObjectId(91);
+        let service_object = ObjectId(92);
+        let schema =
+            SettingSchema::bytes(setting, policy_object, PERSISTED_RESTART_POLICY_BYTES as u8)
+                .unwrap();
+        let mut configuration = ConfigurationService::<1, 3>::new(root_object, &[schema]).unwrap();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let root = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let policy_capability = capabilities
+            .insert(policy_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+
+        let initial = PersistedRestartPolicy::new(service_object, 1, 10, 10).unwrap();
+        let mut encoded = [0; PERSISTED_RESTART_POLICY_BYTES];
+        initial.encode(&mut encoded);
+        let mut transaction = ConfigTransaction::<1>::new(0);
+        transaction
+            .push(ConfigUpdate::new(
+                setting,
+                policy_capability,
+                ConfigValue::bytes(&encoded).unwrap(),
+            ))
+            .unwrap();
+        configuration
+            .commit(&capabilities, root, &transaction)
+            .unwrap();
+        let stale = load_persisted_restart_policy(
+            &configuration,
+            &capabilities,
+            policy_capability,
+            setting,
+            service_object,
+        )
+        .unwrap();
+
+        let replacement = PersistedRestartPolicy::new(service_object, 3, 20, 40).unwrap();
+        replacement.encode(&mut encoded);
+        let mut transaction = ConfigTransaction::<1>::new(1);
+        transaction
+            .push(ConfigUpdate::new(
+                setting,
+                policy_capability,
+                ConfigValue::bytes(&encoded).unwrap(),
+            ))
+            .unwrap();
+        configuration
+            .commit(&capabilities, root, &transaction)
+            .unwrap();
+
+        let context = UserContext::new(
+            mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+            0x40_0000,
+            0x7000_0000,
+        )
+        .unwrap();
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime.create(Priority::NORMAL, context).unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(service_object, task).unwrap();
+        let mut management = CapabilitySpace::<2>::new();
+        let wrong = management.insert(ObjectId(93), Rights::CONTROL).unwrap();
+        let control = management.insert(service_object, Rights::CONTROL).unwrap();
+
+        assert_eq!(
+            stale.replace(
+                &configuration,
+                &capabilities,
+                &mut supervisor,
+                service,
+                &management,
+                RestartPolicyApplicationAuthority::new(policy_capability, control),
+            ),
+            Err(PersistedRestartPolicyError::PolicyChanged)
+        );
+        let current = load_persisted_restart_policy(
+            &configuration,
+            &capabilities,
+            policy_capability,
+            setting,
+            service_object,
+        )
+        .unwrap();
+        assert_eq!(current.configuration_revision(), 2);
+        assert_eq!(current.setting_revision(), 2);
+        assert_eq!(
+            current.replace(
+                &configuration,
+                &capabilities,
+                &mut supervisor,
+                service,
+                &management,
+                RestartPolicyApplicationAuthority::new(policy_capability, wrong),
+            ),
+            Err(PersistedRestartPolicyError::Service(
+                ServiceError::Unauthorized(CapabilityError::PermissionDenied)
+            ))
+        );
+        current
+            .replace(
+                &configuration,
+                &capabilities,
+                &mut supervisor,
+                service,
+                &management,
+                RestartPolicyApplicationAuthority::new(policy_capability, control),
+            )
+            .unwrap();
+        capabilities.revoke(policy_capability).unwrap();
+        assert_eq!(
+            current.replace(
+                &configuration,
+                &capabilities,
+                &mut supervisor,
+                service,
+                &management,
+                RestartPolicyApplicationAuthority::new(policy_capability, control),
+            ),
+            Err(PersistedRestartPolicyError::Configuration(
+                ConfigError::Unauthorized(CapabilityError::Invalid)
+            ))
+        );
     }
 }

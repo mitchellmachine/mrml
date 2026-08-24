@@ -1103,8 +1103,14 @@ invalidates the bound value. Later restart remains independently gated by
 exact service CONTROL, cleanup, trusted time/context, backoff, and budget.
 Revoking configuration READ prevents future loads and use of an unapplied bound
 value but does not pretend to erase policy already installed into a live trusted
-supervisor. Dynamic replacement and reboot-time
-capability/policy orchestration remain pending.
+supervisor. Dynamic replacement now explicitly supplies that live setting READ
+capability and a separate exact service CONTROL capability. Replacement
+advances a bounded policy generation, invalidating every restart plan prepared
+under the prior policy, while preserving consumed restart count and any already-
+computed eligibility deadline. Policy-generation exhaustion preserves the old
+policy and prepared plan. This is host-side unit/simulation evidence; signed
+CPL3 replacement, live persistent restoration, and reboot-time capability/
+policy orchestration remain pending.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

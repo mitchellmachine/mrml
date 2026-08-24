@@ -1348,6 +1348,19 @@ restart policy after authenticated checkpoint recovery. Service binding,
 revision tracking, finite retry/backoff fields, reserved-byte validation, and
 fail-closed capability checks are defensive systems integration; no new patent-
 candidate mechanism was identified.
+
+# 2026-08-24 — Dynamic supervision-policy replacement
+
+**Result: NOT_TRIGGERED.** The change conventionally revalidates an existing
+bounded configuration record and separate exact capabilities before replacing
+an existing restart policy. A checked policy generation invalidates stale
+prepared plans, while prior budget consumption and deadlines are retained. It
+adds no compatibility protocol, host-share mechanism, accessibility interface,
+browser semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, device protocol, or other patent-candidate mechanism. Previously
+recorded planned scopes remain `TRIGGERED`; this agent review does not replace
+required independent human dual review.
+
 # 2026-08-24 — Block-service receive/syscall loop
 
 **Result: NOT_TRIGGERED.** The change composes existing canonical IPC,

@@ -325,8 +325,14 @@ explicitly and downgrade the status rather than guessing.
   configuration and setting revisions, while every later restart still passes
   the ordinary CONTROL, cleanup, backoff, budget, and fresh-context checks.
   Wrong-service substitution, stale capability, malformed state, and unset
-  policy fail closed. Dynamic policy replacement and reboot-time capability
-  reconstruction are not yet implemented.
+  policy fail closed. Host-side dynamic replacement now requires the bound value
+  to be reloaded with an explicitly supplied live setting READ capability and
+  independently requires exact service CONTROL. Recover the supervisor's policy
+  generation with its lifecycle state: a successful change advances it and
+  invalidates older prepared restart plans, while consumed restart budget and
+  an existing eligibility deadline survive. Exhaustion preserves the prior
+  policy. Signed CPL3 replacement, live persistent restoration, and reboot-time
+  capability reconstruction remain unimplemented.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

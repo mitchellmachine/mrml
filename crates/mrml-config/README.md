@@ -20,7 +20,11 @@ Implemented boundaries:
   every operation from the exact receiver-space capabilities derived by IPC;
 - bounded configuration dispatch with detail-free authorization rejection; and
 - a supervision adapter that composes query/restart requests with exact kernel
-  authority, cleanup, backoff, restart-limit, and trusted-context gates.
+  authority, cleanup, backoff, restart-limit, and trusted-context gates;
+- canonical service-bound restart-policy records whose application explicitly
+  rechecks setting READ and service CONTROL; and
+- bounded dynamic policy replacement that preserves consumed restart budget
+  and existing deadlines and invalidates pre-replacement restart plans.
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The adapters are
@@ -36,4 +40,5 @@ volatile state; persistence is not implied. Native-storage persistence and
 recovery remain next. The storage-neutral checkpoint codec is
 implemented and adversarially tested, but its expected digest still requires a
 future authenticated native-storage commit; the embedded digest is not treated
-as self-authentication.
+as self-authentication. Dynamic replacement is unit/simulation tested; no live
+persistent restoration or reboot-time authority reconstruction is claimed.
