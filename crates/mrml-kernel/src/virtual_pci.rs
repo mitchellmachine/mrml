@@ -82,6 +82,62 @@ pub struct VirtualPciAttachmentId {
     generation: u32,
 }
 
+/// Exact public identity of the attached configuration generation whose native
+/// mappings, interrupts, DMA, queues, and device state must be retired before
+/// configuration reset. This value identifies cleanup work; it grants no
+/// authority by itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualPciAttachedResources {
+    attachment: VirtualPciAttachmentId,
+    location: VirtualPciLocation,
+    function_generation: u32,
+    mmio_window: Option<VirtualPciMmioWindow>,
+}
+
+impl VirtualPciAttachedResources {
+    pub const fn attachment(self) -> VirtualPciAttachmentId {
+        self.attachment
+    }
+
+    pub const fn location(self) -> VirtualPciLocation {
+        self.location
+    }
+
+    pub const fn function_generation(self) -> u32 {
+        self.function_generation
+    }
+
+    pub const fn mmio_window(self) -> Option<VirtualPciMmioWindow> {
+        self.mmio_window
+    }
+}
+
+/// Failure from attached reset or detach composition. Configuration failures
+/// occur before cleanup. A revocation failure preserves the complete
+/// configuration state and must quarantine or fail the VM rather than resume.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualPciResetError<E> {
+    Configuration(VirtualPciError),
+    Revocation(E),
+}
+
+/// Native cleanup boundary for one attached PCI function generation.
+///
+/// # Safety
+///
+/// Success must mean every mapping, interrupt, DMA binding, queue, cached
+/// decision, device state, and derived handle associated with `resources` can
+/// no longer be used. An implementation must return an error if cleanup is
+/// partial or uncertain.
+pub unsafe trait VirtualPciFunctionRevoker {
+    type Error;
+
+    fn revoke_function(
+        &mut self,
+        resources: VirtualPciAttachedResources,
+    ) -> Result<(), Self::Error>;
+}
+
 impl VirtualPciAttachmentId {
     pub const fn generation(self) -> u32 {
         self.generation
@@ -520,25 +576,70 @@ impl VirtualPciConfigurationRouter {
         self.function_at_mut(location)?.write(offset, size, value)
     }
 
-    pub fn reset(&mut self, id: VirtualPciAttachmentId) -> Result<u32, VirtualPciError> {
-        self.attachment_mut(id)?.function.reset()
-    }
-
-    pub fn detach(
+    pub fn reset_with_revoker<R: VirtualPciFunctionRevoker>(
         &mut self,
         id: VirtualPciAttachmentId,
-    ) -> Result<VirtualPciType0Function, VirtualPciError> {
+        revoker: &mut R,
+    ) -> Result<u32, VirtualPciResetError<R::Error>> {
+        let entry = self
+            .attachment(id)
+            .map_err(VirtualPciResetError::Configuration)?;
+        let next_generation = entry.function.generation().checked_add(1).ok_or(
+            VirtualPciResetError::Configuration(VirtualPciError::GenerationExhausted),
+        )?;
+        let mmio_window = entry.function.assigned_mmio_window();
+        let resources = VirtualPciAttachedResources {
+            attachment: id,
+            location: entry.location,
+            function_generation: entry.function.generation(),
+            mmio_window,
+        };
+        revoker
+            .revoke_function(resources)
+            .map_err(VirtualPciResetError::Revocation)?;
+        let entry = self
+            .attachment_mut(id)
+            .map_err(VirtualPciResetError::Configuration)?;
+        entry.function.command = 0;
+        entry.function.bar0.reset();
+        entry.function.generation = next_generation;
+        Ok(next_generation)
+    }
+
+    pub fn detach_with_revoker<R: VirtualPciFunctionRevoker>(
+        &mut self,
+        id: VirtualPciAttachmentId,
+        revoker: &mut R,
+    ) -> Result<VirtualPciType0Function, VirtualPciResetError<R::Error>> {
         let slot = usize::from(id.slot);
-        let entry = self.attachment(id)?;
+        let entry = self
+            .attachment(id)
+            .map_err(VirtualPciResetError::Configuration)?;
         if entry.function.command() & PCI_COMMAND_MEMORY_SPACE != 0 {
-            return Err(VirtualPciError::InvalidState);
+            return Err(VirtualPciResetError::Configuration(
+                VirtualPciError::InvalidState,
+            ));
         }
-        let generation = self.generations[slot]
-            .checked_add(1)
-            .ok_or(VirtualPciError::GenerationExhausted)?;
+        let generation =
+            self.generations[slot]
+                .checked_add(1)
+                .ok_or(VirtualPciResetError::Configuration(
+                    VirtualPciError::GenerationExhausted,
+                ))?;
+        let resources = VirtualPciAttachedResources {
+            attachment: id,
+            location: entry.location,
+            function_generation: entry.function.generation(),
+            mmio_window: entry.function.assigned_mmio_window(),
+        };
+        revoker
+            .revoke_function(resources)
+            .map_err(VirtualPciResetError::Revocation)?;
         let entry = self.slots[slot]
             .take()
-            .ok_or(VirtualPciError::StaleAttachment)?;
+            .ok_or(VirtualPciResetError::Configuration(
+                VirtualPciError::StaleAttachment,
+            ))?;
         self.generations[slot] = generation;
         Ok(entry.function)
     }
@@ -625,6 +726,14 @@ impl VirtualPciType0Function {
             return Err(VirtualPciError::InvalidState);
         }
         Ok(VirtualPciMmioWindow {
+            generation: self.generation,
+            address: self.bar0.address,
+            size: self.bar0.size,
+        })
+    }
+
+    fn assigned_mmio_window(&self) -> Option<VirtualPciMmioWindow> {
+        (self.bar0.address != 0).then_some(VirtualPciMmioWindow {
             generation: self.generation,
             address: self.bar0.address,
             size: self.bar0.size,
@@ -734,6 +843,26 @@ mod tests {
 
     fn identity() -> VirtualPciIdentity {
         VirtualPciIdentity::new(0x1234, 0x5678, 1, 2, 0x80, 1, 0x1234, 0x5679).unwrap()
+    }
+
+    #[derive(Default)]
+    struct RecordingRevoker {
+        fail: bool,
+        calls: usize,
+        last: Option<VirtualPciAttachedResources>,
+    }
+
+    unsafe impl VirtualPciFunctionRevoker for RecordingRevoker {
+        type Error = ();
+
+        fn revoke_function(
+            &mut self,
+            resources: VirtualPciAttachedResources,
+        ) -> Result<(), Self::Error> {
+            self.calls += 1;
+            self.last = Some(resources);
+            if self.fail { Err(()) } else { Ok(()) }
+        }
     }
 
     #[test]
@@ -977,6 +1106,7 @@ mod tests {
     #[test]
     fn detach_requires_disabled_decode_and_stales_attachment_identity() {
         let mut router = VirtualPciConfigurationRouter::new();
+        let mut revoker = RecordingRevoker::default();
         let routed = location(1);
         let old = router.attach(routed, function(1)).unwrap();
         router.write(routed, 16, 4, 0x2000_0000).unwrap();
@@ -984,13 +1114,20 @@ mod tests {
             .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
             .unwrap();
         assert!(matches!(
-            router.detach(old),
-            Err(VirtualPciError::InvalidState)
+            router.detach_with_revoker(old, &mut revoker),
+            Err(VirtualPciResetError::Configuration(
+                VirtualPciError::InvalidState
+            ))
         ));
-        assert_eq!(router.reset(old), Ok(2));
-        let detached = router.detach(old).unwrap();
+        assert_eq!(router.reset_with_revoker(old, &mut revoker), Ok(2));
+        let detached = router.detach_with_revoker(old, &mut revoker).unwrap();
         assert_eq!(detached.generation(), 2);
-        assert_eq!(router.reset(old), Err(VirtualPciError::StaleAttachment));
+        assert_eq!(
+            router.reset_with_revoker(old, &mut revoker),
+            Err(VirtualPciResetError::Configuration(
+                VirtualPciError::StaleAttachment
+            ))
+        );
         assert_eq!(
             router.read(routed, 0, 2),
             Err(VirtualPciError::FunctionNotPresent)
@@ -999,12 +1136,143 @@ mod tests {
         let fresh = router.attach(routed, function(2)).unwrap();
         assert_eq!(fresh.generation(), 2);
         assert_eq!(router.read(routed, 2, 2), Ok(2));
-        assert_eq!(router.reset(old), Err(VirtualPciError::StaleAttachment));
+        assert_eq!(
+            router.reset_with_revoker(old, &mut revoker),
+            Err(VirtualPciResetError::Configuration(
+                VirtualPciError::StaleAttachment
+            ))
+        );
+    }
+
+    #[test]
+    fn attached_reset_revokes_exact_resources_before_configuration_mutation() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = location(2);
+        let id = router.attach(routed, function(7)).unwrap();
+        router.write(routed, 16, 4, 0x2345_6000).unwrap();
+        router
+            .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .unwrap();
+        let window = router
+            .attachment(id)
+            .unwrap()
+            .function
+            .mmio_window()
+            .unwrap();
+        let mut revoker = RecordingRevoker {
+            fail: true,
+            ..RecordingRevoker::default()
+        };
+
+        assert_eq!(
+            router.reset_with_revoker(id, &mut revoker),
+            Err(VirtualPciResetError::Revocation(()))
+        );
+        assert_eq!(
+            router.read(routed, 4, 2),
+            Ok(u32::from(PCI_COMMAND_MEMORY_SPACE))
+        );
+        assert_eq!(router.read(routed, 16, 4), Ok(0x2345_6000));
+        assert_eq!(
+            revoker.last,
+            Some(VirtualPciAttachedResources {
+                attachment: id,
+                location: routed,
+                function_generation: 1,
+                mmio_window: Some(window),
+            })
+        );
+
+        let mut successful = VirtualPciConfigurationRouter::new();
+        let successful_id = successful.attach(routed, function(7)).unwrap();
+        successful.write(routed, 16, 4, 0x2345_6000).unwrap();
+        successful
+            .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .unwrap();
+        let successful_window = successful
+            .attachment(successful_id)
+            .unwrap()
+            .function
+            .mmio_window()
+            .unwrap();
+        let mut successful_revoker = RecordingRevoker::default();
+        assert_eq!(
+            successful.reset_with_revoker(successful_id, &mut successful_revoker),
+            Ok(2)
+        );
+        assert_eq!(successful_revoker.calls, 1);
+        assert_eq!(successful.read(routed, 4, 2), Ok(0));
+        assert_eq!(successful.read(routed, 16, 4), Ok(0));
+        assert_eq!(
+            successful
+                .attachment(successful_id)
+                .unwrap()
+                .function
+                .validate_mmio_window(successful_window),
+            Err(VirtualPciError::StaleGeneration)
+        );
+    }
+
+    #[test]
+    fn reset_preflight_failure_never_calls_native_revocation() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let id = router.attach(location(3), function(8)).unwrap();
+        router.attachment_mut(id).unwrap().function.generation = u32::MAX;
+        let mut revoker = RecordingRevoker::default();
+        assert_eq!(
+            router.reset_with_revoker(id, &mut revoker),
+            Err(VirtualPciResetError::Configuration(
+                VirtualPciError::GenerationExhausted
+            ))
+        );
+        assert_eq!(revoker.calls, 0);
+        assert_eq!(router.read(location(3), 2, 2), Ok(8));
+    }
+
+    #[test]
+    fn detach_revocation_failure_preserves_attachment_and_generation() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = location(4);
+        let id = router.attach(routed, function(9)).unwrap();
+        router.write(routed, 16, 4, 0x3456_7000).unwrap();
+        let assigned = router
+            .attachment(id)
+            .unwrap()
+            .function
+            .assigned_mmio_window();
+        let mut revoker = RecordingRevoker {
+            fail: true,
+            ..RecordingRevoker::default()
+        };
+        assert!(matches!(
+            router.detach_with_revoker(id, &mut revoker),
+            Err(VirtualPciResetError::Revocation(()))
+        ));
+        assert_eq!(router.read(routed, 2, 2), Ok(9));
+        assert_eq!(revoker.last.unwrap().attachment(), id);
+        assert_eq!(revoker.last.unwrap().location(), routed);
+        assert_eq!(revoker.last.unwrap().function_generation(), 1);
+        assert_eq!(revoker.last.unwrap().mmio_window(), assigned);
+
+        let mut successful = VirtualPciConfigurationRouter::new();
+        let successful_id = successful.attach(routed, function(9)).unwrap();
+        let mut successful_revoker = RecordingRevoker::default();
+        let detached = successful
+            .detach_with_revoker(successful_id, &mut successful_revoker)
+            .unwrap();
+        assert_eq!(detached.identity().device(), 9);
+        assert_eq!(
+            successful.read(routed, 0, 2),
+            Err(VirtualPciError::FunctionNotPresent)
+        );
+        let replacement = successful.attach(routed, function(10)).unwrap();
+        assert_eq!(replacement.generation(), 2);
     }
 
     #[test]
     fn detach_generation_exhaustion_preserves_attachment() {
         let mut router = VirtualPciConfigurationRouter::new();
+        let mut revoker = RecordingRevoker::default();
         let routed = location(1);
         let id = router.attach(routed, function(1)).unwrap();
         router.generations[usize::from(id.slot)] = u32::MAX;
@@ -1013,11 +1281,14 @@ mod tests {
             generation: u32::MAX,
         };
         assert!(matches!(
-            router.detach(exhausted),
-            Err(VirtualPciError::GenerationExhausted)
+            router.detach_with_revoker(exhausted, &mut revoker),
+            Err(VirtualPciResetError::Configuration(
+                VirtualPciError::GenerationExhausted
+            ))
         ));
+        assert_eq!(revoker.calls, 0);
         assert_eq!(router.read(routed, 2, 2), Ok(1));
-        assert_eq!(router.reset(exhausted), Ok(2));
+        assert_eq!(router.reset_with_revoker(exhausted, &mut revoker), Ok(2));
     }
 
     const fn selector(bus: u8, device: u8, function: u8, register: u8) -> u32 {

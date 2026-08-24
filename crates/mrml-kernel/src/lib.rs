@@ -174,9 +174,10 @@ pub use virtual_gpu::{
 pub use virtual_pci::{
     MAX_VIRTUAL_PCI_FUNCTIONS, PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE,
     PCI_CONFIGURATION_ADDRESS_PORT, PCI_CONFIGURATION_DATA_PORT, PCI_CONFIGURATION_IO_RULES,
-    PCI_TYPE0_CONFIGURATION_BYTES, VirtualPciAttachmentId, VirtualPciConfigurationMechanismOne,
-    VirtualPciConfigurationRouter, VirtualPciError, VirtualPciIdentity, VirtualPciIoOutcome,
-    VirtualPciLocation, VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciRunError,
+    PCI_TYPE0_CONFIGURATION_BYTES, VirtualPciAttachedResources, VirtualPciAttachmentId,
+    VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter, VirtualPciError,
+    VirtualPciFunctionRevoker, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
+    VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciResetError, VirtualPciRunError,
     VirtualPciType0Function, VirtualPciWriteOutcome, run_pci_configuration_once,
 };
 pub use vm::{

@@ -1885,3 +1885,12 @@ ones response for one deliberately unattached BDF, and emits a bounded proof.
 It assigns no identity, attaches no device, grants no new authority, and
 introduces no patent-candidate mechanism. This agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Attached PCI revoke-before-reset/removal composition
+
+**Result: NOT_TRIGGERED.** The change conventionally preflights exact
+generational configuration state, requires native resource cleanup before reset
+or removal, preserves configuration on cleanup failure, and advances lifetime
+state only after confirmed cleanup. It introduces no device protocol, assigned
+identity, native adapter, new authority model, or patent-candidate mechanism.
+This agent review does not replace the required independent human dual review.

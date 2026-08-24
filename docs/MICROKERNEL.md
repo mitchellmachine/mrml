@@ -4813,6 +4813,68 @@ Patent review: `NOT_TRIGGERED` — conventional signed absent-function PCI
 configuration probing through existing native VMM exits; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The attached-lifecycle prerequisite now removes the router's cleanup-free reset
+and detach operations. `VirtualPciAttachedResources` identifies the exact
+attachment ID, BDF, function generation, and assigned generational MMIO window,
+if one exists, even when memory decode is currently disabled. It remains data,
+not authority. The unsafe
+`VirtualPciFunctionRevoker` contract may report success only after every native
+mapping, interrupt, DMA binding, queue, cached decision, device state, and
+derived handle for that identity is unusable. `reset_with_revoker` preflights
+attachment identity, function-generation capacity, decode state, and the exact
+MMIO window before cleanup; revocation failure preserves all configuration.
+Confirmed cleanup then clears command/BAR/probe state and publishes the already
+preflighted successor generation. `detach_with_revoker` additionally requires
+memory decode disabled and preflights attachment-generation capacity before
+cleanup; only confirmed cleanup removes the slot and advances its attachment
+generation. Stale identities and every preflight failure call no revoker.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm passed all 415 release
+kernel tests and strict scoped Clippy. Three new focused tests prove exact active
+MMIO cleanup identity, configuration preservation for a quarantined reset
+failure, stale-window invalidation on an independent successful reset, no
+cleanup after generation preflight failure, attachment preservation for a
+quarantined detach failure, and attachment-generation advance only after an
+independent confirmed removal. Arch Linux under WSL2 passed the same 415
+kernel tests and strict scoped kernel/KVM/KVM-run Clippy using isolated
+`CARGO_TARGET_DIR=target/pci-lifecycle`. This is unit and compile/lint evidence
+for a backend-neutral contract, not a native KVM/WHP cleanup adapter, attached
+function, PCI identity,
+BAR mapping, interrupt, DMA, device, signed runtime, bare-metal, or physical-
+hardware claim.
+
+The attached-lifecycle `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, attestation, DRM, vendor or publisher preference,
+first-party bypass, accessibility restriction, AI authority, persistence, or
+lock-in. Cleanup identity is bounded local routing data and grants no authority.
+The `HOSTILE SECURITY REVIEW` treats attachment ID/generation, BDF, function
+generation, command, BAR, MMIO window, every native derived resource, revoker
+result, retry, reset, detach, and exhaustion as hostile. All configuration
+preflight precedes cleanup; preflight failure performs no cleanup; uncertain or
+partial cleanup returns failure without configuration mutation; only confirmed
+cleanup permits reset/removal mutation. Callers must quarantine or fail a VM
+after cleanup uncertainty. Existing capability, revocation, rollback-
+resistance, accessibility, evidence, owner-sovereignty, data-minimization, anti-
+DRM, owner-controlled-attestation, third-party-accessibility, AI-containment,
+and anti-persistence gates remain unchanged. This agent review does not replace
+independent human implementer, reviewer, adversary, accessibility, or hardware
+review.
+
+Patent review: `NOT_TRIGGERED` — conventional revoke-before-reset/removal
+composition with exact generational resource identity; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

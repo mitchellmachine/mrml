@@ -300,6 +300,14 @@ an assigned BAR, and configuration reset invalidates exact generational routing
 views. For an attached device, native mapping and interrupt cleanup must complete
 before configuration reset commits; uncertainty quarantines or fails closed
 rather than treating cleared configuration bytes as completed revocation.
+The router exposes reset and detach only through an unsafe revoker contract
+whose success covers the exact attachment and function generation plus every
+derived mapping, interrupt, DMA binding, queue, cached decision, device state,
+and handle. Configuration and generation preflight occurs before cleanup;
+cleanup failure preserves configuration and cannot report lifecycle success.
+An assigned generational BAR window remains part of cleanup identity even after
+memory decode is disabled; clearing the command bit cannot hide residual native
+state from reset or detach cleanup.
 Configuration routing additionally requires one exact bounded BDF match.
 Attachment requires reset, unassigned, non-probing state. Duplicate
 registrations, absent functions, table exhaustion, stale attachment generations,

@@ -681,9 +681,13 @@ cannot create mappings. Memory decode requires an assigned nonzero BAR, and BAR
 relocation is rejected while decode is active. An exact generational MMIO-window
 view becomes stale when reset transactionally advances the function generation
 and clears command, BAR, and probe state. Generation exhaustion preserves the
-complete live configuration. This local reset does not revoke a native mapping;
-a future attachment must revoke or quarantine mapping and interrupt state before
-committing it. This core is unattached: MRML has no assigned PCI
+complete live configuration. Router reset and detach now require an unsafe
+native revoker to confirm retirement of every mapping, interrupt, DMA binding,
+queue, cached decision, device state, and derived handle for the exact
+attachment/function generation before configuration mutation. Preflight or
+revocation failure preserves configuration; uncertainty must quarantine or fail
+the VM. No native revoker adapter exists yet because this core remains
+unattached: MRML has no assigned PCI
 identity here, block does not use it, and PCI capabilities, MSI/MSI-X, multiple
 BARs, native VMM configuration exits, QEMU comparison, and a PCI-compatible
 device remain unimplemented. A fixed-capacity backend-neutral configuration
@@ -692,7 +696,8 @@ segment/bus/device/function locations. Attachment requires reset, unassigned,
 non-probing configuration state. Duplicate or absent locations, malformed
 accesses, capacity exhaustion, active-decode detachment, stale attachment IDs,
 and attachment-generation exhaustion fail without ambiguous routing or partial
-removal. BDF and attachment identity remain data; mutable access to trusted VMM
+removal. Reset and detach expose no cleanup-free router API. BDF and attachment
+identity remain data; mutable access to trusted VMM
 policy, not knowledge of either value, supplies authority.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It

@@ -853,6 +853,18 @@ BDF, receives the exact all-ones dword through scalar-input completion, and
 proves continuation. This closes native runner composition without assigning a
 PCI identity or attaching a function. Live function discovery, BAR mapping,
 interrupts, DMA, device attachment, and QEMU comparison remain pending.
+Attached reset/removal ordering is now enforced at the router boundary.
+`VirtualPciFunctionRevoker` is an unsafe exact-generation contract whose success
+must retire every native mapping, interrupt, DMA binding, queue, cached decision,
+device state, and derived handle. Router reset and detach preflight identity,
+generation capacity, decode state, and assigned MMIO-window state before
+invoking it, including residual window identity after decode is disabled;
+revocation failure preserves configuration, while success precedes reset or
+removal mutation. Focused tests cover exact cleanup identity, stale-window
+invalidation, quarantine-preserving reset/detach failures, independent success,
+and no cleanup call after preflight failure. Native KVM/WHP revoker adapters
+remain pending until a concrete function has separately authorized native
+resources.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
