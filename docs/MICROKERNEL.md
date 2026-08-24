@@ -2311,7 +2311,8 @@ cargo test --release -p mrml-kernel-bench -- --ignored --nocapture
 ```
 
 They report authorization, scheduling, IPC, wakeup, transfer, revocation,
-shared-binding, and domain-handoff policy costs.
+shared-binding, domain-handoff, and virtual-block transaction/notification
+policy costs.
 The generous automated ceiling detects catastrophic regressions; comparative
 optimization decisions require repeated samples on pinned hardware and a
 recorded baseline.
@@ -3251,6 +3252,51 @@ generation exhaustion, scratch, backend effects, and completion publication as
 hostile. Backpressure precedes consumption and post-mutation uncertainty is
 terminal. This agent review does not replace the required independent human dual
 review.
+
+Completion publication now sets one coalesced notification latch in the active
+virtual-block device. A backend-neutral delivery helper reads only the device's
+configured external vector and crosses the existing VM interrupt boundary,
+which independently requires an allowlisted vector, a running VM, and exact
+`SIGNAL` authority for the interrupt object. No pending latch returns without
+backend access. Wrong-object or otherwise denied authority leaves the latch
+pending. Confirmed backend injection clears it exactly once; backend injection
+failure fails the VM and retains the latch so uncertainty cannot be mistaken
+for acknowledgement. A device cannot suspend with pending notification, and
+fail/reset/removal clear the latch with the rest of the generation's transient
+state. Multiple published completions before delivery coalesce without an
+unbounded counter.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 359 `mrml-kernel` release tests and scoped strict Clippy. The 22
+focused virtual-block/interrupt tests include post-publication latching,
+wrong-vector acknowledgement rejection, coalescing, suspend denial, terminal
+lifecycle clearing, exact-object capability denial without acknowledgement,
+successful one-use delivery, idle delivery without backend access, and backend
+injection failure retaining notification while failing the VM. This is shared
+unit/simulation evidence only. No virtual-block doorbell, KVM/WHP device
+attachment, guest driver, concrete hosted/physical block backend, PCI transport,
+durability, or hardware interrupt behavior was exercised.
+
+The new release microbenchmark establishes a first optimized in-process policy
+baseline over 10,000 complete simulated write transactions, including request
+decode/admission, one 4 KiB scratch-backed mock write, completion publication,
+notification latching, exact capability/vector authorization, mock injection,
+and acknowledgement. Windows gnullvm measured 963,800 ns total (96.380 ns per
+transaction); Arch Linux under WSL2 measured 1,067,570 ns total (106.757 ns per
+transaction). These throughput-derived single samples are regression baselines,
+not before/after optimization evidence. The mock backend and injection are
+ordinary in-process memory operations; the figures are not storage latency,
+hypervisor interrupt latency, interrupt-to-userspace latency, or hardware
+throughput.
+
+The notification `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
+retention, identity expansion, DRM, attestation, remote disclosure, vendor
+preference, accessibility restriction, or persistent owner-state change. A
+completion is data and cannot create interrupt authority. The `HOSTILE SECURITY
+REVIEW` treats lifecycle, vector configuration, authorization, retry, backend
+injection, reset, and removal as hostile; only confirmed authorized delivery
+acknowledges pending state, and uncertainty fails closed. This agent review does
+not replace the required independent human dual review.
 
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one

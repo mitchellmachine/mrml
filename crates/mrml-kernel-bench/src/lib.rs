@@ -12,9 +12,13 @@ mod tests {
     use core::hint::black_box;
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
-        CapabilitySpace, Endpoint, GuestMemory, GuestRegion, HostResourceHandle, KernelScheduler,
-        ObjectId, OwnershipMailbox, PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler,
-        SchedulerLoad, SharedAccess, SharedEndpoint, SharedMemoryBindings, TaskRuntime, VmTable,
+        CapabilitySpace, Endpoint, GuestMemory, GuestRegion, HostResourceHandle, InterruptPolicy,
+        KernelScheduler, ObjectId, PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler,
+        SchedulerLoad, SharedAccess, SharedEndpoint, SharedMemoryBindings, TaskRuntime,
+        VirtualBlockBackend, VirtualBlockDevice, VirtualBlockMutationError,
+        VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
+        VirtualBlockRequest, VirtualBlockVmmMemory, VmBackend, VmExit, VmTable,
+        inject_virtual_block_interrupt, process_virtual_block_request,
     };
     use mrml_runtime::{Instant, mrml_println};
 
@@ -22,6 +26,85 @@ mod tests {
     const MAX_NANOSECONDS_PER_OPERATION: u128 = 10_000;
     const SERVICE_ITERATIONS: u64 = 100_000;
     const MAX_SERVICE_NANOSECONDS_PER_OPERATION: u128 = 100_000;
+    const VIRTUAL_BLOCK_ITERATIONS: u64 = 10_000;
+
+    struct VirtualBlockMemory {
+        bytes: [u8; 0x5000],
+        interrupts: u64,
+    }
+
+    impl VirtualBlockMemory {
+        fn write(&mut self, address: u64, input: &[u8]) {
+            let start = address as usize;
+            self.bytes[start..start + input.len()].copy_from_slice(input);
+        }
+    }
+
+    impl VmBackend for VirtualBlockMemory {
+        type Error = ();
+
+        fn run(&mut self, _: u32) -> Result<VmExit, Self::Error> {
+            Err(())
+        }
+
+        fn read_guest(&self, address: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+            let start = usize::try_from(address).map_err(|_| ())?;
+            let end = start.checked_add(output.len()).ok_or(())?;
+            output.copy_from_slice(self.bytes.get(start..end).ok_or(())?);
+            Ok(())
+        }
+
+        fn write_guest(&mut self, address: u64, input: &[u8]) -> Result<(), Self::Error> {
+            self.write_virtual_block(address, input)
+        }
+
+        fn inject_interrupt(&mut self, _: u32, _: u8) -> Result<(), Self::Error> {
+            self.interrupts = self.interrupts.checked_add(1).ok_or(())?;
+            Ok(())
+        }
+    }
+
+    impl VirtualBlockVmmMemory for VirtualBlockMemory {
+        fn write_virtual_block(&mut self, address: u64, input: &[u8]) -> Result<(), Self::Error> {
+            let start = usize::try_from(address).map_err(|_| ())?;
+            let end = start.checked_add(input.len()).ok_or(())?;
+            self.bytes
+                .get_mut(start..end)
+                .ok_or(())?
+                .copy_from_slice(input);
+            Ok(())
+        }
+    }
+
+    struct VirtualBlockStorage([u8; 4096]);
+
+    unsafe impl VirtualBlockBackend for VirtualBlockStorage {
+        type Error = ();
+
+        fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+            if block != 0 || output.len() != self.0.len() {
+                return Err(());
+            }
+            output.copy_from_slice(&self.0);
+            Ok(())
+        }
+
+        fn write_blocks(
+            &mut self,
+            block: u64,
+            input: &[u8],
+        ) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+            if block != 0 || input.len() != self.0.len() {
+                return Err(VirtualBlockMutationError::Rejected(()));
+            }
+            self.0.copy_from_slice(input);
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+            Ok(())
+        }
+    }
 
     fn report(label: &str, elapsed: u128, iterations: u64) {
         mrml_println!(
@@ -575,10 +658,80 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "manual release-mode performance gate"]
+    fn virtual_block_transaction_interrupt_policy_budget() {
+        let layout = VirtualBlockQueueLayout::new(0x1000, 0x3000, 1).unwrap();
+        let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0).unwrap();
+        device.negotiate(0).unwrap();
+        device.activate(layout, 48).unwrap();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout).unwrap();
+        let mut memory = VirtualBlockMemory {
+            bytes: [0; 0x5000],
+            interrupts: 0,
+        };
+        memory.bytes[0x4000..0x5000].fill(0x5a);
+        let mut storage = VirtualBlockStorage([0; 4096]);
+        let mut scratch = [0; 4096];
+
+        let interrupt_object = ObjectId(0x161);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, Rights::SIGNAL)
+            .unwrap();
+        let mut policy = InterruptPolicy::deny_all();
+        policy.allow(48).unwrap();
+        let mut vms = VmTable::<1>::new();
+        let vm = vms.create(VIRTUAL_BLOCK_ITERATIONS + 1).unwrap();
+        vms.mark_loaded(vm).unwrap();
+        vms.start(vm).unwrap();
+
+        let start = Instant::now();
+        for sequence in 1..=VIRTUAL_BLOCK_ITERATIONS {
+            let mut request = [0; 64];
+            VirtualBlockRequest::write(1, sequence, 0, 1, 0x4000, 4096).encode(&mut request);
+            memory.write(0x1000 + 128, &request);
+            memory.write(0x1000, &sequence.to_le_bytes());
+            memory.write(0x3000 + 64, &(sequence - 1).to_le_bytes());
+            assert!(matches!(
+                black_box(process_virtual_block_request(
+                    &mut device,
+                    &mut bridge,
+                    &mut memory,
+                    &mut storage,
+                    &mut scratch,
+                ))
+                .unwrap(),
+                VirtualBlockProcessOutcome::Completed(_)
+            ));
+            assert_eq!(
+                black_box(inject_virtual_block_interrupt(
+                    &mut device,
+                    &mut memory,
+                    &mut vms,
+                    vm,
+                    0,
+                    &policy,
+                    &capabilities,
+                    interrupt_capability,
+                    interrupt_object,
+                )),
+                Ok(true)
+            );
+        }
+        report(
+            "virtual_block_transaction_interrupt_policy",
+            start.elapsed().as_nanos(),
+            VIRTUAL_BLOCK_ITERATIONS,
+        );
+        assert_eq!(memory.interrupts, VIRTUAL_BLOCK_ITERATIONS);
+    }
+
     #[cfg(windows)]
     #[test]
     #[ignore = "manual affinity-pinned physical-core performance gate"]
     fn physical_cross_core_mailbox_round_trip_budget() {
+        use mrml_kernel::OwnershipMailbox;
         use std::sync::{Arc, mpsc};
         use std::thread;
 

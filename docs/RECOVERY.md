@@ -345,9 +345,12 @@ explicitly and downgrade the status rather than guessing.
   device and poisons its bridge. A one-request processor preflights admission
   and completion capacity before consuming, then admits, executes once, and
   publishes the exact completion; post-mutation publication uncertainty fails
-  closed. It is unit-tested shared policy only: no
-  concrete hosted/physical backend, KVM/WHP attachment, interrupt path, guest
-  driver, or durability evidence exists yet. A
+  closed. Published completions latch one coalesced notification that crosses
+  the existing capability-authorized, allowlisted VM interrupt boundary and is
+  cleared only after confirmed injection. Denied or uncertain delivery remains
+  pending; terminal device lifecycle invalidates it. It is unit-tested shared
+  policy only: no concrete hosted/physical backend, KVM/WHP device attachment,
+  doorbell, guest driver, or durability evidence exists yet. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

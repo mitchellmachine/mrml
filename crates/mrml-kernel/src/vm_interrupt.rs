@@ -1,6 +1,6 @@
 use crate::{
-    Capability, CapabilitySpace, ObjectId, Rights, VmBackend, VmError, VmId, VmRunError, VmState,
-    VmTable,
+    Capability, CapabilitySpace, ObjectId, Rights, VirtualBlockDevice, VirtualBlockError,
+    VmBackend, VmError, VmId, VmRunError, VmState, VmTable,
 };
 
 const FIRST_EXTERNAL_VECTOR: u8 = 32;
@@ -77,10 +77,59 @@ pub fn inject_vm_interrupt<B: VmBackend, const V: usize, const C: usize>(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockInterruptError<E> {
+    Device(VirtualBlockError),
+    Injection(VmRunError<E>),
+}
+
+/// Delivers one coalesced virtual-block completion notification through the
+/// ordinary capability-authorized VM interrupt boundary. Denied or uncertain
+/// injection leaves the device latch pending; only confirmed delivery clears
+/// it. The device supplies its configured vector, so callers cannot substitute
+/// a different interrupt while retaining the same device state.
+#[allow(clippy::too_many_arguments)]
+pub fn inject_virtual_block_interrupt<
+    B: VmBackend,
+    const N: usize,
+    const V: usize,
+    const C: usize,
+>(
+    device: &mut VirtualBlockDevice<N>,
+    backend: &mut B,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    vcpu: u32,
+    policy: &InterruptPolicy,
+    capabilities: &CapabilitySpace<C>,
+    capability: Capability,
+    interrupt_object: ObjectId,
+) -> Result<bool, VirtualBlockInterruptError<B::Error>> {
+    let Some(vector) = device.pending_interrupt_vector() else {
+        return Ok(false);
+    };
+    inject_vm_interrupt(
+        backend,
+        vms,
+        vm,
+        vcpu,
+        vector,
+        policy,
+        capabilities,
+        capability,
+        interrupt_object,
+    )
+    .map_err(VirtualBlockInterruptError::Injection)?;
+    device
+        .acknowledge_interrupt(vector)
+        .map_err(VirtualBlockInterruptError::Device)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VmExit;
+    use crate::{VirtualBlockQueueLayout, VmExit};
 
     struct Backend {
         injected: Option<(u32, u8)>,
@@ -113,6 +162,16 @@ mod tests {
         table.mark_loaded(id).unwrap();
         table.start(id).unwrap();
         (table, id)
+    }
+
+    fn pending_block_device() -> VirtualBlockDevice<1> {
+        let mut device = VirtualBlockDevice::new(4096, 64, 0).unwrap();
+        device.negotiate(0).unwrap();
+        device
+            .activate(VirtualBlockQueueLayout::new(0x1000, 0x3000, 1).unwrap(), 48)
+            .unwrap();
+        device.latch_completion_interrupt().unwrap();
+        device
     }
 
     #[test]
@@ -211,5 +270,108 @@ mod tests {
             Err(VmRunError::Backend(()))
         );
         assert_eq!(vms.state(id), Ok(VmState::Failed));
+    }
+
+    #[test]
+    fn virtual_block_notification_requires_exact_authority_and_acks_after_delivery() {
+        let object = ObjectId(9);
+        let wrong = ObjectId(10);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let right_cap = capabilities.insert(object, Rights::SIGNAL).unwrap();
+        let wrong_cap = capabilities.insert(wrong, Rights::SIGNAL).unwrap();
+        let mut policy = InterruptPolicy::deny_all();
+        policy.allow(48).unwrap();
+        let (mut vms, id) = running_vm();
+        let mut backend = Backend {
+            injected: None,
+            fail: false,
+        };
+        let mut device = pending_block_device();
+
+        assert_eq!(
+            inject_virtual_block_interrupt(
+                &mut device,
+                &mut backend,
+                &mut vms,
+                id,
+                3,
+                &policy,
+                &capabilities,
+                wrong_cap,
+                object,
+            ),
+            Err(VirtualBlockInterruptError::Injection(VmRunError::Policy(
+                VmError::WrongObject
+            )))
+        );
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+        assert_eq!(backend.injected, None);
+
+        assert_eq!(
+            inject_virtual_block_interrupt(
+                &mut device,
+                &mut backend,
+                &mut vms,
+                id,
+                3,
+                &policy,
+                &capabilities,
+                right_cap,
+                object,
+            ),
+            Ok(true)
+        );
+        assert_eq!(backend.injected, Some((3, 48)));
+        assert_eq!(device.pending_interrupt_vector(), None);
+        backend.injected = None;
+        assert_eq!(
+            inject_virtual_block_interrupt(
+                &mut device,
+                &mut backend,
+                &mut vms,
+                id,
+                3,
+                &policy,
+                &capabilities,
+                right_cap,
+                object,
+            ),
+            Ok(false)
+        );
+        assert_eq!(backend.injected, None);
+    }
+
+    #[test]
+    fn failed_virtual_block_injection_keeps_notification_pending_and_fails_vm() {
+        let object = ObjectId(11);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities.insert(object, Rights::SIGNAL).unwrap();
+        let mut policy = InterruptPolicy::deny_all();
+        policy.allow(48).unwrap();
+        let (mut vms, id) = running_vm();
+        let mut backend = Backend {
+            injected: None,
+            fail: true,
+        };
+        let mut device = pending_block_device();
+
+        assert_eq!(
+            inject_virtual_block_interrupt(
+                &mut device,
+                &mut backend,
+                &mut vms,
+                id,
+                0,
+                &policy,
+                &capabilities,
+                capability,
+                object,
+            ),
+            Err(VirtualBlockInterruptError::Injection(VmRunError::Backend(
+                ()
+            )))
+        );
+        assert_eq!(vms.state(id), Ok(VmState::Failed));
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
     }
 }

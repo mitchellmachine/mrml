@@ -625,9 +625,13 @@ uncertainty fails the device and poisons its bridge. A one-request processor now
 preflights both admission and completion capacity before consuming a queue entry,
 executes an admitted request once, and publishes its exact completion. Malformed
 entries reach no backend; post-mutation publication uncertainty fails the device
-instead of retrying. It has no concrete hosted
-or physical backend, doorbell, interrupt delivery, PCI transport, KVM/WHP
-attachment, or guest driver yet. **PLANNED:** guest
+instead of retrying. Published completions set a coalesced device notification
+latch. A backend-neutral bridge derives the configured vector from that latch,
+requires the existing exact VM-interrupt `SIGNAL` capability and vector
+allowlist, and clears the latch only after confirmed injection; denial or
+backend uncertainty leaves it pending, while terminal device transitions clear
+it. It has no concrete hosted or physical backend, doorbell, PCI transport,
+KVM/WHP attachment, or guest driver yet. **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No
 VirtIO-compatible MRML device currently exists.

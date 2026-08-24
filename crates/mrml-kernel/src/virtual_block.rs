@@ -379,6 +379,7 @@ pub struct VirtualBlockDevice<const N: usize> {
     state: VirtualBlockDeviceState,
     queue: Option<VirtualBlockQueueLayout>,
     interrupt_vector: Option<u8>,
+    completion_interrupt_pending: bool,
     last_request_id: u64,
     slots: [Option<InFlight>; N],
     slot_generations: [u32; N],
@@ -408,6 +409,7 @@ impl<const N: usize> VirtualBlockDevice<N> {
             state: VirtualBlockDeviceState::Created,
             queue: None,
             interrupt_vector: None,
+            completion_interrupt_pending: false,
             last_request_id: 0,
             slots: [None; N],
             slot_generations: [0; N],
@@ -440,6 +442,30 @@ impl<const N: usize> VirtualBlockDevice<N> {
 
     pub const fn interrupt_vector(&self) -> Option<u8> {
         self.interrupt_vector
+    }
+
+    /// Returns the configured vector only while a published completion still
+    /// requires notification. Reading this latch carries no injection
+    /// authority; the VMM must separately authorize delivery.
+    pub const fn pending_interrupt_vector(&self) -> Option<u8> {
+        if self.completion_interrupt_pending {
+            self.interrupt_vector
+        } else {
+            None
+        }
+    }
+
+    /// Clears one coalesced completion notification only after the exact
+    /// configured vector has been delivered successfully.
+    pub fn acknowledge_interrupt(&mut self, vector: u8) -> Result<(), VirtualBlockError> {
+        if self.state != VirtualBlockDeviceState::Active
+            || !self.completion_interrupt_pending
+            || self.interrupt_vector != Some(vector)
+        {
+            return Err(VirtualBlockError::InvalidInterrupt);
+        }
+        self.completion_interrupt_pending = false;
+        Ok(())
     }
 
     pub fn admission_ready(&self) -> Result<bool, VirtualBlockError> {
@@ -496,7 +522,10 @@ impl<const N: usize> VirtualBlockDevice<N> {
     }
 
     pub fn suspend(&mut self) -> Result<(), VirtualBlockError> {
-        if self.state != VirtualBlockDeviceState::Active || self.slots.iter().any(Option::is_some) {
+        if self.state != VirtualBlockDeviceState::Active
+            || self.slots.iter().any(Option::is_some)
+            || self.completion_interrupt_pending
+        {
             return Err(VirtualBlockError::InvalidState);
         }
         self.state = VirtualBlockDeviceState::Suspended;
@@ -519,10 +548,12 @@ impl<const N: usize> VirtualBlockDevice<N> {
             return Err(VirtualBlockError::InvalidState);
         }
         if let Err(error) = self.preflight_invalidation() {
+            self.completion_interrupt_pending = false;
             self.state = VirtualBlockDeviceState::Failed;
             return Err(error);
         }
         let invalidated = self.invalidate_inflight();
+        self.completion_interrupt_pending = false;
         self.state = VirtualBlockDeviceState::Failed;
         Ok(invalidated)
     }
@@ -545,6 +576,7 @@ impl<const N: usize> VirtualBlockDevice<N> {
         self.generation = next_generation;
         self.queue = None;
         self.interrupt_vector = None;
+        self.completion_interrupt_pending = false;
         self.negotiated_features = 0;
         self.last_request_id = 0;
         self.state = VirtualBlockDeviceState::Created;
@@ -567,6 +599,7 @@ impl<const N: usize> VirtualBlockDevice<N> {
         self.generation = next_generation;
         self.queue = None;
         self.interrupt_vector = None;
+        self.completion_interrupt_pending = false;
         self.negotiated_features = 0;
         self.state = VirtualBlockDeviceState::Removed;
         Ok(invalidated)
@@ -749,6 +782,14 @@ impl<const N: usize> VirtualBlockDevice<N> {
             }
         }
         count
+    }
+
+    pub(crate) fn latch_completion_interrupt(&mut self) -> Result<(), VirtualBlockError> {
+        if self.state != VirtualBlockDeviceState::Active || self.interrupt_vector.is_none() {
+            return Err(VirtualBlockError::InvalidInterrupt);
+        }
+        self.completion_interrupt_pending = true;
+        Ok(())
     }
 }
 
@@ -1242,6 +1283,13 @@ where
             invalidated: device.fail(),
         });
     }
+    if let Err(error) = device.latch_completion_interrupt() {
+        bridge.fail_stop();
+        return Err(VirtualBlockProcessError::Queue {
+            error: VirtualBlockQueueError::Protocol(error),
+            invalidated: device.fail(),
+        });
+    }
     Ok(VirtualBlockProcessOutcome::Completed(execution))
 }
 
@@ -1402,6 +1450,27 @@ mod tests {
                 1, 2, 1, 1, 0x9000, 4096,
             ))),
             Err(VirtualBlockError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn completion_notification_coalesces_and_terminal_lifecycle_clears_it() {
+        let mut device = active::<1>();
+        device.latch_completion_interrupt().unwrap();
+        device.latch_completion_interrupt().unwrap();
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+        assert_eq!(device.suspend(), Err(VirtualBlockError::InvalidState));
+        assert_eq!(device.reset(), Ok(0));
+        assert_eq!(device.pending_interrupt_vector(), None);
+
+        device.negotiate(0).unwrap();
+        device.activate(layout::<1>(), 49).unwrap();
+        device.latch_completion_interrupt().unwrap();
+        assert_eq!(device.fail(), Ok(0));
+        assert_eq!(device.pending_interrupt_vector(), None);
+        assert_eq!(
+            device.acknowledge_interrupt(49),
+            Err(VirtualBlockError::InvalidInterrupt)
         );
     }
 
@@ -1888,6 +1957,15 @@ mod tests {
             Ok(VirtualBlockProcessOutcome::Idle)
         );
         assert_eq!(backend.writes, 1);
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+        assert_eq!(device.suspend(), Err(VirtualBlockError::InvalidState));
+        assert_eq!(
+            device.acknowledge_interrupt(49),
+            Err(VirtualBlockError::InvalidInterrupt)
+        );
+        assert_eq!(device.pending_interrupt_vector(), Some(48));
+        device.acknowledge_interrupt(48).unwrap();
+        assert_eq!(device.pending_interrupt_vector(), None);
     }
 
     #[test]

@@ -626,15 +626,24 @@ request until it publishes consumption and permanently poisons on uncertain
 guest-memory I/O. A backend-neutral executor copies reads and writes through
 erased bounded private scratch, issues flush only after admission, returns a
 detail-free device error for a backend-guaranteed clean rejection, and fails the
-device plus bridge after uncertain mutation. A concrete hosted/physical backend,
-A complete one-request transaction now preflights admission and completion-ring
+device plus bridge after uncertain mutation. A complete one-request transaction
+now preflights admission and completion-ring
 capacity before consumption, distinguishes idle and backpressure, rejects a
 consumed malformed request before backend access, executes once, and publishes
 the bound completion. If completion publication becomes uncertain after possible
 mutation, the device and bridge fail rather than retry. A concrete hosted/
-physical backend, doorbells, interrupt delivery, PCI transport, KVM/WHP
+physical backend, doorbells, PCI transport, KVM/WHP
 attachment, a guest driver, QEMU comparison, and fuzzing remain pending. This is
-not VirtIO-compatible.
+not VirtIO-compatible. Completion publication now latches one coalesced
+notification. Delivery uses the device-configured vector through the existing
+allowlisted, exact-`SIGNAL`-capability VM interrupt boundary and acknowledges
+the latch only after confirmed backend injection. Denial and uncertain
+injection retain it; reset, removal, and failure invalidate it. This composition
+is simulation-tested shared policy, not a concrete KVM/WHP device attachment.
+An optimized 10,000-iteration in-process regression baseline measures the full
+mock transaction-through-acknowledgement policy composition on Windows gnullvm
+and Arch Linux/WSL2; it is not storage, hypervisor, or hardware-interrupt
+latency evidence.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

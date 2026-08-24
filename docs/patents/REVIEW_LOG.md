@@ -1367,6 +1367,17 @@ exit handling, canonical responses, and byte comparisons are defensive systems
 integration. No new patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — Virtual-block completion interrupt bridge
+
+**Result: NOT_TRIGGERED.** The change conventionally coalesces completion
+notification in a boolean latch, derives the configured vector from device
+state, invokes an existing capability-authorized interrupt boundary, and clears
+the latch only after confirmed delivery. Retaining notification after denial or
+uncertainty and clearing it during terminal lifecycle transitions are standard
+defensive virtual-device techniques. No patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Block-service controlled-probe lifecycle cleanup
 
 **Result: NOT_TRIGGERED.** The change conventionally routes both probe-task
