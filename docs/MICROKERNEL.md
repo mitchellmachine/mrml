@@ -3574,11 +3574,17 @@ length access, release/acquire ordering, exact port/value use, and unchanged
 producer/consumer counters without notification on error are mandatory unsafe-
 implementation obligations. Every transport error preserves driver state, and
 stale tickets fail before transport access. The current implementation is
-exercised only by a mock transport; the existing guest-read-only completion
-mapping is unchanged.
+exercised by a mock common transport and a concrete x86_64 direct transport
+against a controlled port model; the existing guest-read-only completion
+mapping is unchanged. The direct transport has an unsafe constructor requiring
+live exact identity mappings and the same configured device. It uses volatile
+wire-byte copies, aligned volatile 64-bit counters, release/acquire compiler
+fences over x86 ordering, and exact `OUT DX, EAX`. After protected
+acknowledgement resumes the guest it reads the supplied consumer counter and
+fails stop rather than retire locally if the exact value is not visible.
 
-Windows gnullvm and Arch Linux/WSL2 each passed all 381 release kernel tests and
-scoped strict Clippy. Five focused tests cover strict fresh-queue discovery,
+Windows gnullvm and Arch Linux/WSL2 each passed all 382 release kernel tests and
+scoped strict Clippy. Six focused tests cover strict fresh-queue discovery,
 corrupt configuration and counter disagreement, non-mutating preparation,
 canonical request encoding, stale/replayed publication tickets, forged and
 misordered completions without state loss, exact capacity denial, multi-slot
@@ -3590,7 +3596,9 @@ transport-failure nonmutation, no-transport stale-ticket rejection, slot
 progression, geometry/buffer
 arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
 and permanently terminal removal/exhaustion. This is
-unit/simulation evidence only. The signed KVM/WHP producer still uses its
+unit/simulation evidence only. The native transport test executes volatile
+memory access and a controlled port model, not the privileged `OUT` instruction.
+The signed KVM/WHP producer still uses its
 bounded fixed mechanics; mapped-image use of the common state, nonzero resume,
 unbounded progress, PCI, native boot, and physical hardware remain unverified.
 
@@ -3605,9 +3613,10 @@ invalid completion data cannot release pending ownership, and only an exact
 reset successor can clear reset-terminal state. Capacity and request-ID
 exhaustion cannot wrap, and terminal lifecycle invalidates outstanding derived
 state only after the exact acknowledgement ticket commits. Guest-memory
-addresses, ordering, shortening, redirection, port/value substitution, error
-atomicity, and watermarks are also hostile; the unsafe contract makes those
-guarantees explicit. Existing
+addresses, mapping lifetime, alignment, ordering, shortening, redirection,
+counter tearing, port/value substitution, acknowledgement visibility, error
+atomicity, and watermarks are also hostile; the unsafe contract and fail-stop
+native acknowledgement check make those guarantees explicit. Existing
 capability, revocation, rollback-resistance, accessibility, and evidence gates
 are unchanged. This agent review does not replace the required independent
 human dual review.

@@ -709,8 +709,12 @@ skipped retirement. A reported transport error guarantees that no counter or
 notification may have become visible and leaves driver state unchanged; stale
 tickets fail before transport access. Implementations must guarantee exact,
 non-redirected, non-shortened access and may not substitute a port or value.
-The common mock transport is unit/simulation evidence, not signed-guest
-integration.
+The x86_64 direct transport now performs exact volatile byte copies, aligned
+volatile counter access, release/acquire fencing, exact 32-bit port output, and
+fail-stop verification that protected acknowledgement is visible before local
+retirement. Its unsafe constructor requires live identity mappings and the same
+configured device. The controlled port model is unit/simulation evidence; the
+native `OUT` path and signed-guest integration remain unexecuted.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

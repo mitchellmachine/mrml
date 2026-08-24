@@ -399,9 +399,11 @@ explicitly and downgrade the status rather than guessing.
   retirement. Ahead watermarks cannot skip slots; a reported transport failure
   guarantees no counter or notification became visible and changes no driver
   state, while stale tickets cause no transport access. Its exact
-  access/order/tuple/error guarantees are part of the unsafe contract. Only
-  mock-transport unit/simulation evidence exists; signed native use remains
-  pending. The canonical fixed-capacity
+  access/order/tuple/error guarantees are part of the unsafe contract. The
+  common path has a concrete x86_64 identity-mapped implementation with
+  volatile exact copies, ordered counters, exact port output, and fail-stop
+  acknowledgement observation. Only controlled-port unit/simulation evidence
+  exists; signed native execution remains pending. The canonical fixed-capacity
   allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

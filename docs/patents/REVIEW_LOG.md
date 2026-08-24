@@ -1620,3 +1620,12 @@ address, length, port, and value validation plus fail-closed error atomicity are
 standard defensive virtual-device techniques. No patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
+
+# 2026-08-24 — Native x86 guest block queue transport
+
+**Result: NOT_TRIGGERED.** The change conventionally combines volatile shared-
+ring copies and counters, compiler ordering fences, fixed x86 port output, and a
+fail-stop post-acknowledgement counter check. These are standard defensive
+virtual-device implementation techniques. No patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.

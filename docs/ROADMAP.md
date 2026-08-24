@@ -725,8 +725,11 @@ A reported transport failure guarantees no counter or notification became
 visible and leaves driver state unchanged; stale tickets fail before transport
 access. The unsafe contract requires exact non-redirected access,
 release/acquire ordering, exact port/value tuples, and unchanged counters on
-error. Mock-transport tests are unit/simulation evidence; signed-image use and
-concrete native guest-transport implementations remain pending.
+error. A concrete x86_64 identity-mapped implementation now uses exact volatile
+copies, aligned volatile counters, release/acquire fences, exact 32-bit port
+output, and fail-stop acknowledgement observation. Its controlled port model is
+unit/simulation evidence; signed-image use and execution of the privileged
+native `OUT` path remain pending.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

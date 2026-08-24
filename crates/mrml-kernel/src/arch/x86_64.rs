@@ -5,6 +5,7 @@ mod active_user_copy;
 mod address_space;
 mod ap_online;
 mod ap_trampoline;
+mod block_guest;
 mod context;
 mod descriptors;
 mod ept;
@@ -31,6 +32,9 @@ pub use ap_online::{ApOnlineError, ApOnlineTable};
 pub use ap_trampoline::{
     ActiveApTrampolinePage, ApTrampolineError, ApTrampolineImage, ApTrampolinePage,
     InstalledApTrampoline, TrampolinePermissions,
+};
+pub use block_guest::{
+    NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport, X86VirtualBlockPortIo,
 };
 pub use context::{
     ContextError, USER_CODE_SELECTOR, USER_DATA_SELECTOR, USER_INITIAL_RFLAGS, UserContext,
