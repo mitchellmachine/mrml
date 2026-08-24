@@ -23,6 +23,22 @@ pub enum BlockOpcode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockBufferAccess {
+    None,
+    ServiceReads,
+    ServiceWrites,
+}
+
+impl BlockBufferAccess {
+    pub const fn capability_count(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::ServiceReads | Self::ServiceWrites => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockRequest {
     Read {
         request_id: u64,
@@ -64,6 +80,14 @@ impl BlockRequest {
             | Self::Write { session, .. }
             | Self::Flush { session, .. }
             | Self::ReplaceSuperblock { session, .. } => session,
+        }
+    }
+
+    pub const fn buffer_access(self) -> BlockBufferAccess {
+        match self {
+            Self::Read { .. } => BlockBufferAccess::ServiceWrites,
+            Self::Write { .. } => BlockBufferAccess::ServiceReads,
+            Self::Flush { .. } | Self::ReplaceSuperblock { .. } => BlockBufferAccess::None,
         }
     }
 
@@ -708,6 +732,14 @@ mod tests {
             request.encode(&mut encoded).unwrap();
             assert_eq!(BlockRequest::decode(&encoded).unwrap(), request);
         }
+        assert_eq!(
+            requests[0].buffer_access(),
+            BlockBufferAccess::ServiceWrites
+        );
+        assert_eq!(requests[0].buffer_access().capability_count(), 1);
+        assert_eq!(requests[1].buffer_access(), BlockBufferAccess::ServiceReads);
+        assert_eq!(requests[2].buffer_access(), BlockBufferAccess::None);
+        assert_eq!(requests[3].buffer_access().capability_count(), 0);
 
         for status in [
             BlockStatus::Ok,

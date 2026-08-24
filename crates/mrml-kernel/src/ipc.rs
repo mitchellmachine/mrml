@@ -16,6 +16,7 @@ pub enum IpcError {
     BufferTooSmall,
     Malformed,
     Replay,
+    CapabilityShape,
 }
 
 impl From<CapabilityError> for IpcError {
@@ -29,6 +30,22 @@ pub struct Message {
     payload_length: u16,
     capabilities: [Option<Capability>; MAX_CAPABILITIES],
     capability_count: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorizedIpcCapability {
+    capability: Capability,
+    object: ObjectId,
+}
+
+impl AuthorizedIpcCapability {
+    pub const fn capability(self) -> Capability {
+        self.capability
+    }
+
+    pub const fn object(self) -> ObjectId {
+        self.object
+    }
 }
 
 impl Message {
@@ -98,6 +115,29 @@ impl Message {
 
     pub const fn capability_count(&self) -> usize {
         self.capability_count as usize
+    }
+
+    pub fn authorize_no_capabilities(&self) -> Result<(), IpcError> {
+        if self.capability_count != 0 {
+            return Err(IpcError::CapabilityShape);
+        }
+        Ok(())
+    }
+
+    /// Requires exactly one already-transferred receiver capability with the
+    /// supplied service-side rights. The opaque token is revalidated in the
+    /// receiver's capability space before its object identity is returned.
+    pub fn authorize_single_capability<const N: usize>(
+        &self,
+        receiver_space: &CapabilitySpace<N>,
+        required: Rights,
+    ) -> Result<AuthorizedIpcCapability, IpcError> {
+        if self.capability_count != 1 {
+            return Err(IpcError::CapabilityShape);
+        }
+        let capability = self.capabilities[0].ok_or(IpcError::CapabilityShape)?;
+        let object = receiver_space.authorize_exact(capability, required)?;
+        Ok(AuthorizedIpcCapability { capability, object })
     }
 
     /// Encodes without allocation. Tokens only have meaning in a
@@ -361,6 +401,70 @@ mod tests {
             rollback_destination
                 .insert(ObjectId(2), Rights::READ)
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn receiver_authorizes_exact_transferred_capability_shape_and_live_rights() {
+        let mut source = CapabilitySpace::<2>::new();
+        let shared = source
+            .insert(
+                ObjectId(44),
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::DELEGATE),
+            )
+            .unwrap();
+        let mut receiver = CapabilitySpace::<3>::new();
+        let message = Message::transfer(
+            b"block-write",
+            &[(shared, Rights::MAP.union(Rights::READ))],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        assert_eq!(
+            message.authorize_no_capabilities(),
+            Err(IpcError::CapabilityShape)
+        );
+        let authorized = message
+            .authorize_single_capability(&receiver, Rights::MAP.union(Rights::READ))
+            .unwrap();
+        assert_eq!(authorized.object(), ObjectId(44));
+        assert_eq!(
+            message.authorize_single_capability(&receiver, Rights::WRITE),
+            Err(IpcError::Unauthorized)
+        );
+        receiver.revoke(authorized.capability()).unwrap();
+        assert_eq!(
+            message.authorize_single_capability(&receiver, Rights::READ),
+            Err(IpcError::Unauthorized)
+        );
+
+        let empty = Message::new(b"flush", &[]).unwrap();
+        assert_eq!(empty.authorize_no_capabilities(), Ok(()));
+        assert_eq!(
+            empty.authorize_single_capability(&receiver, Rights::READ),
+            Err(IpcError::CapabilityShape)
+        );
+
+        let excessive = receiver
+            .insert(ObjectId(9), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let excessive_message = Message::new(b"excessive", &[excessive]).unwrap();
+        assert_eq!(
+            excessive_message.authorize_single_capability(&receiver, Rights::READ),
+            Err(IpcError::Unauthorized)
+        );
+        receiver.revoke(excessive).unwrap();
+
+        let first = receiver.insert(ObjectId(1), Rights::READ).unwrap();
+        let second = receiver.insert(ObjectId(2), Rights::READ).unwrap();
+        let multiple = Message::new(b"invalid", &[first, second]).unwrap();
+        assert_eq!(
+            multiple.authorize_single_capability(&receiver, Rights::READ),
+            Err(IpcError::CapabilityShape)
         );
     }
 }

@@ -134,7 +134,12 @@ explicitly and downgrade the status rather than guessing.
   exact-block client. Its canonical v1 control records are fixed-size, carry no
   raw pointer or principal, bind read/write to one separately authorized buffer,
   reject replay per session generation, and poison uncertain mutating sessions.
-  No isolated service process or kernel IPC/shared-memory-capability wiring,
+  The operation exposes its exact service-side buffer access shape, and kernel
+  IPC now accepts zero transferred capabilities or exactly one live receiver
+  capability with the exact nonzero rights required for that shape. Existing
+  shared-memory binding resolution still performs the later mapping/object/
+  liveness check. No isolated service process or block-specific receive and
+  shared-mapping wiring,
   concrete hosted or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,

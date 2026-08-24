@@ -1057,6 +1057,19 @@ capability-transfer, replay-protection, or fail-stop technique.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded control protocol.
 
+## 2026-08-23 — exact received-buffer capability shape
+
+MRML source: `crates/mrml-kernel/src/{capability,ipc}.rs` and
+`crates/mrml-storage/src/block_protocol.rs`.
+
+The kernel conventionally requires zero capabilities or one live transferred
+capability with an exact rights set before returning its object identity, while
+the service protocol labels whether the service reads, writes, or uses no bulk
+buffer. This adds no novel IPC, capability, shared-memory, block-service, or
+authorization technique.
+
+Patent review: `NOT_TRIGGERED` — conventional exact capability authorization.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

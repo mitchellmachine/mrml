@@ -324,8 +324,13 @@ authority; unrelated domains continue.
    carries its fixed record inline. Dispatch binds the authenticated sender,
    exact buffer shape, and strictly increasing request ID to the current session
    generation; replay fails before the backend, while uncertain mutation
-   failures poison that generation. An isolated service process, kernel IPC and
-   shared-memory-capability wiring, concrete hosted/physical backend, and
+   failures poison that generation. Each decoded operation now declares whether
+   the service reads, writes, or uses no bulk buffer. Kernel IPC can validate
+   zero capabilities or exactly one live receiver capability with the exact
+   required nonzero rights; over-privileged, insufficient, missing, multiple,
+   stale, and revoked transfers fail before object identity is returned. An
+   isolated service process, block-specific receive/syscall and shared-mapping
+   wiring, concrete hosted/physical backend, and
    physical durability evidence remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
@@ -428,8 +433,8 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, the isolated block-service process and kernel IPC
-   transport integration, a concrete hosted/physical device backend, and physical
+   checkpoint/reconstruction, the isolated block-service process and block-
+   specific kernel receive/shared-mapping integration, a concrete hosted/physical device backend, and physical
    power-loss evidence remain pending. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.

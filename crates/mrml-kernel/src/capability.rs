@@ -140,6 +140,19 @@ impl<const N: usize> CapabilitySpace<N> {
             .ok_or(CapabilityError::PermissionDenied)
     }
 
+    pub fn authorize_exact(
+        &self,
+        capability: Capability,
+        required: Rights,
+    ) -> Result<ObjectId, CapabilityError> {
+        Rights::from_bits(required.bits())?;
+        let entry = self.entry(capability)?;
+        if entry.rights != required {
+            return Err(CapabilityError::PermissionDenied);
+        }
+        Ok(entry.object)
+    }
+
     pub fn derive<const M: usize>(
         &self,
         capability: Capability,
@@ -195,9 +208,18 @@ mod tests {
         let mut child = CapabilitySpace::<2>::new();
         let read = source.derive(root, Rights::READ, &mut child).unwrap();
         assert_eq!(child.authorize(read, Rights::READ), Ok(ObjectId(7)));
+        assert_eq!(child.authorize_exact(read, Rights::READ), Ok(ObjectId(7)));
         assert_eq!(
             child.authorize(read, Rights::WRITE),
             Err(CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            source.authorize_exact(root, Rights::READ),
+            Err(CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            child.authorize_exact(read, Rights::NONE),
+            Err(CapabilityError::Invalid)
         );
         child.revoke(read).unwrap();
         let replacement = child.insert(ObjectId(8), Rights::READ).unwrap();

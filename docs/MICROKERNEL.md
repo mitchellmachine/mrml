@@ -2955,8 +2955,24 @@ backend. Replays therefore fail before I/O. An uncertain write, flush, or atomic
 replacement backend result permanently poisons that generation; read failures
 remain retryable. Backend failure is reported distinctly and never becomes
 corruption or rollback permission. This is still an in-process codec/dispatcher
-simulation: kernel IPC capability transfer, an isolated service process, a
-device driver, and physical-device evidence remain pending.
+simulation: block-specific receive/mapping execution, an isolated service
+process, a device driver, and physical-device evidence remain pending.
+
+The first kernel transport gate is now connected without teaching the kernel
+the block protocol. Every decoded block operation reports `ServiceReads`,
+`ServiceWrites`, or `None` and therefore an exact zero-or-one capability shape.
+Generic kernel `Message` reception can require no capabilities or exactly one
+already-transferred receiver capability with an exact nonzero rights set. The
+check re-resolves the opaque generational token in the receiver capability
+space; only then does it return the capability and object identity needed by the
+existing exact shared-memory binding resolver. A service-read buffer is intended
+to retain exactly `MAP|READ`; a service-write buffer exactly
+`MAP|READ|WRITE`, matching current non-executable shared-binding semantics.
+Missing, multiple, insufficient, excessive, stale, and revoked capabilities all
+fail before object identity or mapping resolution. The block-specific receive
+loop, binding selection, mapped-slice construction, and syscall path remain
+pending, so this is kernel transfer authorization rather than end-to-end service
+execution.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3071,13 +3087,19 @@ no wire principal or pointer, buffer-shape equality, authenticated sender
 binding, per-generation monotonic request IDs, replay rejection before I/O, and
 fail-stop poisoning after uncertain mutation. Dispatcher restart without
 session invalidation is outside the contract and remains forbidden.
+Kernel-transfer review additionally requires exact capability cardinality and
+exact nonzero receiver rights, generational reauthorization on every use, no
+object-identity return before authorization, and subsequent exact shared-binding
+resolution. Capability attenuation cannot become amplification, while excess
+rights are rejected rather than silently accepted.
 This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-five focused unit tests and strict crate-local clippy pass on Windows
-gnullvm and Arch Linux under WSL2. An isolated block-service process and kernel
-IPC/shared-memory-capability integration, a concrete hosted/physical device backend,
+Ninety-five focused storage tests and 310 focused kernel tests plus strict
+crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
+block-service process and block-specific receive/shared-mapping integration, a
+concrete hosted/physical device backend,
 complete directory hierarchy/lifetime handling, reboot-time capability
 checkpoint/reconstruction, complete crash recovery, snapshots, and
 configuration-checkpoint persistence remain unimplemented.
@@ -3089,10 +3111,10 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 95 tests, and both strict crate-local clippy
-invocations pass.
-These are unit tests and simulation of metadata/authority and exact-block
-adapter state, not
+Both storage unit-test runs pass 95 tests, both kernel runs pass 310 tests, and
+all four strict crate-local clippy invocations pass.
+These are unit tests and simulation of metadata/authority, exact-block adapter,
+and kernel capability-transfer state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded directory ancestry,
