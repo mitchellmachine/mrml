@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `76b0fc6`
-  (`compiler: preanalyze tuple value returns`)
+- Compiler checkpoint commit: `739ae6e`
+  (`compiler: preanalyze compound array bases`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -138,6 +138,10 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   identifier copies retain numbered `TupleField` projections, and tuple-producing
   call arguments remain left-to-right. Public tuple transport remains
   unsupported; this evidence work does not invent an unstable Rust tuple ABI.
+  Supported compound fixed-array index bases now reuse the same bounded whole-
+  array planner before the index read, covering literal, conditional, wrapped,
+  identifier, repeat, integer-byte, and array-producing-call materializers
+  without guessing unsupported shapes.
   Other aggregate return/tail shapes remain outside preanalysis.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
@@ -147,9 +151,9 @@ unsupported semantics.
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, call-derived or otherwise
-unsupported wrapped fat-reference returns, compound array bases, method/call
-families, unsupported tuple-value shapes, and other body reads remain emission-
-time facts.
+unsupported wrapped fat-reference returns, unsupported compound array bases,
+method/call families, unsupported tuple-value shapes, and other body reads
+remain emission-time facts.
 Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
@@ -190,7 +194,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 640 tests on each host: 351
+The checkpoint source passed 641 tests on each host: 352
 library tests, 10 conformance tests, 277 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 

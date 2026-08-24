@@ -288,12 +288,13 @@ by the supported runtime body and loop parsers, plus root-place and supported
 nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
-It does not yet preanalyze compound array-base materialization, other wrapped or
-non-literal conditional aggregate values, wrapped/non-literal conditional-array
+Supported compound fixed-array index bases now reuse the bounded whole-array
+planner before the index read. It does not yet preanalyze unsupported compound
+array-base materialization, other wrapped or non-literal conditional aggregate
+values, wrapped/non-literal conditional-array
 and otherwise unsupported aggregate-argument call-derived fat-reference
 initializers, call-derived or otherwise unsupported wrapped fat-reference
-returns, method/call
-families beyond the bounded initializer slice,
+returns, method/call families beyond the bounded initializer slice, unsupported
 aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
