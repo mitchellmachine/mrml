@@ -1615,6 +1615,15 @@ adds no new authority model, persistent format, device protocol, or patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Canonical virtual-block restart image
+
+**Result: NOT_TRIGGERED.** The change conventionally minimizes a stopped-VM
+restart image to required queue counters, live slots, and a validated resume
+page, zero-fills omitted queue bytes, and requires fresh zeroed payload memory.
+It adds no new authority model, persistent format, device protocol, or patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
+
 # 2026-08-24 — Virtual-block queue transaction processor
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights producer/

@@ -3876,14 +3876,16 @@ bounded canonical state capture and resume after successful publication; see
 
 The signed KVM block probe now crosses a real native VM replacement instead of
 resuming the stopped vCPU after checkpoint publication. While the retained
-capability-bound device remains suspended, the runner reads exactly one request
-page, one completion page, the canonical resume page, and the two block payload
-pages. It destroys the old native VM, then prepares a fresh native VM from the
+capability-bound device remains suspended, the runner reads canonical request,
+completion, and resume pages. Each queue image contains only its two required
+counters and two live slots; all gaps, unused slots, and page tails remain zero.
+It destroys the old native VM, then prepares a fresh native VM from the
 same already verified executable,
 canonical boot handoff, launch layout, configuration, and read-only/NX resume
 binding; restores request memory through the ordinary host boundary and
-completion/resume memory only through the device-write boundary; restores the
-two bounded payload pages; and only then returns the device to `Active`. No
+completion/resume memory only through the device-write boundary; verifies the
+replacement's two payload pages are freshly zeroed rather than restoring
+completed-I/O data; and only then returns the device to `Active`. No
 unrelated old guest RAM or resumable old execution context is retained.
 
 The compiled kernel entry now decodes the complete resume page before creating
@@ -3910,7 +3912,7 @@ durable state, host resistance, native boot, bare metal, or physical hardware.
 The VM-replacement `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, disclosure, attestation mandate, DRM, vendor/publisher
 veto, first-party bypass, accessibility restriction, AI authority, or durable
-owner-state change. Copying only five bounded device-required pages minimizes
+owner-state change. Copying only three canonical device-required pages minimizes
 retention and grants no authority. The `HOSTILE SECURITY REVIEW` treats the
 verified artifact and handoff binding, checkpoint tuple and budget, old VM stop,
 device suspension, every copied page and byte, queue/page directionality,
@@ -3930,11 +3932,11 @@ a freshly prepared VM and exact fresh-versus-resume state selection; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The WHP block runner now mirrors the controlled replacement ordering. Its
-stopped partition is read only for the exact request, completion, resume, and
-two payload pages while the retained device stays suspended. A fresh partition
+stopped partition is read only for canonical request, completion, and resume
+pages while the retained device stays suspended. A fresh partition
 is prepared from the same verified executable, canonical handoff, launch
-layout, configuration, and page protections. Request and payload state use the
-ordinary host boundary; completion and resume state use only the virtual-block
+layout, configuration, and page protections. Request state uses the ordinary
+host boundary; completion and resume state use only the virtual-block
 device-write boundary. The runner destroys the old partition immediately after
 snapshot and before replacement preparation. The device returns to `Active`
 only after complete restoration, and every preparation or restoration error
@@ -3956,7 +3958,7 @@ WHP idle-checkpoint execution is not promoted into replacement evidence.
 The WHP-parity `DIGITAL-RIGHTS REVIEW` found no new identity, collection,
 retention, correlation, disclosure, attestation mandate, DRM, vendor/publisher
 control, first-party bypass, accessibility restriction, AI authority, or
-durable owner-state change. The same five-page minimum-retention boundary is
+durable owner-state change. The same three-page minimum-retention boundary is
 used and carries no authority. The `HOSTILE SECURITY REVIEW` treats the old
 partition stop, retained-system lifetime, device suspension, all copied bytes,
 mapping directionality, replacement preparation, consuming assignment, and
@@ -3974,7 +3976,7 @@ see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 Both hosted runners now transfer ownership of the prepared guest into the block
 probe. After the exact suspended checkpoint snapshot succeeds, `drop` destroys
 the old KVM VM or WHP partition before the replacement builder is invoked. The
-five bounded arrays and the retained suspended device/bridge/backend are the
+three bounded arrays and the retained suspended device/bridge/backend are the
 only recovery inputs. If replacement preparation or any direction-checked page
 write fails, the function returns with no old execution fallback and without
 resuming the device. This closes an accidental rollback path to stale guest RAM
@@ -3996,7 +3998,7 @@ retention, correlation, disclosure, attestation mandate, DRM, vendor/publisher
 control, first-party bypass, accessibility restriction, AI authority, or
 durable owner-state change. Destroying unrelated old RAM earlier reduces
 retention and creates no authority. The `HOSTILE SECURITY REVIEW` treats guest
-ownership, snapshot completion, destruction ordering, all five arrays,
+ownership, snapshot completion, destruction ordering, all three arrays,
 retained device/bridge/backend state, replacement construction, page-write
 direction, restoration completion, and device resume as hostile. Destruction
 occurs only after the full bounded snapshot, but before any replacement work;
@@ -4008,6 +4010,46 @@ does not replace the required independent human dual review.
 
 Patent review: `NOT_TRIGGERED` — conventional ownership consumption and old-VM
 destruction before bounded checkpoint restoration; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
+The restart image is now canonical and data-minimized on both hosted backends.
+The request page retains only producer/consumed counters and the two request
+slots; the completion page retains only published/consumer counters and the two
+completion slots; the validated resume page is retained in full. Zero-initialized
+arrays canonicalize every omitted byte. Completed write payload pages are not
+captured or restored, and the runner rejects a replacement unless those pages
+read back as fresh zero memory before device resume. The old VM is still dropped
+only after all three retained pages have been captured and before replacement
+preparation, so snapshot failure preserves the stopped old VM while every later
+failure remains fail-stop with the device suspended.
+
+Fresh one-time Lamport-signed version-1 Arch Linux/WSL2 KVM execution on
+2026-08-24 completed the canonical three-page path and reported
+`verify=17421us prepare=2820us execute=49091us total=96198us`. Isolated release
+verification passed all 387 kernel tests and all 6 KVM-run tests. Strict
+package-focused `--no-deps` Clippy passed for the kernel and KVM runner. Native
+Windows test-target `check` and strict scoped Clippy passed for the kernel, WHP
+adapter, and WHP runner with CUDA excluded. No linked or live WHP evidence is
+claimed. The consumed one-time signing material and signed test artifact were
+deleted after the run.
+
+The canonical-image `DIGITAL-RIGHTS REVIEW` found that omitting completed payload
+data and unused queue bytes reduces collection, retention, and persistence. It
+adds no identity, correlation, disclosure, attestation mandate, DRM,
+vendor/publisher control, first-party bypass, accessibility restriction, AI
+authority, or durable owner-state change. The `HOSTILE SECURITY REVIEW` treats
+all offsets, lengths, counters, slots, padding, page directionality, replacement
+memory initialization, and device-resume ordering as adversarial. Fixed bounds
+select exactly two slots per queue; omitted bytes remain zero; protected pages
+are restored only through the device-write boundary; nonzero fresh payload
+memory fails closed; and no error after old-VM destruction can resume stale
+execution. Existing capability, revocation, rollback-resistance, accessibility,
+evidence, owner-sovereignty, anti-DRM, owner-controlled-attestation,
+AI-containment, and anti-persistence gates remain unchanged. This agent review
+does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional minimization and canonicalization
+of a bounded restart image; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,

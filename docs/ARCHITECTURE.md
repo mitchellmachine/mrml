@@ -723,16 +723,18 @@ ownership checkpoint; the WHP path has matching source and current compile/lint
 evidence but no linked or live replacement evidence. The KVM controlled probe
 now also destroys the stopped native VM,
 prepares a fresh VM from the same verified executable and canonical handoff,
-restores only the exact request, completion, resume, and two payload pages while
-the device remains suspended, and resumes through the fresh kernel entry. That
+restores canonical request, completion, and resume pages while the device
+remains suspended, requires the replacement payload pages to be freshly zeroed,
+and resumes through the fresh kernel entry. The queue pages retain only their
+two live counters and two slots; every other byte is zero. That
 entry accepts only canonical all-zero launch or exact `14/14/14/12` recovery
 watermarks and matching history anchors. The device, bridge, volatile backend,
 and common VM policy identity remain live across replacement. The WHP runner
-now implements the same consuming partition replacement and exact five-page
+now implements the same consuming partition replacement and canonical three-page
 restoration through ordinary versus device-write boundaries; native Windows
 `check --tests` and strict Clippy pass with CUDA excluded. No linked or live WHP
 replacement evidence exists because `link.exe` remains unavailable.
-Both runners now take ownership of the old native VM, snapshot the five pages,
+Both runners now take ownership of the old native VM, snapshot the three pages,
 and destroy the old VM before replacement preparation begins. There is no old-
 execution fallback if preparation or restoration fails; the retained device
 stays suspended. Fresh signed KVM execution covers this no-fallback ordering.

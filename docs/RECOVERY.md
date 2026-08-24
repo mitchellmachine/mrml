@@ -424,16 +424,17 @@ explicitly and downgrade the status rather than guessing.
   KVM path now leaves the device, bridge, volatile
   backend, and common policy VM identity live while destroying the stopped
   native VM. It prepares a fresh VM from the same verified executable and
-  canonical handoff, restores only the request, completion, resume, and two
-  payload pages while the device stays suspended, and enters the kernel from
+  canonical handoff, restores canonical request, completion, and resume pages
+  while the device stays suspended, requires fresh zeroed replacement payload
+  memory, and enters the kernel from
   its beginning. That entry accepts only all-zero launch state or the exact
   `14/14/14/12` recovery watermarks plus matching ID anchors. This is orderly
   hosted execution replacement. The WHP runner now implements the same
-  consuming partition replacement and restores the same five pages through
+  consuming partition replacement and restores the same three pages through
   their ordinary versus protected device-write paths. Native Windows
   `check --tests` and strict Clippy pass with CUDA excluded, but no linked or
   live WHP replacement evidence exists because `link.exe` is unavailable.
-  Both runners now own and destroy the old VM immediately after the exact five-
+  Both runners now own and destroy the old VM immediately after the exact three-
   page snapshot, before preparing a replacement. No failure path can fall back
   to old execution; preparation or restoration failure leaves the retained
   device suspended. Fresh signed KVM execution covers this ordering, while WHP

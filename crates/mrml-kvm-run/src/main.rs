@@ -13,12 +13,13 @@ use mrml_kernel::{
     GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory,
     HypercallRouter, InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, ObjectId,
     ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockVmmMemory, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
-    run_virtual_block_doorbell_once, run_vm_once, verify_gpu_kernel_bundle,
+    VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
+    VIRTUAL_BLOCK_REQUEST_BYTES, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
+    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit, VmTable,
+    run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once, run_vm_once,
+    verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -107,6 +108,10 @@ const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8 + 1) as u64;
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(target_os = "linux")]
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
+#[cfg(target_os = "linux")]
+const BLOCK_QUEUE_CONSUMER_OFFSET: usize = 64;
+#[cfg(target_os = "linux")]
+const BLOCK_QUEUE_SLOTS_OFFSET: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -374,15 +379,49 @@ fn run_block_guest_driver_probe(
             let mut request_page = [0; 4096];
             let mut completion_page = [0; 4096];
             let mut encoded_resume_page = [0; 4096];
-            let mut payload_pages = [0; 8192];
-            VmBackend::read_guest(&guest, layout.request_base(), &mut request_page)
+            VmBackend::read_guest(&guest, layout.request_base(), &mut request_page[..8])
                 .and_then(|()| {
-                    VmBackend::read_guest(&guest, layout.completion_base(), &mut completion_page)
+                    VmBackend::read_guest(
+                        &guest,
+                        layout.request_base() + BLOCK_QUEUE_CONSUMER_OFFSET as u64,
+                        &mut request_page
+                            [BLOCK_QUEUE_CONSUMER_OFFSET..BLOCK_QUEUE_CONSUMER_OFFSET + 8],
+                    )
+                })
+                .and_then(|()| {
+                    VmBackend::read_guest(
+                        &guest,
+                        layout.request_base() + BLOCK_QUEUE_SLOTS_OFFSET as u64,
+                        &mut request_page[BLOCK_QUEUE_SLOTS_OFFSET
+                            ..BLOCK_QUEUE_SLOTS_OFFSET + 2 * VIRTUAL_BLOCK_REQUEST_BYTES],
+                    )
+                })
+                .and_then(|()| {
+                    VmBackend::read_guest(
+                        &guest,
+                        layout.completion_base(),
+                        &mut completion_page[..8],
+                    )
+                })
+                .and_then(|()| {
+                    VmBackend::read_guest(
+                        &guest,
+                        layout.completion_base() + BLOCK_QUEUE_CONSUMER_OFFSET as u64,
+                        &mut completion_page
+                            [BLOCK_QUEUE_CONSUMER_OFFSET..BLOCK_QUEUE_CONSUMER_OFFSET + 8],
+                    )
+                })
+                .and_then(|()| {
+                    VmBackend::read_guest(
+                        &guest,
+                        layout.completion_base() + BLOCK_QUEUE_SLOTS_OFFSET as u64,
+                        &mut completion_page[BLOCK_QUEUE_SLOTS_OFFSET
+                            ..BLOCK_QUEUE_SLOTS_OFFSET + 2 * VIRTUAL_BLOCK_COMPLETION_BYTES],
+                    )
                 })
                 .and_then(|()| {
                     VmBackend::read_guest(&guest, BLOCK_RESUME_BASE, &mut encoded_resume_page)
                 })
-                .and_then(|()| VmBackend::read_guest(&guest, FRAMEBUFFER, &mut payload_pages))
                 .map_err(|_| anyhow!("block restart snapshot failed"))?;
             drop(guest);
             let configuration_page =
@@ -415,10 +454,13 @@ fn run_block_guest_driver_probe(
                         &encoded_resume_page,
                     )
                 })
-                .and_then(|()| {
-                    VmBackend::write_guest(&mut replacement, FRAMEBUFFER, &payload_pages)
-                })
                 .map_err(|_| anyhow!("replacement block VM state restoration failed"))?;
+            let mut fresh_payload_pages = [0; 8192];
+            VmBackend::read_guest(&replacement, FRAMEBUFFER, &mut fresh_payload_pages)
+                .map_err(|_| anyhow!("replacement block payload validation failed"))?;
+            if fresh_payload_pages.iter().any(|byte| *byte != 0) {
+                return Err(anyhow!("replacement block payload was not fresh"));
+            }
             guest = replacement;
             device
                 .resume()

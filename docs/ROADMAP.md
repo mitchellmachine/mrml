@@ -742,14 +742,16 @@ covers this checkpoint. WHP source parity is present, but this increment has no
 new WHP build or execution evidence because the available Windows shell lacked
 its linker. KVM now has controlled native VM-replacement evidence: the runner
 never resumes the stopped VM, prepares a new VM from the same verified
-executable and canonical handoff, copies only the two queue pages, canonical
-resume page, and two payload pages while the device remains suspended, then
-resumes the retained device only after complete restoration. The fresh kernel
+executable and canonical handoff, copies canonical request, completion, and
+resume pages while the device remains suspended, requires fresh zeroed payload
+memory, then resumes the retained device only after complete restoration. Each
+queue page contains only its two required counters and two live slots; all
+other bytes are zero. The fresh kernel
 entry accepts only all-zero launch state or the exact `14/14/14/12` checkpoint
 and matching ID anchors before reconstructing. The device, bridge, volatile
 backend, and common policy VM identity are retained, so this is orderly
 execution replacement, not crash recovery. The WHP runner now has the same
-consuming partition replacement and exact five-page restoration source path;
+consuming partition replacement and canonical three-page restoration source path;
 native Windows `check --tests` and strict Clippy pass with CUDA excluded. A
 linked/live WHP replacement run remains pending because the available shell
 lacks `link.exe`. Both runners now consume ownership of the old VM and destroy
