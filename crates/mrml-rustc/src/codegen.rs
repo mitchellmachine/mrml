@@ -4457,18 +4457,96 @@ fn runtime_call_arguments_preanalysis_supported<
         {
             continue;
         }
-        if matches!(
+        if runtime_aggregate_call_argument_preanalysis_supported(
+            tree,
+            *argument,
             expected,
-            RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
-        ) && matches!(
-            tree.expression(*argument).map(|expression| expression.kind),
-            Some(ExprKind::Identifier(_))
+            depth + 1,
         ) {
             continue;
         }
         return Ok(false);
     }
     Ok(true)
+}
+
+fn runtime_aggregate_call_argument_preanalysis_supported<const MAX_NODES: usize>(
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    expected: RuntimeExpressionType,
+    depth: usize,
+) -> bool {
+    if depth == 64 {
+        return false;
+    }
+    let kind = tree.expression(id).map(|expression| expression.kind);
+    match (expected, kind) {
+        (RuntimeExpressionType::Array { .. }, Some(ExprKind::Identifier(_)))
+        | (RuntimeExpressionType::Array { .. }, Some(ExprKind::DefaultValue))
+        | (RuntimeExpressionType::Tuple { .. }, Some(ExprKind::Identifier(_))) => true,
+        (
+            RuntimeExpressionType::Array { count, .. },
+            Some(ExprKind::Array {
+                elements,
+                element_count,
+            }),
+        ) => element_count == count && elements[..element_count].iter().all(Option::is_some),
+        (
+            RuntimeExpressionType::Array { count, .. },
+            Some(ExprKind::ArrayRepeat { count: repeat, .. }),
+        ) => repeat == count,
+        (
+            RuntimeExpressionType::Tuple { element_count, .. },
+            Some(ExprKind::Tuple {
+                elements,
+                element_count: actual_count,
+            }),
+        ) => actual_count == element_count && elements[..actual_count].iter().all(Option::is_some),
+        (
+            expected @ RuntimeExpressionType::Tuple { .. },
+            Some(
+                ExprKind::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::LoopBreakIf {
+                    then_branch,
+                    else_branch,
+                    ..
+                },
+            ),
+        ) => {
+            runtime_aggregate_call_argument_preanalysis_supported(
+                tree,
+                then_branch,
+                expected,
+                depth + 1,
+            ) && runtime_aggregate_call_argument_preanalysis_supported(
+                tree,
+                else_branch,
+                expected,
+                depth + 1,
+            )
+        }
+        (
+            expected @ RuntimeExpressionType::Tuple { .. },
+            Some(
+                ExprKind::InlineConst { operand }
+                | ExprKind::LoopBreak { operand }
+                | ExprKind::Return { operand },
+            ),
+        ) => runtime_aggregate_call_argument_preanalysis_supported(
+            tree,
+            operand,
+            expected,
+            depth + 1,
+        ),
+        (expected @ RuntimeExpressionType::Tuple { .. }, Some(ExprKind::Sequence { then, .. })) => {
+            runtime_aggregate_call_argument_preanalysis_supported(tree, then, expected, depth + 1)
+        }
+        _ => false,
+    }
 }
 
 fn runtime_fat_reference_return_preanalysis_supported<const MAX_NODES: usize>(
@@ -18405,7 +18483,10 @@ mod tests {
                 element: CallArrayElement::Integer(crate::IntegerType::Usize),
                 mutable: false,
             };
-            if name == "choose_aggregate" && argument_count == 3 && MAX_PARAMETERS >= 3 {
+            if matches!(name, "choose_aggregate" | "choose_literal")
+                && argument_count == 3
+                && MAX_PARAMETERS >= 3
+            {
                 let element = CallArrayElement::Integer(crate::IntegerType::Usize);
                 let mut tuple_elements = [None; 4];
                 tuple_elements[0] = Some(element);
@@ -18427,7 +18508,11 @@ mod tests {
                     ty: ScalarType::Integer(crate::IntegerType::Usize),
                 });
                 return Some(RuntimeCallTarget {
-                    name: "choose_aggregate",
+                    name: if name == "choose_aggregate" {
+                        "choose_aggregate"
+                    } else {
+                        "choose_literal"
+                    },
                     parameters,
                     parameter_count: 3,
                     return_type: slice,
@@ -19709,6 +19794,53 @@ mod tests {
             };
             assert_eq!(fact.base, base);
             assert_eq!(fact.projections, projections);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_literal_aggregate_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize, choose: bool) -> usize { let selected: &[usize] = { prefix; choose_literal([first, second, third], if choose { (left, right) } else { (right, left) }, bias) }; let repeated: &[usize] = choose_literal([first; 3], (left, right), bias); selected.len() + repeated.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_read_count, 14);
+        for (fact, identity) in facts.assignment_reads[..14].iter().zip([
+            RuntimePlaceIdentity::Parameter(5),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(2),
+            RuntimePlaceIdentity::Parameter(7),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(6),
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(6),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
