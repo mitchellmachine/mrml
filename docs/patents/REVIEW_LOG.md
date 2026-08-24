@@ -2637,3 +2637,14 @@ protocol, host-share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Direct shared-loan owner conflicts
+
+**Result: NOT_TRIGGERED.** The compiler conventionally includes direct owner
+write, read-modify-write, and non-`Copy` move effects in the existing bounded
+shared-loan conflict predicate. Existing control-flow reachability limits the
+conflict to a later borrower use. It adds no optimization, authority model,
+compatibility protocol, host-share mechanism, accessibility or browser-semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.
