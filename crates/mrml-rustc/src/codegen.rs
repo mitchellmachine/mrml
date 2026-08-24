@@ -2777,7 +2777,8 @@ fn push_read<'source, const MAX_PARAMETERS: usize>(
     Ok(())
 }
 
-fn preanalyze_runtime_expression_at_reads<
+#[allow(clippy::too_many_arguments)]
+fn preanalyze_runtime_expression_at_reads_with_tuple<
     'source,
     R: ConstantResolver,
     const MAX_PARAMETERS: usize,
@@ -2789,6 +2790,7 @@ fn preanalyze_runtime_expression_at_reads<
     resolver: &R,
     tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
     root: crate::ExprId,
+    tuple_expected: Option<RuntimeExpressionType>,
     expression_span: Span,
 ) -> Result<(), CodegenError> {
     #[allow(clippy::too_many_arguments)]
@@ -3649,14 +3651,54 @@ fn preanalyze_runtime_expression_at_reads<
         }
     }
 
-    recurse(
+    if let Some(expected) = tuple_expected {
+        recurse_tuple_value(
+            facts,
+            locals,
+            function,
+            resolver,
+            tree,
+            root,
+            expected,
+            0,
+            expression_span,
+        )
+    } else {
+        recurse(
+            facts,
+            locals,
+            function,
+            resolver,
+            tree,
+            root,
+            0,
+            expression_span,
+        )
+    }
+}
+
+fn preanalyze_runtime_expression_at_reads<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
+    root: crate::ExprId,
+    expression_span: Span,
+) -> Result<(), CodegenError> {
+    preanalyze_runtime_expression_at_reads_with_tuple(
         facts,
         locals,
         function,
         resolver,
         tree,
         root,
-        0,
+        None,
         expression_span,
     )
 }
@@ -4219,25 +4261,32 @@ fn preanalyze_runtime_source_expression_reads<
         }
         return Ok(());
     }
-    let direct_tuple_call = matches!(ty, RuntimeExpressionType::Tuple { .. })
-        && matches!(
-            tree.expression(tree.root())
-                .map(|expression| expression.kind),
-            Some(ExprKind::Call { .. })
-        )
-        && runtime_call_arguments_preanalysis_supported(
+    if let expected @ RuntimeExpressionType::Tuple { .. } = ty {
+        let supported = runtime_tuple_value_preanalysis_supported(
             function,
             resolver,
             locals,
             &tree,
             tree.root(),
+            expected,
             0,
         )
         .map_err(|kind| CodegenError {
             kind,
             span: translate_span(body_start, expression_span),
         })?;
-    if matches!(ty, RuntimeExpressionType::Tuple { .. }) && !direct_tuple_call {
+        if supported {
+            preanalyze_runtime_expression_at_reads_with_tuple(
+                facts,
+                locals,
+                function,
+                resolver,
+                &tree,
+                tree.root(),
+                Some(expected),
+                expression_span,
+            )?;
+        }
         return Ok(());
     }
     if runtime_type_stack_slots(ty) != 1
@@ -21775,6 +21824,48 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 16384, 6, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_tuple_value_returns_and_tails() {
+        let source = "fn value(first: usize, second: usize, prefix: usize, choose: bool) -> (usize, usize) { let pair = (first, second); if choose { return { prefix; pair }; } { prefix; if choose { make_tuple(first, second) } else { (second, first) } } }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let resolver = TupleCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 4, 64>(
+            &function,
+            &resolver,
+            &body,
+            "(usize, usize)",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 12);
+        for (fact, parameter) in facts.assignment_reads[..4].iter().zip([0, 1, 3, 2]) {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+        for (fact, field) in facts.assignment_reads[4..6].iter().zip([0, 1]) {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Local(RuntimeLocalId(0)));
+            assert_eq!(
+                fact.projections,
+                RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field))
+            );
+        }
+        for (fact, parameter) in facts.assignment_reads[6..].iter().zip([2, 3, 0, 1, 1, 0]) {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
         }
     }
 
