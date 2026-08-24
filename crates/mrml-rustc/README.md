@@ -3551,3 +3551,17 @@ conditional action blocks, nested loops, differing origins, and malformed or
 over-capacity bodies still fail closed. This does not claim general loop dataflow,
 regions, or return coercions. The `no_std`/allocation/unsafe hygiene scan remained
 empty.
+
+The conditional loop-block call-result origin milestone passed all 735 compiler
+and driver tests on Windows gnullvm and all 735 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
+rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The bounded callee proof now
+visits action-free `if`/`else if`/`else` blocks represented inside a top-level
+loop, merging every explicit return terminal with all other function exits.
+Break, continue, and fallthrough arms manufacture no result origin. Caller
+initializer and assignment probes match the oracle's E0499 behavior while the
+returned child is live and restore the owner after its last use. Any branch
+action, invalid else-arm range, nested loop, mutation, differing origin, parse
+failure, or capacity failure rejects the proof. This does not claim branch-local
+dataflow, nested-loop origins, regions, or return coercions. The
+`no_std`/allocation/unsafe hygiene scan remained empty.

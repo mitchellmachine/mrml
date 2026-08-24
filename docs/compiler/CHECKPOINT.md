@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `02f1517`
-  (`compiler: trace direct loop return loans`)
+- Compiler checkpoint commit: `4753d74`
+  (`compiler: trace conditional loop return loans`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -423,11 +423,12 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. broaden reference-carrying call-result origins through conditional action
-   blocks and nested loop returns, then add return coercion-site reborrows before
-   region reasoning; bounded, shadow-aware straight-line local aliases and
-   direct/conditional top-level loop returns are implemented, while loop-local
-   mutation and unsupported loop shapes still fail closed;
+1. broaden reference-carrying call-result origins through nested loop returns,
+   then add return coercion-site reborrows before region reasoning; bounded,
+   shadow-aware straight-line local aliases, direct/conditional top-level loop
+   returns, and action-free conditional loop-block return terminals are
+   implemented, while branch/loop-local mutation and unsupported loop shapes
+   still fail closed;
    preserve the
    distinction between an expected-reference reborrow, an explicit
    reassignment borrow, and an indirect consuming move;
@@ -460,8 +461,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 733 tests on each host: 402
-library tests, 10 conformance tests, 319 replacement tests, and 2 driver tests.
+The checkpoint source passed 735 tests on each host: 403
+library tests, 10 conformance tests, 320 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
