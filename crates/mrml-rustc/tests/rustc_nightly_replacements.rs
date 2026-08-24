@@ -3980,6 +3980,23 @@ fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
 }
 
 #[test]
+fn rustc_single_block_initializedness_rejects_second_moves_and_accepts_writes() {
+    let rejected = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let first: &mut u16 = identity(input); let second: &mut u16 = identity(input); *first + *second }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(rejected, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeUseAfterMove
+            ))
+        );
+    }
+
+    let accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let mut slot: &mut u16 = input; let moved: &mut u16 = slot; slot = &mut *moved; *slot += 2; *slot }";
+    assert_eq!(compile_wide(accepted, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(accepted, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
