@@ -3,6 +3,7 @@ use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, Rights, 
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
+pub const MAX_SHARED_BUFFER_SYSCALL_BYTES: usize = 1024 * 1024;
 pub const CAPABILITY_TRANSFER_DESCRIPTOR_BYTES: usize = 16;
 const USER_RETURN_FLAGS: u64 = 2
     | (1 << 0)
@@ -193,6 +194,18 @@ pub enum SyscallRequest {
         object: ObjectId,
         rights: Rights,
     },
+    ReadSharedBuffer {
+        capability: Capability,
+        offset: u64,
+        output_address: u64,
+        length: u32,
+    },
+    WriteSharedBuffer {
+        capability: Capability,
+        offset: u64,
+        input_address: u64,
+        length: u32,
+    },
 }
 
 impl SyscallRequest {
@@ -319,6 +332,33 @@ impl SyscallRequest {
                     rights,
                 })
             }
+            7 | 8 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                let length = usize::try_from(r10).map_err(|_| SyscallError::InvalidBuffer)?;
+                validate_user_range(rdx, length, MAX_SHARED_BUFFER_SYSCALL_BYTES)?;
+                rsi.checked_add(r10).ok_or(SyscallError::InvalidBuffer)?;
+                let capability = Capability::from_token(rdi);
+                if operation == 7 {
+                    Ok(Self::ReadSharedBuffer {
+                        capability,
+                        offset: rsi,
+                        output_address: rdx,
+                        length: length as u32,
+                    })
+                } else {
+                    Ok(Self::WriteSharedBuffer {
+                        capability,
+                        offset: rsi,
+                        input_address: rdx,
+                        length: length as u32,
+                    })
+                }
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -330,12 +370,29 @@ impl SyscallRequest {
             | Self::Exit
             | Self::SendBuffer { .. }
             | Self::ReceiveBuffer { .. }
-            | Self::AuthorizeCapability { .. } => &[],
+            | Self::AuthorizeCapability { .. }
+            | Self::ReadSharedBuffer { .. }
+            | Self::WriteSharedBuffer { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
         }
     }
+}
+
+fn validate_user_range(address: u64, length: usize, maximum: usize) -> Result<(), SyscallError> {
+    if length == 0 || length > maximum {
+        return Err(SyscallError::InvalidBuffer);
+    }
+    validate_buffer_address(address, 1)?;
+    let length = u64::try_from(length).map_err(|_| SyscallError::InvalidBuffer)?;
+    let end = address
+        .checked_add(length)
+        .ok_or(SyscallError::InvalidBuffer)?;
+    if end > 1 << 47 {
+        return Err(SyscallError::InvalidBuffer);
+    }
+    Ok(())
 }
 
 fn validate_buffer_address(address: u64, alignment: u64) -> Result<(), SyscallError> {
@@ -565,6 +622,63 @@ mod tests {
             SyscallRequest::decode(6, token, 0x42, u64::from(Rights::READ.bits()), 1, 0, 0),
             Err(SyscallError::ReservedArgument)
         );
+    }
+
+    #[test]
+    fn shared_buffer_calls_are_capability_selected_and_range_bounded() {
+        let token = (8u64 << 32) | 4;
+        assert_eq!(
+            SyscallRequest::decode(7, token, 17, 0x6000, 4096, 0, 0),
+            Ok(SyscallRequest::ReadSharedBuffer {
+                capability: Capability::from_token(token),
+                offset: 17,
+                output_address: 0x6000,
+                length: 4096,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(8, token, 29, 0x7000, 8192, 0, 0),
+            Ok(SyscallRequest::WriteSharedBuffer {
+                capability: Capability::from_token(token),
+                offset: 29,
+                input_address: 0x7000,
+                length: 8192,
+            })
+        );
+        for operation in [7, 8] {
+            assert_eq!(
+                SyscallRequest::decode(operation, 4, 0, 0x6000, 1, 0, 0),
+                Err(SyscallError::InvalidCapability)
+            );
+            assert_eq!(
+                SyscallRequest::decode(operation, token, 0, 0x6000, 0, 0, 0),
+                Err(SyscallError::InvalidBuffer)
+            );
+            assert_eq!(
+                SyscallRequest::decode(
+                    operation,
+                    token,
+                    0,
+                    0x6000,
+                    MAX_SHARED_BUFFER_SYSCALL_BYTES as u64 + 1,
+                    0,
+                    0,
+                ),
+                Err(SyscallError::InvalidBuffer)
+            );
+            assert_eq!(
+                SyscallRequest::decode(operation, token, 0, (1 << 47) - 1, 2, 0, 0),
+                Err(SyscallError::InvalidBuffer)
+            );
+            assert_eq!(
+                SyscallRequest::decode(operation, token, u64::MAX, 0x6000, 2, 0, 0),
+                Err(SyscallError::InvalidBuffer)
+            );
+            assert_eq!(
+                SyscallRequest::decode(operation, token, 0, 0x6000, 1, 1, 0),
+                Err(SyscallError::ReservedArgument)
+            );
+        }
     }
 
     #[test]

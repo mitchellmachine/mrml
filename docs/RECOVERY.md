@@ -152,6 +152,9 @@ explicitly and downgrade the status rather than guessing.
   loop,
   concrete hosted or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
+  The kernel syscall ABI can now decode bounded capability-selected shared-
+  buffer reads and writes, but the kernel-image executor/resource backend is
+  deliberately still absent; the hosted service probe halts on those operations.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

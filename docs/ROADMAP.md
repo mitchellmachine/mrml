@@ -342,6 +342,11 @@ authority; unrelated domains continue.
    An isolated service process, concrete receive/syscall loop, hosted/physical
    backend, and
    physical durability evidence remain pending.
+   The syscall decoder now admits capability-selected shared-buffer reads and
+   writes with implicit exact access modes, nonempty transfers capped at 1 MiB,
+   checked shared offsets, complete canonical user ranges, and zero reserved
+   registers. Kernel-image execution and its concrete opaque-resource backend
+   remain pending and fail closed rather than returning a handle or address.
    Service-side binding selection is implemented: the exact transferred
    capability and kernel-known VM/task identity must select exactly one live
    binding of the required access, while missing, ambiguous, and stale

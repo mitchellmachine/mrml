@@ -658,7 +658,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             | SyscallRequest::Exit
             | SyscallRequest::SendBuffer { .. }
             | SyscallRequest::ReceiveBuffer { .. }
-            | SyscallRequest::AuthorizeCapability { .. } => halt(),
+            | SyscallRequest::AuthorizeCapability { .. }
+            | SyscallRequest::ReadSharedBuffer { .. }
+            | SyscallRequest::WriteSharedBuffer { .. } => halt(),
         };
         let payload = request.payload();
         let runtime = match (*core::ptr::addr_of_mut!(USER_RUNTIME)).as_mut() {
@@ -863,6 +865,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .authorize_capability(current, capability, rights, object)
                     .is_ok();
                 frame.complete_authorization(authorized);
+            }
+            SyscallRequest::ReadSharedBuffer { .. } | SyscallRequest::WriteSharedBuffer { .. } => {
+                halt()
             }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {

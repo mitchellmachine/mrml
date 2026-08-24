@@ -1146,3 +1146,15 @@ block protocol. This adds no novel IPC, capability, admission, block-I/O, or
 buffer-copy technique.
 
 Patent review: `NOT_TRIGGERED` — conventional authorized service dispatch.
+
+## 2026-08-23 — capability-selected shared-buffer syscall ABI
+
+MRML source: `crates/mrml-kernel/src/syscall.rs` and
+`crates/mrml-kernel-image/src/main.rs`.
+
+The kernel conventionally decodes opaque capability, offset, userspace address,
+and bounded length fields for read/write copy operations, rejects noncanonical
+or overflowing ranges, and leaves unsupported execution fail-closed. This adds
+no novel syscall, capability, shared-memory, or bounded-copy technique.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded syscall validation.
