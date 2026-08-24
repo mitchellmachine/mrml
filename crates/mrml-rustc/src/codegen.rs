@@ -10467,9 +10467,12 @@ fn validate_runtime_bounded_direct_loan_liveness(
                         && sibling.generation_event == loan.generation_event
                 });
             let conflicts_with_loan = match loan.kind {
-                RuntimePlaceEffectKind::SharedBorrow => {
-                    conflict.kind == RuntimePlaceEffectKind::MutableBorrow
-                }
+                RuntimePlaceEffectKind::SharedBorrow => matches!(
+                    conflict.kind,
+                    RuntimePlaceEffectKind::MutableBorrow
+                        | RuntimePlaceEffectKind::Write
+                        | RuntimePlaceEffectKind::ReadModifyWrite
+                ),
                 RuntimePlaceEffectKind::MutableBorrow => matches!(
                     conflict.kind,
                     RuntimePlaceEffectKind::Copy
@@ -27760,6 +27763,35 @@ mod tests {
                         && effect.path == RuntimeMovePathId(2)
                 })
         );
+    }
+
+    #[test]
+    fn runtime_shared_loan_liveness_rejects_only_use_after_owner_mutation() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let shared: &u16 = &slot; slot += 1; *shared }";
+        assert_eq!(
+            analyze(rejected).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let shared: &u16 = &slot; let copied = *shared; slot += 1; copied + slot }";
+        analyze(accepted).unwrap();
     }
 
     #[test]
