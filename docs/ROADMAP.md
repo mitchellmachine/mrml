@@ -714,16 +714,19 @@ counters, and leaves all state unchanged on rejection. Removal and request-ID
 exhaustion cannot be rediscovered. Integration into the signed guest image,
 unbounded progress, nonzero-queue restart, and PCI transport remain pending.
 
-The common driver now has an unsafe backend-neutral guest queue-memory boundary.
-It derives every header and slot address from the canonical configuration,
-publishes a complete request before its producer, acquires the completion
-watermark before copying the exact next consumer slot, and publishes only that
-one acknowledgement before committing retirement. A watermark ahead of the
-consumer does not skip entries. Publication/read/acknowledgement failure leaves
-driver state unchanged, and stale tickets fail before memory access. The unsafe
-contract requires exact non-redirected access, release/acquire ordering, and
-unchanged counters on error. Mock-memory tests are unit/simulation evidence;
-signed-image use and concrete native guest-memory implementations remain pending.
+The common driver now has an unsafe backend-neutral guest queue-transport
+boundary. It derives every header and slot address from the canonical
+configuration, publishes a complete request before its producer, and rings only
+the exact configured doorbell after publication. It acquires the completion
+watermark before copying the exact next consumer slot and uses the exact
+protected acknowledgement tuple to publish only that one consumer before
+committing retirement. A watermark ahead of the consumer does not skip entries.
+A reported transport failure guarantees no counter or notification became
+visible and leaves driver state unchanged; stale tickets fail before transport
+access. The unsafe contract requires exact non-redirected access,
+release/acquire ordering, exact port/value tuples, and unchanged counters on
+error. Mock-transport tests are unit/simulation evidence; signed-image use and
+concrete native guest-transport implementations remain pending.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

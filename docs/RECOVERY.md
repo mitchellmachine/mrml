@@ -392,14 +392,16 @@ explicitly and downgrade the status rather than guessing.
   successor generation with four zero counters; rejection changes nothing,
   while removal and sequence exhaustion remain permanent. Nonzero restart
   history, signed-image integration, unbounded progress, and PCI transport
-  remain pending. A common unsafe guest-memory boundary now derives exact queue
-  addresses, orders request-slot publication before its producer, acquires the
-  completion watermark before the next consumer slot, and writes only that
-  acknowledgement before local retirement. Ahead watermarks cannot skip slots;
-  memory failure changes no driver state, and stale tickets cause no memory
-  access. Its exact access/order/error guarantees are part of the unsafe
-  contract. Only mock-memory unit/simulation evidence exists; signed native use
-  remains pending. The canonical fixed-capacity
+  remain pending. A common unsafe guest queue-transport boundary now derives
+  exact queue addresses, orders request-slot publication before its producer and
+  the exact doorbell, acquires the completion watermark before the next consumer
+  slot, and uses the exact protected acknowledgement tuple before local
+  retirement. Ahead watermarks cannot skip slots; a reported transport failure
+  guarantees no counter or notification became visible and changes no driver
+  state, while stale tickets cause no transport access. Its exact
+  access/order/tuple/error guarantees are part of the unsafe contract. Only
+  mock-transport unit/simulation evidence exists; signed native use remains
+  pending. The canonical fixed-capacity
   allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

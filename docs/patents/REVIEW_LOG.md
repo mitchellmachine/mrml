@@ -1611,3 +1611,12 @@ bytes. Issuance after successful I/O, duplicate rejection, and safe-constructor
 removal are standard defensive recovery techniques. No patent-candidate
 mechanism was identified. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Exact guest block queue transport binding
+
+**Result: NOT_TRIGGERED.** The change binds conventional shared-ring producer
+and consumer ordering to fixed doorbell and acknowledgement I/O tuples. Exact
+address, length, port, and value validation plus fail-closed error atomicity are
+standard defensive virtual-device techniques. No patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.

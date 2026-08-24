@@ -576,31 +576,38 @@ pub enum VirtualBlockGuestTerminalReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum VirtualBlockGuestQueueError<E> {
+pub enum VirtualBlockGuestQueueTransportError<E> {
     Protocol(VirtualBlockError),
-    Memory(E),
+    Transport(E),
 }
 
-/// Exact guest-side memory operations for the MRML-specific block queues.
+/// Exact guest-side memory and notification operations for the MRML-specific
+/// block queues.
 ///
 /// # Safety
 ///
-/// Implementations must access exactly the supplied addresses and lengths.
-/// `publish_request` must make the complete slot visible before release-
-/// publishing the producer and must leave the producer unchanged on error.
+/// Implementations must access exactly the supplied addresses and lengths and
+/// use exactly the supplied ports and values. `publish_request_and_notify`
+/// must make the complete slot visible before release-publishing the producer,
+/// notify only after that publication, and leave the producer unchanged without
+/// notifying on error.
 /// `read_completion` must acquire the published counter before copying the
-/// corresponding complete slot. `acknowledge_completion` must release-publish
-/// the exact consumer and leave it unchanged on error. No operation may redirect
-/// or shorten a copy.
-pub unsafe trait VirtualBlockGuestQueueMemory {
+/// corresponding complete slot. `acknowledge_completion` must use the protected
+/// acknowledgement transport to release-publish the exact consumer at the
+/// supplied address and leave it unchanged on error. No operation may redirect
+/// or shorten a copy, substitute a transport tuple, or report an error after a
+/// producer or consumer publication might have become visible.
+pub unsafe trait VirtualBlockGuestQueueTransport {
     type Error;
 
-    fn publish_request(
+    fn publish_request_and_notify(
         &mut self,
         request_address: u64,
         request: &[u8; VIRTUAL_BLOCK_REQUEST_BYTES],
         producer_address: u64,
         producer: u64,
+        doorbell_port: u16,
+        doorbell_value: u32,
     ) -> Result<(), Self::Error>;
 
     fn read_completion(
@@ -615,6 +622,8 @@ pub unsafe trait VirtualBlockGuestQueueMemory {
         &mut self,
         consumer_address: u64,
         consumer: u64,
+        acknowledgement_port: u16,
+        acknowledgement_value: u32,
     ) -> Result<(), Self::Error>;
 }
 
@@ -797,14 +806,14 @@ impl VirtualBlockGuestDriver {
         Ok(())
     }
 
-    pub fn publish_submission<M: VirtualBlockGuestQueueMemory>(
+    pub fn publish_submission<M: VirtualBlockGuestQueueTransport>(
         &mut self,
-        memory: &mut M,
+        transport: &mut M,
         submission: VirtualBlockGuestSubmission,
-    ) -> Result<(), VirtualBlockGuestQueueError<M::Error>> {
+    ) -> Result<(), VirtualBlockGuestQueueTransportError<M::Error>> {
         let (slot, pending_count) = self
             .validate_submission(submission)
-            .map_err(VirtualBlockGuestQueueError::Protocol)?;
+            .map_err(VirtualBlockGuestQueueTransportError::Protocol)?;
         let configuration = self.configuration;
         let request_address = slot_address(
             configuration.queue().request_base(),
@@ -812,22 +821,24 @@ impl VirtualBlockGuestDriver {
             usize::from(configuration.queue().slots()),
             VIRTUAL_BLOCK_REQUEST_BYTES,
         )
-        .map_err(VirtualBlockGuestQueueError::Protocol)?;
+        .map_err(VirtualBlockGuestQueueTransportError::Protocol)?;
         if slot != usize::from(submission.slot) {
-            return Err(VirtualBlockGuestQueueError::Protocol(
+            return Err(VirtualBlockGuestQueueTransportError::Protocol(
                 VirtualBlockError::StaleTicket,
             ));
         }
         let mut encoded = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
         submission.request.encode(&mut encoded);
-        memory
-            .publish_request(
+        transport
+            .publish_request_and_notify(
                 request_address,
                 &encoded,
                 configuration.queue().request_base(),
                 submission.producer,
+                VIRTUAL_BLOCK_DOORBELL_PORT,
+                VIRTUAL_BLOCK_DOORBELL_VALUE,
             )
-            .map_err(VirtualBlockGuestQueueError::Memory)?;
+            .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         self.finish_submission(submission, slot, pending_count);
         Ok(())
     }
@@ -904,12 +915,13 @@ impl VirtualBlockGuestDriver {
         })
     }
 
-    pub fn prepare_completion_from_memory<M: VirtualBlockGuestQueueMemory>(
+    pub fn prepare_completion_from_transport<M: VirtualBlockGuestQueueTransport>(
         &self,
-        memory: &mut M,
-    ) -> Result<VirtualBlockGuestCompletionTicket, VirtualBlockGuestQueueError<M::Error>> {
+        transport: &mut M,
+    ) -> Result<VirtualBlockGuestCompletionTicket, VirtualBlockGuestQueueTransportError<M::Error>>
+    {
         let position = self.completion_consumer.checked_add(1).ok_or(
-            VirtualBlockGuestQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+            VirtualBlockGuestQueueTransportError::Protocol(VirtualBlockError::SequenceExhausted),
         )?;
         let configuration = self.configuration;
         let completion_address = slot_address(
@@ -918,19 +930,19 @@ impl VirtualBlockGuestDriver {
             usize::from(configuration.queue().slots()),
             VIRTUAL_BLOCK_COMPLETION_BYTES,
         )
-        .map_err(VirtualBlockGuestQueueError::Protocol)?;
+        .map_err(VirtualBlockGuestQueueTransportError::Protocol)?;
         let mut published = 0;
         let mut encoded = [0; VIRTUAL_BLOCK_COMPLETION_BYTES];
-        memory
+        transport
             .read_completion(
                 configuration.queue().completion_base(),
                 completion_address,
                 &mut published,
                 &mut encoded,
             )
-            .map_err(VirtualBlockGuestQueueError::Memory)?;
+            .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         self.prepare_completion(published, &encoded)
-            .map_err(VirtualBlockGuestQueueError::Protocol)
+            .map_err(VirtualBlockGuestQueueTransportError::Protocol)
     }
 
     pub fn commit_completion(
@@ -957,42 +969,46 @@ impl VirtualBlockGuestDriver {
         Ok(self.finish_completion(slot, pending_count, acknowledgement, ticket.completion))
     }
 
-    pub fn acknowledge_completion_with_memory<M: VirtualBlockGuestQueueMemory>(
+    pub fn acknowledge_completion_with_transport<M: VirtualBlockGuestQueueTransport>(
         &mut self,
-        memory: &mut M,
+        transport: &mut M,
         ticket: VirtualBlockGuestCompletionTicket,
-    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockGuestQueueError<M::Error>> {
+    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockGuestQueueTransportError<M::Error>> {
         let (slot, pending) = self
             .validate_completion(ticket.completion_published, ticket.completion)
-            .map_err(|_| VirtualBlockGuestQueueError::Protocol(VirtualBlockError::StaleTicket))?;
+            .map_err(|_| {
+                VirtualBlockGuestQueueTransportError::Protocol(VirtualBlockError::StaleTicket)
+            })?;
         let acknowledgement = self.completion_consumer.checked_add(1).ok_or(
-            VirtualBlockGuestQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+            VirtualBlockGuestQueueTransportError::Protocol(VirtualBlockError::SequenceExhausted),
         )?;
         if slot != usize::from(ticket.slot)
             || pending != ticket.pending
             || ticket.acknowledgement != acknowledgement
         {
-            return Err(VirtualBlockGuestQueueError::Protocol(
+            return Err(VirtualBlockGuestQueueTransportError::Protocol(
                 VirtualBlockError::StaleTicket,
             ));
         }
-        let pending_count =
-            self.pending_count
-                .checked_sub(1)
-                .ok_or(VirtualBlockGuestQueueError::Protocol(
-                    VirtualBlockError::InvalidState,
-                ))?;
+        let pending_count = self.pending_count.checked_sub(1).ok_or(
+            VirtualBlockGuestQueueTransportError::Protocol(VirtualBlockError::InvalidState),
+        )?;
         let consumer_address = self
             .configuration
             .queue()
             .completion_base()
             .checked_add(64)
-            .ok_or(VirtualBlockGuestQueueError::Protocol(
+            .ok_or(VirtualBlockGuestQueueTransportError::Protocol(
                 VirtualBlockError::RangeOverflow,
             ))?;
-        memory
-            .acknowledge_completion(consumer_address, acknowledgement)
-            .map_err(VirtualBlockGuestQueueError::Memory)?;
+        transport
+            .acknowledge_completion(
+                consumer_address,
+                acknowledgement,
+                VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            )
+            .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         Ok(self.finish_completion(slot, pending_count, acknowledgement, ticket.completion))
     }
 
@@ -2665,22 +2681,22 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum GuestQueueMemoryError {
+    enum GuestQueueTransportError {
         Injected,
     }
 
-    struct MockGuestQueueMemory {
-        published_request: Option<(u64, [u8; VIRTUAL_BLOCK_REQUEST_BYTES], u64, u64)>,
+    struct MockGuestQueueTransport {
+        published_request: Option<(u64, [u8; VIRTUAL_BLOCK_REQUEST_BYTES], u64, u64, u16, u32)>,
         completion_published: u64,
         completion: [u8; VIRTUAL_BLOCK_COMPLETION_BYTES],
         completion_read: Option<(u64, u64)>,
-        acknowledgement: Option<(u64, u64)>,
+        acknowledgement: Option<(u64, u64, u16, u32)>,
         fail_publish: bool,
         fail_read: bool,
         fail_acknowledge: bool,
     }
 
-    impl MockGuestQueueMemory {
+    impl MockGuestQueueTransport {
         fn new() -> Self {
             Self {
                 published_request: None,
@@ -2695,20 +2711,29 @@ mod tests {
         }
     }
 
-    unsafe impl VirtualBlockGuestQueueMemory for MockGuestQueueMemory {
-        type Error = GuestQueueMemoryError;
+    unsafe impl VirtualBlockGuestQueueTransport for MockGuestQueueTransport {
+        type Error = GuestQueueTransportError;
 
-        fn publish_request(
+        fn publish_request_and_notify(
             &mut self,
             request_address: u64,
             request: &[u8; VIRTUAL_BLOCK_REQUEST_BYTES],
             producer_address: u64,
             producer: u64,
+            doorbell_port: u16,
+            doorbell_value: u32,
         ) -> Result<(), Self::Error> {
             if self.fail_publish {
-                return Err(GuestQueueMemoryError::Injected);
+                return Err(GuestQueueTransportError::Injected);
             }
-            self.published_request = Some((request_address, *request, producer_address, producer));
+            self.published_request = Some((
+                request_address,
+                *request,
+                producer_address,
+                producer,
+                doorbell_port,
+                doorbell_value,
+            ));
             Ok(())
         }
 
@@ -2720,7 +2745,7 @@ mod tests {
             completion: &mut [u8; VIRTUAL_BLOCK_COMPLETION_BYTES],
         ) -> Result<(), Self::Error> {
             if self.fail_read {
-                return Err(GuestQueueMemoryError::Injected);
+                return Err(GuestQueueTransportError::Injected);
             }
             self.completion_read = Some((published_address, completion_address));
             *published = self.completion_published;
@@ -2732,11 +2757,18 @@ mod tests {
             &mut self,
             consumer_address: u64,
             consumer: u64,
+            acknowledgement_port: u16,
+            acknowledgement_value: u32,
         ) -> Result<(), Self::Error> {
             if self.fail_acknowledge {
-                return Err(GuestQueueMemoryError::Injected);
+                return Err(GuestQueueTransportError::Injected);
             }
-            self.acknowledgement = Some((consumer_address, consumer));
+            self.acknowledgement = Some((
+                consumer_address,
+                consumer,
+                acknowledgement_port,
+                acknowledgement_value,
+            ));
             Ok(())
         }
     }
@@ -2871,31 +2903,42 @@ mod tests {
     }
 
     #[test]
-    fn guest_driver_memory_transport_is_exact_and_transactional() {
+    fn guest_driver_queue_transport_is_exact_and_transactional() {
         let device = active::<2>();
         let mut driver = discovered_driver(&device);
         let submission = driver.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
-        let mut memory = MockGuestQueueMemory::new();
+        let mut transport = MockGuestQueueTransport::new();
 
-        memory.fail_publish = true;
+        transport.fail_publish = true;
         assert_eq!(
-            driver.publish_submission(&mut memory, submission),
-            Err(VirtualBlockGuestQueueError::Memory(
-                GuestQueueMemoryError::Injected
+            driver.publish_submission(&mut transport, submission),
+            Err(VirtualBlockGuestQueueTransportError::Transport(
+                GuestQueueTransportError::Injected
             ))
         );
         assert_eq!(driver.request_producer(), 0);
         assert_eq!(driver.pending_count(), 0);
-        memory.fail_publish = false;
-        driver.publish_submission(&mut memory, submission).unwrap();
-        let (request_address, encoded_request, producer_address, producer) =
-            memory.published_request.unwrap();
+        assert_eq!(transport.published_request, None);
+        transport.fail_publish = false;
+        driver
+            .publish_submission(&mut transport, submission)
+            .unwrap();
+        let (
+            request_address,
+            encoded_request,
+            producer_address,
+            producer,
+            doorbell_port,
+            doorbell_value,
+        ) = transport.published_request.unwrap();
         assert_eq!(
             request_address,
             layout::<2>().request_base() + QUEUE_HEADER_BYTES
         );
         assert_eq!(producer_address, layout::<2>().request_base());
         assert_eq!(producer, 1);
+        assert_eq!(doorbell_port, VIRTUAL_BLOCK_DOORBELL_PORT);
+        assert_eq!(doorbell_value, VIRTUAL_BLOCK_DOORBELL_VALUE);
         assert_eq!(
             VirtualBlockRequest::decode(&encoded_request),
             Ok(submission.request())
@@ -2904,25 +2947,27 @@ mod tests {
         assert_eq!(driver.pending_count(), 1);
 
         let second = driver.prepare_read(1, 1, 0x81_0000, 4096).unwrap();
-        driver.publish_submission(&mut memory, second).unwrap();
+        driver.publish_submission(&mut transport, second).unwrap();
         assert_eq!(driver.request_producer(), 2);
         assert_eq!(driver.pending_count(), 2);
 
-        memory.completion_published = 2;
-        memory.completion = completion_bytes(1, 1, VirtualBlockCompletionStatus::Ok, 4096);
-        memory.fail_read = true;
+        transport.completion_published = 2;
+        transport.completion = completion_bytes(1, 1, VirtualBlockCompletionStatus::Ok, 4096);
+        transport.fail_read = true;
         assert_eq!(
-            driver.prepare_completion_from_memory(&mut memory),
-            Err(VirtualBlockGuestQueueError::Memory(
-                GuestQueueMemoryError::Injected
+            driver.prepare_completion_from_transport(&mut transport),
+            Err(VirtualBlockGuestQueueTransportError::Transport(
+                GuestQueueTransportError::Injected
             ))
         );
         assert_eq!(driver.completion_consumer(), 0);
         assert_eq!(driver.pending_count(), 2);
-        memory.fail_read = false;
-        let ticket = driver.prepare_completion_from_memory(&mut memory).unwrap();
+        transport.fail_read = false;
+        let ticket = driver
+            .prepare_completion_from_transport(&mut transport)
+            .unwrap();
         assert_eq!(
-            memory.completion_read,
+            transport.completion_read,
             Some((
                 layout::<2>().completion_base(),
                 layout::<2>().completion_base() + QUEUE_HEADER_BYTES,
@@ -2931,35 +2976,40 @@ mod tests {
         assert_eq!(ticket.acknowledgement(), 1);
         assert_eq!(driver.completion_consumer(), 0);
 
-        memory.fail_acknowledge = true;
+        transport.fail_acknowledge = true;
         assert_eq!(
-            driver.acknowledge_completion_with_memory(&mut memory, ticket),
-            Err(VirtualBlockGuestQueueError::Memory(
-                GuestQueueMemoryError::Injected
+            driver.acknowledge_completion_with_transport(&mut transport, ticket),
+            Err(VirtualBlockGuestQueueTransportError::Transport(
+                GuestQueueTransportError::Injected
             ))
         );
         assert_eq!(driver.completion_consumer(), 0);
         assert_eq!(driver.pending_count(), 2);
-        memory.fail_acknowledge = false;
+        transport.fail_acknowledge = false;
         let outcome = driver
-            .acknowledge_completion_with_memory(&mut memory, ticket)
+            .acknowledge_completion_with_transport(&mut transport, ticket)
             .unwrap();
         assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Ok);
         assert_eq!(
-            memory.acknowledgement,
-            Some((layout::<2>().completion_base() + 64, 1))
+            transport.acknowledgement,
+            Some((
+                layout::<2>().completion_base() + 64,
+                1,
+                VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            ))
         );
         assert_eq!(driver.completion_consumer(), 1);
         assert_eq!(driver.pending_count(), 1);
 
-        memory.acknowledgement = None;
+        transport.acknowledgement = None;
         assert_eq!(
-            driver.acknowledge_completion_with_memory(&mut memory, ticket),
-            Err(VirtualBlockGuestQueueError::Protocol(
+            driver.acknowledge_completion_with_transport(&mut transport, ticket),
+            Err(VirtualBlockGuestQueueTransportError::Protocol(
                 VirtualBlockError::StaleTicket
             ))
         );
-        assert_eq!(memory.acknowledgement, None);
+        assert_eq!(transport.acknowledgement, None);
     }
 
     #[test]

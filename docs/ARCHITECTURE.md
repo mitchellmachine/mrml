@@ -698,15 +698,19 @@ generation and four zero queue counters, and failure preserves the old terminal
 state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
 queue resume, mapped signed-guest consumption of this state, unbounded progress,
 and PCI discovery remain pending.
-A backend-neutral unsafe guest-memory contract now composes those transactions
-with canonical queue addresses. Request publication copies the exact slot before
-release-publishing its producer; completion acquisition reads the published
-watermark before the exact next consumer slot; acknowledgement release-publishes
-only that one consumer before local commit. A watermark may be ahead without
-authorizing skipped retirement. Memory errors leave driver state unchanged, and
-stale tickets fail before memory access. Implementations must guarantee exact,
-non-redirected, non-shortened access and unchanged counters on error. The common
-mock transport is unit/simulation evidence, not signed-guest integration.
+A backend-neutral unsafe guest queue-transport contract now composes those
+transactions with canonical queue addresses and exact configured I/O tuples.
+Request publication copies the exact slot, release-publishes its producer, and
+only then rings the canonical doorbell; completion acquisition reads the
+published watermark before the exact next consumer slot; protected
+acknowledgement uses the canonical tuple to release-publish only that one
+consumer before local commit. A watermark may be ahead without authorizing
+skipped retirement. A reported transport error guarantees that no counter or
+notification may have become visible and leaves driver state unchanged; stale
+tickets fail before transport access. Implementations must guarantee exact,
+non-redirected, non-shortened access and may not substitute a port or value.
+The common mock transport is unit/simulation evidence, not signed-guest
+integration.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

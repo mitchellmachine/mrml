@@ -3563,16 +3563,19 @@ removal invalidates every still-outstanding request; normal retirement frees
 only its exact slot. Request-ID exhaustion blocks preparation without wrapping
 while the last bounded window drains.
 
-The common state now also has an unsafe backend-neutral guest queue-memory
+The common state now also has an unsafe backend-neutral guest queue-transport
 contract. Request publication derives the exact configured slot, copies its
-canonical bytes, and only then release-publishes the producer. Completion
-acquisition first observes the published watermark and then copies the exact
-next consumer slot; an ahead watermark never permits skipping. Acknowledgement
-release-publishes only that consumer before local ticket commit. Exact address
-and length access, release/acquire ordering, and unchanged producer/consumer
-counters on error are mandatory unsafe-implementation obligations. Every
-memory error preserves driver state, and stale tickets fail before memory
-access. The current implementation is exercised only by mock memory.
+canonical bytes, release-publishes the producer, and only then uses the exact
+configured doorbell tuple. Completion acquisition first observes the published
+watermark and then copies the exact next consumer slot; an ahead watermark never
+permits skipping. Acknowledgement uses the exact configured protected tuple to
+release-publish only that consumer before local ticket commit. Exact address and
+length access, release/acquire ordering, exact port/value use, and unchanged
+producer/consumer counters without notification on error are mandatory unsafe-
+implementation obligations. Every transport error preserves driver state, and
+stale tickets fail before transport access. The current implementation is
+exercised only by a mock transport; the existing guest-read-only completion
+mapping is unchanged.
 
 Windows gnullvm and Arch Linux/WSL2 each passed all 381 release kernel tests and
 scoped strict Clippy. Five focused tests cover strict fresh-queue discovery,
@@ -3581,9 +3584,10 @@ canonical request encoding, stale/replayed publication tickets, forged and
 misordered completions without state loss, exact capacity denial, multi-slot
 fill and ordered retirement, post-retirement slot reuse, descendant
 invalidation only on completion-ticket commit, completion-ticket replay, the
-maximum 64-slot boundary, exact transport addresses and canonical request bytes,
-ahead completion watermarks, memory-failure nonmutation, no-memory stale-ticket
-rejection, slot progression, geometry/buffer
+maximum 64-slot boundary, exact transport addresses, doorbell and
+acknowledgement tuples, canonical request bytes, ahead completion watermarks,
+transport-failure nonmutation, no-transport stale-ticket rejection, slot
+progression, geometry/buffer
 arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
 and permanently terminal removal/exhaustion. This is
 unit/simulation evidence only. The signed KVM/WHP producer still uses its
@@ -3601,8 +3605,9 @@ invalid completion data cannot release pending ownership, and only an exact
 reset successor can clear reset-terminal state. Capacity and request-ID
 exhaustion cannot wrap, and terminal lifecycle invalidates outstanding derived
 state only after the exact acknowledgement ticket commits. Guest-memory
-addresses, ordering, shortening, redirection, error atomicity, and watermarks
-are also hostile; the unsafe contract makes those guarantees explicit. Existing
+addresses, ordering, shortening, redirection, port/value substitution, error
+atomicity, and watermarks are also hostile; the unsafe contract makes those
+guarantees explicit. Existing
 capability, revocation, rollback-resistance, accessibility, and evidence gates
 are unchanged. This agent review does not replace the required independent
 human dual review.
