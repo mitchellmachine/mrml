@@ -2420,6 +2420,21 @@ the differential COFF/ELF execution gate. This is precise place evidence only:
 it neither adds array move paths nor permits rustc-rejected indexed moves from
 non-`Copy` arrays.
 
+The mutable-reference tuple-field milestone passed all 697 compiler and driver
+tests on Windows gnullvm and all 697 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Bounded tuple elements can now retain
+scalar values, thin scalar references, or scalar raw pointers without admitting
+fat references, arrays, nested tuples, or a public tuple ABI. Inferred
+`&mut` fields follow the exact pinned rustc oracle: a field can move once, a
+sibling remains usable, a whole-tuple move requires every field initialized,
+and an exact field write restores tuple completeness. The accepted probe emits
+both COFF and ELF64 objects; duplicate field moves fail with
+`RuntimeUseAfterMove`. The Arch release gate initially exposed a fixed-state
+stack regression from an overbroad reference target; narrowing the retained
+tuple reference to its actual scalar scope restored the ordinary gate without
+raising stack limits. Implicit coercion reborrows remain a loan-analysis
+dependency and are not claimed as moves.
+
 Security review searched both crates for direct `std`/`alloc` imports and unsafe
 blocks and found none. `cargo tree -p mrml-rustc-driver --offline` showed only
 original workspace crates. Adversarial tests cover truncated output, capacity

@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `480a198`
-  (`compiler: identify constant array elements`)
+- Compiler checkpoint commit: `5c53eb9`
+  (`compiler: track mutable tuple field moves`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `40a035c` (`compiler: analyze initializedness
+- Preceding compiler commits: `480a198` (`compiler: identify constant array
+  elements`), `40a035c` (`compiler: analyze initializedness
   through expressions`), `daf9fb9` (`compiler: connect conditional
   expression flow`), `cbc6cc5` (`compiler: map conditional expression
   program points`), `7003640` (`compiler: identify conditional
@@ -78,7 +79,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
 - a fixed 1,360-entry move-path table and 512-entry initialization-site table
   with one dense root path for every supported parameter and named local.
   Supported owned tuple roots immediately expand into one precisely numbered,
-  typed child path per field; the derived capacity preserves all 256 retained
+  typed child path per field. Tuple elements now retain bounded scalar values,
+  thin scalar references, or scalar raw pointers; fat references, arrays, and
+  nested tuples remain excluded. The derived capacity preserves all 256 retained
   locals and 16 supported ABI parameters at maximum tuple width. Parameter-entry
   and successful-local-declaration initialization origins retain their exact type
   and source span. Final validation requires deterministic parameter-then-local
@@ -93,9 +96,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   `Write` or `ReadModifyWrite` after their RHS read planning. Assignment reads
   derive their effect context from the typed RHS: an exact root of proven
   non-`Copy` type records `Move` before the destination write, while an exact
-  root or tuple field of proven `Copy` type records `Copy`. Capacity failure
-  cannot retain the read without its effect. Summary indexes, dereferences,
-  projected non-`Copy` reads, and tuple materialization remain unclassified.
+  root or tuple field of proven `Copy` type records `Copy`. An inferred exact
+  mutable-reference tuple-field binding records a `Move`; moving it twice or
+  consuming the incomplete tuple fails initializedness, while sibling fields
+  remain independently usable and an exact field write restores completeness.
+  Capacity failure cannot retain the read without its effect. Summary indexes,
+  dereferences, other projected non-`Copy` reads, and tuple materialization
+  remain unclassified.
   Direct shared and mutable borrows of an exact root, plus shared
   or mutable reborrows through a direct reference root, record `SharedBorrow` or
   `MutableBorrow` instead of being mislabeled as copies or moves. Reference
@@ -106,8 +113,8 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   context through transparent wrappers, sequence tails, and conditional
   branches. Sequence prefixes, conditions, indexes, arithmetic operands, and
   aggregate elements keep ordinary value context. Moves of `Copy` types,
-  projected moves in this direct-only
-  slice, read-modify-write on non-`Copy` paths, invalid IDs, holes, malformed
+  unsupported projected moves, read-modify-write on non-`Copy` paths, invalid
+  IDs, holes, malformed
   spans, corrupt counts, incompatible `Copy` effects, and capacity exhaustion
   fail closed; and
 - a derived fixed bound of 1,280 ownership events spanning all 512 possible
@@ -345,7 +352,7 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Array-element move paths, remaining indirect move/borrow classification,
+Array-element move paths, implicit reborrow and remaining indirect move/borrow classification,
 unsupported expression/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
@@ -356,9 +363,9 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. extend contextual effects for implicit coercions and remaining indirect
-   call/return and aggregate-materialization shapes without treating ambiguous
-   pointee or projected reads as moves;
+1. stage shared-loan and mutable-loan/invalidation facts before admitting
+   implicit coercion reborrows; do not mislabel an explicit expected-reference
+   binding as an inferred move or accept overlapping aliases without loans;
 2. exact constant owned-array element identity is now retained. Add array move
    paths only for a modern Rust operation that can legally move an element
    (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
@@ -388,8 +395,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 695 tests on each host: 383
-library tests, 10 conformance tests, 300 replacement tests, and 2 driver tests.
+The checkpoint source passed 697 tests on each host: 384
+library tests, 10 conformance tests, 301 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
