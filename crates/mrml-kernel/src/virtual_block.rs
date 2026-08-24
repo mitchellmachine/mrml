@@ -908,6 +908,14 @@ pub enum VirtualBlockCompletionAckError<M> {
 pub type VirtualBlockCompletionAckResult<M> = Result<u64, VirtualBlockCompletionAckError<M>>;
 
 #[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockCompletionAckRunError<M> {
+    Exit(VmRunError<M>),
+    Acknowledgement(VirtualBlockCompletionAckError<M>),
+}
+
+pub type VirtualBlockCompletionAckRunResult<M> = Result<u64, VirtualBlockCompletionAckRunError<M>>;
+
+#[derive(Debug, Eq, PartialEq)]
 pub enum VirtualBlockRunError<M, D> {
     Exit(VmRunError<M>),
     Doorbell(VirtualBlockDoorbellError<M, D>),
@@ -1516,6 +1524,50 @@ where
         })?;
     }
     Ok(outcome)
+}
+
+/// Runs one vCPU to one completion acknowledgement and composes native exit
+/// accounting, deny-by-default I/O dispatch, and the protected completion
+/// consumer transition. Any exit or acknowledgement error fails the VM so an
+/// uncertain native position cannot be resumed through this composition.
+#[allow(clippy::too_many_arguments)]
+pub fn run_virtual_block_completion_ack_once<
+    M,
+    const N: usize,
+    const V: usize,
+    const C: usize,
+    const G: usize,
+    const I: usize,
+>(
+    memory: &mut M,
+    vcpu: u32,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    router: &mut HypercallRouter,
+    capabilities: &CapabilitySpace<C>,
+    guest_memory: &GuestMemory<G>,
+    io_policy: &IoPortPolicy<I>,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+) -> VirtualBlockCompletionAckRunResult<M::Error>
+where
+    M: VirtualBlockVmmMemory,
+{
+    let disposition = run_vm_once(
+        memory,
+        vcpu,
+        vms,
+        vm,
+        router,
+        capabilities,
+        guest_memory,
+        io_policy,
+    )
+    .map_err(VirtualBlockCompletionAckRunError::Exit)?;
+    process_virtual_block_completion_ack(disposition, device, bridge, memory).map_err(|error| {
+        let _ = vms.fail(vm);
+        VirtualBlockCompletionAckRunError::Acknowledgement(error)
+    })
 }
 
 fn slot_address(
@@ -2473,6 +2525,101 @@ mod tests {
             )
             .unwrap();
         policy
+    }
+
+    fn block_ack_io_policy() -> IoPortPolicy<1> {
+        let mut policy = IoPortPolicy::deny_all();
+        policy
+            .allow(
+                crate::IoPortRule::new(
+                    VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                    4,
+                    crate::IoDirection::Write,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        policy
+    }
+
+    #[test]
+    fn shared_ack_runner_accounts_exact_exit_and_updates_protected_counter() {
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(76), ObjectId(77), ObjectId(78));
+        let capabilities = CapabilitySpace::<0>::new();
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_ack_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        published_completion(&mut device, &mut bridge, &mut vmm);
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        });
+
+        assert_eq!(
+            run_virtual_block_completion_ack_once(
+                &mut vmm,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &mut device,
+                &mut bridge,
+            ),
+            Ok(1)
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+        let mut consumed = [0; 8];
+        vmm.read_guest(0x3000 + 64, &mut consumed).unwrap();
+        assert_eq!(u64::from_le_bytes(consumed), 1);
+    }
+
+    #[test]
+    fn shared_ack_runner_fails_vm_on_dispatched_scalar_mismatch() {
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(72), ObjectId(73), ObjectId(74));
+        let capabilities = CapabilitySpace::<0>::new();
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_ack_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        published_completion(&mut device, &mut bridge, &mut vmm);
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE + 1,
+        });
+
+        assert_eq!(
+            run_virtual_block_completion_ack_once(
+                &mut vmm,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &mut device,
+                &mut bridge,
+            ),
+            Err(VirtualBlockCompletionAckRunError::Acknowledgement(
+                VirtualBlockCompletionAckError::InvalidExit
+            ))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!(device.state(), VirtualBlockDeviceState::Active);
+        assert!(!bridge.is_poisoned());
+        assert_eq!(bridge.completion_consumed, 0);
     }
 
     #[test]

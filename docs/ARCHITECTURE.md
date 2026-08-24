@@ -643,8 +643,13 @@ transport, or guest driver yet. Controlled signed KVM and WHP probes now emit
 the exact native doorbell into this runner after producing one fixed canonical
 write request, its 4 KiB payload, and the producer counter through guest
 mappings. They publish its completion and inject the authorized notification.
-The probes do not implement a reusable block driver, completion consumer, or
-multi-request flow.
+Both signed probe images now contain a fixed one-shot completion consumer: they
+install a minimal GDT and one-vector IDT, receive the injected notification,
+validate the exact protected completion fields, and emit the acknowledgement.
+The KVM path is live-tested; the corresponding WHP path is implemented and
+type-checked but lacks new execution evidence in the current environment. This
+is not a reusable block driver, general interrupt-return path, or multi-request
+flow.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path
@@ -659,7 +664,7 @@ position and updates the protected header through the device-only memory path.
 Acknowledgement is accepted only for the active bound queue after completion
 notification was confirmed delivered; empty, premature, mismatched-state, or
 uncertain acknowledgements fail the device and poison the bridge. Scalar data
-grants no authority. A native guest completion consumer and acknowledgement
+grants no authority. A reusable guest completion consumer and multi-request
 runner remain pending.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound

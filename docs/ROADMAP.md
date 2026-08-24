@@ -657,8 +657,11 @@ contract. Controlled signed KVM and WHP probes now emit the exact native
 doorbell after writing one fixed 4 KiB payload, canonical request record, and
 producer counter through their guest mappings. The common runner publishes its
 completion and injects the authorized notification. This is hosted controlled-
-probe evidence; the guest does not yet provide a reusable driver, completion
-consumer, interrupt handler, or multi-request flow.
+probe evidence. The signed one-shot probe now installs a minimal one-vector
+interrupt table, validates its exact completion, and acknowledges it; this is
+live-verified on KVM and implemented but not newly host-executed on WHP. The
+guest does not yet provide a reusable driver, general interrupt return, or
+multi-request flow.
 Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the
@@ -677,7 +680,8 @@ completion only after confirmed interrupt delivery and updates the protected
 header through the device path. Every scalar is rechecked before state or
 memory access; empty, premature, wrong-queue, terminal, or uncertain accepted
 acknowledgements fail closed. This remains shared unit/simulation policy: the
-signed KVM/WHP probes do not yet consume or acknowledge completions themselves.
+signed KVM/WHP images now contain the matching one-shot consumer, with new live
+execution evidence only for KVM.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

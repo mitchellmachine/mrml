@@ -131,6 +131,7 @@ pub use virtual_block::{
     VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT, VIRTUAL_BLOCK_DOORBELL_VALUE,
     VIRTUAL_BLOCK_FEATURE_FLUSH, VIRTUAL_BLOCK_REQUEST_BYTES, VirtualBlockBackend,
     VirtualBlockCompletion, VirtualBlockCompletionAckError, VirtualBlockCompletionAckResult,
+    VirtualBlockCompletionAckRunError, VirtualBlockCompletionAckRunResult,
     VirtualBlockCompletionStatus, VirtualBlockDevice, VirtualBlockDeviceState,
     VirtualBlockDoorbellError, VirtualBlockDoorbellResult, VirtualBlockError,
     VirtualBlockExecutionError, VirtualBlockExecutionOutcome, VirtualBlockExecutionResult,
@@ -139,7 +140,8 @@ pub use virtual_block::{
     VirtualBlockQueueError, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockRunError,
     VirtualBlockRunResult, VirtualBlockTicket, VirtualBlockVmmMemory,
     execute_virtual_block_request, process_virtual_block_completion_ack,
-    process_virtual_block_doorbell, process_virtual_block_request, run_virtual_block_doorbell_once,
+    process_virtual_block_doorbell, process_virtual_block_request,
+    run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

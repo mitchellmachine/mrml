@@ -3347,7 +3347,7 @@ interrupt error fails the VM; failed interruption retains the device latch, so
 the guest is never resumed after uncertain delivery. Both prepared KVM and WHP
 guests implement the runner's memory contract. Controlled signed probes now
 produce one fixed request and payload before executing this doorbell path; no
-reusable block driver or completion consumer exists yet.
+At that milestone, no reusable block driver or completion consumer existed.
 
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
 each pass all 365 `mrml-kernel` release tests and scoped strict Clippy. The 28
@@ -3437,8 +3437,8 @@ in-process runner-plus-acknowledgement regression sample measured 1,197,183 ns
 total (119.718 ns per iteration) on Arch Linux/WSL2. Windows code and benchmark
 tests type-check, but this shell had no MSVC linker, so no new Windows execution
 evidence was recorded. These are unit/simulation and noisy benchmark evidence,
-not native guest acknowledgement, storage/hypervisor latency, durability, or
-physical-hardware evidence.
+That evidence did not include native guest acknowledgement,
+storage/hypervisor latency, durability, or physical-hardware evidence.
 
 The acknowledgement `DIGITAL-RIGHTS REVIEW` found no collection, retention,
 correlation, identity expansion, DRM, attestation, remote disclosure, vendor or
@@ -3459,10 +3459,16 @@ after those stores. It then executes `out dx, eax` with the exact MRML port and
 value. The backend-neutral runner decodes and accounts the native exit, applies
 the deny-by-default I/O rule, revalidates the doorbell, copies the exact page to
 a volatile in-process backend, publishes and decodes the bound completion, and
-injects the separately authorized vector. The probe intentionally stops after
-this transaction. It is not a reusable guest driver, completion consumer,
-interrupt handler, multi-request implementation, concrete hosted storage
-service, or PCI transport.
+injects the separately authorized vector. The signed probe installs a minimal
+GDT and one-vector IDT before enabling interrupts. Its fixed handler returns
+through `iretq` to signed code, which checks the completion
+magic/version/status, generation, request ID, and transferred length before
+issuing the exact acknowledgement port write. The backend-neutral runner accounts
+and deny-by-default dispatches that second native exit, then advances the
+protected consumer counter through the device-only memory path. Any exit or
+acknowledgement error fails the VM. This deliberately does not claim a reusable
+guest driver, general interrupt return, multi-request implementation, concrete
+hosted storage service, or PCI transport.
 
 The dedicated `prepare_kernel_block_guest` launch path now makes those queues
 guest-addressable without post-launch page-table mutation. KVM and WHP perform
@@ -3475,32 +3481,34 @@ mapping failure, or page-table failure prevents a prepared guest from being
 returned. The older consuming native-only attachment remains available for
 host-side queue-memory tests; it does not imply guest page-table visibility.
 
-Recorded verification on 2026-08-24: Windows gnullvm passes 20 active `mrml-whp`
-release tests with one manual mapping benchmark ignored, including the live WHP
-signed-producer transaction. Arch Linux under WSL2 passes 17 active `mrml-kvm`
-release tests with one manual benchmark ignored, including the equivalent live
-`/dev/kvm` transaction. Strict Clippy passes for both native packages on their
-host platforms; the opposite-platform ABI suites pass six KVM tests on Windows
-and ten WHP tests on Linux. This is controlled hosted-hypervisor evidence only.
+Recorded verification on 2026-08-24: Arch Linux under WSL2 passes all 371
+`mrml-kernel` release tests and 17 active `mrml-kvm` release tests with one
+manual benchmark ignored. The live `/dev/kvm` test covers notification entry,
+exact protected completion validation, the native acknowledgement exit, and
+the protected consumer counter reaching one while the VM remains running.
+Scoped strict Clippy passes for the kernel, KVM, and WHP packages, and the ten
+WHP ABI tests pass on Linux. The updated WHP native probe type-checks on Windows,
+but this shell has no MSVC linker, so earlier WHP execution evidence does not
+verify this new acknowledgement path. This is controlled hosted-hypervisor
+evidence only.
 It does not prove protection from the host, durability, power-loss behavior,
 PCI behavior, a guest driver, bare metal, or physical-device operation.
 
-The same 20-active-test WHP and 17-active-test KVM release suites now verify the
-initial block mappings by native page walk, including exact GPA identity,
-writable/NX request leaves, read-only/NX completion leaves, overlap rejection,
-and KVM slot undercapacity. Strict Clippy, the six-test Windows KVM ABI suite,
-and the ten-test Linux WHP ABI suite pass. This remains hosted controlled-probe
-evidence; the guest image produces exactly one fixed request and does not handle
-its completion or interrupt.
+The native suites also verify the initial block mappings by native page walk,
+including exact GPA identity, writable/NX request leaves, read-only/NX
+completion leaves, overlap rejection, and KVM slot undercapacity. This remains
+hosted controlled-probe evidence; the guest image handles exactly one fixed
+request, interrupt, completion, and acknowledgement.
 
 The native tests read back and decode the exact guest-produced request, require
 both producer and consumed counters to equal one, verify the volatile backend's
 entire 4 KiB payload, decode the exact successful completion, and require the
-notification latch to be acknowledged. No host queue or payload write occurs
-before vCPU entry. This closes the queue-production proof for one fixed signed
-transaction while leaving reusable driver state, negotiated discovery,
-completion consumption, interrupt handling, and bounded multi-request progress
-pending.
+notification latch to be acknowledged. The live KVM path additionally requires
+the guest-issued acknowledgement and protected consumer counter. No host queue
+or payload write occurs before vCPU entry. This closes one fixed signed
+producer/consumer transaction while leaving reusable driver state, negotiated
+discovery, general interrupt return, WHP execution of the new consumer, and
+bounded multi-request progress pending.
 
 The native-doorbell `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
 retention, identity expansion, DRM, attestation, remote disclosure, vendor

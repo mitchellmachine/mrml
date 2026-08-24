@@ -1468,11 +1468,12 @@ mod tests {
     use mrml_kernel::{
         ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
         IoPortPolicy, IoPortRule, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
-        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_BYTES,
+        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
+        VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_DOORBELL_PORT, VirtualBlockBackend, VirtualBlockCompletion,
         VirtualBlockCompletionStatus, VirtualBlockDevice, VirtualBlockMutationError,
         VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockRequest, VmTable,
-        artifact_statement, run_virtual_block_doorbell_once,
+        artifact_statement, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
     };
 
     fn framebuffer_pe() -> [u8; 1024] {
@@ -1508,18 +1509,18 @@ mod tests {
         pe
     }
 
-    fn emit(code: &mut [u8; 256], at: &mut usize, bytes: &[u8]) {
+    fn emit(code: &mut [u8; 512], at: &mut usize, bytes: &[u8]) {
         let end = *at + bytes.len();
         code[*at..end].copy_from_slice(bytes);
         *at = end;
     }
 
-    fn emit_mov(code: &mut [u8; 256], at: &mut usize, opcode: u8, value: u64) {
+    fn emit_mov(code: &mut [u8; 512], at: &mut usize, opcode: u8, value: u64) {
         emit(code, at, &[0x48, opcode]);
         emit(code, at, &value.to_le_bytes());
     }
 
-    fn emit_store_rax(code: &mut [u8; 256], at: &mut usize, offset: u8) {
+    fn emit_store_rax(code: &mut [u8; 512], at: &mut usize, offset: u8) {
         if offset == 0 {
             emit(code, at, &[0x48, 0x89, 0x07]);
         } else {
@@ -1527,10 +1528,86 @@ mod tests {
         }
     }
 
+    fn emit_completion_ack(code: &mut [u8; 512], at: &mut usize) {
+        emit_mov(code, at, 0xbf, 0x60_2080);
+        let mut failures = [0usize; 4];
+        for (index, (offset, expected)) in [(0, 0x0000_0001_4342_524d), (8, 1), (16, 1), (24, 4096)]
+            .into_iter()
+            .enumerate()
+        {
+            if offset == 0 {
+                emit(code, at, &[0x48, 0x8b, 0x07]);
+            } else {
+                emit(code, at, &[0x48, 0x8b, 0x47, offset]);
+            }
+            if index == 0 {
+                emit_mov(code, at, 0xbb, expected);
+                emit(code, at, &[0x48, 0x39, 0xd8]);
+            } else {
+                emit(code, at, &[0x48, 0x3d]);
+                emit(code, at, &(expected as u32).to_le_bytes());
+            }
+            emit(code, at, &[0x75, 0]);
+            failures[index] = *at - 1;
+        }
+        emit(
+            code,
+            at,
+            &[
+                0x66,
+                0xba,
+                VIRTUAL_BLOCK_COMPLETION_ACK_PORT as u8,
+                (VIRTUAL_BLOCK_COMPLETION_ACK_PORT >> 8) as u8,
+                0xb8,
+                1,
+                0,
+                0,
+                0,
+                0xef,
+            ],
+        );
+        let failure = *at;
+        emit(code, at, &[0xf4]);
+        for displacement in failures {
+            code[displacement] = u8::try_from(failure - (displacement + 1)).unwrap();
+        }
+    }
+
+    fn emit_interrupt_table(code: &mut [u8; 512], at: &mut usize, handler: u64) {
+        emit_mov(code, at, 0xbf, 0x60_17d8);
+        emit_mov(code, at, 0xb8, 0x00af_9b00_0000_ffff);
+        emit_store_rax(code, at, 0);
+        emit_mov(code, at, 0xbf, 0x60_17e0);
+        emit_mov(code, at, 0xb8, 0x00cf_9300_0000_ffff);
+        emit_store_rax(code, at, 0);
+        emit_mov(code, at, 0xbf, 0x60_17c0);
+        emit_mov(code, at, 0xb8, (0x60_17d0 << 16) | 23);
+        emit_store_rax(code, at, 0);
+        emit(code, at, &[0x0f, 0x01, 0x17]);
+        let gate_low =
+            (handler & 0xffff) | (8 << 16) | (0x8e << 40) | (((handler >> 16) & 0xffff) << 48);
+        emit_mov(code, at, 0xbf, 0x60_1800);
+        emit_mov(code, at, 0xb8, gate_low);
+        emit_store_rax(code, at, 0);
+        emit_mov(code, at, 0xb8, handler >> 32);
+        emit_store_rax(code, at, 8);
+        emit_mov(code, at, 0xbf, 0x60_17f0);
+        emit_mov(code, at, 0xb8, (0x60_1500 << 16) | 0x30f);
+        emit_store_rax(code, at, 0);
+        emit(code, at, &[0x0f, 0x01, 0x1f]);
+    }
+
     fn producer_pe() -> [u8; 1024] {
         let mut pe = framebuffer_pe();
-        let mut code = [0; 256];
+        let mut code = [0; 512];
         let mut at = 0;
+        const INTERRUPT_HANDLER_OFFSET: usize = 0x1f0;
+
+        emit_interrupt_table(
+            &mut code,
+            &mut at,
+            0xffff_8001_4000_1000 + INTERRUPT_HANDLER_OFFSET as u64,
+        );
 
         // Fill one mapped page with the probe payload.
         emit_mov(&mut code, &mut at, 0xbf, 0xa0000);
@@ -1563,15 +1640,21 @@ mod tests {
         emit_mov(&mut code, &mut at, 0xbf, 0x60_0000);
         emit_mov(&mut code, &mut at, 0xb8, 1);
         emit_store_rax(&mut code, &mut at, 0);
+        emit(&mut code, &mut at, &[0xfb]);
         emit(
             &mut code,
             &mut at,
-            &[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef, 0xf4],
+            &[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef],
         );
-        pe[0x200..0x300].fill(0);
+        emit_completion_ack(&mut code, &mut at);
+        assert!(at < INTERRUPT_HANDLER_OFFSET);
+        code[INTERRUPT_HANDLER_OFFSET..INTERRUPT_HANDLER_OFFSET + 2].copy_from_slice(&[0x48, 0xcf]);
+        pe[0x200..0x400].fill(0);
         pe[0x200..0x200 + at].copy_from_slice(&code[..at]);
+        pe[0x200 + INTERRUPT_HANDLER_OFFSET..0x200 + INTERRUPT_HANDLER_OFFSET + 2]
+            .copy_from_slice(&code[INTERRUPT_HANDLER_OFFSET..INTERRUPT_HANDLER_OFFSET + 2]);
         let section = 0x98 + 240;
-        pe[section + 8..section + 12].copy_from_slice(&0x100u32.to_le_bytes());
+        pe[section + 8..section + 12].copy_from_slice(&0x200u32.to_le_bytes());
         pe
     }
 
@@ -1904,9 +1987,14 @@ mod tests {
             .unwrap();
         let mut interrupt_policy = InterruptPolicy::deny_all();
         interrupt_policy.allow(48).unwrap();
-        let mut io_policy = IoPortPolicy::<1>::deny_all();
+        let mut io_policy = IoPortPolicy::<2>::deny_all();
         io_policy
             .allow(IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write).unwrap())
+            .unwrap();
+        io_policy
+            .allow(
+                IoPortRule::new(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, IoDirection::Write).unwrap(),
+            )
             .unwrap();
         let mut vms = VmTable::<1>::new();
         let vm = vms.create(4).unwrap();
@@ -1964,5 +2052,27 @@ mod tests {
         assert_eq!(completion.status(), VirtualBlockCompletionStatus::Ok);
         assert_eq!(completion.transferred(), 4096);
         assert_eq!(device.pending_interrupt_vector(), None);
+        let acknowledgement = run_virtual_block_completion_ack_once(
+            &mut guest,
+            0,
+            &mut vms,
+            vm,
+            &mut router,
+            &capabilities,
+            &guest_memory,
+            &io_policy,
+            &mut device,
+            &mut bridge,
+        );
+        assert_eq!(acknowledgement, Ok(1));
+        let mut completion_consumed = [0; 8];
+        VmBackend::read_guest(
+            &guest,
+            layout.completion_base() + 64,
+            &mut completion_consumed,
+        )
+        .unwrap();
+        assert_eq!(u64::from_le_bytes(completion_consumed), 1);
+        assert_eq!(vms.state(vm), Ok(mrml_kernel::VmState::Running));
     }
 }

@@ -1376,6 +1376,16 @@ to prevent reuse after partial failure is a standard defensive resource-
 construction technique. No patent-candidate mechanism was identified. This
 agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Signed native virtual-block completion consumer
+
+**Result: NOT_TRIGGERED.** The change conventionally composes a second native
+scalar-I/O exit with an existing exact acknowledgement handler. The fixed signed
+probe installs minimal descriptor tables, receives one authorized interrupt,
+checks one canonical completion, and emits one acknowledgement. These are
+standard controlled-integration techniques; no new patent-candidate mechanism
+was identified. This agent review does not replace the required independent
+human dual review.
+
 # 2026-08-24 — Protected virtual-block completion acknowledgement
 
 **Result: NOT_TRIGGERED.** The change conventionally uses an exact scalar I/O
