@@ -307,9 +307,13 @@ yet a complete typed body table, move path, borrow, or loan model. An initial
 fixed-capacity CFG fact table records stable basic-block IDs, exact top-level
 statement ranges, reachability, and true/false/unconditional edges to blocks or
 function return for straight-line, conditional-return, explicit-return, and tail
-flow. Loops, conditional-assignment blocks, and exhaustive conditional-return
-chains explicitly leave that table incomplete and empty until their real edges
-are modeled. This runtime place/CFG foundation is therefore an incremental
+flow. Loops and conditional-assignment blocks explicitly leave that table
+incomplete and empty until their real edges are modeled. Chained conditional
+returns now carry explicit synthetic-branch
+provenance: exhaustive chains terminate on the final false edge, while
+non-exhaustive chains route it to a top-level continuation block. Conditional
+action blocks and loops remain explicitly incomplete. This runtime place/CFG
+foundation is therefore an incremental
 prerequisite, not a claim of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:

@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `ca2d2d2`
-  (`compiler: add initial bounded CFG facts`)
+- Compiler checkpoint commit: `d9ff4a0`
+  (`compiler: model exhaustive return CFG`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -150,13 +150,16 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   checked hidden-pointer transport for the Windows return buffer.
   Other aggregate return/tail shapes remain outside preanalysis.
 - initial fixed-capacity basic-block and control-flow-edge facts for supported
-  top-level straight-line statements, conditional returns, explicit returns,
-  and final-tail return flow. Blocks carry stable IDs, exact statement ranges,
-  and reachability; edges target another block or function return and distinguish
-  true, false, and unconditional flow. The tables are capped at 64 blocks and
-  128 edges with explicit capacity errors. Bodies containing loops, conditional-
-  assignment blocks, or exhaustive conditional-return chains leave the CFG
-  tables empty and `control_flow_complete` false rather than inventing edges.
+  top-level straight-line statements, simple and chained conditional returns,
+  explicit returns, and final-tail return flow. Blocks carry stable IDs, exact
+  statement ranges, reachability, and explicit top-level or conditional-branch
+  provenance; edges target another block or function return and distinguish
+  true, false, and unconditional flow. Exhaustive `else if` return chains end
+  in a false return edge, while non-exhaustive chains route the final false edge
+  through an explicit top-level continuation block. The tables are capped at
+  64 blocks and 128 edges with explicit capacity errors. Bodies containing
+  loops or conditional-assignment blocks leave the CFG tables empty and
+  `control_flow_complete` false rather than inventing edges.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -181,8 +184,8 @@ compatibility gaps:
 
 1. complete bounded read-place preanalysis for supported
    aggregate/materialization families in exact emission order;
-2. extend explicit basic blocks and control-flow edges through exhaustive
-   branches, conditional action blocks, and loops;
+2. extend explicit basic blocks and control-flow edges through conditional
+   action blocks and loops;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
@@ -208,8 +211,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 648 tests on each host: 356
-library tests, 10 conformance tests, 280 replacement tests, and 2 driver tests.
+The checkpoint source passed 651 tests on each host: 358
+library tests, 10 conformance tests, 281 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
