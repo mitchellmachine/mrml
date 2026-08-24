@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `2ea9dd0`
-  (`compiler: join expression loan origins`)
+- Compiler checkpoint commit: `cd70b12`
+  (`compiler: reborrow conditional reference identifiers`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -423,7 +423,8 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. broaden coercion-site reborrows before region reasoning; preserve the
+1. broaden the remaining projected, call-argument, and return coercion-site
+   reborrows before region reasoning; preserve the
    distinction between an expected-reference reborrow, an explicit
    reassignment borrow, and an indirect consuming move;
 2. exact constant owned-array element identity is now retained. Add array move
@@ -455,8 +456,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 719 tests on each host: 395
-library tests, 10 conformance tests, 312 replacement tests, and 2 driver tests.
+The checkpoint source passed 721 tests on each host: 396
+library tests, 10 conformance tests, 313 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

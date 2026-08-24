@@ -3450,3 +3450,17 @@ later-mutated owner and acceptance when every alternative borrows another
 owner, for both initialization and reassignment. This does not claim indirect
 reference moves, non-direct destinations, general coercion-site coverage, or
 regions. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The conditional reference-identifier reborrow milestone passed all 721 compiler
+and driver tests on Windows gnullvm and all 721 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using rustc
+workspace commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Explicitly typed
+direct local initializers and direct assignments now propagate their expected
+shared or mutable reference context through conditional final values. Identifier
+branches therefore record reborrows, including parent suspension and restoration,
+while conditions and sequence prefixes remain ordinary value evaluation. The
+pinned oracle confirmed E0499 when an alternative child may retain the later-
+mutated owner and acceptance when the child ends before parent reuse, for both
+initialization and assignment. This does not claim projected, call-argument,
+return, indirect-destination, or general region coverage. The
+`no_std`/allocation/unsafe hygiene scan remained empty.
