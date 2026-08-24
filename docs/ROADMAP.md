@@ -300,8 +300,13 @@ authority; unrelated domains continue.
    child only from an exact surviving parent handle with the separate
    `OPEN_CHILD` right. The name remains non-authorizing, requested rights must
    match the child kind, and the new handle is a revocable descendant. Reboot-
-   time capability reconstruction, concrete block integration, and physical
-   power-loss evidence remain pending.
+   time capability reconstruction, a block service/device implementation, and
+   physical power-loss evidence remain pending. A bounded exact-block metadata
+   adapter now supplies canonical padded staging, complete digest readback,
+   ordered flushes, inactive-superblock-only atomic replacement, fail-stop
+   session poisoning, and exact immutable recovery reads. This is a tested
+   service-boundary adapter, not physical-device durability evidence; file-data
+   integration and the concrete block service remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -332,7 +337,8 @@ authority; unrelated domains continue.
    adjacent generations, and only the newer is selected. A single usable
    candidate is explicitly reported as fallback. Proven-invalid candidates may
    be bypassed, but indeterminate backend failures abort instead of silently
-   rolling back. A concrete block backend, power-loss harness, repair, and
+   rolling back. The exact-block adapter exists, but a concrete block
+   service/device, power-loss harness, repair, and
    authenticated anti-rollback state remain pending, so
    crash recovery is still only partially implemented.
    Canonical checksummed allocation records and their fixed-capacity global
@@ -402,8 +408,10 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, concrete block integration, and physical
-   power-loss evidence remain pending.
+   checkpoint/reconstruction, file-data block integration, the concrete block
+   service/device implementation, and physical power-loss evidence remain
+   pending. The bounded exact-block metadata publication/recovery adapter is
+   implemented as described above.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

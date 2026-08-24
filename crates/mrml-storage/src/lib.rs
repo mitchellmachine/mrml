@@ -8,6 +8,7 @@
 
 mod allocation;
 mod authority;
+mod block;
 mod cow;
 mod create;
 mod directory;
@@ -28,6 +29,7 @@ pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,
     StorageObjectKind, StoragePrincipal, StorageRights,
 };
+pub use block::{BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
     CowPublishError,

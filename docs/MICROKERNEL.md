@@ -2901,8 +2901,13 @@ width/count, and a SHA3-256 digest over its header, records, and zero-filled
 unused capacity. Decode requires the exact metadata allocation length, rejects
 nonzero padding even under a recomputed digest, parses every record, and rebuilds
 the index invariants. Allocation/free mutation and full reachable-tree traversal
-are implemented in the bounded in-memory model; concrete block-backed durable
-publication remains unimplemented.
+are implemented in the bounded model. A new block-volume adapter binds their
+canonical metadata images to exact block writes, complete digest readback,
+ordered device flushes, inactive-superblock-only atomic replacement, and exact
+recovery reads. It owns one exclusive session and permanently rejects further
+operations after uncertain superblock durability. The unsafe device contract
+must still provide exact transfer, atomic replacement, and durable flush; no
+block service or physical device implementation exists yet.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -2993,14 +2998,21 @@ and recovery images as hostile; exact binding, checked ranges, disjoint COW stor
 complete-image digests, capacity preflight, and one-use receipts fail closed on
 stale, missing, duplicate, or substituted state. Allocator review additionally
 requires distinct exhausted encoding, checked monotonic advance, disjoint COW
-state, and complete-byte publication binding. This agent review does not
+state, and complete-byte publication binding. The block-adapter review
+additionally requires exact full-buffer transfers,
+checked block arithmetic, canonical zero padding, digest verification after
+write, an inactive superblock target, flush ordering, exclusive session access,
+and permanent fail-stop poisoning after uncertain replacement durability. It
+does not treat a device error as proof of corruption or permission to roll back.
+This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-seven focused unit tests and strict crate-local clippy pass on Windows
-gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
+Eighty-two focused unit tests and strict crate-local clippy pass on Windows
+gnullvm and Arch Linux under WSL2. File-data block integration,
 complete directory hierarchy/lifetime handling, reboot-time capability
-checkpoint/reconstruction, complete crash recovery, snapshots, a block-device service, and
+checkpoint/reconstruction, complete crash recovery, snapshots, a block-device
+service/device implementation, and
 configuration-checkpoint persistence remain unimplemented.
 
 ```text
@@ -3010,9 +3022,10 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 77 tests, and both strict crate-local clippy
+Both current unit-test runs pass 82 tests, and both strict crate-local clippy
 invocations pass.
-These are unit tests and simulation of in-memory metadata/authority state, not
+These are unit tests and simulation of metadata/authority and exact-block
+adapter state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded directory ancestry,

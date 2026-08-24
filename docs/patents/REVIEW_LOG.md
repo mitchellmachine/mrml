@@ -1006,6 +1006,19 @@ revocation technique.
 Patent review: `NOT_TRIGGERED` — conventional capability derivation and
 revocation lineage.
 
+## 2026-08-23 — exact-block metadata adapter
+
+MRML source: `crates/mrml-storage/src/block.rs`.
+
+The service conventionally adapts canonical metadata images to exact block
+writes, verifies SHA3-256 by complete readback, orders flushes before and after
+atomic inactive-superblock replacement, supplies exact recovery reads, and
+poisons a session after uncertain replacement durability. This adds no novel
+block protocol, filesystem, persistence, hashing, recovery, or fail-stop
+technique.
+
+Patent review: `NOT_TRIGGERED` — conventional checked block-I/O adaptation.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

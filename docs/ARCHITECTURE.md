@@ -250,9 +250,13 @@ blocks, and provides bounded logical-to-physical lookup. A COW publication plan
 requires exact next-generation nonoverlapping metadata ranges outside the
 protected active generation, verifies staged-image digests, flushes them before
 atomically replacing only the inactive superblock, and treats any failure at or
-after replacement as fail-stop. There is not yet a concrete block backend,
-persistent allocation/free engine, complete COW tree, or concrete native block
-I/O. Bounded in-memory directory state now requires exact
+after replacement as fail-stop. A bounded block-volume adapter now implements
+metadata staging, complete-image readback verification, durable-flush calls,
+inactive-superblock replacement, and immutable recovery reads over an unsafe
+exact-block device boundary. It permanently poisons a session after uncertain
+replacement durability. There is not yet a block service or physical device
+implementation, persistent allocation/free engine, complete COW tree, or
+concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke
@@ -336,7 +340,7 @@ parent-directory handle carrying the distinct `OPEN_CHILD` right. The name
 identifies the recovered child but does not authorize it; requested rights must
 be valid for the recovered kind, and the fresh handle retains parent lineage so
 revocation is transitive. `LOOKUP` alone cannot manufacture authority. Reboot-
-time capability checkpoint/reconstruction, concrete block integration, and
+time capability checkpoint/reconstruction, block service/device integration, and
 physical power-loss evidence remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
@@ -362,7 +366,8 @@ superblock images, requires complete reachable-metadata validation through a
 fail-closed backend contract, selects only identical or adjacent valid
 generations, and permits fallback only when the other candidate is proven
 invalid. The allocation index provides the ownership proof needed by that
-validator but is not yet loaded from or published to a concrete block backend.
+validator and exact-block adapter but is not yet loaded from or published to a
+real block service/device.
 The allocation index now has a canonical block-aligned image whose header binds
 the volume, publication generation, record width/count, complete-image digest,
 and zero padding; decoding reconstructs and revalidates the index rather than
@@ -404,9 +409,9 @@ participant identity. The successor becomes visible only after its exact image
 is present in the COW plan and its one-use receipt is consumed. Directory
 successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
-state only after its one-use publication receipt is consumed. The concrete
-block backend, complete create integration, snapshots, power-loss
-testing, and persistent anti-rollback state
+state only after its one-use publication receipt is consumed. The exact-block
+metadata adapter is implemented, but its block service/device implementation,
+file-data integration, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import

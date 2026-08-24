@@ -120,9 +120,13 @@ explicitly and downgrade the status rather than guessing.
   extent map checks exact logical coverage, physical volume bounds, reserved
   blocks, and intra-file overlap. Its COW planner verifies staged next-generation
   metadata and orders durable metadata before atomic inactive-superblock
-  replacement, with fail-stop handling once replacement may have begun. No
-  concrete block service, persistent allocation/free engine, complete COW tree,
-  concrete native block I/O, snapshot, or crash recovery exists yet.
+  replacement, with fail-stop handling once replacement may have begun. A
+  bounded block-volume adapter now performs exact metadata writes, digest
+  readback, flush ordering, inactive-superblock replacement, and immutable
+  recovery reads over an unsafe block-device contract; uncertain superblock
+  durability permanently poisons that adapter session. No concrete block
+  service/device, file-data adapter integration, persistent allocation/free
+  engine, complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and
@@ -193,15 +197,17 @@ explicitly and downgrade the status rather than guessing.
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming
-  rollback. The complete reachable-tree validator exists over immutable
-  simulated metadata; a real block backend, physical power-loss evidence,
+  rollback. The complete reachable-tree validator can now consume exact reads
+  through the block-volume adapter, but tests still use simulated storage; a
+  real block service/device, physical power-loss evidence,
   repair, and authenticated anti-rollback state do not yet exist. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned
   image binds volume, publication generation, record geometry, full-image
   digest, and zero padding, and decode rebuilds the index. It is traversed by
-  the immutable in-memory recovery backend but not yet a concrete block backend. Allocation
+  the immutable in-memory recovery backend and the generic exact-block adapter,
+  but not yet a real block service/device. Allocation
   image ownership is now distinct and exactly root/publication-generation bound.
   Canonical extent-list images bind file identity, object generation, logical
   length, record geometry, full-image digest, and zero padding, then rebuild
@@ -228,7 +234,7 @@ explicitly and downgrade the status rather than guessing.
   publication. Exact encoded successor bytes are now staged, durably flushed,
   digest-bound into a distinct allocation transaction resource, and exposed only
   after a one-use publication receipt. Focused directory-move transaction
-  integration is simulated; concrete block integration remains pending. UEFI
+  integration is simulated; block service/device integration remains pending. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.
