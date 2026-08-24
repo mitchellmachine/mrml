@@ -1,6 +1,7 @@
 use crate::{PAGE_SIZE, PhysAddr};
 
 mod acpi;
+mod active_user_copy;
 mod address_space;
 mod ap_online;
 mod ap_trampoline;
@@ -19,6 +20,9 @@ mod vmx;
 mod vtd;
 mod vtd_tables;
 pub use acpi::{AcpiError, AcpiMemory, copy_dmar, copy_madt, copy_mcfg};
+pub use active_user_copy::{
+    ActiveTaskUserCopy, ActiveTaskUserCopyError, ActiveUserMemory, DirectActiveUserMemory,
+};
 pub use address_space::{
     AddressSpace, AddressSpaceError, Mapping, MappingId, UserBuffer, UserBufferAccess,
     UserBufferError, UserCopyError, UserMemory,

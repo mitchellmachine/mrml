@@ -155,8 +155,11 @@ explicitly and downgrade the status rather than guessing.
   The kernel syscall ABI can decode bounded capability-selected shared-buffer
   reads and writes, and a generic executor composes exact task authority, live
   binding selection, validated directional user copy, opaque resource I/O, and
-  erased scratch. Concrete kernel-image copy/resource adapters are deliberately
-  still absent; the hosted service probe halts on those operations.
+  erased scratch. The x86-64 active-page copy adapter validates the expected CR3
+  and every touched user leaf, then permits exactly one matching task/range/
+  direction copy; failure cancels any unused ticket. Concrete kernel-image
+  resource wiring is deliberately still absent, so the hosted service probe
+  halts on those operations.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

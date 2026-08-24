@@ -1170,3 +1170,15 @@ and erased bounded scratch. This adds no novel syscall, capability, user-copy,
 shared-memory, or buffer-erasure technique.
 
 Patent review: `NOT_TRIGGERED` — conventional authorized copy composition.
+
+## 2026-08-23 — active-page shared-buffer user copy
+
+MRML source: `crates/mrml-kernel/src/arch/x86_64/active_user_copy.rs` and
+`shared_buffer_syscall.rs`.
+
+The x86-64 adapter conventionally binds an active page-table range validation
+to one exact task/address/length/direction copy, consumes or cancels that ticket,
+and performs a bounded direct copy while address-space mutation is excluded.
+This adds no novel page-table, syscall, ticket, or user-copy technique.
+
+Patent review: `NOT_TRIGGERED` — conventional validated active-memory copy.

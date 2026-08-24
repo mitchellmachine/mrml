@@ -293,8 +293,11 @@ selected shared-buffer copy operations without binding IDs or shared addresses.
 A generic executor binds those requests to the current task capability space,
 kernel-known VM/task identity, exact live binding, direction-validated user-copy
 backend, opaque resource backend, and erased bounded scratch. Concrete kernel-
-image user-copy/resource adapters remain unimplemented and fail closed. Bounded
-in-memory directory state now requires exact
+image opaque-resource wiring remains unimplemented and fails closed. The x86-64
+active-page user-copy adapter is implemented: it binds validation to expected
+CR3 and task plus exact address, length, and direction in a one-use ticket;
+executor failure cancels an unconsumed ticket. Bounded in-memory directory state
+now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
 a service-allocated stable object identity; namespace removal does not revoke

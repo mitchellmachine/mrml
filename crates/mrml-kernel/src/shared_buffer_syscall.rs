@@ -32,6 +32,8 @@ pub unsafe trait SharedBufferUserCopy {
     fn read(&mut self, task: TaskId, address: u64, output: &mut [u8]) -> Result<(), Self::Error>;
 
     fn write(&mut self, task: TaskId, address: u64, input: &[u8]) -> Result<(), Self::Error>;
+
+    fn cancel(&mut self);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,6 +71,7 @@ impl SharedBufferSyscallExecutor {
         let result = Self::execute_inner(
             request, runtime, task, vm, bindings, memory, shared, user, scratch,
         );
+        user.cancel();
         scratch.fill(0);
         result
     }
@@ -279,6 +282,8 @@ mod tests {
             self.copies += 1;
             Ok(())
         }
+
+        fn cancel(&mut self) {}
     }
 
     struct Fixture {

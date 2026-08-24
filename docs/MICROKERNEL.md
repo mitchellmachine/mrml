@@ -3042,8 +3042,24 @@ or resource backend uncertainty remains distinct. Tests cover both directions,
 undersized scratch, rejected userspace, revoked authority, and backend failure,
 including proof that rejected userspace and revoked authority touch no bulk
 backend. The service-probe kernel-image dispatcher still halts on both
-operations; concrete active-page-table user copy, opaque-resource adapters, and
-an isolated block-service loop remain unimplemented.
+operations; kernel-image handler/resource wiring and an isolated block-service
+loop remain unimplemented.
+
+The concrete x86-64 userspace side is now available as
+`ActiveTaskUserCopy`. It invokes the existing active page-table walker with the
+exact expected CR3 and 1 MiB syscall ceiling, requiring every touched leaf to be
+live, user-accessible, and writable when the kernel will copy to userspace.
+Successful validation creates one private ticket bound to task, virtual address,
+length, and direction. The corresponding direct active-address-space copy must
+match every field and consumes the ticket even on mismatch; reuse and direction
+changes fail. The generic executor explicitly cancels any ticket left after a
+later capability, binding, or backend failure. The direct copy implementation
+does not translate a request-supplied address into authority: it is usable only
+behind the active-root validation ticket while page-table mutation is excluded.
+Unit tests cover exact transfer, task/range/direction mismatch, consumption on
+mismatch, and reuse; existing active-walker tests cover canonical range, leaf
+permissions, and mapping bounds. Kernel-image handler wiring and a concrete
+opaque-resource backend still remain pending.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3170,7 +3186,7 @@ This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-nine focused storage tests and 319 focused kernel tests plus strict
+Ninety-nine focused storage tests and 321 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
 block-service process and concrete receive/syscall integration, a
 concrete hosted/physical device backend,
@@ -3185,7 +3201,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 99 tests, both kernel runs pass 319 tests, and
+Both storage unit-test runs pass 99 tests, both kernel runs pass 321 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
 kernel capability-transfer state, opaque-handle bounded buffer I/O, generic
@@ -3193,8 +3209,8 @@ shared-buffer syscall execution, and in-process block transport composition,
 not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
-Patent review: `NOT_TRIGGERED` — conventional validated user-copy composition
-with capability-selected opaque resource I/O; see
+Patent review: `NOT_TRIGGERED` — conventional one-use validation tickets over
+active page-table range checks and bounded copies; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The ancestry, successor-construction, and object-ID allocator increments also passed the two
