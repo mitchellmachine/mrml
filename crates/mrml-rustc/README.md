@@ -2932,8 +2932,11 @@ per-element `Index` or numbered `TupleField` reads used by emission. Conditional
 tuple initializers with direct literal branches plan the condition once and both
 branches' scalar operands. Direct conditional array literals follow their
 different emitter order by planning condition, then element, and else element
-for every materialized index. Wrapped or non-literal conditional aggregates and
-fat-reference initializer materialization remain emission-time fact families.
+for every materialized index. Wrapped or non-literal conditional aggregates
+remain emission-time fact families. Simple fat-reference initializers now plan
+direct identifier reads, the condition and both direct-identifier branches, or
+a sequence prefix followed by its direct-identifier tail. Range-derived, call-
+derived, and other wrapped fat-reference initializers remain emission-time.
 Direct sequence-wrapped tuple literals additionally plan their prefix once,
 whereas direct sequence-wrapped array literals plan their prefix before every
 element, preserving the two materializers' actual order.
@@ -3037,6 +3040,13 @@ plus warnings-denied Clippy on both hosts. Its adversarial unit test proves one
 tuple prefix followed by its two operands, then an array prefix repeated before
 each element, followed by projected reads from both locals. Its original
 replacement emits both COFF and ELF64 objects through the same wrappers.
+
+The simple fat-reference initializer read milestone passed all 596 compiler and
+driver tests on Windows gnullvm and all 596 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+six exact parameter/local identities across a direct slice copy, conditional
+slice selection, and sequence-wrapped string copy. Its original replacement
+emits both COFF and ELF64 objects through the same initializer families.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

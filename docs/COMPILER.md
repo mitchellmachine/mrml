@@ -208,9 +208,9 @@ and aggregate families remain outside this slice.
 The same bounded visitor now runs for scalar local initializers before the new
 binding enters the active environment. Sequential and scoped shadowing therefore
 records reads against the previous binding identity; the replacement binding
-receives its monotonic ID only after initializer emission. Aggregate and fat-
-reference initializers retain their specialized emission-time materialization,
-except that direct array literals, single-evaluation array repeats, and tuple
+receives its monotonic ID only after initializer emission. Aggregate initializers
+retain their specialized emission-time materialization, except that direct array
+literals, single-evaluation array repeats, and tuple
 literals now preanalyze their scalar operands in the same order as stack
 materialization. Direct identifier-backed array and tuple copies also reserve
 the emitter's exact per-element `Index` or numbered `TupleField` projections.
@@ -222,6 +222,10 @@ each materialized index.
 Sequence-wrapped direct tuple literals plan the prefix once before all tuple
 operands, while sequence-wrapped direct array literals plan the prefix before
 each element, matching their distinct materializers.
+Simple fat-reference initializers now reserve direct identifier reads, the
+condition followed by both direct-identifier branches, or a sequence prefix
+followed by its direct-identifier tail. Range-derived, call-derived, and other
+wrapped fat-reference materialization remains emission-time work.
 The visitor also runs for every supported scalar expression statement at the
 top level, in conditional arms, in direct and nested loop actions, and after
 loops. Each statement is parsed once and its reads are reserved against the
@@ -256,8 +260,9 @@ nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
 It does not yet preanalyze compound array-base materialization, other wrapped or
-non-literal conditional aggregate values, fat-reference initializers or returns,
-method/call, aggregate returns/tails, or other body reads, or replace name lookup
+non-literal conditional aggregate values, range-derived or otherwise complex
+fat-reference initializers, fat-reference returns, method/call, aggregate
+returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
