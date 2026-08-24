@@ -713,10 +713,12 @@ authority; unrelated domains continue.
    each pass all 447 kernel tests, all 16 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict
    Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
-   enabled; strict Linux crate-local Clippy also passes. An
-   `x86_64-unknown-uefi` image check was attempted but failed in unrelated
-   existing `mrml-runtime` target-cfg code before checking the loader; therefore
-   this milestone has no linked UEFI-image or firmware execution evidence.
+   enabled; strict Linux crate-local Clippy also passes. The direct UEFI crypto
+   dependency now disables its unused host-runtime default feature, so the
+   optimized `x86_64-unknown-uefi` loader links successfully and strict target
+   Clippy passes. Dependency inspection confirms `mrml-runtime` is absent from
+   the firmware graph. This is native image linkage evidence, not firmware,
+   provisioned TPM, reboot, Secure Boot, or physical execution evidence.
    A generic consumed validation transaction now keeps that rebuilt table
    private while a dependent recovery validator uses one exact reconstructed
    file handle. The configuration adapter recovers only the selected file

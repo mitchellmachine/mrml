@@ -19,6 +19,6 @@ bench = false
 required-features = ["uefi-image"]
 
 [dependencies]
-mrml-crypto = { path = "../mrml-crypto" }
+mrml-crypto = { path = "../mrml-crypto", default-features = false }
 mrml-kernel = { path = "../mrml-kernel" }
 mrml-storage = { path = "../mrml-storage" }

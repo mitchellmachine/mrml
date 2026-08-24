@@ -545,9 +545,11 @@ Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
-incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, native UEFI-target linkage and execution, signed
-storage-service invocation of the isolated syscall, and physical evidence remain pending. A consumed dependent-
+incorrect `NV_Write` command code was corrected to `NV_Increment`. The loader
+now links as an optimized native `x86_64-unknown-uefi` image with the recovery
+path and without `mrml-runtime` in its firmware dependency graph. Owner-policy
+provisioning/recovery, native UEFI execution, and physical evidence remain
+pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

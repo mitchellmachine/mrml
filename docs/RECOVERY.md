@@ -337,8 +337,12 @@ explicitly and downgrade the status rather than guessing.
   configuration now binds the exact indices and policy recipe to TCG2 and a
   fresh firmware-RNG call per session, then authenticates the counter-selected
   slot before boot-services exit. Partial configuration and any backend
-  uncertainty fail boot; temporary state is erased. This does not provision
-  indices or policy, link the native UEFI target, or provide physical evidence.
+  uncertainty fail boot; temporary state is erased. The optimized native
+  `x86_64-unknown-uefi` loader now links this path after disabling the unused
+  host-runtime default feature on its direct crypto dependency; dependency
+  inspection confirms `mrml-runtime` is absent from the firmware graph. This
+  does not provision indices or policy, execute firmware, or provide physical
+  evidence.
   The canonical epoch, handle generation, optional volume, and root generation
   now cross into early kernel decoding through a separately flagged 40-byte
   handoff record. Exact length, reserved bytes, nonzero generations, and the

@@ -1385,6 +1385,17 @@ semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
 mechanism, or other patent-candidate mechanism. Existing planned scopes remain
 `TRIGGERED`; this agent review does not replace independent human dual review.
 
+# 2026-08-24 — Native UEFI recovery-loader linkage
+
+**Result: NOT_TRIGGERED.** The change disables an unused host-runtime default
+feature on the loader's existing cryptographic dependency so the existing TPM
+recovery path links for its native firmware target. It introduces no algorithm,
+store protocol, authority mechanism, attestation, compatibility transport,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace independent human dual review.
+
 # 2026-08-24 — Access-sensitive direct-loan use
 
 **Result: NOT_TRIGGERED.** The compiler conventionally distinguishes reads from

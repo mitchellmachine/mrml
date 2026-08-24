@@ -200,6 +200,12 @@ firmware RNG call, and authenticates only the counter-selected slot before
 closed; temporary recovery bytes are erased. This admission is not owner
 provisioning, authority reconstruction, artifact rollback evidence, remote
 attestation, native UEFI execution evidence, or physical durability evidence.
+The recovery-enabled loader now links as an optimized native
+`x86_64-unknown-uefi` image. Its direct crypto dependency disables the unused
+host-runtime default feature, and dependency inspection confirms filesystem,
+network, process, and other `mrml-runtime` host facilities are absent from the
+firmware graph. This reduces ambient code and capability surface but is linkage
+evidence only, not firmware execution or physical TPM evidence.
 Canonical recovery metadata crosses the loader/kernel boundary only in its own
 optional fixed-size handoff record. Both encoder and decoder require nonzero
 epoch and handle generation, zero reserved bytes, and an all-or-none nonzero

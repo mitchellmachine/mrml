@@ -2286,9 +2286,12 @@ an authenticated monotonic-store compare-and-store operation, so concurrent or
 stale updates fail instead of overwriting newer trust state. A conforming
 platform backend must use TPM NV or an equivalent authenticated, power-loss
 atomic facility; a normal host file is not a conforming backend. The encoding,
-rotation, corruption, conflict, and replay paths have unit tests. Actual TPM NV
-and UEFI variable backends remain pending and no rollback-resistance claim is
-made until one is implemented and tested on physical hardware.
+rotation, corruption, conflict, and replay paths have unit tests. The concrete
+TPM NV path now links into an optimized native `x86_64-unknown-uefi` loader;
+the direct crypto dependency excludes its unused host runtime, and
+`mrml-runtime` is absent from the firmware graph. Owner provisioning, native
+firmware execution, physical power-cut testing, and any rollback-resistance
+claim remain pending.
 
 Boot admission also requires a coherent signed artifact set: exactly one
 kernel, VM image, service image, CUDA kernel bundle, and launch policy from the
