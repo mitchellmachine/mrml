@@ -3095,6 +3095,18 @@ or repeated observation changes no bookkeeping. This prevents a double-unmap
 while retaining fail-closed host/guest agreement; it is compiled and unit-
 policy-tested, not yet exercised by a newly signed hosted service probe.
 
+KVM and WHP now also distinguish the existing common two-service diagnostic
+page from capability-resource pages. A resource attachment selects exactly one
+service slot and one user read/write page. It rejects a missing service,
+duplicate slot, invalid shape, or any virtual/physical collision with the common
+page or another resource before native allocation or page-table mutation. The
+sibling root receives no leaf or supervisor alias. Resource revoke, verified
+kernel-side revoke observation, and restore have state independent from the
+common page. Restore zeroes the entire backing while the resource remains non-
+live, then installs the exact leaf; reset failure cannot publish stale content.
+KVM/WHP unit and strict compile gates cover the changed backends, but no new
+signed hosted probe has yet attached or exercised these resource pages.
+
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
 self-ownership. Extent lists now use a separate canonical block-aligned image
@@ -3263,7 +3275,9 @@ physical leaves, permissions, and one-use state before mutation; mismatch leaves
 policy identity live. Host observation additionally requires the complete
 recorded leaf range to remain absent before changing one slot's re-arm state;
 live or partially removed ranges and repeated observations fail closed.
-Registration and active page-table ownership remain
+Per-service resource admission additionally rejects common/sibling address
+aliases, and generation re-arm cannot expose retained bytes because reset
+precedes leaf installation. Registration and active page-table ownership remain
 explicit unsafe boundaries, and final-reference cleanup uses the existing
 revocation path. This agent review
 does not replace the constitution's independent human dual review.

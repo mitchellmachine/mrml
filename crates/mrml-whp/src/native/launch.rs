@@ -96,6 +96,8 @@ pub struct PreparedWhpGuest<'system> {
     service_instance: [Option<ServiceInstance>; 2],
     service_shared: Option<Mapping>,
     service_shared_live: [bool; 2],
+    service_resource: [Option<Mapping>; 2],
+    service_resource_live: [bool; 2],
     ap_trampoline: Option<u64>,
 }
 
@@ -273,6 +275,85 @@ impl<'system> PreparedWhpGuest<'system> {
         Ok(())
     }
 
+    /// Installs one independently backed user read/write resource into exactly
+    /// one service root. Neither the sibling service nor the common diagnostic
+    /// page receives an alias.
+    pub fn attach_service_resource_page(
+        mut self,
+        slot: usize,
+        mapping: Mapping,
+    ) -> Result<Self, WhpError> {
+        if slot >= 2
+            || self.service_resource[slot].is_some()
+            || mapping.pages() != 1
+            || mapping.permissions() != PagePermissions::USER_READ_WRITE
+            || self.service_instance[slot].is_none()
+            || self.service_shared.is_some_and(|shared| {
+                shared.virtual_start() == mapping.virtual_start()
+                    || shared.physical_start() == mapping.physical_start()
+            })
+            || self.service_resource.iter().flatten().any(|existing| {
+                existing.physical_start() == mapping.physical_start()
+                    || existing.virtual_start() == mapping.virtual_start()
+            })
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.partition.map_zeroed(range(
+            mapping.physical_start().get(),
+            PAGE_SIZE,
+            MapPermissions::read_write(),
+        )?)?;
+        self.mutate_service_resource_leaf(slot, mapping, true, true)?;
+        self.service_resource[slot] = Some(mapping);
+        self.service_resource_live[slot] = true;
+        Ok(self)
+    }
+
+    pub fn revoke_service_resource_page(&mut self, slot: usize) -> Result<(), WhpError> {
+        let mapping = *self
+            .service_resource
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or(WhpError::InvalidMapping)?;
+        if !self.service_resource_live[slot] {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.mutate_service_resource_leaf(slot, mapping, false, false)?;
+        self.service_resource_live[slot] = false;
+        Ok(())
+    }
+
+    pub fn observe_service_resource_page_revoked(&mut self, slot: usize) -> Result<(), WhpError> {
+        let mapping = *self
+            .service_resource
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or(WhpError::InvalidMapping)?;
+        if !self.service_resource_live[slot] {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.verify_service_mapping_absent(slot, mapping)?;
+        self.service_resource_live[slot] = false;
+        Ok(())
+    }
+
+    pub fn restore_service_resource_page(&mut self, slot: usize) -> Result<(), WhpError> {
+        let mapping = *self
+            .service_resource
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or(WhpError::InvalidMapping)?;
+        if self.service_resource_live[slot] {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.partition
+            .write_guest(mapping.physical_start().get(), &[0; PAGE_SIZE as usize])?;
+        self.mutate_service_resource_leaf(slot, mapping, true, false)?;
+        self.service_resource_live[slot] = true;
+        Ok(())
+    }
+
     pub fn restore_service_shared_page(&mut self, slot: usize) -> Result<(), WhpError> {
         let mapping = self.service_shared.ok_or(WhpError::InvalidMapping)?;
         if slot >= 2 || self.service_shared_live[slot] {
@@ -306,17 +387,66 @@ impl<'system> PreparedWhpGuest<'system> {
         )
         .map_err(|_| WhpError::InvalidMapping)?;
         if install {
-            tables.map(mapping).and_then(|_| {
-                if initial {
-                    tables.map(supervisor)
-                } else {
-                    Ok(())
-                }
-            })
+            if initial {
+                tables.map(supervisor).and_then(|_| tables.map(mapping))
+            } else {
+                tables.map(mapping)
+            }
         } else {
             tables.unmap_exact(mapping)
         }
         .map_err(|_| WhpError::PageTable)
+    }
+
+    fn mutate_service_resource_leaf(
+        &mut self,
+        slot: usize,
+        mapping: Mapping,
+        install: bool,
+        initial: bool,
+    ) -> Result<(), WhpError> {
+        let instance = self.service_instance[slot].ok_or(WhpError::InvalidMapping)?;
+        let root = self.service_root[slot].ok_or(WhpError::InvalidMapping)?;
+        let store = WhpPageTableStore::open_existing(
+            &mut self.partition,
+            instance.table_physical,
+            instance.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, root);
+        let supervisor = Mapping::new(
+            VirtAddr::new(mapping.physical_start().get()).map_err(|_| WhpError::InvalidMapping)?,
+            mapping.physical_start(),
+            1,
+            PagePermissions::KERNEL_LOW_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
+        if install {
+            if initial {
+                tables.map(supervisor).and_then(|_| tables.map(mapping))
+            } else {
+                tables.map(mapping)
+            }
+        } else {
+            tables.unmap_exact(mapping)
+        }
+        .map_err(|_| WhpError::PageTable)
+    }
+
+    fn verify_service_mapping_absent(
+        &mut self,
+        slot: usize,
+        mapping: Mapping,
+    ) -> Result<(), WhpError> {
+        let instance = self.service_instance[slot].ok_or(WhpError::InvalidMapping)?;
+        let root = self.service_root[slot].ok_or(WhpError::InvalidMapping)?;
+        let store = WhpPageTableStore::open_existing(
+            &mut self.partition,
+            instance.table_physical,
+            instance.table_pages,
+        )?;
+        PageTableBuilder::from_existing_root(store, root)
+            .verify_unmapped(mapping)
+            .map_err(|_| WhpError::PageTable)
     }
     pub fn run(&mut self) -> Result<VmExit, WhpError> {
         self.partition.run()
@@ -1178,6 +1308,8 @@ impl WhpSystem {
             service_instance: [None; 2],
             service_shared: None,
             service_shared_live: [false; 2],
+            service_resource: [None; 2],
+            service_resource_live: [false; 2],
             ap_trampoline: trampoline,
         })
     }
@@ -1742,6 +1874,8 @@ mod tests {
             service_instance: [None; 2],
             service_shared: None,
             service_shared_live: [false; 2],
+            service_resource: [None; 2],
+            service_resource_live: [false; 2],
             ap_trampoline: None,
         };
         assert_eq!(VmBackend::run(&mut guest, 1), Err(WhpError::InvalidVcpu));

@@ -363,6 +363,11 @@ authority; unrelated domains continue.
    KVM and WHP now accept kernel-side removal only after a complete read-only
    absent-leaf verification, then mark precisely that service slot eligible for
    re-arm; live leaves, invalid slots, and repeated observation fail closed.
+   Backend-neutral policy is preserved: KVM and WHP now expose matching
+   per-service resource-page lifecycles distinct from the common two-party
+   diagnostic page. Admission rejects common-page or sibling virtual/physical
+   aliases, maps only one service root, and zeroes backing before generation
+   re-arm. Signed hosted-probe exercise remains pending.
    Wiring user copy, active mapping cleanup, and opaque resources into the
    kernel-image syscall/lifecycle handlers remains pending.
    Service-side binding selection is implemented: the exact transferred

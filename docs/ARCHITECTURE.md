@@ -307,7 +307,12 @@ permissions before removing all leaves and invalidating their local TLB entries.
 KVM and WHP can now observe that kernel-side retirement only by verifying the
 complete expected leaf range is absent before changing their live/re-arm
 bookkeeping; they do not attempt a second unmap. This is the revocation
-prerequisite for kernel-image resource wiring. Bounded
+prerequisite for kernel-image resource wiring. Each backend now also carries a
+separate per-service resource slot: attachment targets exactly one service root,
+rejects virtual or physical overlap with the common page or sibling resources,
+and has independent revoke, observed-revoke, and restore state. Restore erases
+the complete backing page before reinstalling the leaf. These APIs are compile-
+tested but not yet exercised by the signed hosted probe. Bounded
 in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
 cross-directory file moves, and removal. Creation returns a capability bound to
