@@ -333,10 +333,14 @@ explicitly and downgrade the status rather than guessing.
   operation, rejects immediate nonce reuse, and best-effort flushes mismatched
   or failed sessions. A safe constructor composes this provider, admitted NV
   layout, TPM backend, and authenticated journal; policy/layout substitution
-  fails before journal use. This does
-  not provision indices or the policy recipe, execute linked firmware, compose
-  or provide physical evidence. No linked firmware or complete durable TPM
-  backend is claimed. Dependent
+  fails before journal use. An optional all-or-none UEFI development
+  configuration now binds the exact indices and policy recipe to TCG2 and a
+  fresh firmware-RNG call per session, then authenticates the counter-selected
+  slot before boot-services exit. Partial configuration and any backend
+  uncertainty fail boot; temporary state is erased. This does not provision
+  indices or policy, pass recovered state into kernel authority, link the native
+  UEFI target, or provide physical evidence. No complete durable TPM backend is
+  claimed. Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator
   reads the exact selected configuration file,

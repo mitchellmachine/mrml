@@ -482,13 +482,20 @@ operation. Mismatch and policy failure trigger best-effort session cleanup.
 Immediate nonce reuse fails closed. A safe composition constructor exposes the
 authenticated journal only after the complete three-index layout is admitted
 through that provider; layout-policy substitution fails construction.
+The UEFI loader now has an optional all-or-none development configuration for
+those exact indices, policy digest, PCR digest, and PCR selection. When present,
+it uses TCG2 plus a fresh firmware-RNG call per session to construct the stack
+and authenticate the currently selected journal slot before
+`ExitBootServices`; partial configuration or any uncertainty aborts boot, and
+the temporary state bytes are erased. The loader does not yet consume that
+state into kernel authority or reinterpret it as artifact rollback evidence.
 Commands use bounded TPM session framing; responses must
 have exact parameters, bounded nonce, zero session attributes, and no trailing
 authorization bytes. Slot writes are read-verified, and counter increment
 rechecks both predecessor and exact successor. The existing rollback helper's
 incorrect `NV_Write` command code was corrected to `NV_Increment`. Owner policy
-provisioning/recovery, linked firmware execution, and physical evidence remain
-pending. A consumed dependent-
+provisioning/recovery, native UEFI-target linkage, typed kernel handoff/boot
+consumption, and physical evidence remain pending. A consumed dependent-
 validation transaction now
 keeps the fresh authority table private while an unsafe side-effect-free
 validator recovers an

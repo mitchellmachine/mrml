@@ -655,13 +655,19 @@ authority; unrelated domains continue.
    best-effort cleanup. A safe constructor now composes this provider, the
    admitted layout, the TPM backend, and the authenticated journal; an end-to-
    end hosted test loads and atomically replaces journal state while rejecting
-   layout-policy substitution. Actual owner-policy
-   provisioning/recovery, linked UEFI execution,
-   and physical testing remain pending.
+   layout-policy substitution. The loader now accepts an optional exact all-or-
+   none development configuration for the three indices and PolicyPCR recipe,
+   composes the real TCG2 transport with one firmware-RNG call per session, and
+   authenticates the selected journal record before `ExitBootServices`.
+   Partial configuration, malformed state, or firmware uncertainty aborts;
+   temporary state is erased and is not yet promoted into kernel authority or
+   artifact rollback evidence. Actual owner-policy provisioning/recovery,
+   native UEFI-target linkage, typed handoff/boot consumption, and physical
+   testing remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 15 `mrml-uefi` library tests, all 115 storage tests, and strict
-   crate-local Clippy. Windows workspace-dependency Clippy remains blocked by
-   unrelated existing `mrml-runtime` lints. An
+   each pass all 16 `mrml-uefi` library tests and all 115 storage tests. Strict
+   Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
+   enabled; strict Linux crate-local Clippy also passes. An
    `x86_64-unknown-uefi` image check was attempted but failed in unrelated
    existing `mrml-runtime` target-cfg code before checking the loader; therefore
    this milestone has no linked UEFI-image or firmware execution evidence.

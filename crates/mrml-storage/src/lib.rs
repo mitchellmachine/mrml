@@ -50,6 +50,7 @@ pub use authority_checkpoint::{
     recover_selected_stable_authorities_and_commit,
     recover_selected_validate_and_commit_stable_authorities, recover_stable_authorities,
     recover_stable_authorities_and_commit, recover_validate_and_commit_stable_authorities,
+    validate_authenticated_authority_recovery_state,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{

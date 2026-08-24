@@ -2425,3 +2425,15 @@ compatibility transport, host-share protocol, accessibility device, browser
 semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
 mechanism, or other patent-candidate mechanism. Existing planned scopes remain
 `TRIGGERED`; this agent review does not replace independent human dual review.
+
+# 2026-08-24 — UEFI recovery-journal admission
+
+**Result: NOT_TRIGGERED.** The change conventionally parses an exact all-or-none
+development configuration, connects the existing standard TCG2 command
+transport and UEFI RNG protocol to the existing TPM recovery journal, and
+authenticates the counter-selected record before boot-services exit. It grants
+no recovered authority and adds no attestation, compatibility transport,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace independent human dual review.

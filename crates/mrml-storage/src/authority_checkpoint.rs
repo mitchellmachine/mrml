@@ -206,6 +206,14 @@ impl AuthenticatedAuthorityRecoveryState {
     }
 }
 
+/// Validates the canonical encoding returned by an authenticated recovery
+/// store without constructing or releasing recovery authority.
+pub fn validate_authenticated_authority_recovery_state(
+    input: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+) -> Result<(), AuthorityCheckpointError> {
+    AuthenticatedAuthorityRecoveryState::decode_authenticated(input).map(drop)
+}
+
 /// Exact owner-approved durable-grant policy admitted by trusted recovery.
 /// Names, identities, signatures, and checkpoint bytes remain data until this
 /// boundary has authenticated the complete policy and selected storage root.
@@ -1906,10 +1914,14 @@ mod tests {
 
     #[test]
     fn authenticated_recovery_state_rejects_corruption_and_store_conflict() {
+        assert_eq!(
+            validate_authenticated_authority_recovery_state(&RecoveryStateBackend::new(8, 1).state),
+            Ok(())
+        );
         let mut malformed = RecoveryStateBackend::new(8, 1).state;
         malformed[28] = 1;
         assert!(matches!(
-            AuthenticatedAuthorityRecoveryState::decode_authenticated(&malformed),
+            validate_authenticated_authority_recovery_state(&malformed),
             Err(AuthorityCheckpointError::MalformedRecoveryState)
         ));
         malformed = RecoveryStateBackend::new(8, 1).state;

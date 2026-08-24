@@ -113,6 +113,84 @@ impl PcrPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecoveryJournalConfiguration {
+    layout: NvRecoveryLayout,
+    policy: PcrPolicy,
+}
+
+impl RecoveryJournalConfiguration {
+    pub fn parse_optional(fields: [Option<&[u8]>; 6]) -> Result<Option<Self>, NvCounterError> {
+        match fields {
+            [None, None, None, None, None, None] => Ok(None),
+            [
+                Some(counter),
+                Some(slot_zero),
+                Some(slot_one),
+                Some(policy),
+                Some(pcr),
+                Some(select),
+            ] => Self::parse(counter, slot_zero, slot_one, policy, pcr, select).map(Some),
+            _ => Err(NvCounterError::InvalidIndex),
+        }
+    }
+
+    pub fn parse(
+        counter_index: &[u8],
+        slot_zero_index: &[u8],
+        slot_one_index: &[u8],
+        policy_digest: &[u8],
+        expected_pcr_digest: &[u8],
+        pcr_select: &[u8],
+    ) -> Result<Self, NvCounterError> {
+        let policy_digest = parse_hex_exact::<32>(policy_digest)?;
+        let layout = NvRecoveryLayout::new(
+            parse_hex_u32(counter_index)?,
+            [
+                parse_hex_u32(slot_zero_index)?,
+                parse_hex_u32(slot_one_index)?,
+            ],
+            policy_digest,
+        )?;
+        let policy = PcrPolicy::new(
+            policy_digest,
+            parse_hex_exact::<32>(expected_pcr_digest)?,
+            parse_hex_exact::<3>(pcr_select)?,
+        )?;
+        Ok(Self { layout, policy })
+    }
+
+    pub const fn into_parts(self) -> (NvRecoveryLayout, PcrPolicy) {
+        (self.layout, self.policy)
+    }
+}
+
+fn parse_hex_u32(input: &[u8]) -> Result<u32, NvCounterError> {
+    Ok(u32::from_be_bytes(parse_hex_exact::<4>(input)?))
+}
+
+fn parse_hex_exact<const N: usize>(input: &[u8]) -> Result<[u8; N], NvCounterError> {
+    if input.len() != N * 2 {
+        return Err(NvCounterError::InvalidIndex);
+    }
+    let mut output = [0; N];
+    for (index, byte) in output.iter_mut().enumerate() {
+        let high = hex_nibble(input[index * 2]).ok_or(NvCounterError::InvalidIndex)?;
+        let low = hex_nibble(input[index * 2 + 1]).ok_or(NvCounterError::InvalidIndex)?;
+        *byte = high << 4 | low;
+    }
+    Ok(output)
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Concrete one-use provider for an owner-configured SHA-256 `PolicyPCR`
 /// recipe. It serializes one pending NV authorization at a time.
 pub struct PcrPolicySessionTransport<T, N> {
@@ -1005,6 +1083,95 @@ mod tests {
 
     fn layout(policy: [u8; 32]) -> NvRecoveryLayout {
         NvRecoveryLayout::new(0x0180_0010, [0x0180_0011, 0x0180_0012], policy).unwrap()
+    }
+
+    #[test]
+    fn recovery_configuration_requires_exact_canonical_fields() {
+        let policy = [b'a'; 64];
+        let pcr_digest = [b'B'; 64];
+        let configuration = RecoveryJournalConfiguration::parse(
+            b"01800010",
+            b"01800011",
+            b"01800012",
+            &policy,
+            &pcr_digest,
+            b"000800",
+        )
+        .unwrap();
+        assert_eq!(
+            configuration.into_parts(),
+            (
+                layout([0xaa; 32]),
+                PcrPolicy::new([0xaa; 32], [0xbb; 32], [0, 8, 0]).unwrap(),
+            )
+        );
+        assert_eq!(
+            RecoveryJournalConfiguration::parse_optional([None; 6]),
+            Ok(None)
+        );
+        assert!(matches!(
+            RecoveryJournalConfiguration::parse_optional([
+                Some(&b"01800010"[..]),
+                None,
+                Some(&b"01800012"[..]),
+                Some(&policy),
+                Some(&pcr_digest),
+                Some(&b"000800"[..]),
+            ]),
+            Err(NvCounterError::InvalidIndex)
+        ));
+
+        for malformed in [
+            &b"0180001"[..],
+            &b"018000100"[..],
+            &b"0180001g"[..],
+            &b"00000000"[..],
+        ] {
+            assert!(matches!(
+                RecoveryJournalConfiguration::parse(
+                    malformed,
+                    b"01800011",
+                    b"01800012",
+                    &policy,
+                    &pcr_digest,
+                    b"000800",
+                ),
+                Err(NvCounterError::InvalidIndex)
+            ));
+        }
+        assert!(matches!(
+            RecoveryJournalConfiguration::parse(
+                b"01800010",
+                b"01800010",
+                b"01800012",
+                &policy,
+                &pcr_digest,
+                b"000800",
+            ),
+            Err(NvCounterError::InvalidIndex)
+        ));
+        assert!(matches!(
+            RecoveryJournalConfiguration::parse(
+                b"01800010",
+                b"01800011",
+                b"01800012",
+                &[b'0'; 64],
+                &pcr_digest,
+                b"000800",
+            ),
+            Err(NvCounterError::InvalidIndex)
+        ));
+        assert!(matches!(
+            RecoveryJournalConfiguration::parse(
+                b"01800010",
+                b"01800011",
+                b"01800012",
+                &policy,
+                &pcr_digest,
+                b"000000",
+            ),
+            Err(NvCounterError::InvalidSession)
+        ));
     }
 
     #[test]

@@ -193,6 +193,13 @@ confidentiality, prove firmware integration, or establish physical durability,
 so this remains protocol evidence rather than rollback-resistance evidence.
 The safe journal constructor first admits all three exact NV public identities
 through this provider, so mismatched layout policy never yields a usable store.
+The UEFI loader's optional development integration requires all six exact
+configuration fields together, obtains every session nonce from a separate
+firmware RNG call, and authenticates only the counter-selected slot before
+`ExitBootServices`. Partial configuration and all TPM/RNG uncertainty fail
+closed; temporary recovery bytes are erased. This admission is not owner
+provisioning, authority reconstruction, artifact rollback evidence, remote
+attestation, native UEFI execution evidence, or physical durability evidence.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

@@ -14,7 +14,14 @@ use mrml_kernel::{
     },
     encode_handoff_with_smp_and_service,
 };
-use mrml_uefi::tpm::{NvCounterError, TpmTransport, enforce_version};
+use mrml_storage::{
+    AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore,
+    validate_authenticated_authority_recovery_state,
+};
+use mrml_uefi::tpm::{
+    NvCounterError, RecoveryJournalConfiguration, TpmNonceSource, TpmTransport, enforce_version,
+    open_recovery_journal,
+};
 use mrml_uefi::*;
 
 const MAP_BYTES: usize = 64 * 1024;
@@ -88,6 +95,25 @@ struct FirmwarePageTables {
 
 struct FirmwareTpm {
     protocol: *mut Tcg2Protocol,
+}
+
+struct FirmwareRng {
+    protocol: *mut RngProtocol,
+}
+
+impl TpmNonceSource for FirmwareRng {
+    fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError> {
+        let protocol = unsafe { self.protocol.as_mut() }.ok_or(NvCounterError::Transport)?;
+        check(unsafe {
+            (protocol.get_rng)(
+                protocol,
+                core::ptr::null(),
+                output.len(),
+                output.as_mut_ptr(),
+            )
+        })
+        .map_err(|_| NvCounterError::Transport)
+    }
 }
 
 impl TpmTransport for FirmwareTpm {
@@ -471,6 +497,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     if require_rollback_counter() && !rollback_protected {
         return Err(LOAD_ERROR);
     }
+    admit_configured_recovery_journal(services, rng_pointer.cast())?;
 
     loader_trace(0xa8);
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services) }?;
@@ -665,6 +692,54 @@ fn enforce_rollback_counter(services: &BootServices, version: u64) -> Result<boo
     };
     enforce_version(&mut transport, index, version, 1024).map_err(|_| LOAD_ERROR)?;
     Ok(true)
+}
+
+fn configured_recovery_journal() -> Result<Option<RecoveryJournalConfiguration>, Status> {
+    RecoveryJournalConfiguration::parse_optional([
+        option_env!("MRML_RECOVERY_COUNTER_NV_INDEX_HEX").map(str::as_bytes),
+        option_env!("MRML_RECOVERY_SLOT0_NV_INDEX_HEX").map(str::as_bytes),
+        option_env!("MRML_RECOVERY_SLOT1_NV_INDEX_HEX").map(str::as_bytes),
+        option_env!("MRML_RECOVERY_POLICY_DIGEST_HEX").map(str::as_bytes),
+        option_env!("MRML_RECOVERY_PCR_DIGEST_HEX").map(str::as_bytes),
+        option_env!("MRML_RECOVERY_PCR_SELECT_HEX").map(str::as_bytes),
+    ])
+    .map_err(|_| LOAD_ERROR)
+}
+
+fn admit_configured_recovery_journal(
+    services: &BootServices,
+    rng: *mut RngProtocol,
+) -> Result<(), Status> {
+    let Some(configuration) = configured_recovery_journal()? else {
+        return Ok(());
+    };
+    if rng.is_null() {
+        return Err(LOAD_ERROR);
+    }
+    let mut protocol_pointer = core::ptr::null_mut();
+    check(unsafe {
+        (services.locate_protocol)(
+            &TCG2_PROTOCOL_GUID,
+            core::ptr::null_mut(),
+            &mut protocol_pointer,
+        )
+    })?;
+    let (layout, policy) = configuration.into_parts();
+    let transport = FirmwareTpm {
+        protocol: protocol_pointer.cast(),
+    };
+    let nonce_source = FirmwareRng { protocol: rng };
+    let journal =
+        open_recovery_journal(transport, nonce_source, layout, policy).map_err(|_| LOAD_ERROR)?;
+    let mut state = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+    let result = journal
+        .load_authenticated(&mut state)
+        .map_err(|_| LOAD_ERROR)
+        .and_then(|()| {
+            validate_authenticated_authority_recovery_state(&state).map_err(|_| LOAD_ERROR)
+        });
+    state.fill(0);
+    result
 }
 
 fn detect_secure_boot(runtime: *mut RuntimeServices) -> Result<bool, Status> {
