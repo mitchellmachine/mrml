@@ -2648,3 +2648,15 @@ compatibility protocol, host-share mechanism, accessibility or browser-semantic
 interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. This agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Nested-reborrow ancestor invalidation
+
+**Result: NOT_TRIGGERED.** The compiler conventionally extends its bounded loan
+ancestry walk to distinguish intermediate reference paths from ultimate owner
+paths and includes mutation-through-reference effects in existing conflict
+checks. A loan's borrower binding is excluded from its own borrowed paths.
+It adds no optimization, authority model, compatibility protocol, host-share
+mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
