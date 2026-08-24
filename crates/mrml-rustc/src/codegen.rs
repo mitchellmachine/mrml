@@ -5558,31 +5558,14 @@ fn nested_loop_has_supported_control_flow(
     }
     let control_count = nested_loop_control_count(block)?;
     let mut seen = 0usize;
-    let mut terminated = false;
     for action_index in 0..=block.action_count() {
         for control_order in 0..control_count {
-            let Some(control) = nested_loop_control_at(block, action_index, control_order)? else {
+            let Some(_control) = nested_loop_control_at(block, action_index, control_order)? else {
                 continue;
             };
-            if terminated {
-                return Ok(false);
-            }
             seen = seen
                 .checked_add(1)
                 .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-            terminated = matches!(
-                control,
-                RuntimeNestedLoopControl::Break {
-                    conditional: false,
-                    ..
-                } | RuntimeNestedLoopControl::Continue {
-                    conditional: false,
-                    ..
-                } | RuntimeNestedLoopControl::Return { conditional: false }
-            );
-        }
-        if action_index < block.action_count() && terminated {
-            return Ok(false);
         }
     }
     if seen != control_count {
@@ -5629,7 +5612,7 @@ fn nested_loop_has_outer_break(block: &crate::NestedLoopBlock<'_>) -> bool {
 fn loop_has_supported_initial_control_flow(
     loop_statement: &crate::WhileLoop<'_>,
 ) -> Result<bool, CodegenErrorKind> {
-    for (operation_index, operation) in loop_statement.operations().iter().enumerate() {
+    for operation in loop_statement.operations() {
         let operation = operation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
         if let crate::LoopOperation::NestedBlock(index) = operation {
             let block = loop_statement
@@ -5638,11 +5621,6 @@ fn loop_has_supported_initial_control_flow(
                 .and_then(|block| *block)
                 .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
             if !nested_loop_has_supported_control_flow(&block)? {
-                return Ok(false);
-            }
-            if !nested_loop_has_inner_exit(&block)
-                && operation_index + 1 != loop_statement.operation_count()
-            {
                 return Ok(false);
             }
         }
@@ -5668,51 +5646,45 @@ fn loop_has_supported_initial_control_flow(
                     action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
                 }
             }
-            if conditional_loop_block_all_paths_terminate(loop_statement, &block)?
-                && operation_index + 1 != loop_statement.operation_count()
-            {
-                return Ok(false);
-            }
-        }
-        if matches!(
-            operation,
-            crate::LoopOperation::Break
-                | crate::LoopOperation::Continue
-                | crate::LoopOperation::Return(_)
-        ) && operation_index + 1 != loop_statement.operation_count()
-        {
-            return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn loop_has_exit_path(loop_statement: &crate::WhileLoop<'_>) -> Result<bool, CodegenErrorKind> {
-    if loop_statement.condition.is_some() {
-        return Ok(true);
-    }
+fn loop_exit_paths(
+    loop_statement: &crate::WhileLoop<'_>,
+) -> Result<(bool, bool), CodegenErrorKind> {
+    let mut has_any_exit = loop_statement.condition.is_some();
+    let mut has_reachable_exit = loop_statement.condition.is_some();
+    let mut operation_reachable = true;
     for operation in loop_statement.operations().iter().flatten() {
-        if matches!(
+        let direct_exit = matches!(
             operation,
             crate::LoopOperation::Break | crate::LoopOperation::ConditionalBreak(_)
-        ) {
-            return Ok(true);
-        }
+        );
+        has_any_exit |= direct_exit;
+        has_reachable_exit |= operation_reachable && direct_exit;
+        let mut universally_terminates = matches!(
+            operation,
+            crate::LoopOperation::Break
+                | crate::LoopOperation::Continue
+                | crate::LoopOperation::Return(_)
+        );
         if let crate::LoopOperation::ConditionalBlock(index) = operation {
             let block = loop_statement
                 .conditional_blocks()
                 .get(*index)
                 .and_then(|block| *block)
                 .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-            if conditional_loop_terminal_is_break(block.terminal) {
-                return Ok(true);
-            }
+            let mut block_has_break = conditional_loop_terminal_is_break(block.terminal);
             for arm in conditional_loop_block_arms(loop_statement, &block)? {
                 let arm = arm.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-                if conditional_loop_terminal_is_break(arm.terminal) {
-                    return Ok(true);
-                }
+                block_has_break |= conditional_loop_terminal_is_break(arm.terminal);
             }
+            has_any_exit |= block_has_break;
+            has_reachable_exit |= operation_reachable && block_has_break;
+            universally_terminates =
+                conditional_loop_block_all_paths_terminate(loop_statement, &block)?;
         }
         if let crate::LoopOperation::NestedBlock(index) = operation {
             let block = loop_statement
@@ -5720,12 +5692,14 @@ fn loop_has_exit_path(loop_statement: &crate::WhileLoop<'_>) -> Result<bool, Cod
                 .get(*index)
                 .and_then(|block| *block)
                 .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-            if nested_loop_has_outer_break(&block) {
-                return Ok(true);
-            }
+            let block_has_outer_break = nested_loop_has_outer_break(&block);
+            has_any_exit |= block_has_outer_break;
+            has_reachable_exit |= operation_reachable && block_has_outer_break;
+            universally_terminates = !nested_loop_has_inner_exit(&block);
         }
+        operation_reachable &= !universally_terminates;
     }
-    Ok(false)
+    Ok((has_any_exit, has_reachable_exit))
 }
 
 fn conditional_loop_terminal_target(
@@ -5944,6 +5918,7 @@ fn push_nested_loop_block_control_flow(
     } else {
         Some((nested_header, RuntimeControlFlowEdgeKind::Unconditional))
     };
+    let mut event_reachable = reachable;
     let control_count = nested_loop_control_count(block)?;
     let mut seen = 0usize;
     for action_index in 0..=block.action_count() {
@@ -5956,7 +5931,7 @@ fn push_nested_loop_block_control_flow(
                 .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
             let control_block = facts.push_sourced_basic_block(
                 statement_index,
-                reachable,
+                event_reachable,
                 RuntimeBasicBlockSource::NestedLoopControl {
                     statement_index,
                     operation_index,
@@ -5964,7 +5939,9 @@ fn push_nested_loop_block_control_flow(
                     control_order,
                 },
             )?;
-            push_pending_control_flow_edge(facts, pending, control_block)?;
+            if pending.is_some() {
+                push_pending_control_flow_edge(facts, pending, control_block)?;
+            }
             let target = nested_loop_control_target(
                 control,
                 nested_header,
@@ -5992,20 +5969,25 @@ fn push_nested_loop_block_control_flow(
                 },
             })?;
             pending = conditional.then_some((control_block, RuntimeControlFlowEdgeKind::False));
+            if !conditional {
+                event_reachable = false;
+            }
         }
         if action_index == block.action_count() {
             break;
         }
         let action_block = facts.push_sourced_basic_block(
             statement_index,
-            reachable,
+            event_reachable,
             RuntimeBasicBlockSource::NestedLoopAction {
                 statement_index,
                 operation_index,
                 action_index,
             },
         )?;
-        push_pending_control_flow_edge(facts, pending, action_block)?;
+        if pending.is_some() {
+            push_pending_control_flow_edge(facts, pending, action_block)?;
+        }
         pending = Some((action_block, RuntimeControlFlowEdgeKind::Unconditional));
     }
     if seen != control_count {
@@ -6258,13 +6240,16 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                     .and_then(|loop_statement| *loop_statement)
                     .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
                 let header = current;
-                let continuation = if loop_has_exit_path(&loop_statement)? {
-                    Some(facts.push_basic_block(statement_index + 1, current_reachable)?)
+                let (has_any_exit, has_reachable_exit) = loop_exit_paths(&loop_statement)?;
+                let continuation_reachable = current_reachable && has_reachable_exit;
+                let continuation = if has_any_exit {
+                    Some(facts.push_basic_block(statement_index + 1, continuation_reachable)?)
                 } else {
                     None
                 };
                 let mut body_block =
                     facts.push_loop_body_block(statement_index, 0, current_reachable)?;
+                let mut body_path_reachable = current_reachable;
                 if loop_statement.condition.is_some() {
                     facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
                         from: header,
@@ -6289,6 +6274,12 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                 for (operation_index, operation) in loop_statement.operations().iter().enumerate() {
                     let operation =
                         operation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                    if body_terminated {
+                        body_block =
+                            facts.push_loop_body_block(statement_index, operation_index, false)?;
+                        body_path_reachable = false;
+                        body_terminated = false;
+                    }
                     facts.extend_loop_body_block(body_block)?;
                     if let crate::LoopOperation::NestedBlock(index) = operation {
                         let block = loop_statement
@@ -6303,7 +6294,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                             body_block,
                             header,
                             continuation,
-                            current_reachable,
+                            body_path_reachable,
                             facts,
                         )? {
                             body_block = next;
@@ -6326,7 +6317,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                             body_block,
                             header,
                             continuation,
-                            current_reachable,
+                            body_path_reachable,
                             facts,
                         )? {
                             body_block = next;
@@ -6354,7 +6345,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                         let next = facts.push_loop_body_block(
                             statement_index,
                             operation_index + 1,
-                            current_reachable,
+                            body_path_reachable,
                         )?;
                         facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
                             from: body_block,
@@ -6400,6 +6391,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                 }
                 if let Some(next) = continuation {
                     current = next;
+                    current_reachable = continuation_reachable;
                     terminated = false;
                 } else {
                     terminated = true;
@@ -21999,8 +21991,7 @@ mod tests {
 
     #[test]
     fn runtime_body_cfg_fails_closed_and_bounds_fact_capacity() {
-        let source =
-            "fn value(input: usize) -> usize { while input != 0 { loop {} input; } input }";
+        let source = "fn value(mode: bool) -> u8 { let mut result: u8 = 0; if mode { result = 1; return 1; result = 2; } result }";
         let module = Parser::new(source).parse_module::<1, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
@@ -22011,7 +22002,7 @@ mod tests {
             &function,
             &NoConstants,
             &body,
-            "usize",
+            "u8",
             function.body_expression_span.start,
             &mut facts,
         )
@@ -22131,7 +22122,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_body_facts_model_loop_continue_and_reject_post_terminal_operations() {
+    fn runtime_body_facts_model_loop_continue_and_post_terminal_operations() {
         let source = "fn value(limit: u8) -> u8 { let mut index: u8 = 0; loop { index += 1; if index < limit { continue; } break; } index }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -22177,9 +22168,13 @@ mod tests {
             &mut facts,
         )
         .unwrap();
-        assert!(!facts.control_flow_complete);
-        assert_eq!(facts.basic_block_count, 0);
-        assert_eq!(facts.control_flow_edge_count, 0);
+        assert!(facts.control_flow_complete);
+        assert!(
+            facts.basic_blocks[..facts.basic_block_count]
+                .iter()
+                .flatten()
+                .any(|block| !block.reachable)
+        );
     }
 
     #[test]
@@ -22307,9 +22302,13 @@ mod tests {
             &mut facts,
         )
         .unwrap();
-        assert!(!facts.control_flow_complete);
-        assert_eq!(facts.basic_block_count, 0);
-        assert_eq!(facts.control_flow_edge_count, 0);
+        assert!(facts.control_flow_complete);
+        assert!(
+            facts.basic_blocks[..facts.basic_block_count]
+                .iter()
+                .flatten()
+                .any(|block| !block.reachable)
+        );
     }
 
     #[test]
@@ -22443,7 +22442,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_body_facts_target_outer_loop_and_reject_nested_terminal_suffix() {
+    fn runtime_body_facts_target_outer_loop_and_isolate_nested_terminal_suffix() {
         let source = "fn value(enter: bool, stop: bool) -> u8 { 'outer: while enter { 'inner: loop { if stop { break 'outer; } continue 'inner; } } 42 }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -22484,9 +22483,25 @@ mod tests {
             &mut facts,
         )
         .unwrap();
-        assert!(!facts.control_flow_complete);
-        assert_eq!(facts.basic_block_count, 0);
-        assert_eq!(facts.control_flow_edge_count, 0);
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 6);
+        assert_eq!(facts.control_flow_edge_count, 6);
+        assert!(!facts.basic_blocks[4].unwrap().reachable);
+        assert!(!facts.basic_blocks[5].unwrap().reachable);
+        assert_eq!(
+            facts.basic_blocks[4].unwrap().source,
+            RuntimeBasicBlockSource::NestedLoopAction {
+                statement_index: 0,
+                operation_index: 0,
+                action_index: 0,
+            }
+        );
+        assert!(
+            !facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .flatten()
+                .any(|edge| edge.target == RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(4)))
+        );
     }
 
     #[test]
@@ -22523,6 +22538,55 @@ mod tests {
                 first_operation: 0,
                 operation_count: 3,
             }
+        );
+    }
+
+    #[test]
+    fn runtime_body_facts_isolate_post_terminal_loop_operations() {
+        let source = "fn value() -> u8 { loop { continue; let unreachable: u8 = 1; if unreachable == 1 { break; } } 42 }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 5);
+        assert_eq!(facts.control_flow_edge_count, 6);
+        assert!(!facts.basic_blocks[1].unwrap().reachable);
+        assert!(!facts.basic_blocks[3].unwrap().reachable);
+        assert!(!facts.basic_blocks[4].unwrap().reachable);
+        assert_eq!(
+            facts.basic_blocks[3].unwrap().source,
+            RuntimeBasicBlockSource::LoopBody {
+                statement_index: 0,
+                first_operation: 1,
+                operation_count: 2,
+            }
+        );
+        assert!(
+            !facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .flatten()
+                .any(|edge| edge.target == RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(3)))
+        );
+        assert_eq!(
+            facts.control_flow_edges[2],
+            Some(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(3),
+                target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(1)),
+                kind: RuntimeControlFlowEdgeKind::True,
+            })
         );
     }
 
