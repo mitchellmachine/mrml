@@ -1349,7 +1349,18 @@ can count as trusted consent.
    current loader selected, but does not yet enforce one release manifest or
    include the planned VM image, CUDA bundle, launch policy, configuration root,
    or compiler/runtime artifacts. No TPM-backed execution or remote-attestation
-   evidence is claimed.
+   evidence is claimed. The implemented `VerifiedRelease` foundation now also
+   withholds its per-kind minimum-version roots and exposes exact-release
+   artifact/executable admission instead: requested kind and signed artifact
+   version must equal the authenticated manifest release before signature or PE
+   interpretation can succeed. Focused tests reject substitution from both an
+   older and a newer release. The UEFI loader does not yet load or commit this
+   manifest, so coherent-set boot admission remains partial. Verification on
+   2026-08-24 passed all 4 artifact tests and strict crate-local Clippy on
+   Windows gnullvm, all 451 kernel tests on Arch Linux/WSL2, and an optimized
+   native UEFI loader build. The Windows full suite passed 450 tests; the known
+   deep delegation-capacity test again overflowed the Windows test-process
+   stack, independently of this artifact code.
 3. Add rollback, stale-update, corruption, interrupted-write, and recovery tests.
 4. Establish reproducible builds, independently controlled release keys,
    Secure Boot integration, recovery, and key rotation.

@@ -181,6 +181,13 @@ pair without recording their relationship. It does not establish a coherent
 same-release manifest, owner trust-root persistence, remote attestation, or
 measurement of planned VM, CUDA, launch-policy, configuration, and compiler/
 runtime artifacts, so Phase 6 exact artifact-set admission remains partial.
+At the release-manifest boundary, callers can no longer extract a per-kind
+minimum-version trust root and accidentally admit a later artifact into an
+earlier verified release. `VerifiedRelease` now authenticates only the exact
+manifest release and exact requested kind; executable payload parsing follows
+that check. Tests reject both older-manifest/newer-artifact and newer-manifest/
+older-artifact substitution plus kind substitution. This is unit-tested
+admission machinery, not UEFI manifest integration or durable release commit.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

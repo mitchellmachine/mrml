@@ -41,6 +41,7 @@ pub enum ArtifactError {
     StateStorageFailure,
     MalformedContainer,
     WrongArtifactKind,
+    ReleaseMismatch,
 }
 
 pub const SIGNED_ARTIFACT_HEADER_BYTES: usize = 112;
@@ -435,13 +436,50 @@ pub struct VerifiedRelease {
 }
 
 impl VerifiedRelease {
-    pub fn trust_root(&self, kind: ArtifactKind) -> TrustRoot {
+    fn trust_root(&self, kind: ArtifactKind) -> TrustRoot {
         TrustRoot::new(
             kind,
             self.manifest.artifact_roots[kind as usize - 1],
             self.manifest.release,
         )
     }
+
+    /// Authenticates one artifact only when its signed version is exactly this
+    /// release. A per-kind minimum-version root is never exposed to callers.
+    pub fn verify_artifact(
+        &self,
+        artifact: &SignedArtifact<'_>,
+        expected_kind: ArtifactKind,
+    ) -> Result<VerifiedArtifact, ArtifactError> {
+        if artifact.kind() != expected_kind {
+            return Err(ArtifactError::WrongArtifactKind);
+        }
+        if artifact.version() != self.manifest.release {
+            return Err(ArtifactError::ReleaseMismatch);
+        }
+        artifact.verify(&self.trust_root(expected_kind), expected_kind)
+    }
+
+    /// Applies exact-release authentication before interpreting executable
+    /// payload bytes as PE metadata.
+    pub fn verify_executable<'a>(
+        &self,
+        artifact: &SignedArtifact<'a>,
+        expected_kind: ArtifactKind,
+    ) -> Result<VerifiedExecutable<'a>, ExecutableArtifactError> {
+        let maximum = executable_image_limit(expected_kind)
+            .ok_or(ExecutableArtifactError::NonExecutableKind)?;
+        let verified = self
+            .verify_artifact(artifact, expected_kind)
+            .map_err(ExecutableArtifactError::Signature)?;
+        let image = PeImage::parse_with_limit(artifact.payload(), maximum)
+            .map_err(ExecutableArtifactError::Format)?;
+        Ok(VerifiedExecutable {
+            artifact: verified,
+            image,
+        })
+    }
+
     pub const fn release(&self) -> u64 {
         self.manifest.release
     }
@@ -650,6 +688,45 @@ mod tests {
             container.verify(&root, ArtifactKind::VmImage).err(),
             Some(ArtifactError::WrongArtifactKind)
         );
+
+        let artifact_roots = [Sha3_512::digest(&public); 5];
+        let exact_release = VerifiedRelease {
+            manifest: ReleaseManifest::new(9, [0xa5; 64], artifact_roots).unwrap(),
+        };
+        let admitted = exact_release
+            .verify_artifact(&container, ArtifactKind::Kernel)
+            .unwrap();
+        assert_eq!(admitted.kind(), ArtifactKind::Kernel);
+        assert_eq!(admitted.version(), 9);
+        for release in [8, 10] {
+            let other_release = VerifiedRelease {
+                manifest: ReleaseManifest::new(release, [0xa5; 64], artifact_roots).unwrap(),
+            };
+            assert_eq!(
+                other_release
+                    .verify_artifact(&container, ArtifactKind::Kernel)
+                    .err(),
+                Some(ArtifactError::ReleaseMismatch)
+            );
+            assert_eq!(
+                other_release
+                    .verify_executable(&container, ArtifactKind::Kernel)
+                    .err(),
+                Some(ExecutableArtifactError::Signature(
+                    ArtifactError::ReleaseMismatch
+                ))
+            );
+        }
+        assert_eq!(
+            exact_release
+                .verify_artifact(&container, ArtifactKind::ServiceImage)
+                .err(),
+            Some(ArtifactError::WrongArtifactKind)
+        );
+        assert!(matches!(
+            exact_release.verify_executable(&container, ArtifactKind::Kernel),
+            Err(ExecutableArtifactError::Format(_))
+        ));
 
         let mut trailing = [0u8; TOTAL + 1];
         trailing[..TOTAL].copy_from_slice(&encoded);

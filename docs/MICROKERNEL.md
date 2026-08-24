@@ -1983,6 +1983,13 @@ mrml-sign manifest 1 release.manifest NEXT_ROOT KERNEL VM SERVICE CUDA POLICY
 mrml-sign sign policy 1 release.manifest genesis.private release.manifest.sig
 ```
 
+After a manifest is authenticated, `VerifiedRelease` no longer exposes the
+underlying per-kind version-floor roots. Its artifact and executable admission
+methods require the signed artifact version to equal the manifest release and
+the requested kind to match before PE parsing. This prevents a valid artifact
+from an adjacent release being spliced through a minimum-version check. The
+current UEFI loader has not yet integrated manifest loading or monotonic commit.
+
 Each digest argument is the 128-character SHA3-512 public-key digest printed by
 `key-digest`. The kernel now decodes this exact representation, verifies it
 against the current root, exposes typed artifact trust roots, advances the next

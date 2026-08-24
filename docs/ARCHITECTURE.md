@@ -68,6 +68,12 @@ their fixed order, kinds, nonzero versions, and verified SHA3-512 digests. The
 measured-boot handoff bit requires all three extensions. This binds the pair the
 current loader actually selects; it is not same-release admission for the
 planned VM, CUDA, launch-policy, configuration, or compiler/runtime artifacts.
+The existing authenticated `VerifiedRelease` boundary now admits an artifact
+only when its kind-specific root matches and its signed version equals—not
+merely meets—the manifest release. Executable admission performs this exact
+release check before PE parsing. The per-kind minimum-version roots are no
+longer exposed from `VerifiedRelease`, closing the cross-release splice at this
+foundation; the UEFI loader has not yet consumed a release manifest.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
 authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM
