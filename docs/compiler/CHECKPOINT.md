@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `66c896f`
-  (`compiler: map ownership events to control flow`)
+- Compiler checkpoint commit: `8481749`
+  (`compiler: map loop ownership control points`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `8ddd42f` (`compiler: refine conditional event
@@ -132,11 +132,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   including disconnected post-return suffixes. Reachable tails map to their
   unconditional return edge; syntactically retained tails after all-path
   termination map to an explicit `Unreachable` point rather than a fabricated
-  block. Final place-fact validation requires every non-expansion origin to
-  resolve. Missing or forged action-block provenance fails closed. This mapping
-  is derived from the bounded 64-block/128-edge CFG and adds no per-event table.
-  Nested-action and loop-operation provenance is not yet refined beyond its
-  containing top-level statement; and
+  block. Loop events now retain exact loop-header, operation, conditional-arm,
+  action, return-value, nested-loop-header, nested-action, and ordered nested-
+  control origins. Their control points resolve to the exact sourced CFG block
+  or return edge. The parser-shape table retains each loop's bounded operation
+  count, while CFG-source matching validates exact operation, arm, action, and
+  control coordinates. Final place-fact validation requires every non-expansion
+  origin to resolve. Missing or forged loop/action/control provenance fails
+  closed. This mapping is derived from the bounded 64-block/128-edge CFG and
+  adds no per-event table; and
 - bounded initializedness enforcement for functions proven to have exactly one
   reachable top-level basic block and an expression stream with no conditional
   path split. A fixed 1,360-path state map consumes the dense event order.
@@ -288,8 +292,7 @@ resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths, remaining indirect move/borrow classification,
-complete loop/nested-action control-point mapping, general CFG initializedness
-and use-after-move enforcement, unsupported
+general CFG initializedness and use-after-move enforcement, unsupported
 parser/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
@@ -300,15 +303,12 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. refine statement provenance into nested-action and loop-operation origins;
-2. extend the implemented conditional/top-level control-point mapping across
-   those loop and nested-action origins;
-3. compute fixed-point initializedness across CFG edges and precise tuple paths;
-4. extend contextual effects for implicit coercions and remaining indirect
+1. compute fixed-point initializedness across CFG edges and precise tuple paths;
+2. extend contextual effects for implicit coercions and remaining indirect
    call/return shapes without treating ambiguous pointee reads as moves;
-5. add array-element paths only after place facts retain exact constant element
+3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
-6. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
+4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
    and flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
 
@@ -333,8 +333,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 686 tests on each host: 377
-library tests, 10 conformance tests, 297 replacement tests, and 2 driver tests.
+The checkpoint source passed 688 tests on each host: 378
+library tests, 10 conformance tests, 298 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

@@ -248,8 +248,11 @@ edges for conditional return values, sourced conditional action blocks including
 disconnected post-return suffixes, reachable tail-return edges, or an explicit
 `Unreachable` point for syntactically retained tails after all-path termination.
 Final validation rejects origins whose required block or edge cannot be found.
-Nested-action and loop-operation provenance is not yet refined beyond its
-containing statement, so their derived point remains the enclosing loop header.
+Loop events retain exact header, operation, conditional-arm/action/terminal,
+direct-return, nested-loop-header/action, and ordered nested-control origins.
+These map to exact sourced blocks or return edges. Bounded parser operation
+counts and exact CFG-source matching reject forged operation, arm, action, and
+control coordinates instead of assigning an enclosing block.
 General multi-block and multi-path initializedness remains unenforced rather
 than being analyzed linearly.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
