@@ -1111,6 +1111,15 @@ computed eligibility deadline. Policy-generation exhaustion preserves the old
 policy and prepared plan. This is host-side unit/simulation evidence; signed
 CPL3 replacement, live persistent restoration, and reboot-time capability/
 policy orchestration remain pending.
+The kernel ABI now has a pointer-free policy-replacement operation carrying only
+an opaque generational service token, one task-local capability, and bounded
+restart-count/base/maximum scalars. Decode rejects malformed capabilities,
+service tokens, policy bounds, overflow, and nonzero reserved registers before
+dispatch. Service-probe dispatch independently authorizes exact service CONTROL
+through the caller's capability space and returns only success or rejection.
+This operation does not identify a configuration setting, infer a service
+object from the token, or make policy bytes authoritative. The userspace
+supervision protocol and signed CPL3 composition remain pending.
 
 Networking is planned around explicit authority and bounded connection objects,
 not ambient sockets. Raw packet and device access require separate capabilities.

@@ -333,6 +333,13 @@ explicitly and downgrade the status rather than guessing.
   an existing eligibility deadline survive. Exhaustion preserves the prior
   policy. Signed CPL3 replacement, live persistent restoration, and reboot-time
   capability reconstruction remain unimplemented.
+  A pointer-free kernel syscall foundation now admits bounded replacement
+  mechanics only after exact service CONTROL authorization. Recover its ABI as
+  operation 11 with service token, capability, finite restart count, base and
+  maximum backoff, and a mandatory zero reserved register. It returns no policy
+  or denial detail. This is not the userspace configuration protocol: service
+  tokens do not reveal object identity, so a future supervision service must
+  recover its trusted service-object mapping rather than infer it from a token.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

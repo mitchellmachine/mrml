@@ -25,6 +25,7 @@ pub enum SyscallError {
     InvalidCapability,
     InvalidObject,
     InvalidRights,
+    InvalidPolicy,
     InvalidTask,
     PayloadTooLarge,
     TooManyCapabilities,
@@ -179,6 +180,14 @@ impl UserCallFrame {
         self.r8 = 0;
         self.r9 = 0;
     }
+
+    pub fn complete_policy_replacement(&mut self, replaced: bool) {
+        self.rax = u64::from(!replaced);
+        self.rdx = 0;
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
 }
 
 const fn user_address(address: u64) -> bool {
@@ -234,6 +243,11 @@ pub enum SyscallRequest {
     RestartService {
         capability: Capability,
         service: crate::ServiceId,
+    },
+    ReplaceServicePolicy {
+        capability: Capability,
+        service: crate::ServiceId,
+        policy: crate::RestartPolicy,
     },
 }
 
@@ -418,6 +432,26 @@ impl SyscallRequest {
                     service: crate::ServiceId::from_token(rsi),
                 })
             }
+            11 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi == 0 || rsi >> 32 == 0 {
+                    return Err(SyscallError::InvalidObject);
+                }
+                if r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                let maximum_restarts =
+                    u32::try_from(rdx).map_err(|_| SyscallError::InvalidPolicy)?;
+                let policy = crate::RestartPolicy::new(maximum_restarts, r10, r8)
+                    .map_err(|_| SyscallError::InvalidPolicy)?;
+                Ok(Self::ReplaceServicePolicy {
+                    capability: Capability::from_token(rdi),
+                    service: crate::ServiceId::from_token(rsi),
+                    policy,
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -433,7 +467,8 @@ impl SyscallRequest {
             | Self::ReadSharedBuffer { .. }
             | Self::WriteSharedBuffer { .. }
             | Self::QueryService { .. }
-            | Self::RestartService { .. } => &[],
+            | Self::RestartService { .. }
+            | Self::ReplaceServicePolicy { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
@@ -824,6 +859,60 @@ mod tests {
             (0, replacement.token(), 0, 0, 0)
         );
         frame.complete_service_restart(None);
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (1, 0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn service_policy_replacement_is_bounded_and_pointer_free() {
+        let capability = (14u64 << 32) | 2;
+        let service = (15u64 << 32) | 1;
+        let policy = crate::RestartPolicy::new(3, 10, 40).unwrap();
+        assert_eq!(
+            SyscallRequest::decode(11, capability, service, 3, 10, 40, 0),
+            Ok(SyscallRequest::ReplaceServicePolicy {
+                capability: Capability::from_token(capability),
+                service: crate::ServiceId::from_token(service),
+                policy,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(11, 2, service, 3, 10, 40, 0),
+            Err(SyscallError::InvalidCapability)
+        );
+        assert_eq!(
+            SyscallRequest::decode(11, capability, 1, 3, 10, 40, 0),
+            Err(SyscallError::InvalidObject)
+        );
+        for (maximum_restarts, base, maximum) in
+            [(0, 0, 0), (1, 2, 1), (u64::from(u32::MAX) + 1, 0, 0)]
+        {
+            assert_eq!(
+                SyscallRequest::decode(11, capability, service, maximum_restarts, base, maximum, 0,),
+                Err(SyscallError::InvalidPolicy)
+            );
+        }
+        assert_eq!(
+            SyscallRequest::decode(11, capability, service, 3, 10, 40, 1),
+            Err(SyscallError::ReservedArgument)
+        );
+    }
+
+    #[test]
+    fn policy_replacement_completion_is_detail_free() {
+        let mut frame = valid_yield_frame();
+        frame.rdx = u64::MAX;
+        frame.r10 = u64::MAX;
+        frame.r8 = u64::MAX;
+        frame.r9 = u64::MAX;
+        frame.complete_policy_replacement(true);
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (0, 0, 0, 0, 0)
+        );
+        frame.complete_policy_replacement(false);
         assert_eq!(
             (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
             (1, 0, 0, 0, 0)

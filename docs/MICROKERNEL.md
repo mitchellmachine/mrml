@@ -2740,6 +2740,46 @@ this is conventional bounded configuration/lifecycle revalidation, not a new
 compatibility, accessibility, browser, AI, media, or device mechanism. This
 agent review does not replace required independent human review.
 
+The next dynamic-policy dependency adds pointer-free syscall operation 11.
+Registers carry the calling task's opaque capability, generational service
+token, a `u32`-bounded nonzero restart count, base and maximum backoff, and one
+mandatory zero reserved scalar. Decode constructs `RestartPolicy` before
+dispatch and rejects invalid handles, tokens, count overflow, zero budget,
+inverted backoff, and reserved data. In the service-probe kernel path,
+`ServiceSupervisor::replace_restart_policy` independently reauthorizes exact
+CONTROL against the live service object. Completion is detail-free: success or
+rejection plus four zero result registers. The ABI accepts no pointer, setting
+ID, service-object claim, executable, context, priority, clock, or persistence
+input.
+
+Recorded verification on 2026-08-24: Windows nightly gnullvm and Arch Linux/
+WSL each passed all 442 release kernel tests. Scoped strict kernel Clippy and
+UEFI `mrml-kernel-image` Clippy with `service-probe` passed on both. Commands
+were `cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release
+--no-default-features`, the corresponding strict kernel Clippy command, and
+`cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel-image --target
+x86_64-unknown-uefi --features service-probe --no-deps -- -D warnings`; Arch
+used the equivalent default-toolchain commands with
+`CARGO_TARGET_DIR=target/policy-replacement-syscall`. This is unit and compile-
+time evidence only. No CPL3 policy request, signed KVM/WHP execution, persistent
+restoration, native boot, bare metal, physical hardware, accessibility device,
+or user evidence is claimed.
+
+The syscall `DIGITAL-RIGHTS REVIEW` found no identity collection, retention,
+disclosure, attestation mandate, DRM, vendor control, accessibility restriction,
+AI authority, persistence, or owner-state dispossession. Exact owner-delegated
+service CONTROL remains necessary and independently revocable; data and tokens
+do not manufacture it. The `HOSTILE SECURITY REVIEW` treats every register,
+handle, generation, scalar, policy bound, and reserved bit as hostile. Complete
+decode precedes supervisor access, exact live-object authorization precedes
+mutation, and rejection is detail-free. Existing rollback-resistance,
+accessibility, evidence, owner-sovereignty, data-minimization, anti-DRM, owner-
+controlled-attestation, third-party-accessibility, AI-containment, anti-
+persistence, and dual-review gates remain unchanged. Patent review is
+`NOT_TRIGGERED`: this is a conventional bounded capability-authorized syscall,
+not a new compatibility, browser, accessibility, AI, media, host-share, or
+device mechanism. This agent review does not replace human dual review.
+
 Recorded verification for this gate on 2026-08-24: Windows gnullvm
 `cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-config --release --no-default-features --target x86_64-pc-windows-gnullvm`
 passed 23 tests, and the corresponding scoped `clippy --no-deps -- -D warnings`

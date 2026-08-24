@@ -1024,6 +1024,32 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     frame.complete_service_restart(None);
                 }
             }
+            SyscallRequest::ReplaceServicePolicy {
+                capability,
+                service,
+                policy,
+            } => {
+                #[cfg(feature = "service-probe")]
+                {
+                    let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    let replaced = supervisor
+                        .replace_restart_policy(
+                            service,
+                            runtime.capabilities(current).unwrap_or_else(|_| halt()),
+                            capability,
+                            policy,
+                        )
+                        .is_ok();
+                    frame.complete_policy_replacement(replaced);
+                }
+                #[cfg(not(feature = "service-probe"))]
+                {
+                    let _ = (capability, service, policy);
+                    frame.complete_policy_replacement(false);
+                }
+            }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
                     if pending_buffer(to).is_none() {

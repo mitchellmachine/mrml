@@ -122,6 +122,16 @@ non-mutating. Replacement preserves consumed restart count and an already-
 computed eligibility deadline, so rewriting policy cannot manufacture retries
 or shorten pending backoff.
 
+The policy-replacement syscall is pointer-free and separately bounded. Its
+service token identifies a live supervisor slot but supplies no object
+authority. The kernel decodes a finite valid restart policy, rejects every
+reserved or overflowing scalar, and then authorizes exact CONTROL in the
+calling task's capability space against the supervisor's live service object.
+Completion exposes one success bit and no object, generation, rights, policy,
+budget, timing, or denial detail. It accepts no configuration-setting claim;
+the future userspace protocol must preserve its own trusted service-object
+mapping and revalidate setting READ before invoking this mechanism.
+
 ## Persistent state and boot
 
 Signed images alone do not prevent rollback. TPM-backed or equivalent

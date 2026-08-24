@@ -1361,6 +1361,17 @@ mechanism, device protocol, or other patent-candidate mechanism. Previously
 recorded planned scopes remain `TRIGGERED`; this agent review does not replace
 required independent human dual review.
 
+# 2026-08-24 — Service policy-replacement syscall foundation
+
+**Result: NOT_TRIGGERED.** The change adds a conventional pointer-free syscall
+that bounds restart-policy scalars and requires exact service CONTROL through
+the existing supervisor. Reserved-register checks, detail-free completion, and
+live generational authorization are defensive kernel integration. It adds no
+compatibility protocol, host share, accessibility/browser/AI/media interface,
+device mechanism, or other patent-candidate mechanism. Previously recorded
+planned scopes remain `TRIGGERED`; this agent review does not replace required
+independent human dual review.
+
 # 2026-08-24 — Block-service receive/syscall loop
 
 **Result: NOT_TRIGGERED.** The change composes existing canonical IPC,

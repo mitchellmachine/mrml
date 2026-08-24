@@ -252,6 +252,15 @@ authority; unrelated domains continue.
    generation exhaustion changes nothing. Signed CPL3 replacement, live stable-
    storage/block-service restoration, and reboot-time capability reconstruction
    remain pending, so this item remains partial.
+   The next protocol dependency is now implemented at the kernel ABI boundary:
+   operation 11 accepts only an opaque service generation, one task-local
+   capability, bounded restart count/backoff scalars, and a zero reserved
+   register. Decode constructs a valid `RestartPolicy` before dispatch; the
+   service path independently requires exact CONTROL for the live supervisor
+   object and returns a detail-free result. It accepts no setting identity,
+   service-object claim, pointer, context, priority, executable, time, or
+   persistence claim. The versioned userspace supervision request, trusted
+   service-object mapping, and signed CPL3 KVM/WHP execution remain pending.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
    **IMPLEMENTED:** `mrml-storage` supplies stable nonzero volume/object IDs,
