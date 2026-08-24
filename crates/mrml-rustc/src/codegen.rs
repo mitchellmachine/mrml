@@ -13,7 +13,8 @@ const MAX_RUNTIME_PLACE_ACCESS_FACTS: usize = 256;
 const MAX_RUNTIME_MOVE_PATH_FACTS: usize = (MAX_RUNTIME_LOCAL_FACTS + MAX_X86_64_ABI_PARAMETERS)
     * (crate::expression::MAX_TUPLE_ELEMENTS + 1);
 const MAX_RUNTIME_INITIALIZATION_FACTS: usize = 512;
-const MAX_RUNTIME_PLACE_EFFECT_FACTS: usize = 512;
+const MAX_RUNTIME_PLACE_EFFECT_FACTS: usize =
+    MAX_RUNTIME_LOCAL_FACTS + (MAX_RUNTIME_PLACE_ACCESS_FACTS * 2);
 const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
 const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
 const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
@@ -2165,6 +2166,7 @@ struct RuntimeInitializationFact {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimePlaceEffectKind {
+    Copy,
     Move,
     Write,
     ReadModifyWrite,
@@ -2463,12 +2465,33 @@ impl<'source> RuntimeBodyFacts<'source> {
         &mut self,
         fact: RuntimePlaceAccessFact,
     ) -> Result<(), CodegenErrorKind> {
-        let slot = self
-            .assignment_reads
-            .get_mut(self.assignment_read_count)
-            .ok_or(CodegenErrorKind::TooManyRuntimePlaceAccessFacts)?;
-        *slot = Some(fact);
+        if fact.access != RuntimePlaceAccess::Read {
+            return Err(CodegenErrorKind::InvalidRuntimePlaceFacts);
+        }
+        if self.assignment_read_count >= self.assignment_reads.len() {
+            return Err(CodegenErrorKind::TooManyRuntimePlaceAccessFacts);
+        }
+        let copy_path = self
+            .find_move_path(fact.base, fact.projections)
+            .filter(|path| {
+                self.move_paths
+                    .get(path.0)
+                    .and_then(|path| *path)
+                    .is_some_and(|path| runtime_type_is_copy(path.ty))
+            });
+        if copy_path.is_some() && self.effect_count >= self.effects.len() {
+            return Err(CodegenErrorKind::TooManyRuntimePlaceEffectFacts);
+        }
+        self.assignment_reads[self.assignment_read_count] = Some(fact);
         self.assignment_read_count += 1;
+        if let Some(path) = copy_path {
+            self.effects[self.effect_count] = Some(RuntimePlaceEffectFact {
+                path,
+                kind: RuntimePlaceEffectKind::Copy,
+                span: fact.span,
+            });
+            self.effect_count += 1;
+        }
         Ok(())
     }
 
@@ -12746,6 +12769,7 @@ impl<
             if path.id != effect.path
                 || effect.span.end < effect.span.start
                 || match effect.kind {
+                    RuntimePlaceEffectKind::Copy => !runtime_type_is_copy(path.ty),
                     RuntimePlaceEffectKind::Move => {
                         runtime_type_is_copy(path.ty)
                             || path.projections != RuntimePlaceProjections::EMPTY
@@ -22643,7 +22667,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(local_count, 2);
-        assert_eq!(facts.effect_count, 3);
+        assert_eq!(facts.effect_count, 4);
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
         assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Move);
         let pair_root = facts
@@ -22668,6 +22692,11 @@ mod tests {
             facts.effects[2].unwrap().kind,
             RuntimePlaceEffectKind::Write
         );
+        assert_eq!(
+            facts.effects[3].unwrap().path,
+            RuntimeMovePathId(pair_root.0 + 1)
+        );
+        assert_eq!(facts.effects[3].unwrap().kind, RuntimePlaceEffectKind::Copy);
 
         let assignment_access_count = facts.assignment_access_count;
         let assignment_read_count = facts.assignment_read_count;
@@ -22696,6 +22725,16 @@ mod tests {
             runtime_call_local_floor: None,
         };
         emitter.validate_runtime_place_facts().unwrap();
+        let valid_copy = emitter.body_facts.effects[3].unwrap();
+        emitter.body_facts.effects[3] = Some(RuntimePlaceEffectFact {
+            path: RuntimeMovePathId(0),
+            ..valid_copy
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[3] = Some(valid_copy);
         let valid_move = emitter.body_facts.effects[0].unwrap();
         emitter.body_facts.effects[0] = Some(RuntimePlaceEffectFact {
             path: RuntimeMovePathId(pair_root.0 + 1),
@@ -22713,11 +22752,31 @@ mod tests {
         );
 
         let mut capacity = RuntimeBodyFacts::EMPTY;
+        capacity
+            .push_initialized_parameter(
+                0,
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                None,
+            )
+            .unwrap();
         capacity.effect_count = MAX_RUNTIME_PLACE_EFFECT_FACTS;
         assert_eq!(
             capacity.push_place_effect(valid_move).unwrap_err(),
             CodegenErrorKind::TooManyRuntimePlaceEffectFacts
         );
+        assert_eq!(
+            capacity
+                .push_assignment_read(RuntimePlaceAccessFact {
+                    base: RuntimePlaceIdentity::Parameter(0),
+                    projections: RuntimePlaceProjections::EMPTY,
+                    ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+                    access: RuntimePlaceAccess::Read,
+                    span: Span { start: 0, end: 1 },
+                })
+                .unwrap_err(),
+            CodegenErrorKind::TooManyRuntimePlaceEffectFacts
+        );
+        assert_eq!(capacity.assignment_read_count, 0);
     }
 
     #[test]
