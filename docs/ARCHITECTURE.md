@@ -738,6 +738,14 @@ Both runners now take ownership of the old native VM, snapshot the three pages,
 and destroy the old VM before replacement preparation begins. There is no old-
 execution fallback if preparation or restoration fails; the retained device
 stays suspended. Fresh signed KVM execution covers this no-fallback ordering.
+Canonical capture and restoration now use one allocation-free kernel mechanism
+instead of duplicated launcher byte selection. It binds the published resume
+page to the suspended device and bridge, retains only request slots needed for
+pending ownership or the latest history anchor, retains only unretired
+completion slots, and validates every request/completion pair. Restoration
+preflights completely zero queue extents and the exact configuration-bound fresh
+resume page before publishing slots and counters through their directional
+boundaries. Memory uncertainty poisons the bridge and cannot authorize resume.
 Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
 and PCI discovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped

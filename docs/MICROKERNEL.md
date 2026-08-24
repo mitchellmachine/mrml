@@ -4052,6 +4052,63 @@ Patent review: `NOT_TRIGGERED` — conventional minimization and canonicalizatio
 of a bounded restart image; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The canonical restart image is now an allocation-free common-kernel mechanism,
+and both hosted runners have dropped their duplicated offset and copy policy.
+Capture requires the exact suspended device/bridge pair and re-reads the
+complete published resume page. It requires that page to decode canonically and
+equal a newly captured live state, retains only request slots needed for pending
+ownership or the latest nonzero history anchor, and retains only completion
+slots not yet retired. Common validation reconstructs the guest driver from the
+captured request slots and rejects every completion whose canonical generation,
+request ID, terminal status, or successful byte count disagrees with its
+request. All other fixed slot storage remains zero.
+
+Restoration first reads every configured queue page and requires complete zero
+extents. The replacement resume page must equal the exact canonical fresh page,
+including the same configuration and configuration-page binding with zero live
+counters; arbitrary zero or nonzero content is rejected. Only after all
+freshness checks pass does restoration write required request slots through the
+ordinary host boundary, then consumed/producer counters, followed by required
+completion slots and consumer/published counters through the device boundary,
+and finally the validated resume page. Any backend read or write uncertainty
+poisons the retained bridge; partial replacement state never authorizes device
+resume.
+
+An initial one-time-signed KVM run failed closed because the first common
+freshness predicate incorrectly expected an all-zero resume page. A prepared
+guest correctly contains its canonical configuration record even when all live
+counters are zero. The predicate was corrected to require that exact fresh
+record. Fresh one-time Lamport-signed version-1 Arch Linux/WSL2 KVM execution on
+2026-08-24 then completed and reported `verify=17191us prepare=2475us
+execute=82677us total=123527us`. The focused common-image release test and all
+388 release kernel tests passed; all 6 KVM-run release tests passed; and strict
+package-focused `--no-deps` Clippy passed for the kernel and KVM runner. Native
+Windows test-target `check` and strict scoped Clippy passed for the kernel, WHP
+adapter, and WHP runner with CUDA excluded. The Windows unit binary did not link
+because `link.exe` remains unavailable, so no live WHP evidence is claimed.
+Consumed one-time signing material and signed test artifacts were deleted.
+
+The common-image `DIGITAL-RIGHTS REVIEW` found that one bounded mechanism reduces
+backend-specific overcollection risk and retains no unused slot history. It adds
+no identity, correlation, disclosure, attestation mandate, DRM,
+vendor/publisher control, first-party bypass, accessibility restriction, AI
+authority, persistence, or durable owner-state change. The `HOSTILE SECURITY
+REVIEW` treats device/bridge lifecycle, page and configuration binding, every
+counter, offset, slot position, request/completion byte, freshness read,
+publication order, direction boundary, and backend outcome as adversarial.
+Capture accepts only state that independently reconstructs and whose unretired
+completions exactly bind their requests. Restoration preflights all fresh
+memory before mutation, publishes records before counters, poisons on uncertain
+access, and leaves the device suspended on every failure. Existing capability,
+revocation, rollback-resistance, accessibility, evidence, owner-sovereignty,
+data-minimization, anti-DRM, owner-controlled-attestation, AI-containment, and
+anti-persistence gates remain unchanged. This agent review does not replace the
+required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional consolidation of bounded snapshot
+validation and ordered restoration behind one backend-neutral mechanism; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

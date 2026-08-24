@@ -758,7 +758,14 @@ lacks `link.exe`. Both runners now consume ownership of the old VM and destroy
 it immediately after the bounded snapshot, before replacement preparation.
 Failure therefore cannot fall back to old execution and leaves the retained
 device suspended. Fresh signed KVM execution covers this stronger ordering;
-WHP remains compile/lint-only. Unplanned crash orchestration, backend-in-flight
+WHP remains compile/lint-only. Both runners now delegate canonical capture and
+restoration to one allocation-free common-kernel restart image. It validates
+the published page against the suspended device/bridge state, copies only live
+request/history and unretired completion slots, rejects mismatched completion
+identity/status/length, and preflights zero queue extents plus the exact fresh
+configuration-bound resume page before any restoration write. Directional
+slot/counter publication and poison-on-uncertainty are common rather than
+launcher policy. Unplanned crash orchestration, backend-in-flight
 recovery, unbounded progress, and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport

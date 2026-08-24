@@ -439,6 +439,14 @@ explicitly and downgrade the status rather than guessing.
   to old execution; preparation or restoration failure leaves the retained
   device suspended. Fresh signed KVM execution covers this ordering, while WHP
   remains compile/lint-only.
+  Restart-image capture and restoration are now one backend-neutral,
+  allocation-free kernel mechanism. Capture revalidates the complete published
+  resume page, retains only reconstruction/history request slots and unretired
+  completions, and binds each completion to its canonical request. Restoration
+  performs all freshness checks before mutation: queue extents must be zero and
+  the resume page must equal the exact configuration-bound fresh record. Slots
+  precede counters, protected bytes use the device boundary, and memory
+  uncertainty poisons the bridge without resuming the device.
   Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
   and PCI transport remain pending. A common
   unsafe guest queue-transport boundary now derives

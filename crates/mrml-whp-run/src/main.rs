@@ -16,12 +16,11 @@ use mrml_kernel::{
     GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory,
     HypercallRouter, InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, ObjectId,
     ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
-    VIRTUAL_BLOCK_REQUEST_BYTES, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
-    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit, VmTable,
-    run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once, run_vm_once,
+    VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockConfigurationPage,
+    VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage, VmBackend, VmExit,
+    VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once, run_vm_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -107,10 +106,6 @@ const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8 + 1) as u64;
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(target_os = "windows")]
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
-#[cfg(target_os = "windows")]
-const BLOCK_QUEUE_CONSUMER_OFFSET: usize = 64;
-#[cfg(target_os = "windows")]
-const BLOCK_QUEUE_SLOTS_OFFSET: usize = 128;
 
 #[cfg(target_os = "windows")]
 struct DriverProbeBlock([u8; 8192]);
@@ -307,53 +302,9 @@ fn run_block_guest_driver_probe<'system>(
             {
                 return Err(anyhow!("block quiescence state mismatch"));
             }
-            let mut request_page = [0; 4096];
-            let mut completion_page = [0; 4096];
-            let mut encoded_resume_page = [0; 4096];
-            VmBackend::read_guest(&guest, layout.request_base(), &mut request_page[..8])
-                .and_then(|()| {
-                    VmBackend::read_guest(
-                        &guest,
-                        layout.request_base() + BLOCK_QUEUE_CONSUMER_OFFSET as u64,
-                        &mut request_page
-                            [BLOCK_QUEUE_CONSUMER_OFFSET..BLOCK_QUEUE_CONSUMER_OFFSET + 8],
-                    )
-                })
-                .and_then(|()| {
-                    VmBackend::read_guest(
-                        &guest,
-                        layout.request_base() + BLOCK_QUEUE_SLOTS_OFFSET as u64,
-                        &mut request_page[BLOCK_QUEUE_SLOTS_OFFSET
-                            ..BLOCK_QUEUE_SLOTS_OFFSET + 2 * VIRTUAL_BLOCK_REQUEST_BYTES],
-                    )
-                })
-                .and_then(|()| {
-                    VmBackend::read_guest(
-                        &guest,
-                        layout.completion_base(),
-                        &mut completion_page[..8],
-                    )
-                })
-                .and_then(|()| {
-                    VmBackend::read_guest(
-                        &guest,
-                        layout.completion_base() + BLOCK_QUEUE_CONSUMER_OFFSET as u64,
-                        &mut completion_page
-                            [BLOCK_QUEUE_CONSUMER_OFFSET..BLOCK_QUEUE_CONSUMER_OFFSET + 8],
-                    )
-                })
-                .and_then(|()| {
-                    VmBackend::read_guest(
-                        &guest,
-                        layout.completion_base() + BLOCK_QUEUE_SLOTS_OFFSET as u64,
-                        &mut completion_page[BLOCK_QUEUE_SLOTS_OFFSET
-                            ..BLOCK_QUEUE_SLOTS_OFFSET + 2 * VIRTUAL_BLOCK_COMPLETION_BYTES],
-                    )
-                })
-                .and_then(|()| {
-                    VmBackend::read_guest(&guest, BLOCK_RESUME_BASE, &mut encoded_resume_page)
-                })
-                .map_err(|_| anyhow!("block restart snapshot failed"))?;
+            let restart_image = bridge
+                .capture_restart_image(&guest, &device, published)
+                .map_err(|error| anyhow!("block restart snapshot failed: {:?}", error))?;
             drop(guest);
             let configuration_page =
                 VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
@@ -369,28 +320,17 @@ fn run_block_guest_driver_probe<'system>(
                         .map_err(|_| anyhow!("invalid replacement block resume page"))?,
                 )
                 .map_err(|error| anyhow!("replacement block VM preparation failed: {:?}", error))?;
-            VmBackend::write_guest(&mut replacement, layout.request_base(), &request_page)
-                .and_then(|()| {
-                    VirtualBlockVmmMemory::write_virtual_block(
-                        &mut replacement,
-                        layout.completion_base(),
-                        &completion_page,
-                    )
-                })
-                .and_then(|()| {
-                    VirtualBlockVmmMemory::write_virtual_block(
-                        &mut replacement,
-                        BLOCK_RESUME_BASE,
-                        &encoded_resume_page,
-                    )
-                })
-                .map_err(|_| anyhow!("replacement block VM state restoration failed"))?;
             let mut fresh_payload_pages = [0; 8192];
             VmBackend::read_guest(&replacement, FRAMEBUFFER, &mut fresh_payload_pages)
                 .map_err(|_| anyhow!("replacement block payload validation failed"))?;
             if fresh_payload_pages.iter().any(|byte| *byte != 0) {
                 return Err(anyhow!("replacement block payload was not fresh"));
             }
+            bridge
+                .restore_restart_image(&mut replacement, &device, &restart_image)
+                .map_err(|error| {
+                    anyhow!("replacement block VM state restoration failed: {:?}", error)
+                })?;
             guest = replacement;
             device
                 .resume()

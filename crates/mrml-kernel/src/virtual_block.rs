@@ -538,6 +538,25 @@ pub struct VirtualBlockResumePage {
     state: VirtualBlockResumeState,
 }
 
+/// Canonical, allocation-free data needed to reconstruct one suspended
+/// virtual-block guest. The image carries no capability, backend handle, or
+/// permission to resume the device. Unused physical slots are zero so stale
+/// queue history is not retained across replacement.
+pub struct VirtualBlockRestartImage {
+    resume_base: u64,
+    configuration_base: u64,
+    state: VirtualBlockResumeState,
+    request_slots: [[u8; VIRTUAL_BLOCK_REQUEST_BYTES]; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
+    completion_slots: [[u8; VIRTUAL_BLOCK_COMPLETION_BYTES]; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
+    encoded_resume_page: [u8; PAGE_SIZE as usize],
+}
+
+impl VirtualBlockRestartImage {
+    pub const fn state(&self) -> VirtualBlockResumeState {
+        self.state
+    }
+}
+
 impl VirtualBlockResumePage {
     pub fn fresh(
         base: u64,
@@ -2334,6 +2353,239 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         Ok(page)
     }
 
+    /// Captures and validates the minimal canonical restart image for an exact
+    /// suspended device/bridge pair. Backend uncertainty poisons the bridge;
+    /// protocol rejection grants no recovery or resume authority.
+    pub fn capture_restart_image<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &B,
+        device: &VirtualBlockDevice<N>,
+        page: VirtualBlockResumePage,
+    ) -> Result<VirtualBlockRestartImage, VirtualBlockQueueError<B::Error>> {
+        let state = self.resume_state(backend, device)?;
+        if page.state() != state || page.state().configuration().queue() != self.layout {
+            return Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidConfiguration,
+            ));
+        }
+        let mut encoded_resume_page = [0; PAGE_SIZE as usize];
+        self.read(backend, page.base(), &mut encoded_resume_page)?;
+        let decoded = VirtualBlockResumePage::decode_page(&encoded_resume_page)
+            .map_err(VirtualBlockQueueError::Protocol)?;
+        if decoded != state {
+            return Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidConfiguration,
+            ));
+        }
+
+        let mut request_slots = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS];
+        let request_first = if state.request_producer() == 0 {
+            None
+        } else if state.request_producer() == state.completion_consumer() {
+            Some(state.request_producer())
+        } else {
+            Some(state.completion_consumer().checked_add(1).ok_or(
+                VirtualBlockQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+            )?)
+        };
+        if let Some(first) = request_first {
+            for position in first..=state.request_producer() {
+                let slot = slot_index(position, N).map_err(VirtualBlockQueueError::Protocol)?;
+                let address = slot_address(
+                    self.layout.request_base(),
+                    position,
+                    N,
+                    VIRTUAL_BLOCK_REQUEST_BYTES,
+                )
+                .map_err(VirtualBlockQueueError::Protocol)?;
+                self.read(backend, address, &mut request_slots[slot])?;
+            }
+        }
+        let mut encoded_state = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        state.encode(&mut encoded_state);
+        VirtualBlockGuestDriver::reconstruct(&encoded_state, &request_slots[..N])
+            .map_err(VirtualBlockQueueError::Protocol)?;
+
+        let mut completion_slots =
+            [[0; VIRTUAL_BLOCK_COMPLETION_BYTES]; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS];
+        if state.completion_published() != state.completion_consumer() {
+            let first = state.completion_consumer().checked_add(1).ok_or(
+                VirtualBlockQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+            )?;
+            for position in first..=state.completion_published() {
+                let slot = slot_index(position, N).map_err(VirtualBlockQueueError::Protocol)?;
+                let address = slot_address(
+                    self.layout.completion_base(),
+                    position,
+                    N,
+                    VIRTUAL_BLOCK_COMPLETION_BYTES,
+                )
+                .map_err(VirtualBlockQueueError::Protocol)?;
+                self.read(backend, address, &mut completion_slots[slot])?;
+                let completion = VirtualBlockCompletion::decode(&completion_slots[slot])
+                    .map_err(VirtualBlockQueueError::Protocol)?;
+                let request = VirtualBlockRequest::decode(&request_slots[slot])
+                    .map_err(VirtualBlockQueueError::Protocol)?;
+                let expected = if request.operation() == VirtualBlockOperation::Flush {
+                    0
+                } else {
+                    request.buffer_length()
+                };
+                if completion.generation() != state.configuration().generation()
+                    || completion.request_id() != request.request_id()
+                    || matches!(
+                        completion.status(),
+                        VirtualBlockCompletionStatus::Reset | VirtualBlockCompletionStatus::Removed
+                    )
+                    || (completion.status() == VirtualBlockCompletionStatus::Ok
+                        && completion.transferred() != expected)
+                {
+                    return Err(VirtualBlockQueueError::Protocol(
+                        VirtualBlockError::InvalidCompletion,
+                    ));
+                }
+            }
+        }
+        Ok(VirtualBlockRestartImage {
+            resume_base: page.base(),
+            configuration_base: page.configuration_base(),
+            state,
+            request_slots,
+            completion_slots,
+            encoded_resume_page,
+        })
+    }
+
+    /// Restores a validated image into completely fresh queue/resume memory.
+    /// Request bytes use the ordinary host boundary; completion and resume
+    /// bytes use only the device boundary. Any read or write uncertainty
+    /// poisons the bridge and leaves the suspended device without resume.
+    pub fn restore_restart_image<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &mut B,
+        device: &VirtualBlockDevice<N>,
+        image: &VirtualBlockRestartImage,
+    ) -> Result<(), VirtualBlockQueueError<B::Error>> {
+        self.require_live()?;
+        let configuration = device
+            .suspended_configuration()
+            .map_err(VirtualBlockQueueError::Protocol)?;
+        let state = image.state;
+        if configuration != state.configuration()
+            || configuration.queue() != self.layout
+            || self.request_consumed != state.request_consumed()
+            || self.completion_published != state.completion_published()
+            || self.completion_consumed != state.completion_consumer()
+        {
+            return Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidConfiguration,
+            ));
+        }
+
+        let mut fresh = [0; PAGE_SIZE as usize];
+        for base in [self.layout.request_base(), self.layout.completion_base()] {
+            for page_index in 0..self.layout.pages_per_queue() {
+                let address = base
+                    .checked_add(page_index.checked_mul(PAGE_SIZE).ok_or(
+                        VirtualBlockQueueError::Protocol(VirtualBlockError::RangeOverflow),
+                    )?)
+                    .ok_or(VirtualBlockQueueError::Protocol(
+                        VirtualBlockError::RangeOverflow,
+                    ))?;
+                self.read(backend, address, &mut fresh)?;
+                if fresh.iter().any(|byte| *byte != 0) {
+                    return Err(VirtualBlockQueueError::Protocol(
+                        VirtualBlockError::InvalidQueue,
+                    ));
+                }
+            }
+        }
+        self.read(backend, image.resume_base, &mut fresh)?;
+        let configuration_page =
+            VirtualBlockConfigurationPage::new(image.configuration_base, configuration)
+                .map_err(VirtualBlockQueueError::Protocol)?;
+        let fresh_resume = VirtualBlockResumePage::fresh(image.resume_base, configuration_page)
+            .map_err(VirtualBlockQueueError::Protocol)?;
+        let mut expected_fresh = [0; PAGE_SIZE as usize];
+        fresh_resume.encode_page(&mut expected_fresh);
+        if fresh != expected_fresh {
+            return Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidConfiguration,
+            ));
+        }
+
+        let request_first = if state.request_producer() == 0 {
+            None
+        } else if state.request_producer() == state.completion_consumer() {
+            Some(state.request_producer())
+        } else {
+            Some(state.completion_consumer().checked_add(1).ok_or(
+                VirtualBlockQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+            )?)
+        };
+        if let Some(first) = request_first {
+            for position in first..=state.request_producer() {
+                let slot = slot_index(position, N).map_err(VirtualBlockQueueError::Protocol)?;
+                let address = slot_address(
+                    self.layout.request_base(),
+                    position,
+                    N,
+                    VIRTUAL_BLOCK_REQUEST_BYTES,
+                )
+                .map_err(VirtualBlockQueueError::Protocol)?;
+                backend
+                    .write_guest(address, &image.request_slots[slot])
+                    .map_err(|error| {
+                        self.poisoned = true;
+                        VirtualBlockQueueError::Backend(error)
+                    })?;
+            }
+        }
+        backend
+            .write_guest(
+                self.layout.request_base() + 64,
+                &state.request_consumed().to_le_bytes(),
+            )
+            .and_then(|()| {
+                backend.write_guest(
+                    self.layout.request_base(),
+                    &state.request_producer().to_le_bytes(),
+                )
+            })
+            .map_err(|error| {
+                self.poisoned = true;
+                VirtualBlockQueueError::Backend(error)
+            })?;
+
+        if state.completion_published() != state.completion_consumer() {
+            let first = state.completion_consumer().checked_add(1).ok_or(
+                VirtualBlockQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+            )?;
+            for position in first..=state.completion_published() {
+                let slot = slot_index(position, N).map_err(VirtualBlockQueueError::Protocol)?;
+                let address = slot_address(
+                    self.layout.completion_base(),
+                    position,
+                    N,
+                    VIRTUAL_BLOCK_COMPLETION_BYTES,
+                )
+                .map_err(VirtualBlockQueueError::Protocol)?;
+                self.write(backend, address, &image.completion_slots[slot])?;
+            }
+        }
+        self.write_counter(
+            backend,
+            self.layout.completion_base() + 64,
+            state.completion_consumer(),
+        )?;
+        self.write_counter(
+            backend,
+            self.layout.completion_base(),
+            state.completion_published(),
+        )?;
+        self.write(backend, image.resume_base, &image.encoded_resume_page)
+    }
+
     pub fn read_payload<B: VirtualBlockVmmMemory>(
         &mut self,
         backend: &B,
@@ -2952,6 +3204,13 @@ fn slot_address(
     base.checked_add(QUEUE_HEADER_BYTES)
         .and_then(|address| address.checked_add(slot * slot_bytes as u64))
         .ok_or(VirtualBlockError::RangeOverflow)
+}
+
+fn slot_index(position: u64, slots: usize) -> Result<usize, VirtualBlockError> {
+    if position == 0 || slots == 0 || slots > MAX_VIRTUAL_BLOCK_QUEUE_SLOTS {
+        return Err(VirtualBlockError::InvalidQueue);
+    }
+    Ok(((position - 1) % slots as u64) as usize)
 }
 
 #[cfg(test)]
@@ -4261,6 +4520,156 @@ mod tests {
             Err(VirtualBlockQueueError::Backend(MockError::Injected))
         );
         assert!(uncertain_bridge.is_poisoned());
+    }
+
+    #[test]
+    fn restart_image_minimizes_validates_and_restores_only_fresh_memory() {
+        let mut device = active::<4>();
+        let queue = layout::<4>();
+        let mut bridge = VirtualBlockQueueBridge::<4>::new(queue).unwrap();
+        let first = VirtualBlockRequest::write(1, 10, 0, 1, 0x4000, 4096);
+        let second = VirtualBlockRequest::write(1, 20, 1, 1, 0x5000, 4096);
+        let first_admitted = device.admit(&encoded(first)).unwrap();
+        let second_admitted = device.admit(&encoded(second)).unwrap();
+        let first_completion = device
+            .complete(
+                first_admitted.ticket(),
+                VirtualBlockCompletionStatus::Ok,
+                4096,
+            )
+            .unwrap();
+        let second_completion = device
+            .complete(
+                second_admitted.ticket(),
+                VirtualBlockCompletionStatus::Ok,
+                4096,
+            )
+            .unwrap();
+        bridge.request_consumed = 2;
+        bridge.completion_published = 2;
+
+        let mut source = MockVmm::new();
+        source.bytes[queue.request_base() as usize..queue.request_base() as usize + 8]
+            .copy_from_slice(&2_u64.to_le_bytes());
+        source.bytes[queue.request_base() as usize + 64..queue.request_base() as usize + 72]
+            .copy_from_slice(&2_u64.to_le_bytes());
+        for (position, request) in [(1, first), (2, second)] {
+            let address = slot_address(
+                queue.request_base(),
+                position,
+                4,
+                VIRTUAL_BLOCK_REQUEST_BYTES,
+            )
+            .unwrap() as usize;
+            source.bytes[address..address + VIRTUAL_BLOCK_REQUEST_BYTES]
+                .copy_from_slice(&encoded(request));
+        }
+        source.bytes[queue.request_base() as usize + 0x800] = 0xa5;
+        source.bytes[queue.completion_base() as usize..queue.completion_base() as usize + 8]
+            .copy_from_slice(&2_u64.to_le_bytes());
+        for (position, completion) in [(1, first_completion), (2, second_completion)] {
+            let address = slot_address(
+                queue.completion_base(),
+                position,
+                4,
+                VIRTUAL_BLOCK_COMPLETION_BYTES,
+            )
+            .unwrap() as usize;
+            completion.encode(
+                (&mut source.bytes[address..address + VIRTUAL_BLOCK_COMPLETION_BYTES])
+                    .try_into()
+                    .unwrap(),
+            );
+        }
+        source.bytes[queue.completion_base() as usize + 0x800] = 0x5a;
+
+        let configuration = device.configuration().unwrap();
+        let configuration_page = VirtualBlockConfigurationPage::new(0x5000, configuration).unwrap();
+        let resume_page = VirtualBlockResumePage::fresh(0x4000, configuration_page).unwrap();
+        device.suspend().unwrap();
+        let published = bridge
+            .publish_resume_page(&mut source, &device, resume_page)
+            .unwrap();
+        let image = bridge
+            .capture_restart_image(&source, &device, published)
+            .unwrap();
+        assert_eq!(image.state(), published.state());
+        assert!(
+            image.request_slots[2..]
+                .iter()
+                .flatten()
+                .all(|byte| *byte == 0)
+        );
+        assert!(
+            image.completion_slots[2..]
+                .iter()
+                .flatten()
+                .all(|byte| *byte == 0)
+        );
+        let mut encoded_fresh_resume = [0; PAGE_SIZE as usize];
+        resume_page.encode_page(&mut encoded_fresh_resume);
+
+        let mut nonfresh = MockVmm::new();
+        nonfresh.bytes[queue.request_base() as usize + 1] = 1;
+        assert_eq!(
+            bridge.restore_restart_image(&mut nonfresh, &device, &image),
+            Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidQueue
+            ))
+        );
+        assert_eq!(
+            &nonfresh.bytes[queue.completion_base() as usize..queue.completion_base() as usize + 8],
+            &[0; 8]
+        );
+
+        let mut replacement = MockVmm::new();
+        replacement.bytes[0x4000..0x5000].copy_from_slice(&encoded_fresh_resume);
+        bridge
+            .restore_restart_image(&mut replacement, &device, &image)
+            .unwrap();
+        assert_eq!(
+            &replacement.bytes[queue.request_base() as usize..queue.request_base() as usize + 8],
+            &2_u64.to_le_bytes()
+        );
+        assert_eq!(
+            &replacement.bytes
+                [queue.completion_base() as usize..queue.completion_base() as usize + 8],
+            &2_u64.to_le_bytes()
+        );
+        assert_eq!(
+            &replacement.bytes[0x4000..0x5000],
+            &source.bytes[0x4000..0x5000]
+        );
+        assert_eq!(replacement.bytes[queue.request_base() as usize + 0x800], 0);
+        assert_eq!(
+            replacement.bytes[queue.completion_base() as usize + 0x800],
+            0
+        );
+
+        let second_completion_address = slot_address(
+            queue.completion_base(),
+            2,
+            4,
+            VIRTUAL_BLOCK_COMPLETION_BYTES,
+        )
+        .unwrap() as usize;
+        source.bytes[second_completion_address + 16] ^= 1;
+        assert!(matches!(
+            bridge.capture_restart_image(&source, &device, published),
+            Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidCompletion
+            ))
+        ));
+
+        let mut uncertain = MockVmm::new();
+        uncertain.bytes[0x4000..0x5000].copy_from_slice(&encoded_fresh_resume);
+        uncertain.fail_write_address =
+            Some(slot_address(queue.request_base(), 1, 4, VIRTUAL_BLOCK_REQUEST_BYTES).unwrap());
+        assert_eq!(
+            bridge.restore_restart_image(&mut uncertain, &device, &image),
+            Err(VirtualBlockQueueError::Backend(MockError::Injected))
+        );
+        assert!(bridge.is_poisoned());
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
