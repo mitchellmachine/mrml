@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `739ae6e`
-  (`compiler: preanalyze compound array bases`)
+- Compiler checkpoint commit: `cfaa44c`
+  (`compiler: support wrapped fat returns`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -142,6 +142,10 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   array planner before the index read, covering literal, conditional, wrapped,
   identifier, repeat, integer-byte, and array-producing-call materializers
   without guessing unsupported shapes.
+  Non-call fat-reference returns now accept the emitter's bounded return/break/
+  inline-const wrappers, sequence prefixes, and both conditional forms. Their
+  read preanalysis mirrors the same recursion and source order; call-derived fat
+  returns remain unsupported.
   Other aggregate return/tail shapes remain outside preanalysis.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
@@ -150,10 +154,9 @@ unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
-argument and call-derived fat-reference initializers, call-derived or otherwise
-unsupported wrapped fat-reference returns, unsupported compound array bases,
-method/call families, unsupported tuple-value shapes, and other body reads
-remain emission-time facts.
+argument and call-derived fat-reference initializers, call-derived fat-reference
+returns, unsupported compound array bases, method/call families, unsupported
+tuple-value shapes, and other body reads remain emission-time facts.
 Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
@@ -194,8 +197,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 641 tests on each host: 352
-library tests, 10 conformance tests, 277 replacement tests, and 2 driver tests.
+The checkpoint source passed 643 tests on each host: 353
+library tests, 10 conformance tests, 278 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
