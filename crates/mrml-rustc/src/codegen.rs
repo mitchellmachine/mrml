@@ -10997,11 +10997,55 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
     let body =
         crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
             .ok()?;
-    if body.statement_count() != 0 || body.tail_diverges || body.tail_expression.is_empty() {
-        return None;
+    let mut origin = None;
+    let mut merge = |candidate: usize| -> Option<()> {
+        if origin.is_some_and(|existing| existing != candidate) {
+            return None;
+        }
+        origin = Some(candidate);
+        Some(())
+    };
+    for statement in body.statements().iter().flatten() {
+        match *statement {
+            crate::BodyStatement::ConditionalReturn(index) => {
+                let value = body
+                    .conditional_returns()
+                    .get(index)
+                    .and_then(|value| *value)?;
+                let tree = value.parse_value::<MAX_NODES>().ok()?;
+                merge(recurse(target, &tree, tree.root(), 0)?)?;
+            }
+            crate::BodyStatement::ConditionalReturnElse(index) => {
+                let values = body
+                    .conditional_return_elses()
+                    .get(index)
+                    .and_then(|value| *value)?;
+                for branch in values.branches().iter().flatten() {
+                    let tree = branch.parse_value::<MAX_NODES>().ok()?;
+                    merge(recurse(target, &tree, tree.root(), 0)?)?;
+                }
+                if let Some(value) = values.else_value {
+                    let tree = value.parse_value::<MAX_NODES>().ok()?;
+                    merge(recurse(target, &tree, tree.root(), 0)?)?;
+                }
+            }
+            crate::BodyStatement::Return(index) => {
+                let value = body.returns().get(index).and_then(|value| *value)?;
+                let tree = value.parse_value::<MAX_NODES>().ok()?;
+                merge(recurse(target, &tree, tree.root(), 0)?)?;
+            }
+            crate::BodyStatement::Local(_)
+            | crate::BodyStatement::Assignment(_)
+            | crate::BodyStatement::ConditionalAssignment(_)
+            | crate::BodyStatement::Expression(_)
+            | crate::BodyStatement::Loop(_) => return None,
+        }
     }
-    let tree = body.parse_tail::<MAX_NODES>().ok()?;
-    recurse(target, &tree, tree.root(), 0)
+    if !body.tail_diverges && !body.tail_expression.is_empty() {
+        let tree = body.parse_tail::<MAX_NODES>().ok()?;
+        merge(recurse(target, &tree, tree.root(), 0)?)?;
+    }
+    origin
 }
 
 fn runtime_expression_reference_call_origin<
@@ -26052,7 +26096,7 @@ mod tests {
             name: &str,
             argument_count: usize,
         ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
-            if argument_count != 1 || MAX_PARAMETERS == 0 {
+            if MAX_PARAMETERS == 0 {
                 return None;
             }
             let reference = ScalarType::Reference {
@@ -26060,27 +26104,53 @@ mod tests {
                 mutable: true,
             };
             let mut parameters = [None; MAX_PARAMETERS];
-            parameters[0] = Some(RuntimeCallParameter {
-                name: "value",
-                ty: reference,
-            });
-            match name {
-                "identity" => Some(RuntimeCallTarget {
-                    name: "identity",
-                    parameters,
-                    parameter_count: 1,
-                    return_type: reference,
-                    return_type_name: "&mut u16",
-                    body_expression: "value",
-                }),
-                "touch" => Some(RuntimeCallTarget {
-                    name: "touch",
-                    parameters,
-                    parameter_count: 1,
-                    return_type: ScalarType::Unit,
-                    return_type_name: "()",
-                    body_expression: "*value += 1",
-                }),
+            match (name, argument_count) {
+                ("identity", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "identity",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "value",
+                    })
+                }
+                ("touch", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "touch",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: ScalarType::Unit,
+                        return_type_name: "()",
+                        body_expression: "*value += 1",
+                    })
+                }
+                ("choose", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "choose",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "if first { return value; } value",
+                    })
+                }
                 _ => None,
             }
         }
@@ -28172,6 +28242,43 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+        ] {
+            analyze(source).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_conditional_return_call_results_retain_argument_origins() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 40>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = choose(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = choose(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = choose(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = choose(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
