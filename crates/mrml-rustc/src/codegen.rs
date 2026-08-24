@@ -15,6 +15,8 @@ const MAX_RUNTIME_MOVE_PATH_FACTS: usize = (MAX_RUNTIME_LOCAL_FACTS + MAX_X86_64
 const MAX_RUNTIME_INITIALIZATION_FACTS: usize = 512;
 const MAX_RUNTIME_PLACE_EFFECT_FACTS: usize =
     MAX_RUNTIME_LOCAL_FACTS + (MAX_RUNTIME_PLACE_ACCESS_FACTS * 2);
+const MAX_RUNTIME_OWNERSHIP_EVENT_FACTS: usize =
+    MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS;
 const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
 const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
 const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
@@ -87,6 +89,7 @@ pub enum CodegenErrorKind {
     TooManyRuntimeMovePathFacts,
     TooManyRuntimeInitializationFacts,
     TooManyRuntimePlaceEffectFacts,
+    TooManyRuntimeOwnershipEventFacts,
     TooManyRuntimeBasicBlockFacts,
     TooManyRuntimeControlFlowEdgeFacts,
     TooManyRuntimePlaceProjections,
@@ -2162,7 +2165,11 @@ struct RuntimeInitializationFact {
     path: RuntimeMovePathId,
     origin: RuntimeInitializationOrigin,
     span: Option<Span>,
+    event: RuntimeOwnershipEventId,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeOwnershipEventId(usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimePlaceEffectKind {
@@ -2188,6 +2195,7 @@ struct RuntimePlaceEffectFact {
     path: RuntimeMovePathId,
     kind: RuntimePlaceEffectKind,
     span: Span,
+    event: RuntimeOwnershipEventId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2294,6 +2302,7 @@ struct RuntimeBodyFacts<'source> {
     initialization_count: usize,
     effects: [Option<RuntimePlaceEffectFact>; MAX_RUNTIME_PLACE_EFFECT_FACTS],
     effect_count: usize,
+    ownership_event_count: usize,
     basic_blocks: [Option<RuntimeBasicBlockFact>; MAX_RUNTIME_BASIC_BLOCK_FACTS],
     basic_block_count: usize,
     control_flow_edges: [Option<RuntimeControlFlowEdgeFact>; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2317,6 +2326,7 @@ impl<'source> RuntimeBodyFacts<'source> {
         initialization_count: 0,
         effects: [None; MAX_RUNTIME_PLACE_EFFECT_FACTS],
         effect_count: 0,
+        ownership_event_count: 0,
         basic_blocks: [None; MAX_RUNTIME_BASIC_BLOCK_FACTS],
         basic_block_count: 0,
         control_flow_edges: [None; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2383,6 +2393,9 @@ impl<'source> RuntimeBodyFacts<'source> {
         if self.initialization_count >= self.initializations.len() {
             return Err(CodegenErrorKind::TooManyRuntimeInitializationFacts);
         }
+        if self.ownership_event_count >= MAX_RUNTIME_OWNERSHIP_EVENT_FACTS {
+            return Err(CodegenErrorKind::TooManyRuntimeOwnershipEventFacts);
+        }
         let root = RuntimeMovePathId(self.move_path_count);
         self.move_paths[self.move_path_count] = Some(RuntimeMovePathFact {
             id: root,
@@ -2416,8 +2429,10 @@ impl<'source> RuntimeBodyFacts<'source> {
             path: root,
             origin,
             span,
+            event: RuntimeOwnershipEventId(self.ownership_event_count),
         });
         self.initialization_count += 1;
+        self.ownership_event_count += 1;
         Ok(root)
     }
 
@@ -2449,13 +2464,27 @@ impl<'source> RuntimeBodyFacts<'source> {
             .map(|path| path.id)
     }
 
-    fn push_place_effect(&mut self, fact: RuntimePlaceEffectFact) -> Result<(), CodegenErrorKind> {
+    fn push_place_effect(
+        &mut self,
+        path: RuntimeMovePathId,
+        kind: RuntimePlaceEffectKind,
+        span: Span,
+    ) -> Result<(), CodegenErrorKind> {
         let slot = self
             .effects
             .get_mut(self.effect_count)
             .ok_or(CodegenErrorKind::TooManyRuntimePlaceEffectFacts)?;
-        *slot = Some(fact);
+        if self.ownership_event_count >= MAX_RUNTIME_OWNERSHIP_EVENT_FACTS {
+            return Err(CodegenErrorKind::TooManyRuntimeOwnershipEventFacts);
+        }
+        *slot = Some(RuntimePlaceEffectFact {
+            path,
+            kind,
+            span,
+            event: RuntimeOwnershipEventId(self.ownership_event_count),
+        });
         self.effect_count += 1;
+        self.ownership_event_count += 1;
         Ok(())
     }
 
@@ -2517,16 +2546,21 @@ impl<'source> RuntimeBodyFacts<'source> {
                     path,
                     kind,
                     span: fact.span,
+                    event: RuntimeOwnershipEventId(self.ownership_event_count),
                 })
             });
         if effect.is_some() && self.effect_count >= self.effects.len() {
             return Err(CodegenErrorKind::TooManyRuntimePlaceEffectFacts);
+        }
+        if effect.is_some() && self.ownership_event_count >= MAX_RUNTIME_OWNERSHIP_EVENT_FACTS {
+            return Err(CodegenErrorKind::TooManyRuntimeOwnershipEventFacts);
         }
         self.assignment_reads[self.assignment_read_count] = Some(fact);
         self.assignment_read_count += 1;
         if let Some(effect) = effect {
             self.effects[self.effect_count] = Some(effect);
             self.effect_count += 1;
+            self.ownership_event_count += 1;
         }
         Ok(())
     }
@@ -3143,11 +3177,11 @@ fn preanalyze_runtime_local_binding<
                 span: translate_span(body_start, local.initializer_span),
             })?;
         facts
-            .push_place_effect(RuntimePlaceEffectFact {
+            .push_place_effect(
                 path,
-                kind: RuntimePlaceEffectKind::Move,
-                span: translate_span(body_start + local.initializer_span.start, expression.span),
-            })
+                RuntimePlaceEffectKind::Move,
+                translate_span(body_start + local.initializer_span.start, expression.span),
+            )
             .map_err(|kind| CodegenError {
                 kind,
                 span: translate_span(body_start, local.initializer_span),
@@ -5031,11 +5065,7 @@ fn preanalyze_runtime_assignment_access<
             }
         };
         facts
-            .push_place_effect(RuntimePlaceEffectFact {
-                path,
-                kind,
-                span: assignment.name_span,
-            })
+            .push_place_effect(path, kind, assignment.name_span)
             .map_err(|kind| CodegenError {
                 kind,
                 span: assignment.name_span,
@@ -12929,6 +12959,63 @@ impl<
             || self.body_facts.effects[..self.body_facts.effect_count]
                 .iter()
                 .any(Option::is_none)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        let expected_event_count = self
+            .body_facts
+            .initialization_count
+            .checked_add(self.body_facts.effect_count)
+            .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+        if expected_event_count != self.body_facts.ownership_event_count
+            || expected_event_count > MAX_RUNTIME_OWNERSHIP_EVENT_FACTS
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        let mut initialization_index = 0usize;
+        let mut effect_index = 0usize;
+        for expected_event in 0..expected_event_count {
+            let initialization_event = self
+                .body_facts
+                .initializations
+                .get(initialization_index)
+                .and_then(|fact| *fact)
+                .map(|fact| fact.event.0);
+            let effect_event = self
+                .body_facts
+                .effects
+                .get(effect_index)
+                .and_then(|fact| *fact)
+                .map(|fact| fact.event.0);
+            match (initialization_event, effect_event) {
+                (Some(initialization), Some(effect)) if initialization == effect => {
+                    return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                }
+                (Some(initialization), Some(effect)) if initialization < effect => {
+                    if initialization != expected_event {
+                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                    }
+                    initialization_index += 1;
+                }
+                (Some(_), Some(effect)) | (None, Some(effect)) => {
+                    if effect != expected_event {
+                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                    }
+                    effect_index += 1;
+                }
+                (Some(initialization), None) => {
+                    if initialization != expected_event {
+                        return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                    }
+                    initialization_index += 1;
+                }
+                (None, None) => {
+                    return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+                }
+            }
+        }
+        if initialization_index != self.body_facts.initialization_count
+            || effect_index != self.body_facts.effect_count
         {
             return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
         }
@@ -22623,6 +22710,7 @@ mod tests {
                 path: RuntimeMovePathId(0),
                 origin: RuntimeInitializationOrigin::Parameter,
                 span: Some(function.parameters()[0].unwrap().span),
+                event: RuntimeOwnershipEventId(0),
             })
         );
 
@@ -22666,6 +22754,17 @@ mod tests {
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
+
+        let mut event_capacity = RuntimeBodyFacts::EMPTY;
+        event_capacity.ownership_event_count = MAX_RUNTIME_OWNERSHIP_EVENT_FACTS;
+        assert_eq!(
+            event_capacity
+                .push_initialized_parameter(0, runtime_type_from_text("&mut u16").unwrap(), None,)
+                .unwrap_err(),
+            CodegenErrorKind::TooManyRuntimeOwnershipEventFacts
+        );
+        assert_eq!(event_capacity.move_path_count, 0);
+        assert_eq!(event_capacity.initialization_count, 0);
     }
 
     #[test]
@@ -22977,7 +23076,9 @@ mod tests {
             .unwrap();
         capacity.effect_count = MAX_RUNTIME_PLACE_EFFECT_FACTS;
         assert_eq!(
-            capacity.push_place_effect(valid_move).unwrap_err(),
+            capacity
+                .push_place_effect(valid_move.path, valid_move.kind, valid_move.span)
+                .unwrap_err(),
             CodegenErrorKind::TooManyRuntimePlaceEffectFacts
         );
         assert_eq!(
@@ -23099,6 +23200,18 @@ mod tests {
 
         assert_eq!(local_count, 1);
         assert_eq!(facts.effect_count, 2);
+        assert_eq!(facts.initialization_count, 2);
+        assert_eq!(facts.ownership_event_count, 4);
+        assert_eq!(
+            facts.initializations[0].unwrap().event,
+            RuntimeOwnershipEventId(0)
+        );
+        assert_eq!(facts.effects[0].unwrap().event, RuntimeOwnershipEventId(1));
+        assert_eq!(
+            facts.initializations[1].unwrap().event,
+            RuntimeOwnershipEventId(2)
+        );
+        assert_eq!(facts.effects[1].unwrap().event, RuntimeOwnershipEventId(3));
         assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Move);
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
         assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Move);
@@ -23136,6 +23249,14 @@ mod tests {
         emitter.body_facts.effects[1] = Some(RuntimePlaceEffectFact {
             path: RuntimeMovePathId(0),
             kind: RuntimePlaceEffectKind::Copy,
+            ..valid_move
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[1] = Some(RuntimePlaceEffectFact {
+            event: RuntimeOwnershipEventId(2),
             ..valid_move
         });
         assert_eq!(
