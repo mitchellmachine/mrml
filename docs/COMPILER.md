@@ -650,9 +650,10 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is validated local/loop
-call-result origins followed by return coercion-site reborrowing before region
-reasoning.
+The highest-value next major implementation task is validated loop call-result
+origins followed by return coercion-site reborrowing before region reasoning.
+Bounded, shadow-aware straight-line local alias origins are implemented; this
+does not imply assignment or loop flow.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

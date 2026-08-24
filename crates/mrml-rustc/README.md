@@ -3519,3 +3519,20 @@ assignments, expression statements, loops, missing values, parse failures, and
 differing origins fail the proof closed. General local/loop interprocedural flow,
 regions, and return coercions remain unimplemented. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The local-alias call-result origin milestone passed all 731 compiler and driver
+tests on Windows gnullvm and all 731 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using the pinned rustc
+commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. A bounded callee proof may now
+carry one compatible reference-parameter origin through ordered immutable local
+initializers into top-level returns or the tail. Local lookup is newest-first,
+and an unresolved shadow blocks fallback to an older parameter name. Caller
+initializer and assignment probes match the pinned future-edition oracle: a
+live returned child rejects a competing mutable borrow with E0499, while owner
+access is restored after the child's last use. Assignments, expression
+statements, loops, ambiguous origins, parse failures, and capacity exhaustion
+still fail the proof closed. The updated Arch nightly commit
+`fb6531d550e0075b9eb9a51464f404805eec87d9` was also identified, but its release
+build crashed inside LLVM `PromotePass`; it is not promoted to oracle or passing
+evidence. General loop flow, regions, and return coercions remain unimplemented.
+The `no_std`/allocation/unsafe hygiene scan remained empty.

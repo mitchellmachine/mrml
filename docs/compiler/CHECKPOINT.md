@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `533ede7`
-  (`compiler: trace conditional return call loans`)
+- Compiler checkpoint commit: `f5b7096`
+  (`compiler: trace local call result loans`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -423,8 +423,10 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. broaden reference-carrying call-result origins through validated local and
-   loop flow, then add return coercion-site reborrows before region reasoning;
+1. broaden reference-carrying call-result origins through validated loop flow,
+   then add return coercion-site reborrows before region reasoning; bounded,
+   shadow-aware straight-line local alias origins are implemented, while
+   assignments and loops still fail closed;
    preserve the
    distinction between an expected-reference reborrow, an explicit
    reassignment borrow, and an indirect consuming move;
@@ -457,21 +459,26 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 729 tests on each host: 400
-library tests, 10 conformance tests, 317 replacement tests, and 2 driver tests.
+The checkpoint source passed 731 tests on each host: 401
+library tests, 10 conformance tests, 318 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
 $env:RUSTFLAGS='-C link-arg=/stack:16777216'
-cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-rustc -p mrml-rustc-driver --target x86_64-pc-windows-gnullvm --offline
-cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-pc-windows-gnullvm --all-targets --no-deps --offline -- -D warnings
+cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm test -p mrml-rustc -p mrml-rustc-driver --target x86_64-pc-windows-gnullvm --offline
+cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-pc-windows-gnullvm --all-targets --no-deps --offline -- -D warnings
 ```
 
 ```sh
 cd /mnt/c/Users/Mitch/Documents/mrml
-cargo +nightly-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --offline
-cargo +nightly-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --all-targets --no-deps --offline -- -D warnings
+cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --offline
+cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --all-targets --no-deps --offline -- -D warnings
 ```
+
+The separately installed 2026-08-23 Arch nightly at commit
+`fb6531d550e0075b9eb9a51464f404805eec87d9` crashed in LLVM `PromotePass` while
+building the release test binary. That compiler-host failure is recorded but is
+not passing evidence and does not replace the pinned oracle generation.
 
 The hygiene scan must remain empty:
 
