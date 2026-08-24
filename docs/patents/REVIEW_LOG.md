@@ -2056,6 +2056,18 @@ semantic interface, JavaScript/WebAssembly runtime, media mechanism, or other
 patent-candidate mechanism. This agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Direct mutable-loan invalidation
+
+**Result: NOT_TRIGGERED.** The compiler conventionally derives uses of direct
+mutable-reference loans from its existing bounded initialization and effect
+facts, then rejects standard conflicting accesses to the exact borrowed path
+while the borrower remains live along its existing fixed-capacity CFG. It adds
+no new arena, optimization, authority model, device or compatibility protocol,
+host-share mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Attachment-bound legacy PCI completion masking
 
 **Result: NOT_TRIGGERED.** The change conventionally reads the current PCI

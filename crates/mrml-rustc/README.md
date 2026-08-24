@@ -3319,3 +3319,15 @@ uses across reachable block and edge control points, including real cycles.
 Mutually unreachable control points do not manufacture conflicts. This remains
 direct shared-loan evidence, not mutable-loan invalidation, regions, reborrow
 completion, or a complete borrow checker. The hygiene scan remained empty.
+
+The direct mutable-loan invalidation milestone passed all 703 compiler and
+driver tests on Windows gnullvm and all 703 in release mode on native Arch
+Linux WSL, plus warnings-denied Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Uses of a reference local are
+classified as loan uses only when its initialization and borrow effects derive
+a direct loan identity. A later exact-path copy, move, shared/mutable borrow,
+write, or read-modify-write conflicts with a live direct mutable loan; the same
+access is accepted after the mutable borrower’s last reachable use. A forged
+loan-use effect on an unrelated reference parameter fails structural
+validation. This does not claim implicit reborrows, indirect alias identity,
+regions, or a complete borrow checker. The hygiene scan remained empty.

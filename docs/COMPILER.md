@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and fixed-point definite-initialization enforcement across supported statement/loop CFGs exist. Conditional expressions now retain bounded root, condition, then, else, join, and branch-exit program points plus canonical nested/sequential edges, and every point is anchored to an existing statement/loop control point through its ownership location. Initializedness does not yet consume that expression graph; there is no loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
+| Modern borrowing / Polonius | **PARTIAL** | References, explicit reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, and direct shared/mutable-loan conflict checks across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. Implicit reborrows, indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -554,12 +554,13 @@ to allocation and capability identities where appropriate. Address equality
 alone never proves provenance interchangeability.
 
 The current bounded ownership foundation derives direct loan identities from
-existing borrow and initialization facts. It also records dereference and
-projection uses of direct shared-reference borrowers and rejects a later exact-
-place mutable borrow when that borrower is subsequently used along a reachable
-path in the validated bounded CFG. This is a bounded direct shared-loan
-liveness slice, not mutable-loan invalidation, regions, reborrow completion, or
-a complete borrow checker.
+existing borrow and initialization facts. It records dereference and projection
+uses only for reference locals with a derived direct loan. Across reachable
+paths in the validated bounded CFG, live shared loans reject later exact-place
+mutable borrows, while live mutable loans reject later copies, moves, borrows,
+writes, or read-modify-writes of the exact borrowed path. This is direct-loan
+liveness and invalidation, not indirect alias tracking, implicit reborrows,
+regions, reborrow completion, or a complete borrow checker.
 
 ## Roadmap selection
 
@@ -580,8 +581,8 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is adding bounded mutable-loan
-invalidation facts on top of the validated shared-loan CFG traversal.
+The highest-value next major implementation task is connecting explicit and
+implicit reborrows to the underlying loan identity before region reasoning.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,
