@@ -546,9 +546,14 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, live instantiation of the block-service loop in an
-   isolated process, a hosted/physical device backend, and physical
-   power-loss evidence remain pending. The bounded block-service core and exact-block
+   checkpoint/reconstruction, a hosted/physical device backend, and physical
+   power-loss evidence remain pending. A focused signed KVM/WHP controlled
+   probe now instantiates the bounded block-service loop in an isolated CPL3
+   process against a volatile one-page in-image backend. A separate client has
+   only delegable shared-buffer authority and verifies both responses, while
+   the service verifies the written and returned bytes;
+   this does not establish device durability, physical isolation, or focused-
+   probe lifecycle cleanup. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.
 4. Add snapshot objects and capability enforcement, then system-generation and

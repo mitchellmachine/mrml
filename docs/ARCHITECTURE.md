@@ -486,9 +486,15 @@ syscalls, device dispatch, response send, and unconditional transport-buffer
 erasure. Its syscall adapter is an unsafe authority boundary: principal,
 capability transfer, mapping selection, endpoint, and reply task must come only
 from authenticated kernel/launch state. The UEFI image compiles the concrete
-x86-64 operations 4/5/7/8 adapter, but the loop is not yet instantiated as an
-isolated hosted service process; physical
-device backend, snapshots, physical power-loss testing, and persistent anti-rollback state
+x86-64 operations 4/5/7/8 adapter. A focused signed KVM/WHP probe now
+instantiates the loop in an isolated CPL3 service: a separate client can
+transfer only an attenuated shared-buffer capability, while the service retains
+the launch-bound principal, session, and one-page simulated block backend. The
+probe verifies one write and one read, including response fields and returned
+bytes, before emitting its terminal marker. This is hosted controlled-probe
+evidence only; the in-image backend is volatile, the focused terminal path does
+not prove lifecycle cleanup, and a hosted device backend, physical device,
+snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
 for boot. ext4, NTFS, and other formats may later be compatibility/import

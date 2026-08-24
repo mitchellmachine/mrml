@@ -301,7 +301,10 @@ explicitly and downgrade the status rather than guessing.
   single-candidate fallback. Validator uncertainty aborts rather than becoming
   rollback. The complete reachable-tree validator can now consume exact reads
   through the block-volume adapter, but tests still use simulated storage; a
-  real isolated block-service/device backend, physical power-loss evidence,
+  focused signed KVM/WHP probes now instantiate the isolated block-service loop
+  against a volatile one-page in-image backend and verify one write/read
+  exchange. This is not a real hosted or physical device backend, physical
+  power-loss evidence,
   repair, and authenticated anti-rollback state do not yet exist. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
@@ -309,7 +312,7 @@ explicitly and downgrade the status rather than guessing.
   image binds volume, publication generation, record geometry, full-image
   digest, and zero padding, and decode rebuilds the index. It is traversed by
   the immutable in-memory recovery backend and the generic exact-block adapter,
-  but not yet a real isolated block-service/device backend. Allocation
+  but not yet a real hosted or physical block-device backend. Allocation
   image ownership is now distinct and exactly root/publication-generation bound.
   Canonical extent-list images bind file identity, object generation, logical
   length, record geometry, full-image digest, and zero padding, then rebuild
@@ -336,7 +339,9 @@ explicitly and downgrade the status rather than guessing.
   publication. Exact encoded successor bytes are now staged, durably flushed,
   digest-bound into a distinct allocation transaction resource, and exposed only
   after a one-use publication receipt. Focused directory-move transaction
-  integration is simulated; block service/device integration remains pending. UEFI
+  integration is simulated; the isolated block-service transport is exercised
+  only by the focused volatile-backend probes, while real device integration
+  remains pending. UEFI
   Simple File System use is boot interoperability,
   and `mrml-runtime` file APIs wrap host files; neither establishes native MRML
   storage semantics.

@@ -90,6 +90,7 @@ enum LaunchMode {
     PreemptionProbe,
     UserProbe,
     ServiceProbe,
+    BlockServiceProbe,
     ServiceRestartRequestProbe,
     ServicePreemptionProbe,
     GpuBenchmark,
@@ -110,6 +111,7 @@ impl LaunchMode {
             "preemption-probe" => Ok(Self::PreemptionProbe),
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
+            "block-service-probe" => Ok(Self::BlockServiceProbe),
             "service-restart-request-probe" => Ok(Self::ServiceRestartRequestProbe),
             "service-preemption-probe" => Ok(Self::ServicePreemptionProbe),
             "gpu-benchmark" => Ok(Self::GpuBenchmark),
@@ -119,7 +121,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, block-service-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -150,6 +152,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::GpuBenchmark
             | LaunchMode::ServiceProbe
+            | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
@@ -177,6 +180,7 @@ fn application_main() -> Result<()> {
     let service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
@@ -315,7 +319,9 @@ fn application_main() -> Result<()> {
         | LaunchMode::SmpPeriodicBalanceProbe => {
             system.prepare_smp_kernel_guest::<16>(&executable, handoff.as_slice(), layout)
         }
-        LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe => system
+        LaunchMode::ServiceProbe
+        | LaunchMode::BlockServiceProbe
+        | LaunchMode::ServiceRestartRequestProbe => system
             .prepare_isolated_service_kernel_guest::<16>(
                 0,
                 &executable,
@@ -686,6 +692,40 @@ fn application_main() -> Result<()> {
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution after user proof failed: {:?}", error))?;
+    } else if mode == LaunchMode::BlockServiceProbe {
+        for _ in 0..32 {
+            if exit
+                == (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x30,
+                })
+            {
+                println!(
+                    "verified independently signed CPL3 block-service loop under KVM: verify={}us prepare={}us execute={}us total={}us",
+                    verification_micros,
+                    preparation_micros,
+                    execution_started.elapsed().as_micros(),
+                    total_started.elapsed().as_micros()
+                );
+                return Ok(());
+            }
+            if !matches!(
+                exit,
+                VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1..=3,
+                }
+            ) {
+                return Err(anyhow!("KVM block-service stage mismatch: {:?}", exit));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM block-service execution failed: {:?}", error))?;
+        }
+        return Err(anyhow!("KVM block-service probe exceeded its stage bound"));
     } else if matches!(
         mode,
         LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
@@ -1555,6 +1595,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("service-probe").unwrap(),
             LaunchMode::ServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("block-service-probe").unwrap(),
+            LaunchMode::BlockServiceProbe
         );
         assert_eq!(
             LaunchMode::parse("service-restart-request-probe").unwrap(),

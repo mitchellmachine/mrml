@@ -97,6 +97,7 @@ fn application_main() -> Result<()> {
         ));
     }
     let service_mode = arguments.len() == 8 && arguments[4] == "service-probe";
+    let block_service_mode = arguments.len() == 8 && arguments[4] == "block-service-probe";
     let service_restart_request_mode =
         arguments.len() == 8 && arguments[4] == "service-restart-request-probe";
     let service_preemption_mode =
@@ -104,6 +105,7 @@ fn application_main() -> Result<()> {
     let smp_service_migration_mode =
         arguments.len() == 8 && arguments[4] == "smp-service-migration-probe";
     let service_artifact_mode = service_mode
+        || block_service_mode
         || service_restart_request_mode
         || service_preemption_mode
         || smp_service_migration_mode;
@@ -126,7 +128,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[3]
@@ -262,7 +264,7 @@ fn application_main() -> Result<()> {
     let system = WhpSystem::open()
         .map_err(|error| anyhow!("Windows Hypervisor Platform is unavailable: {:?}", error))?;
     let preparation_started = Instant::now();
-    let mut guest = if service_mode || service_restart_request_mode {
+    let mut guest = if service_mode || block_service_mode || service_restart_request_mode {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)
     } else if service_preemption_mode {
         system.prepare_preemption_kernel(&executable, handoff.as_slice(), layout)
@@ -628,6 +630,42 @@ fn application_main() -> Result<()> {
             total_started.elapsed().as_micros()
         );
         return Ok(());
+    }
+    if block_service_mode {
+        let mut exit = exit;
+        for _ in 0..32 {
+            if exit
+                == (VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value: 0x30,
+                })
+            {
+                println!(
+                    "verified independently signed CPL3 block-service loop under WHP: verify={}us prepare={}us execute={}us total={}us",
+                    verification_micros,
+                    preparation_micros,
+                    execution_started.elapsed().as_micros(),
+                    total_started.elapsed().as_micros()
+                );
+                return Ok(());
+            }
+            if !matches!(
+                exit,
+                VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1..=3,
+                }
+            ) {
+                return Err(anyhow!("WHP block-service stage mismatch: {:?}", exit));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP block-service execution failed: {:?}", error))?;
+        }
+        return Err(anyhow!("WHP block-service probe exceeded its stage bound"));
     }
     if service_mode || service_restart_request_mode {
         if exit

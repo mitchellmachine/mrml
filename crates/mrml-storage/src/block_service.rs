@@ -80,6 +80,17 @@ pub struct BlockSessionHandle {
 }
 
 impl BlockSessionHandle {
+    /// Reconstructs an opaque session token received from a trusted service
+    /// grant. The token is not sufficient authority: every operation also
+    /// authenticates the exact owning principal and live service generation.
+    pub const fn from_token(token: u64) -> Option<Self> {
+        Self::from_parts(token as u32, (token >> 32) as u32)
+    }
+
+    pub const fn token(self) -> u64 {
+        (self.generation as u64) << 32 | self.slot as u64
+    }
+
     pub(crate) const fn from_parts(slot: u32, generation: u32) -> Option<Self> {
         if generation == 0 {
             None

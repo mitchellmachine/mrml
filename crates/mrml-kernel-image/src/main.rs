@@ -972,39 +972,53 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 _ => halt(),
             },
             SyscallRequest::Exit => {
-                let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
-                    .as_mut()
-                    .unwrap_or_else(|| halt());
-                let terminated = supervisor.exit_current(runtime).unwrap_or_else(|_| halt());
-                if terminated.task != current || runtime.context(current).is_ok() {
+                #[cfg(feature = "block-service-probe")]
+                {
+                    asm!(
+                        "out dx, eax",
+                        in("dx") SERVICE_PROBE_PORT,
+                        in("eax") 0x30u32,
+                        options(nomem, nostack)
+                    );
                     halt();
                 }
-                complete_service_cleanup(supervisor, terminated.cleanup);
-                match terminated.next {
-                    ScheduleOutcome::Switch { to, .. } => {
-                        let ControlEvent::PeerDied(death) =
-                            runtime.receive_control(to).unwrap_or_else(|_| halt())
-                        else {
-                            halt()
-                        };
-                        if death.peer() != current || death.reason() != PeerDeathReason::Exited {
-                            halt();
-                        }
-                        asm!(
-                            "out dx, eax",
-                            in("dx") SERVICE_PROBE_PORT,
-                            in("eax") 0x22u32,
-                            options(nomem, nostack)
-                        );
-                        asm!(
-                            "out dx, eax",
-                            in("dx") SERVICE_CALL_PORT,
-                            in("eax") 3u32,
-                            options(nomem, nostack)
-                        );
-                        enter_service_task(runtime, to)
+                #[cfg(not(feature = "block-service-probe"))]
+                {
+                    let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    let terminated = supervisor.exit_current(runtime).unwrap_or_else(|_| halt());
+                    if terminated.task != current || runtime.context(current).is_ok() {
+                        halt();
                     }
-                    _ => halt(),
+                    complete_service_cleanup(supervisor, terminated.cleanup);
+                    match terminated.next {
+                        ScheduleOutcome::Switch { to, .. } => {
+                            let ControlEvent::PeerDied(death) =
+                                runtime.receive_control(to).unwrap_or_else(|_| halt())
+                            else {
+                                halt()
+                            };
+                            if death.peer() != current || death.reason() != PeerDeathReason::Exited
+                            {
+                                halt();
+                            }
+                            asm!(
+                                "out dx, eax",
+                                in("dx") SERVICE_PROBE_PORT,
+                                in("eax") 0x22u32,
+                                options(nomem, nostack)
+                            );
+                            asm!(
+                                "out dx, eax",
+                                in("dx") SERVICE_CALL_PORT,
+                                in("eax") 3u32,
+                                options(nomem, nostack)
+                            );
+                            enter_service_task(runtime, to)
+                        }
+                        _ => halt(),
+                    }
                 }
             }
         }
@@ -2352,6 +2366,21 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             })
             .unwrap_or_else(|_| halt());
         let resource_capabilities = provision_service_resource(runtime, receiver);
+        #[cfg(feature = "block-service-probe")]
+        let sender_resource = runtime
+            .capabilities_mut(sender)
+            .and_then(|space| {
+                space
+                    .insert(
+                        ObjectId(0x94),
+                        Rights::MAP
+                            .union(Rights::READ)
+                            .union(Rights::WRITE)
+                            .union(Rights::DELEGATE),
+                    )
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
         let supervision_capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2368,6 +2397,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        #[cfg(not(feature = "block-service-probe"))]
         let root_capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2418,7 +2448,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
-        sender_context.r15 = root_capability.token();
+        #[cfg(not(feature = "block-service-probe"))]
+        {
+            sender_context.r15 = root_capability.token();
+        }
+        #[cfg(feature = "block-service-probe")]
+        {
+            sender_context.r15 = sender_resource.token();
+        }
         sender_context.rbx = setting_capability.token();
         sender_context.rbp = supervision_capability.token();
         sender_context.r10 = service_b.token();

@@ -3032,9 +3032,10 @@ to retain exactly `MAP|READ`; a service-write buffer exactly
 Missing, multiple, insufficient, excessive, stale, and revoked capabilities all
 fail before object identity or mapping resolution; wrong object, VM/task,
 mapping, access, resource range, or executable state fails before the handle is
-returned. The service-side loop and syscall adapter now consume this contract,
-but they are not yet instantiated in a hosted isolated task, so this is not yet
-end-to-end isolated service execution.
+returned. The service-side loop and syscall adapter now consume this contract.
+Focused signed KVM/WHP probes instantiate them in a hosted isolated task as
+described below; that evidence remains limited to the probe's volatile in-image
+backend.
 
 The same generic gate now supports actual bounded buffer use without returning
 an address or a persistent mapping view. Each read or write repeats exact
@@ -3080,9 +3081,9 @@ failure after admission leaves the ID consumed, so retry is rejected before it
 could duplicate a mutation. The syscall trait is unsafe because implementations
 must preserve authenticated capability transfer, mapping selection, principal,
 and launch-bound reply identity. The UEFI service image compiles a concrete
-x86-64 adapter for operations 5, 7/8, and 4. This is unit/simulation plus
-compile-time evidence: no hosted isolated task invokes the loop yet, and a
-device driver and physical-device evidence remain pending.
+x86-64 adapter for operations 5, 7/8, and 4. Focused signed hosted probes invoke
+that loop, but a real hosted device backend, device driver, persistence, and
+physical-device evidence remain pending.
 
 Recorded verification on 2026-08-24: Windows gnullvm
 `cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-storage --release --no-default-features --target x86_64-pc-windows-gnullvm`
@@ -3092,6 +3093,49 @@ passed the same 101 tests, and its corresponding scoped strict Clippy command
 passed. The release UEFI `mrml-service-image` build and scoped strict Clippy with
 `--features block-service-loop` passed. This proves unit/simulation behavior and
 ABI compilation only, not hosted invocation or device durability.
+
+A focused `block-service-probe` now supplies the hosted invocation evidence.
+The kernel creates two disjoint signed CPL3 tasks. The client receives one
+`MAP|READ|WRITE|DELEGATE` capability for a shared page but no mapping, block
+device, session-management, or service-control authority. It transfers
+`MAP|READ` for a block write and `MAP|READ|WRITE` for a block read. The service
+alone owns the live read-write binding, launch-bound principal, generated
+session, and volatile one-page backend. It validates the exact transferred
+shape, session owner/generation, and request IDs 1 then 2; verifies that the
+first operation wrote `0x5a`; replaces the simulated backend bytes with `0x3c`;
+and copies the second result through the capability-selected syscall. The
+client checks both canonical successful responses; the service checks the
+written and returned bytes before yielding back to that client. Only then can
+the client's exit produce the terminal `0x30` proof marker. Each runner accepts at
+most 32 host exits and only service-call stages 1 through 3 before that marker.
+
+Fresh independently signed version-1 artifacts passed on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features
+# 337 passed
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-storage --release --no-default-features
+# 101 passed
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp --release --no-default-features
+# 19 passed, 1 ignored manual performance gate
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp-run --release --no-default-features
+# 2 passed
+wsl env CARGO_TARGET_DIR=/mnt/c/Users/Mitch/Documents/mrml/.codex-kvm-target cargo test -p mrml-kvm-run --release --no-default-features
+# 3 passed
+mrml-whp-run ... block-service-probe ...
+# verified independently signed CPL3 block-service loop under WHP
+mrml-kvm-run ... block-service-probe ...
+# verified independently signed CPL3 block-service loop under KVM
+```
+
+Scoped strict Clippy passed for `mrml-storage`, both focused UEFI images, and
+`mrml-whp-run`. These are unit tests, simulation, and hosted controlled probes.
+WHP/KVM do not protect a guest from its host. The backend is volatile memory,
+not a host block device; no reboot, durability, power-loss, bare-metal, TPM,
+IOMMU, Secure Boot, or physical hardware result is claimed. The focused
+terminal path deliberately stops after client verification and therefore does
+not add lifecycle cleanup evidence; the existing ordinary service probes and
+unit tests remain the evidence for cleanup and revocation behavior.
 
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one
@@ -3118,8 +3162,8 @@ undersized scratch, rejected userspace, revoked authority, and backend failure,
 including proof that rejected userspace and revoked authority touch no bulk
 backend. The service-probe kernel-image dispatcher now executes both operations
 through the active user-copy and opaque-resource composition. The userspace
-block-service adapter compiles against that path, but live task invocation of
-the loop remains unimplemented.
+block-service adapter compiles against that path and the focused signed KVM/WHP
+probe invokes it as described above.
 
 The concrete x86-64 userspace side is now available as
 `ActiveTaskUserCopy`. It invokes the existing active page-table walker with the

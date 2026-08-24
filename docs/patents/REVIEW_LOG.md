@@ -1355,3 +1355,14 @@ capability-selected shared-buffer syscalls, replay admission, block dispatch,
 response encoding, and buffer erasure into a conventional bounded userspace
 service loop. Ordering checks and an explicit unsafe syscall-adapter contract are
 defensive systems integration; no new patent-candidate mechanism was identified.
+
+# 2026-08-24 — Isolated block-service controlled probe
+
+**Result: NOT_TRIGGERED.** The change conventionally instantiates the existing
+bounded block-service loop in a signed CPL3 task and uses an independently
+signed client to transfer an attenuated shared-buffer capability for one write
+and one read against a volatile in-image page. Launch-bound principal and reply
+identity, generational session validation, monotonic request IDs, bounded host
+exit handling, canonical responses, and byte comparisons are defensive systems
+integration. No new patent-candidate mechanism was identified. This agent
+review does not replace the required independent human dual review.
