@@ -148,9 +148,14 @@ explicitly and downgrade the status rather than guessing.
   field supplies a binding ID. The storage-service transport now performs
   capability/binding validation and replay/poison admission before copying bulk
   bytes, dispatches through bounded caller-owned scratch, and erases scratch on
-  every return path. No isolated service process or concrete receive/syscall
-  loop,
-  concrete hosted or physical device backend, persistent allocation/free engine,
+  every return path. A bounded service-side loop now composes exact receive,
+  replay/session admission, capability-selected shared-buffer syscalls, device
+  dispatch, canonical response, and unconditional request/capability/scratch/
+  response erasure. Admission precedes all bulk and device I/O; copy uncertainty
+  consumes the request ID and therefore cannot be retried as a duplicate
+  mutation. The UEFI image compiles the concrete operations 4/5/7/8 syscall
+  adapter, but no isolated hosted service task invokes it yet. No concrete hosted
+  or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
   The kernel syscall ABI can decode bounded capability-selected shared-buffer
   reads and writes, and a generic executor composes exact task authority, live

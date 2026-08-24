@@ -3009,9 +3009,9 @@ IDs per live handle generation, and consumes an admitted ID before touching the
 backend. Replays therefore fail before I/O. An uncertain write, flush, or atomic
 replacement backend result permanently poisons that generation; read failures
 remain retryable. Backend failure is reported distinctly and never becomes
-corruption or rollback permission. This is still an in-process codec/dispatcher
-simulation: block-specific receive/mapping execution, an isolated service
-process, a device driver, and physical-device evidence remain pending.
+corruption or rollback permission. The service-side receive/syscall composition
+described below is now implemented, but live isolated-task execution, a device
+driver, and physical-device evidence remain pending.
 
 The first kernel transport gate is now connected without teaching the kernel
 the block protocol. Every decoded block operation reports `ServiceReads`,
@@ -3032,8 +3032,9 @@ to retain exactly `MAP|READ`; a service-write buffer exactly
 Missing, multiple, insufficient, excessive, stale, and revoked capabilities all
 fail before object identity or mapping resolution; wrong object, VM/task,
 mapping, access, resource range, or executable state fails before the handle is
-returned. The concrete receive loop and syscall path remain pending, so this is
-not yet end-to-end isolated service execution.
+returned. The service-side loop and syscall adapter now consume this contract,
+but they are not yet instantiated in a hosted isolated task, so this is not yet
+end-to-end isolated service execution.
 
 The same generic gate now supports actual bounded buffer use without returning
 an address or a persistent mapping view. Each read or write repeats exact
@@ -3069,13 +3070,32 @@ binding failure, and buffer-shape failure reach neither bulk-buffer nor device
 I/O. Backend uncertainty retains the existing rule: uncertain mutating block
 operations poison the session generation, while transport copy failure is
 reported distinctly and cannot become corruption or rollback permission. This
-is still in-process transport simulation over an already-received message; a
-real isolated service image, concrete receive/syscall loop, device driver, and
-physical-device evidence remain pending.
+now has a matching service-side loop. It receives exactly one canonical request,
+requires the operation's exact zero-or-one transferred-capability shape, admits
+session owner/generation and monotonic request ID before any bulk or device I/O,
+then invokes capability-selected shared-buffer read/write, dispatches the device
+operation, and sends one canonical response. Request bytes, returned capability
+tokens, scratch, and response storage are erased on every return. A shared-copy
+failure after admission leaves the ID consumed, so retry is rejected before it
+could duplicate a mutation. The syscall trait is unsafe because implementations
+must preserve authenticated capability transfer, mapping selection, principal,
+and launch-bound reply identity. The UEFI service image compiles a concrete
+x86-64 adapter for operations 5, 7/8, and 4. This is unit/simulation plus
+compile-time evidence: no hosted isolated task invokes the loop yet, and a
+device driver and physical-device evidence remain pending.
 
-The next syscall prerequisite is decoded and has a generic executor, but is not
-yet wired into a kernel image. Operations 7 and 8
-describe service reads from and writes to one capability-selected shared buffer.
+Recorded verification on 2026-08-24: Windows gnullvm
+`cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-storage --release --no-default-features --target x86_64-pc-windows-gnullvm`
+passed 101 tests, and the corresponding scoped `clippy --no-deps -- -D warnings`
+passed. Linux `cargo test -p mrml-storage --release --no-default-features`
+passed the same 101 tests, and its corresponding scoped strict Clippy command
+passed. The release UEFI `mrml-service-image` build and scoped strict Clippy with
+`--features block-service-loop` passed. This proves unit/simulation behavior and
+ABI compilation only, not hosted invocation or device durability.
+
+Operations 7 and 8 are decoded, have a generic executor, and are wired into the
+service-probe kernel image. They describe service reads from and writes to one
+capability-selected shared buffer.
 They carry the opaque generational capability, checked byte offset, userspace
 copy address, and nonzero length capped at 1 MiB. The decoder rejects invalid
 tokens, reserved registers, offset overflow, null or noncanonical user ranges,
@@ -3096,9 +3116,10 @@ caller-provided scratch region is erased on every success or failure, and user
 or resource backend uncertainty remains distinct. Tests cover both directions,
 undersized scratch, rejected userspace, revoked authority, and backend failure,
 including proof that rejected userspace and revoked authority touch no bulk
-backend. The service-probe kernel-image dispatcher still halts on both
-operations; kernel-image handler/resource wiring and an isolated block-service
-loop remain unimplemented.
+backend. The service-probe kernel-image dispatcher now executes both operations
+through the active user-copy and opaque-resource composition. The userspace
+block-service adapter compiles against that path, but live task invocation of
+the loop remains unimplemented.
 
 The concrete x86-64 userspace side is now available as
 `ActiveTaskUserCopy`. It invokes the existing active page-table walker with the
@@ -3113,8 +3134,8 @@ does not translate a request-supplied address into authority: it is usable only
 behind the active-root validation ticket while page-table mutation is excluded.
 Unit tests cover exact transfer, task/range/direction mismatch, consumption on
 mismatch, and reuse; existing active-walker tests cover canonical range, leaf
-permissions, and mapping bounds. Kernel-image handler/resource wiring remains
-pending.
+permissions, and mapping bounds. The service-probe kernel-image handler/resource
+wiring is implemented as described below.
 
 The kernel now has a concrete fixed-capacity `HostResourceTable`. Registration
 is an explicit unsafe supervisor operation because an address-backed resource

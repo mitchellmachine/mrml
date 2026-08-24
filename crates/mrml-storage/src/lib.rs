@@ -22,6 +22,7 @@ mod identity;
 mod kernel_transport;
 mod object_id_allocator;
 mod recovery;
+mod service_loop;
 mod transaction;
 
 pub use allocation::{
@@ -87,6 +88,9 @@ pub use recovery::{
     CandidateValidationError, CowRecoveryValidator, ReachableRecoveryValidator,
     RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend, recover_reachable_superblock,
     recover_superblock,
+};
+pub use service_loop::{
+    BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,
 };
 pub use transaction::{
     StorageTransaction, StorageTransactionId, TransactionError, TransactionParticipant,

@@ -480,7 +480,14 @@ successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The exact-block
 metadata and file-data adapters plus the bounded block-service core are
-implemented, but the isolated service process and concrete receive/syscall loop, physical
+implemented. A bounded no-allocation service loop now composes exact IPC receive,
+capability-shape validation, replay admission, capability-selected shared-buffer
+syscalls, device dispatch, response send, and unconditional transport-buffer
+erasure. Its syscall adapter is an unsafe authority boundary: principal,
+capability transfer, mapping selection, endpoint, and reply task must come only
+from authenticated kernel/launch state. The UEFI image compiles the concrete
+x86-64 operations 4/5/7/8 adapter, but the loop is not yet instantiated as an
+isolated hosted service process; physical
 device backend, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

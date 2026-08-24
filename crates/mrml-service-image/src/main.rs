@@ -16,6 +16,10 @@ use mrml_config::{
 };
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{Capability, CapabilityError, ObjectId, Rights, ServiceId, ServiceState};
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+use mrml_storage::{
+    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockServiceSyscalls, ReceivedBlockEnvelope,
+};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
@@ -635,6 +639,120 @@ unsafe fn receive_buffer(payload: &mut [u8], capabilities: &mut [u64]) -> (usize
         halt();
     }
     (payload_length as usize, capability_count as usize)
+}
+
+/// Concrete x86-64 syscall boundary for the block-service loop. The endpoint,
+/// reply task are trusted launch state; the loop receives its authenticated
+/// principal separately from launch state. Block request bytes can select none
+/// of them.
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+#[allow(dead_code)]
+struct UserspaceBlockSyscalls {
+    endpoint: u64,
+    reply_task: u64,
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+unsafe impl BlockServiceSyscalls for UserspaceBlockSyscalls {
+    type Error = u64;
+
+    fn receive(
+        &mut self,
+        payload: &mut [u8; BLOCK_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+    ) -> Result<ReceivedBlockEnvelope, Self::Error> {
+        let mut status = 5u64;
+        let payload_length: u64;
+        let capability_count: u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") payload.as_mut_ptr() as u64,
+                in("rsi") payload.len() as u64,
+                inlateout("rdx") capability_tokens.as_mut_ptr() as u64 => payload_length,
+                inlateout("r10") capability_tokens.len() as u64 => capability_count,
+                inlateout("r8") 0u64 => _,
+                inlateout("r9") 0u64 => _,
+                options(nostack)
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        Ok(ReceivedBlockEnvelope {
+            payload_length: usize::try_from(payload_length).map_err(|_| u64::MAX)?,
+            capability_count: usize::try_from(capability_count).map_err(|_| u64::MAX)?,
+        })
+    }
+
+    fn read_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        shared_buffer_call(7, capability, offset, output.as_mut_ptr(), output.len())
+    }
+
+    fn write_shared(
+        &mut self,
+        capability: Capability,
+        offset: u64,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        shared_buffer_call(
+            8,
+            capability,
+            offset,
+            input.as_ptr().cast_mut(),
+            input.len(),
+        )
+    }
+
+    fn send_response(&mut self, response: &[u8; BLOCK_RESPONSE_BYTES]) -> Result<(), Self::Error> {
+        let mut status = 4u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") self.endpoint,
+                in("rsi") self.reply_task,
+                inlateout("rdx") response.as_ptr() as u64 => _,
+                in("r10") response.len() as u64,
+                in("r8") 0u64,
+                in("r9") 0u64,
+                options(nostack)
+            )
+        };
+        if status == 0 { Ok(()) } else { Err(status) }
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+#[allow(dead_code)]
+fn shared_buffer_call(
+    operation: u64,
+    capability: Capability,
+    offset: u64,
+    buffer: *mut u8,
+    length: usize,
+) -> Result<(), u64> {
+    let mut status = operation;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") capability.token(),
+            in("rsi") offset,
+            in("rdx") buffer as u64,
+            in("r10") length as u64,
+            in("r8") 0u64,
+            in("r9") 0u64,
+            options(nostack)
+        )
+    };
+    if status == 0 { Ok(()) } else { Err(status) }
 }
 
 #[cfg(not(feature = "preemption-probe"))]

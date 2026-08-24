@@ -7,10 +7,12 @@ license.workspace = true
 
 [features]
 preemption-probe = []
+block-service-loop = []
 
 [dependencies]
 mrml-config = { path = "../mrml-config" }
 mrml-kernel = { path = "../mrml-kernel" }
+mrml-storage = { path = "../mrml-storage" }
 
 [[bin]]
 name = "mrml-service-pe"

@@ -395,9 +395,18 @@ authority; unrelated domains continue.
    scratch, replay/poison admission, and the block dispatcher outside the
    privileged kernel. It admits before touching bulk bytes, so denied, replayed,
    poisoned, revoked, malformed, or wrongly shaped requests reach no block I/O.
-   An isolated service process, concrete receive/syscall loop, hosted/physical
-   backend, and
-   physical durability evidence remain pending.
+   A bounded service-side loop now receives one exact 320-byte request and zero
+   or one transferred capability, performs replay/session admission before any
+   shared-buffer or device I/O, invokes only capability-selected shared-buffer
+   operations, dispatches the device request, sends one canonical response, and
+   erases request, capability, scratch, and response storage on every return.
+   Copy uncertainty consumes the admitted request ID, so retry cannot duplicate
+   a mutation. Its unsafe syscall contract forbids manufacturing sender identity,
+   capability tokens, mappings, or reply peers. The UEFI service image compiles
+   a concrete adapter for receive/send operations 5/4 and shared-buffer
+   operations 7/8 with launch-bound endpoint and reply task. The loop is not yet
+   instantiated as a separately provisioned hosted service task, and a hosted or
+   physical device backend plus physical durability evidence remain pending.
    The syscall decoder now admits capability-selected shared-buffer reads and
    writes with implicit exact access modes, nonempty transfers capped at 1 MiB,
    checked shared offsets, complete canonical user ranges, and zero reserved
@@ -537,8 +546,8 @@ authority; unrelated domains continue.
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, the isolated block-service process and concrete
-   receive/syscall loop, a hosted/physical device backend, and physical
+   checkpoint/reconstruction, live instantiation of the block-service loop in an
+   isolated process, a hosted/physical device backend, and physical
    power-loss evidence remain pending. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.

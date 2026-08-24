@@ -1348,3 +1348,10 @@ restart policy after authenticated checkpoint recovery. Service binding,
 revision tracking, finite retry/backoff fields, reserved-byte validation, and
 fail-closed capability checks are defensive systems integration; no new patent-
 candidate mechanism was identified.
+# 2026-08-24 — Block-service receive/syscall loop
+
+**Result: NOT_TRIGGERED.** The change composes existing canonical IPC,
+capability-selected shared-buffer syscalls, replay admission, block dispatch,
+response encoding, and buffer erasure into a conventional bounded userspace
+service loop. Ordering checks and an explicit unsafe syscall-adapter contract are
+defensive systems integration; no new patent-candidate mechanism was identified.
