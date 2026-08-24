@@ -30,6 +30,7 @@ global_asm!(
             mov rsi, r14
             mov rdx, r12
             mov rcx, r15
+            mov r8, rbx
             call mrml_configuration_receiver
             ud2
 
@@ -94,9 +95,10 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
     sender: u64,
     generation: u64,
-    shared_buffer: u64,
+    shared_write: u64,
+    shared_read: u64,
 ) -> ! {
-    unsafe { verify_shared_buffer_syscalls(shared_buffer, generation) };
+    unsafe { verify_shared_buffer_syscalls(shared_write, shared_read, generation) };
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
     let configuration = core::ptr::addr_of_mut!(CONFIGURATION);
     if unsafe { (*configuration).is_none() } {
@@ -127,14 +129,14 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
 }
 
 #[cfg(not(feature = "preemption-probe"))]
-unsafe fn verify_shared_buffer_syscalls(capability: u64, generation: u64) {
+unsafe fn verify_shared_buffer_syscalls(write: u64, read: u64, generation: u64) {
     let mut output = [0xa5u8; 8];
     let mut status = 7u64;
     unsafe {
         asm!(
             "int 0x80",
             inlateout("rax") status,
-            in("rdi") capability,
+            in("rdi") read,
             in("rsi") 128u64,
             in("rdx") output.as_mut_ptr() as u64,
             in("r10") output.len() as u64,
@@ -152,7 +154,7 @@ unsafe fn verify_shared_buffer_syscalls(capability: u64, generation: u64) {
         asm!(
             "int 0x80",
             inlateout("rax") status,
-            in("rdi") capability,
+            in("rdi") write,
             in("rsi") 128u64,
             in("rdx") input.as_ptr() as u64,
             in("r10") input.len() as u64,
@@ -170,7 +172,7 @@ unsafe fn verify_shared_buffer_syscalls(capability: u64, generation: u64) {
         asm!(
             "int 0x80",
             inlateout("rax") status,
-            in("rdi") capability,
+            in("rdi") read,
             in("rsi") 128u64,
             in("rdx") output.as_mut_ptr() as u64,
             in("r10") output.len() as u64,

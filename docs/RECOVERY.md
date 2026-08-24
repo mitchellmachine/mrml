@@ -170,12 +170,14 @@ explicitly and downgrade the status rather than guessing.
   isolated from the common page and sibling slots and erase their backing page
   before restore. Both hosted runners now schedule receiver-only attachment,
   kernel-side absent-leaf observation, zeroed restore, and final revocation.
-  The kernel image binds a receiver-only capability to one live mapping and
-  opaque resource, dispatches bounded shared-buffer copies through active user-
+  The kernel image binds separate exact receiver-only read and read/write
+  capabilities to one live mapping and opaque resource, dispatches bounded
+  shared-buffer copies through active user-
   memory validation, and retires mapping, binding, and handle before re-arm.
-  The service source verifies zero state before each generation writes and reads
-  its value. Fresh signed hosted execution evidence for this composition is
-  still absent.
+  Fresh one-time signed KVM and WHP runs verify zero state before each generation
+  writes and reads its value, kernel-side retirement before host observation,
+  zeroed re-arm, and final retirement. This is hosted controlled-probe evidence,
+  not crash, physical-hardware, or host-resistant evidence.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

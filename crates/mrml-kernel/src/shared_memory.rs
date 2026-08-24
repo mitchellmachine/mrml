@@ -430,7 +430,7 @@ impl<const N: usize> SharedMemoryBindings<N> {
                 entry.object == object
                     && entry.vm == vm
                     && entry.task == Some(task)
-                    && entry.access == access
+                    && entry.access.permits(access)
             }) else {
                 continue;
             };
@@ -1190,6 +1190,7 @@ mod tests {
             .union(Rights::CONTROL)
             .union(Rights::DELEGATE);
         let buffer_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let read_rights = Rights::MAP.union(Rights::READ);
         let mut source = CapabilitySpace::<1>::new();
         let root = source.insert(OBJECT, source_rights).unwrap();
         let endpoint = SharedEndpoint::for_task(vm, task, mapping, SharedAccess::ReadWrite);
@@ -1204,6 +1205,14 @@ mod tests {
             &[(root, buffer_rights)],
             &source,
             &mut receiver,
+        )
+        .unwrap();
+        let mut reader = CapabilitySpace::<1>::new();
+        let read_message = Message::transfer(
+            b"selected-read",
+            &[(root, read_rights)],
+            &source,
+            &mut reader,
         )
         .unwrap();
         let mut backend = BufferBackend {
@@ -1227,10 +1236,10 @@ mod tests {
             )
             .unwrap();
         let mut output = [0; 8];
-        message
+        read_message
             .read_selected_shared_buffer(
-                &receiver,
-                buffer_rights,
+                &reader,
+                read_rights,
                 &bindings,
                 &memory,
                 vm,
@@ -1243,9 +1252,9 @@ mod tests {
         assert_eq!(&output, b"selected");
         assert_eq!(backend.calls, 2);
         assert_eq!(
-            message.read_selected_shared_buffer(
-                &receiver,
-                buffer_rights,
+            read_message.read_selected_shared_buffer(
+                &reader,
+                read_rights,
                 &bindings,
                 &memory,
                 vm,

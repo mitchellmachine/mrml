@@ -342,7 +342,7 @@ static mut USER_RUNTIME: Option<TaskRuntime<2, 1>> = None;
 #[cfg(feature = "user-probe")]
 static mut USER_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_RUNTIME: Option<TaskRuntime<2, 4>> = None;
+static mut SERVICE_RUNTIME: Option<TaskRuntime<2, 6>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_ENDPOINT: Option<Endpoint> = None;
 #[cfg(feature = "service-probe")]
@@ -2241,7 +2241,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         .unwrap_or_else(|_| halt());
         context_a.r12 = 1;
         context_b.r12 = 1;
-        let mut runtime = TaskRuntime::<2, 4>::new(1_000, 1).unwrap_or_else(|_| halt());
+        let mut runtime = TaskRuntime::<2, 6>::new(1_000, 1).unwrap_or_else(|_| halt());
         let receiver = runtime
             .create(Priority::NORMAL, context_a)
             .unwrap_or_else(|_| halt());
@@ -2271,7 +2271,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
-        let resource_capability = provision_service_resource(&mut runtime, receiver);
+        let resource_capabilities = provision_service_resource(&mut runtime, receiver);
         let capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2303,7 +2303,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
         receiver_context.r13 = receiver_capability.token();
         receiver_context.r14 = sender.token();
-        receiver_context.r15 = resource_capability.token();
+        receiver_context.r15 = resource_capabilities[0].token();
+        receiver_context.rbx = resource_capabilities[1].token();
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
@@ -2750,10 +2751,10 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 
 #[cfg(feature = "service-probe")]
 unsafe fn provision_service_resource(
-    runtime: &mut TaskRuntime<2, 4>,
+    runtime: &mut TaskRuntime<2, 6>,
     task: mrml_kernel::TaskId,
-) -> Capability {
-    let capability = runtime
+) -> [Capability; 2] {
+    let write = runtime
         .capabilities_mut(task)
         .and_then(|space| {
             space
@@ -2761,6 +2762,14 @@ unsafe fn provision_service_resource(
                     ObjectId(0x94),
                     Rights::MAP.union(Rights::READ).union(Rights::WRITE),
                 )
+                .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+        })
+        .unwrap_or_else(|_| halt());
+    let read = runtime
+        .capabilities_mut(task)
+        .and_then(|space| {
+            space
+                .insert(ObjectId(0x94), Rights::MAP.union(Rights::READ))
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
@@ -2803,13 +2812,13 @@ unsafe fn provision_service_resource(
     bindings
         .bind(
             runtime.capabilities(task).unwrap_or_else(|_| halt()),
-            capability,
+            write,
             memory,
             SharedEndpoint::for_task(vm, task, mapping, SharedAccess::ReadWrite),
             handle,
         )
         .unwrap_or_else(|_| halt());
-    capability
+    [write, read]
 }
 
 #[cfg(feature = "service-probe")]
@@ -2873,7 +2882,7 @@ unsafe fn complete_service_cleanup(
 
 #[cfg(feature = "service-probe")]
 unsafe fn restart_service_pair(
-    runtime: &mut TaskRuntime<2, 4>,
+    runtime: &mut TaskRuntime<2, 6>,
     supervisor: &mut ServiceSupervisor<2>,
     receiver_service: ServiceId,
 ) -> ! {
@@ -2939,7 +2948,7 @@ unsafe fn restart_service_pair(
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
-    let resource_capability = unsafe { provision_service_resource(runtime, receiver) };
+    let resource_capabilities = unsafe { provision_service_resource(runtime, receiver) };
     let capability = runtime
         .capabilities_mut(sender)
         .and_then(|space| {
@@ -2971,7 +2980,8 @@ unsafe fn restart_service_pair(
     let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
     receiver_context.r13 = receiver_capability.token();
     receiver_context.r14 = sender.token();
-    receiver_context.r15 = resource_capability.token();
+    receiver_context.r15 = resource_capabilities[0].token();
+    receiver_context.rbx = resource_capabilities[1].token();
     let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
     sender_context.r13 = capability.token();
     sender_context.r14 = receiver.token();
@@ -3010,7 +3020,7 @@ unsafe fn service_restart_stage(stage: u32) {
 
 #[cfg(feature = "service-probe")]
 unsafe fn verify_restart_budget_exhausted(
-    runtime: &mut TaskRuntime<2, 4>,
+    runtime: &mut TaskRuntime<2, 6>,
     supervisor: &mut ServiceSupervisor<2>,
 ) {
     let management = unsafe {
@@ -3168,7 +3178,7 @@ unsafe fn complete_buffer_current(
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<2, 4>, task: mrml_kernel::TaskId) {
+unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<2, 6>, task: mrml_kernel::TaskId) {
     let Some((slot, pending)) = (unsafe { pending_buffer(task) }) else {
         return;
     };
@@ -3224,7 +3234,7 @@ unsafe fn insert_pending_buffer(pending: PendingBufferReceive) {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn enter_service_task(runtime: &mut TaskRuntime<2, 4>, task: mrml_kernel::TaskId) -> ! {
+unsafe fn enter_service_task(runtime: &mut TaskRuntime<2, 6>, task: mrml_kernel::TaskId) -> ! {
     unsafe { complete_pending_buffer(runtime, task) };
     let context = runtime
         .context(task)

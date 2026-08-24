@@ -3103,12 +3103,14 @@ sibling root receives no leaf or supervisor alias. Resource revoke, verified
 kernel-side revoke observation, and restore have state independent from the
 common page. Restore zeroes the entire backing while the resource remains non-
 live, then installs the exact leaf; reset failure cannot publish stale content.
-KVM/WHP unit and strict compile gates cover the changed backends, but no new
-matching signed hosted probe has yet completed this resource-page path. The KVM
-and WHP runners now attach an independently backed page only to receiver slot
-zero. The kernel image gives only that receiver an exact non-delegable
-`MAP|READ|WRITE` capability and retains the corresponding VM identity, mapping,
-binding, and opaque resource internally. Shared-buffer syscalls validate the
+KVM/WHP unit and strict compile gates cover the changed backends. The KVM and
+WHP runners attach an independently backed page only to receiver slot zero. The
+kernel image gives only that receiver separate exact non-delegable `MAP|READ`
+and `MAP|READ|WRITE` capabilities and retains the corresponding VM identity,
+mapping, binding, and opaque resource internally. Binding selection permits the
+read capability to attenuate a read/write endpoint but still requires the exact
+per-operation capability shape; write cannot amplify read-only authority.
+Shared-buffer syscalls validate the
 current CR3, select the binding from current task authority and kernel-known VM
 identity, validate the user range before copying, bound scratch to one page, and
 return no handle or address. Receiver cleanup removes the exact active leaf,
@@ -3117,8 +3119,11 @@ then emits the host cleanup transition. The runners therefore observe the
 already absent resource leaf rather than unmapping it twice, restore only after
 zeroing, and revoke again at final retirement. Sender cleanup never operates on
 that resource slot. Service source reads zero state before writing and reading a
-generation value. These paths pass source and compile gates, but no fresh
-matching signed hosted probe has completed them.
+generation value. Fresh one-time signed runs completed this path on KVM and WHP.
+KVM reported `verify=20816us prepare=2469us execute=1449us total=49915us`; WHP
+reported `verify=18522us prepare=3679us execute=799us total=26838us`. These are
+hosted controlled probes, not host-resistant isolation, bare-metal, or physical-
+hardware evidence.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3291,7 +3296,9 @@ live or partially removed ranges and repeated observations fail closed.
 Per-service resource admission additionally rejects common/sibling address
 aliases, and generation re-arm cannot expose retained bytes because reset
 precedes leaf installation. Kernel-image dispatch rechecks the active root and
-task-bound capability, admits at most one page through erased scratch, and lets
+requires separate exact task-bound read or read/write authority for the selected
+operation; read may attenuate a read/write endpoint, while write cannot amplify
+read-only authority. It admits at most one page through erased scratch and lets
 no user input select a binding, VM, host handle, or supervisor address. Cleanup
 must exact-match the receiver root and mapping before it removes any leaf;
 missing state, repeated retirement, host disagreement, or restore failure halts
@@ -3412,8 +3419,9 @@ exact objects through separate kernel operations before state changes. It
 checks the admission response and atomic revision-1 commit response, each a
 canonical 112-byte record, and the sender independently decodes both before
 exiting or entering the generation-2 lifecycle proof. The service-probe runtime
-allows four bounded capabilities per task so the endpoint plus both transaction authorities fit;
-derivation remains atomic and fail-closed. Pending
+allows six bounded capabilities per task so the receiver's signal, exact read
+and read/write resource authorities, schema root, commit root, and setting
+authority remain separate; derivation remains atomic and fail-closed. Pending
 buffered receives are a two-slot task-keyed table rather than one global value,
 so the client and service can block simultaneously without one overwriting the
 other. Sender exit still transitively revokes its derived authority.
@@ -3437,6 +3445,14 @@ controlled probes, not physical-hardware, host-resistant isolation, persistent
 configuration, or bare-metal evidence. Signed supervision requests have not yet
 executed through this CPL3 path.
 
+Fresh one-time Lamport-signed runs on 2026-08-24 additionally completed exact
+read-capability zero checks, exact read/write-capability writes, readback,
+receiver active-leaf/binding/final-handle retirement, host absent-leaf
+observation, zero-before-re-arm, and the same checks in the replacement
+generation. KVM reported `verify=20816us prepare=2469us execute=1449us
+total=49915us`; WHP reported `verify=18522us prepare=3679us execute=799us
+total=26838us`. These remain hosted controlled probes.
+
 Focused verification after the live integration used:
 
 ```text
@@ -3448,8 +3464,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 15 configuration, 309 kernel, and 19 WHP tests with one ignored;
-Linux passed 15 configuration, 309 kernel, and 16 KVM tests with one ignored.
+Windows passed 15 configuration, 331 kernel, and 19 WHP tests with one ignored;
+Linux passed 15 configuration, 331 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

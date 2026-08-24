@@ -1248,3 +1248,17 @@ conventionally checks zero-before-use and bounded write/read behavior. This adds
 no novel capability, syscall, page-table, zeroization, or lifecycle technique.
 
 Patent review: `NOT_TRIGGERED` — conventional authorized resource lifecycle.
+
+## 2026-08-24 — exact service-resource operation capabilities
+
+MRML source: `crates/mrml-kernel/src/shared_memory.rs`,
+`crates/mrml-kernel-image/src/main.rs`, and
+`crates/mrml-service-image/src/main.rs`.
+
+The hosted service conventionally uses separate exact read and read/write
+capabilities for one non-executable bound page. Binding selection allows only a
+requested access that the established endpoint already permits, while message
+authorization still requires the exact per-operation capability shape. This
+adds no novel capability-attenuation, shared-memory, or syscall technique.
+
+Patent review: `NOT_TRIGGERED` — conventional least-authority separation.

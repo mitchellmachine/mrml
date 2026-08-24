@@ -348,9 +348,8 @@ authority; unrelated domains continue.
    registers. A generic executor now composes the current task capability space,
    exact selected binding, direction-validated user copy, opaque resource I/O,
    and fully erased caller scratch. It revalidates immediately before resource
-   use and preserves user/resource backend errors. Concrete kernel-image
-   resource wiring remains pending and fails closed rather
-   than returning a handle or address. The x86-64 active-page copy adapter now walks
+   use and preserves user/resource backend errors. The kernel-image composition
+   returns no handle or address. The x86-64 active-page copy adapter now walks
    every live user leaf under the expected current CR3, issues one exact task/
    range/direction ticket, consumes it once, and cancels it on later executor
    failure. A fixed-capacity opaque-resource table now owns monotonically issued
@@ -369,13 +368,14 @@ authority; unrelated domains continue.
    aliases, maps only one service root, and zeroes backing before generation
    re-arm. KVM/WHP runners attach the distinct receiver page and couple host
    observation, zeroed restore, and final revocation to the existing service
-   lifecycle. The kernel image now provisions receiver-only capability/binding/
-   resource state, executes bounded shared-buffer syscalls through validated
+   lifecycle. The kernel image now provisions separate exact receiver-only read
+   and read/write capabilities plus binding/resource state, executes bounded
+   shared-buffer syscalls through validated
    active user copy, and retires the exact active leaf, binding, and final opaque
-   handle before host re-arm. Service source checks zero-before-use and write/
-   read behavior in both generations. Fresh matching signed hosted-probe
-   evidence remains pending; compile and unit gates do not establish live
-   KVM/WHP execution.
+   handle before host re-arm. Fresh one-time signed KVM and WHP probes check
+   zero-before-use and write/read behavior in both generations plus absent-leaf
+   observation and zeroed re-arm. These are hosted controlled probes, not host-
+   resistant isolation or physical-hardware evidence.
    Service-side binding selection is implemented: the exact transferred
    capability and kernel-known VM/task identity must select exactly one live
    binding of the required access, while missing, ambiguous, and stale
