@@ -3932,9 +3932,29 @@ fn preanalyze_runtime_source_expression_reads<
             kind,
             span: translate_span(body_start, expression_span),
         })?;
+    let direct_aggregate_call = matches!(
+        ty,
+        RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
+    ) && matches!(
+        tree.expression(tree.root())
+            .map(|expression| expression.kind),
+        Some(ExprKind::Call { .. })
+    ) && runtime_call_arguments_preanalysis_supported(
+        function,
+        resolver,
+        locals,
+        &tree,
+        tree.root(),
+        0,
+    )
+    .map_err(|kind| CodegenError {
+        kind,
+        span: translate_span(body_start, expression_span),
+    })?;
     if runtime_type_stack_slots(ty) != 1
         && !(runtime_type_is_fat_reference(ty)
             && runtime_fat_reference_return_preanalysis_supported(&tree, tree.root(), 0))
+        && !direct_aggregate_call
     {
         return Ok(());
     }
@@ -21477,6 +21497,42 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 16384, 5, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_direct_array_call_returns_and_tails() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, prefix: usize, bias: usize) -> [usize; 3] { prefix; if bias == 0 { return make_array(first, second, third); } make_array(third, second, first) }";
+        let module = Parser::new(source).parse_module::<1, 6>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<6>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 6, 64>(
+            &function,
+            &resolver,
+            &body,
+            "[usize; 3]",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(facts.assignment_read_count, 8);
+        for (fact, parameter) in facts.assignment_reads[..8]
+            .iter()
+            .zip([3, 4, 0, 1, 2, 2, 1, 0])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 6, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
