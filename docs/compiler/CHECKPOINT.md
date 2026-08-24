@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `07e81d2`
-  (`compiler: return call-derived fat values`)
+- Compiler checkpoint commit: `ca2d2d2`
+  (`compiler: add initial bounded CFG facts`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -149,6 +149,14 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   preserve left-to-right evidence, retain the System V register pair, and use
   checked hidden-pointer transport for the Windows return buffer.
   Other aggregate return/tail shapes remain outside preanalysis.
+- initial fixed-capacity basic-block and control-flow-edge facts for supported
+  top-level straight-line statements, conditional returns, explicit returns,
+  and final-tail return flow. Blocks carry stable IDs, exact statement ranges,
+  and reachability; edges target another block or function return and distinguish
+  true, false, and unconditional flow. The tables are capped at 64 blocks and
+  128 edges with explicit capacity errors. Bodies containing loops, conditional-
+  assignment blocks, or exhaustive conditional-return chains leave the CFG
+  tables empty and `control_flow_complete` false rather than inventing edges.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -163,8 +171,8 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Initialization/move paths, body basic blocks and edges, borrows, loans, regions,
-Polonius-style analysis, and a general trait solver are unimplemented.
+Initialization/move paths, complete loop/branch CFG coverage, borrows, loans,
+regions, Polonius-style analysis, and a general trait solver are unimplemented.
 
 ## Next compiler work
 
@@ -173,7 +181,8 @@ compatibility gaps:
 
 1. complete bounded read-place preanalysis for supported
    aggregate/materialization families in exact emission order;
-2. add explicit basic blocks and control-flow edges;
+2. extend explicit basic blocks and control-flow edges through exhaustive
+   branches, conditional action blocks, and loops;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
@@ -199,8 +208,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 645 tests on each host: 354
-library tests, 10 conformance tests, 279 replacement tests, and 2 driver tests.
+The checkpoint source passed 648 tests on each host: 356
+library tests, 10 conformance tests, 280 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

@@ -303,9 +303,14 @@ unsupported
 aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
-yet a complete typed body table, move path, borrow, loan, or CFG. This runtime
-place foundation is therefore an incremental prerequisite, not a claim of
-ownership checking.
+yet a complete typed body table, move path, borrow, or loan model. An initial
+fixed-capacity CFG fact table records stable basic-block IDs, exact top-level
+statement ranges, reachability, and true/false/unconditional edges to blocks or
+function return for straight-line, conditional-return, explicit-return, and tail
+flow. Loops, conditional-assignment blocks, and exhaustive conditional-return
+chains explicitly leave that table incomplete and empty until their real edges
+are modeled. This runtime place/CFG foundation is therefore an incremental
+prerequisite, not a claim of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 
