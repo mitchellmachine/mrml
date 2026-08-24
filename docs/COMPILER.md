@@ -317,10 +317,14 @@ range, exit, return, and backedge facts for ordered simple and conditional
 break/continue/return controls. Conditional loop blocks additionally represent
 primary, `else if`, and final `else` condition/action provenance, joins, and
 arm-specific terminals, including structurally proven exhaustive termination.
-Action lists containing statements after a return, nested loop blocks, labeled
-cross-loop targets, and post-terminal loop-operation suffixes remain explicitly
-incomplete. This runtime place/CFG foundation is therefore an incremental
-prerequisite, not a claim of ownership checking.
+Nested loop blocks now carry dedicated entry headers and ordered action/control
+provenance, including parser-resolved inner and outer break/continue targets,
+conditional returns, entry-condition exits, and divergent backedges without
+replaying preceding outer-body operations. Action lists containing statements
+after a return, residual unit-loop parser shapes, and post-terminal loop-
+operation suffixes remain explicitly incomplete. This runtime place/CFG
+foundation is therefore an incremental prerequisite, not a claim of ownership
+checking.
 
 Complexity assessment for the bounded runtime fact tables:
 
