@@ -1415,6 +1415,17 @@ JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Loop-carried loan generations
+
+**Result: NOT_TRIGGERED.** The compiler conventionally extends its existing
+bounded CFG reaching-definition and replacement-kill checks to direct
+reference assignments inside loop control points. It adds no new arena,
+optimization, authority model, device or compatibility protocol, host-share
+mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Service policy-replacement syscall foundation
 
 **Result: NOT_TRIGGERED.** The change adds a conventional pointer-free syscall

@@ -3421,3 +3421,17 @@ initialization/effect count and malformed ancestry cycles fail closed. The
 pinned oracle confirmed E0499 when a bypass path leaves the original owner live
 through the child, and acceptance when exhaustive replacement removes that
 owner. This does not claim loop-carried or expression-conditional generations.
+
+The loop-carried loan-generation milestone passed all 717 compiler and driver
+tests on Windows gnullvm and all 717 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using rustc workspace
+commit `fb6531d550e0075b9eb9a51464f404805eec87d9`. Direct reference assignments
+inside loop operations, conditional loop actions, and nested loop actions now
+participate in bounded generation reaching definitions. Zero-iteration bypass
+paths conservatively retain the pre-loop generation, while an unconditional
+replacement before every reachable exit kills it. A repeated dynamic issuance
+from one static assignment uses that assignment's fixed generation identity.
+The pinned oracle confirmed E0499 for both bypass cases and acceptance for both
+mandatory-replacement cases. This does not claim per-iteration regions,
+expression-conditional generations, or broader coercion sites. The
+`no_std`/allocation/unsafe hygiene scan remained empty.

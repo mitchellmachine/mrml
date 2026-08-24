@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e4f5a56`
-  (`compiler: preserve multi-parent reborrow ancestry`)
+- Compiler checkpoint commit: `14c70f0`
+  (`compiler: track loop-carried loan generations`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -141,10 +141,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   conflict-to-use queries do not combine mutually exclusive paths. A child
   issued with multiple reaching parent generations recursively preserves each
   possible ultimate owner and applies suspension to each mutable parent, with
-  traversal bounded by the combined initialization/effect count. Expression-
-  conditional and loop-carried replacements remain excluded; moved reference
-  values are not indirect loan origins. This is not general coercion-site
-  reborrowing.
+  traversal bounded by the combined initialization/effect count. Direct
+  assignments in loop operations, conditional loop actions, and nested loop
+  actions now participate in the same reaching-definition analysis. A loop
+  that can execute zero times retains the pre-loop generation; an unconditional
+  replacement crossed before every exit kills it. Repeated dynamic issuances
+  from one static assignment conservatively share that bounded generation
+  identity. Expression-conditional replacements remain excluded; moved
+  reference values are not indirect loan origins. This is not general
+  coercion-site reborrowing.
   A plain direct reference identifier assigned into an existing typed reference
   binding uses the destination reference type as coercion context and records a
   shared or mutable reborrow before the destination write. Mutable parent
@@ -403,8 +408,8 @@ emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths and remaining indirect move/borrow classification,
 unsupported expression/control-flow forms, complete loans, indirect alias
-invalidation, broader coercion-site reborrows, expression-conditional and loop-
-carried reference generations, regions,
+invalidation, broader coercion-site reborrows, expression-conditional reference
+generations, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -414,8 +419,8 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. add loop-carried generation dataflow, then expression-conditional
-   generations and broader coercion sites before region reasoning; preserve the
+1. add expression-conditional generations and broader coercion sites before
+   region reasoning; preserve the
    distinction between an expected-reference reborrow, an explicit
    reassignment borrow, and an indirect consuming move;
 2. exact constant owned-array element identity is now retained. Add array move
@@ -447,8 +452,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 715 tests on each host: 393
-library tests, 10 conformance tests, 310 replacement tests, and 2 driver tests.
+The checkpoint source passed 717 tests on each host: 394
+library tests, 10 conformance tests, 311 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
