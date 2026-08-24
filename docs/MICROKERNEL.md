@@ -4109,6 +4109,65 @@ Patent review: `NOT_TRIGGERED` — conventional consolidation of bounded snapsho
 validation and ordered restoration behind one backend-neutral mechanism; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The controlled replacement boundary is now host-forced instead of
+guest-requested. After common doorbell processing has consumed requests 13 and
+14 and published both protected completions, the runner does not enter the old
+vCPU again. It independently suspends the device, captures and validates exact
+`14/14/14/12` state, destroys the old native VM, and restores a fresh execution.
+The block guest no longer contains the checkpoint `OUT`; KVM and WHP no longer
+allow or dispatch its former port; and the exact VM-policy budget is 64 common
+doorbell/acknowledgement exits rather than 65. The replacement kernel still
+starts from its signed entry and reconstructs the two completed-but-unretired
+requests without republishing or retrying them.
+
+`VirtualBlockRestartImage` is now a linear recovery input. It is neither
+`Clone` nor debug-formattable, and `restore_restart_image` consumes it by value,
+so one capture cannot seed multiple replacement attempts. Its destructor uses
+volatile writes to erase all encoded request slots, completion slots, and the
+resume page on success and every error return. Configuration and scalar state
+remain data only and never authorize device resume. Restoration failure still
+leaves the retained device suspended and, after old-VM destruction, provides no
+execution fallback.
+
+Fresh one-time Lamport-signed version-1 Arch Linux/WSL2 KVM execution on
+2026-08-24 completed this host-forced one-use path and reported
+`verify=17163us prepare=2349us execute=76482us total=116649us`. All 388 release
+kernel tests and all 6 release KVM-run tests passed. Strict package-focused
+`--no-deps` Clippy passed for the kernel and KVM runner, and strict nightly UEFI
+Clippy passed for the block-probe image. Native Windows test-target `check` and
+strict scoped Clippy passed for the kernel, WHP adapter, and WHP runner with
+CUDA excluded. No Windows test binary or live WHP execution is claimed because
+`link.exe` remains unavailable. Consumed signing material and signed test
+artifacts were deleted.
+
+This is deterministic host-forced execution loss at an already quiescent,
+fully completed backend boundary. It is not evidence of asynchronous or
+unplanned vCPU failure, capture after native VM destruction, backend-in-flight
+or uncertain-mutation recovery, persistence, durability, host resistance,
+native boot, bare metal, or physical hardware.
+
+The host-forced recovery `DIGITAL-RIGHTS REVIEW` found that eliminating the
+guest checkpoint channel and making snapshot bytes one-use and erased reduces
+retention and covert control surface. It adds no identity, collection beyond
+the already required local queue state, correlation, disclosure, attestation
+mandate, DRM, vendor/publisher control, first-party bypass, accessibility
+restriction, AI authority, persistence, or durable owner-state change. The
+`HOSTILE SECURITY REVIEW` treats the host-selected cut, exact 64-exit budget,
+absence of checkpoint permission, device suspension, live counters and history
+anchors, old-VM destruction, image linearity, destructor erasure, fresh-memory
+preflight, directional publication, replacement entry, and resume result as
+adversarial. The old guest receives no post-cut execution; the image cannot be
+cloned or restored twice; every restoration outcome erases encoded snapshot
+bytes; uncertainty poisons; and no mismatch resumes the device. Existing
+capability, revocation, rollback-resistance, accessibility, evidence,
+owner-sovereignty, data-minimization, anti-DRM, owner-controlled-attestation,
+AI-containment, and anti-persistence gates remain unchanged. This agent review
+does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional host-selected quiescent cut,
+linear snapshot consumption, and volatile cleanup; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

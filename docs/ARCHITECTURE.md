@@ -707,11 +707,12 @@ presentation is now implemented as a distinct queue- and configuration-
 disjoint page. KVM and WHP initialize it from the canonical fresh state, map it
 read-only/NX to the guest, and retain device-path writes; the common bridge can
 recapture and publish the complete zero-padded page and poisons on uncertain
-publication. The signed guest now requests one exact policy-accounted stop
-after requests 13 and 14 have been consumed and their protected completions
-published, but before either completion is retired. The host requires producer,
-consumed, and published watermarks 14, consumer watermark 12, and both history
-anchors 14. The guest discards its local driver state, reconstructs two pending
+publication. The host now cuts old-guest execution immediately after its common
+doorbell runners have consumed requests 13 and 14 and published their protected
+completions, but before another vCPU entry can retire either completion. No
+guest checkpoint port, exit, or allowlist rule participates. The host requires
+producer, consumed, and published watermarks 14, consumer watermark 12, and
+both history anchors 14. The replacement guest reconstructs two pending
 ownership records from the complete page and physical request slots, retires
 both already-published completions in order, and continues through operation 32
 without ID or counter reuse. Resume capture now additionally requires the
@@ -719,7 +720,7 @@ device's explicit `Suspended` lifecycle state; stopping the vCPU alone is not
 sufficient. Suspension succeeds only with no device in-flight slot or pending
 interrupt, and the runners resume the device only after exact publication and
 state validation succeed. Fresh signed KVM execution covers this pending-
-ownership checkpoint; the WHP path has matching source and current compile/lint
+ownership host cut; the WHP path has matching source and current compile/lint
 evidence but no linked or live replacement evidence. The KVM controlled probe
 now also destroys the stopped native VM,
 prepares a fresh VM from the same verified executable and canonical handoff,
@@ -746,8 +747,12 @@ completion slots, and validates every request/completion pair. Restoration
 preflights completely zero queue extents and the exact configuration-bound fresh
 resume page before publishing slots and counters through their directional
 boundaries. Memory uncertainty poisons the bridge and cannot authorize resume.
-Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
-and PCI discovery remain pending. One freshly
+Restoration consumes the non-clonable image exactly once and volatile-erases
+its encoded request, completion, and resume storage on every return path. The
+VM policy budget is exactly 64 common block exits; the former guest checkpoint
+exit and third I/O permission no longer exist. Asynchronous/unplanned crash
+capture, backend-in-flight recovery, unbounded progress, and PCI discovery
+remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

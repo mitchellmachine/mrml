@@ -727,13 +727,14 @@ two physical slots repeatedly wrap. Live presentation of the resume record is
 now implemented with KVM/WHP parity: one typed page must bind the exact
 configuration page and queue, remain disjoint from every launch range, is
 initialized and republished as a complete zero-padded canonical image through
-the device path, and is guest-read-only/NX. The signed workload now reaches one
-exact scalar stop after requests 13 and 14 have been consumed and their
-protected completions published but before guest retirement. The host accounts
-and validates that exit, requires producer/consumed/published watermarks 14 and
-consumer watermark 12, and publishes nonzero state while the vCPU is stopped.
-The guest reconstructs two pending ownership records from the complete page
-plus both request slots, retires the already-published completions in order,
+the device path, and is guest-read-only/NX. The host now selects the recovery
+cut immediately after common processing has consumed requests 13 and 14 and
+published their protected completions but before another guest entry. The
+guest contains no checkpoint port, and the launchers contain no checkpoint I/O
+permission or exit. The host requires producer/consumed/published watermarks 14
+and consumer watermark 12, then publishes nonzero state while execution remains
+stopped. The replacement guest reconstructs two pending ownership records from
+the complete page plus both request slots, retires the already-published completions in order,
 and continues through operation 32. Canonical capture/publication now requires
 an explicit device `Suspended` state in addition to the stopped vCPU. Suspension
 admits no device in-flight slot or pending interrupt, and the device resumes
@@ -765,7 +766,11 @@ request/history and unretired completion slots, rejects mismatched completion
 identity/status/length, and preflights zero queue extents plus the exact fresh
 configuration-bound resume page before any restoration write. Directional
 slot/counter publication and poison-on-uncertainty are common rather than
-launcher policy. Unplanned crash orchestration, backend-in-flight
+launcher policy. Restoration consumes the non-clonable image once and
+volatile-erases its encoded queue/resume storage on every return; the exact
+policy budget is reduced to 64 common block exits. This is deterministic
+host-forced execution loss, not asynchronous/unplanned crash capture.
+Asynchronous crash orchestration, backend-in-flight
 recovery, unbounded progress, and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport

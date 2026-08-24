@@ -11,16 +11,16 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    ArtifactKind, CapabilitySpace, ExitDisposition, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES,
-    GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse,
-    GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory,
-    HypercallRouter, InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, ObjectId,
-    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage, VmBackend, VmExit,
-    VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once, run_vm_once,
+    ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
+    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
+    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
+    IoDirection, IoPortPolicy, IoPortRule, ObjectId, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+    VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
+    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
+    run_virtual_block_doorbell_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -89,8 +89,6 @@ const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
 #[cfg(target_os = "windows")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(target_os = "windows")]
-const BLOCK_QUIESCE_PORT: u16 = 0x4d66;
-#[cfg(target_os = "windows")]
 const BLOCK_PROBE_CYCLES: usize = 8;
 #[cfg(target_os = "windows")]
 const BLOCK_PROBE_OPERATIONS: u32 = (BLOCK_PROBE_CYCLES * 4) as u32;
@@ -101,7 +99,7 @@ const BLOCK_QUIESCE_REQUESTS: u32 = (BLOCK_QUIESCE_WINDOW * 2 + 2) as u32;
 #[cfg(target_os = "windows")]
 const BLOCK_QUIESCE_RETIRED: u32 = BLOCK_QUIESCE_REQUESTS - 2;
 #[cfg(target_os = "windows")]
-const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8 + 1) as u64;
+const BLOCK_PROBE_POLICY_EXITS: u64 = (BLOCK_PROBE_CYCLES * 8) as u64;
 #[cfg(target_os = "windows")]
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(target_os = "windows")]
@@ -193,7 +191,7 @@ fn run_block_guest_driver_probe<'system>(
     interrupt_policy
         .allow(48)
         .map_err(|_| anyhow!("failed to allow block interrupt vector"))?;
-    let mut io_policy = IoPortPolicy::<3>::deny_all();
+    let mut io_policy = IoPortPolicy::<2>::deny_all();
     io_policy
         .allow(
             IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write)
@@ -201,10 +199,6 @@ fn run_block_guest_driver_probe<'system>(
         )
         .and_then(|()| {
             IoPortRule::new(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, IoDirection::Write)
-                .and_then(|rule| io_policy.allow(rule))
-        })
-        .and_then(|()| {
-            IoPortRule::new(BLOCK_QUIESCE_PORT, 4, IoDirection::Write)
                 .and_then(|rule| io_policy.allow(rule))
         })
         .map_err(|_| anyhow!("failed to install block I/O policy"))?;
@@ -257,27 +251,6 @@ fn run_block_guest_driver_probe<'system>(
             }
         }
         if window == BLOCK_QUIESCE_WINDOW {
-            let checkpoint = run_vm_once(
-                &mut guest,
-                0,
-                &mut vms,
-                vm,
-                &mut router,
-                &capabilities,
-                &guest_memory,
-                &io_policy,
-            )
-            .map_err(|error| anyhow!("block quiescence exit failed: {:?}", error))?;
-            if checkpoint
-                != (ExitDisposition::Io {
-                    port: BLOCK_QUIESCE_PORT,
-                    size: 4,
-                    write: true,
-                    value: BLOCK_QUIESCE_REQUESTS,
-                })
-            {
-                return Err(anyhow!("block quiescence tuple mismatch: {:?}", checkpoint));
-            }
             let configuration = device
                 .configuration()
                 .map_err(|_| anyhow!("block configuration unavailable at quiescence"))?;
@@ -327,7 +300,7 @@ fn run_block_guest_driver_probe<'system>(
                 return Err(anyhow!("replacement block payload was not fresh"));
             }
             bridge
-                .restore_restart_image(&mut replacement, &device, &restart_image)
+                .restore_restart_image(&mut replacement, &device, restart_image)
                 .map_err(|error| {
                     anyhow!("replacement block VM state restoration failed: {:?}", error)
                 })?;
@@ -1860,7 +1833,7 @@ mod tests {
     #[test]
     fn block_probe_exit_budget_is_exact_and_fail_closed() {
         assert_eq!(BLOCK_PROBE_OPERATIONS, 32);
-        assert_eq!(BLOCK_PROBE_POLICY_EXITS, 65);
+        assert_eq!(BLOCK_PROBE_POLICY_EXITS, 64);
         let mut vms = VmTable::<1>::new();
         let vm = vms.create(BLOCK_PROBE_POLICY_EXITS).unwrap();
         vms.mark_loaded(vm).unwrap();

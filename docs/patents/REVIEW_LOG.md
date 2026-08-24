@@ -1632,6 +1632,15 @@ backend-neutral mechanism. It adds no new authority model, persistent format,
 device protocol, or patent-candidate mechanism. This agent review does not
 replace the required independent human dual review.
 
+# 2026-08-24 — Host-forced one-use virtual-block recovery
+
+**Result: NOT_TRIGGERED.** The change conventionally removes a guest checkpoint
+exit, selects an already quiescent recovery cut in the host, consumes one
+bounded snapshot exactly once, and volatile-erases its encoded storage. It adds
+no new authority model, persistent format, device protocol, or patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Virtual-block queue transaction processor
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights producer/

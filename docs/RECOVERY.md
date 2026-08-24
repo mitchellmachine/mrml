@@ -407,10 +407,12 @@ explicitly and downgrade the status rather than guessing.
   configuration- and queue-bound, completely zero-padded, mapped read-only/NX
   to KVM and WHP guests, and writable only through the device path. The common
   bridge recaptures live state before publication and poisons on uncertain
-  writes. The signed workload now stops after requests 13 and 14 have been
-  consumed and their protected completions published, but before either is
-  retired by the guest. The host requires producer/consumed/published
-  watermarks 14, consumer watermark 12, and both history anchors 14 before it
+  writes. The host now cuts execution after common processing has consumed
+  requests 13 and 14 and published their protected completions, but before
+  another vCPU entry can retire either. There is no guest checkpoint port,
+  checkpoint exit, or corresponding I/O permission. The host requires
+  producer/consumed/published watermarks 14, consumer watermark 12, and both
+  history anchors 14 before it
   publishes the exact nonzero page while execution is stopped. The guest
   discards its local driver state, reconstructs two pending ownership records
   from the complete page and physical request slots, retires the two already-
@@ -447,8 +449,12 @@ explicitly and downgrade the status rather than guessing.
   the resume page must equal the exact configuration-bound fresh record. Slots
   precede counters, protected bytes use the device boundary, and memory
   uncertainty poisons the bridge without resuming the device.
-  Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
-  and PCI transport remain pending. A common
+  Restoration consumes the non-clonable restart image once and volatile-erases
+  encoded request, completion, and resume storage on all return paths. The VM
+  budget contains exactly 64 common block exits. This proves deterministic
+  host-forced execution loss only; asynchronous/unplanned crash orchestration,
+  backend-in-flight recovery, unbounded progress, and PCI transport remain
+  pending. A common
   unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer

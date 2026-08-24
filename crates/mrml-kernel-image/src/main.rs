@@ -160,8 +160,6 @@ const BLOCK_PAYLOAD_BASE: u64 = 0x00a0_0000;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(feature = "block-guest-driver-probe")]
-const BLOCK_QUIESCE_PORT: u16 = 0x4d66;
-#[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROBE_CYCLES: u32 = 8;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_QUIESCE_CYCLE: u32 = BLOCK_PROBE_CYCLES / 2;
@@ -2367,30 +2365,6 @@ unsafe fn run_block_guest_driver_probe() -> ! {
                     .unwrap_or_else(|_| halt());
                 driver
                     .publish_submission(&mut transport, write)
-                    .unwrap_or_else(|_| halt());
-            }
-            if cycle + 1 == BLOCK_QUIESCE_CYCLE {
-                unsafe {
-                    asm!(
-                        "out dx, eax",
-                        in("dx") BLOCK_QUIESCE_PORT,
-                        in("eax") BLOCK_QUIESCE_REQUESTS,
-                        options(nomem, nostack)
-                    )
-                };
-                for (offset, byte) in resume_page.iter_mut().enumerate() {
-                    *byte =
-                        unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
-                }
-                for (slot, request) in requests.iter_mut().enumerate() {
-                    let base = queue.request_base()
-                        + 128
-                        + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
-                    for (offset, byte) in request.iter_mut().enumerate() {
-                        *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
-                    }
-                }
-                driver = VirtualBlockGuestDriver::reconstruct_from_page(&resume_page, &requests)
                     .unwrap_or_else(|_| halt());
             }
         }

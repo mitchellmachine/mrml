@@ -557,6 +557,22 @@ impl VirtualBlockRestartImage {
     }
 }
 
+impl Drop for VirtualBlockRestartImage {
+    fn drop(&mut self) {
+        for byte in self
+            .request_slots
+            .iter_mut()
+            .flatten()
+            .chain(self.completion_slots.iter_mut().flatten())
+            .chain(self.encoded_resume_page.iter_mut())
+        {
+            // SAFETY: `byte` is a unique reference into image-owned storage.
+            // Volatile erasure prevents ordinary dead-store removal.
+            unsafe { core::ptr::write_volatile(byte, 0) };
+        }
+    }
+}
+
 impl VirtualBlockResumePage {
     pub fn fresh(
         base: u64,
@@ -2464,7 +2480,7 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         &mut self,
         backend: &mut B,
         device: &VirtualBlockDevice<N>,
-        image: &VirtualBlockRestartImage,
+        image: VirtualBlockRestartImage,
     ) -> Result<(), VirtualBlockQueueError<B::Error>> {
         self.require_live()?;
         let configuration = device
@@ -4523,7 +4539,9 @@ mod tests {
     }
 
     #[test]
-    fn restart_image_minimizes_validates_and_restores_only_fresh_memory() {
+    fn restart_image_is_bounded_one_use_and_restores_only_fresh_memory() {
+        assert!(core::mem::needs_drop::<VirtualBlockRestartImage>());
+        assert!(core::mem::size_of::<VirtualBlockRestartImage>() <= 16 * 1024);
         let mut device = active::<4>();
         let queue = layout::<4>();
         let mut bridge = VirtualBlockQueueBridge::<4>::new(queue).unwrap();
@@ -4590,18 +4608,18 @@ mod tests {
         let published = bridge
             .publish_resume_page(&mut source, &device, resume_page)
             .unwrap();
-        let image = bridge
+        let nonfresh_image = bridge
             .capture_restart_image(&source, &device, published)
             .unwrap();
-        assert_eq!(image.state(), published.state());
+        assert_eq!(nonfresh_image.state(), published.state());
         assert!(
-            image.request_slots[2..]
+            nonfresh_image.request_slots[2..]
                 .iter()
                 .flatten()
                 .all(|byte| *byte == 0)
         );
         assert!(
-            image.completion_slots[2..]
+            nonfresh_image.completion_slots[2..]
                 .iter()
                 .flatten()
                 .all(|byte| *byte == 0)
@@ -4612,7 +4630,7 @@ mod tests {
         let mut nonfresh = MockVmm::new();
         nonfresh.bytes[queue.request_base() as usize + 1] = 1;
         assert_eq!(
-            bridge.restore_restart_image(&mut nonfresh, &device, &image),
+            bridge.restore_restart_image(&mut nonfresh, &device, nonfresh_image),
             Err(VirtualBlockQueueError::Protocol(
                 VirtualBlockError::InvalidQueue
             ))
@@ -4622,10 +4640,13 @@ mod tests {
             &[0; 8]
         );
 
+        let image = bridge
+            .capture_restart_image(&source, &device, published)
+            .unwrap();
         let mut replacement = MockVmm::new();
         replacement.bytes[0x4000..0x5000].copy_from_slice(&encoded_fresh_resume);
         bridge
-            .restore_restart_image(&mut replacement, &device, &image)
+            .restore_restart_image(&mut replacement, &device, image)
             .unwrap();
         assert_eq!(
             &replacement.bytes[queue.request_base() as usize..queue.request_base() as usize + 8],
@@ -4661,12 +4682,16 @@ mod tests {
             ))
         ));
 
+        source.bytes[second_completion_address + 16] ^= 1;
+        let uncertain_image = bridge
+            .capture_restart_image(&source, &device, published)
+            .unwrap();
         let mut uncertain = MockVmm::new();
         uncertain.bytes[0x4000..0x5000].copy_from_slice(&encoded_fresh_resume);
         uncertain.fail_write_address =
             Some(slot_address(queue.request_base(), 1, 4, VIRTUAL_BLOCK_REQUEST_BYTES).unwrap());
         assert_eq!(
-            bridge.restore_restart_image(&mut uncertain, &device, &image),
+            bridge.restore_restart_image(&mut uncertain, &device, uncertain_image),
             Err(VirtualBlockQueueError::Backend(MockError::Injected))
         );
         assert!(bridge.is_poisoned());
