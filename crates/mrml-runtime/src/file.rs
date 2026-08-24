@@ -62,6 +62,17 @@ pub fn write_file(path: &str, contents: &[u8]) -> Result<(), FileError> {
     file.write_all(contents)
 }
 
+/// Creates and writes a file only if no filesystem entry already has `path`.
+pub fn write_new_file(path: &str, contents: &[u8]) -> Result<(), FileError> {
+    let mut file = File::create_new(path)?;
+    let result = file.write_all(contents);
+    drop(file);
+    if result.is_err() {
+        let _ = remove_file(path);
+    }
+    result
+}
+
 impl fmt::Display for FileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -391,6 +402,25 @@ impl File {
         }
     }
 
+    pub fn create_new(path: &str) -> Result<Self, FileError> {
+        #[cfg(windows)]
+        {
+            let encoded = encode_windows_path(path).ok_or(FileError::InvalidPath)?;
+            let inner = mrml_windows::NativeFile::create_new_write(&encoded)
+                .ok_or(FileError::OpenFailed)?;
+            Ok(Self { inner, position: 0 })
+        }
+        #[cfg(unix)]
+        {
+            let encoded = encode_unix_path(path).ok_or(FileError::InvalidPath)?;
+            let path = core::ffi::CStr::from_bytes_with_nul(&encoded)
+                .map_err(|_| FileError::InvalidPath)?;
+            let inner =
+                mrml_linux::NativeFile::create_new_write(path).ok_or(FileError::OpenFailed)?;
+            Ok(Self { inner, position: 0 })
+        }
+    }
+
     pub fn open_write(path: &str) -> Result<Self, FileError> {
         #[cfg(windows)]
         {
@@ -508,6 +538,15 @@ mod tests {
         write_file(&path, b"a longer discarded value").unwrap();
         write_file(&path, "observatory λ".as_bytes()).unwrap();
         assert_eq!(read_file_text(&path).unwrap(), "observatory λ");
+        remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn exclusive_writes_never_replace_an_existing_file() {
+        let path = test_path("mrml-exclusive.bin");
+        write_new_file(&path, b"first").unwrap();
+        assert_eq!(write_new_file(&path, b"second"), Err(FileError::OpenFailed));
+        assert_eq!(&*read_file(&path).unwrap(), b"first");
         remove_file(&path).unwrap();
     }
 

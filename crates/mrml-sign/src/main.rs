@@ -59,7 +59,7 @@ fn finalize_vbs_enclave(input_path: &str, output_path: &str) -> Result<()> {
     let image = mrml_runtime::read_file_bounded(input_path, MAX_ARTIFACT)?;
     let output = authenticode::finalize_vbs_enclave(&image)
         .map_err(|_| anyhow!("invalid or noncanonical VBS enclave PE image"))?;
-    mrml_runtime::write_file(output_path, &output)?;
+    mrml_runtime::write_new_file(output_path, &output)?;
     println!("validated VBS load configuration and finalized PE integrity flags");
     Ok(())
 }
@@ -72,7 +72,7 @@ fn attach_authenticode(image_path: &str, certificate_path: &str, output_path: &s
     let certificate = mrml_runtime::read_file_bounded(certificate_path, 16 * 1024 * 1024)?;
     let output = authenticode::attach_pkcs7(&image, &certificate)
         .map_err(|_| anyhow!("invalid PE image or PKCS#7 certificate attachment"))?;
-    mrml_runtime::write_file(output_path, &output)?;
+    mrml_runtime::write_new_file(output_path, &output)?;
     println!("attached canonical PKCS#7 WIN_CERTIFICATE and finalized PE checksum");
     Ok(())
 }
@@ -143,8 +143,8 @@ fn sign_bundle(
         .and_then(|_| bundle.try_extend_from_slice(&signature))
         .and_then(|_| bundle.try_extend_from_slice(&artifact))
         .map_err(|_| anyhow!("allocation failed"))?;
-    mrml_runtime::write_file(output_path, &bundle)?;
     mrml_runtime::remove_file(private_path)?;
+    mrml_runtime::write_new_file(output_path, &bundle)?;
     println!(
         "wrote canonical signed {:?} version {} bundle; consumed one-time private key",
         kind, version
@@ -170,7 +170,7 @@ fn manifest(args: &[Text]) -> Result<()> {
     let encoded = ReleaseManifest::new(version, next, roots)
         .map_err(|_| anyhow!("invalid release manifest"))?
         .encode();
-    mrml_runtime::write_file(&args[3], &encoded)?;
+    mrml_runtime::write_new_file(&args[3], &encoded)?;
     println!("wrote canonical release {} manifest", version);
     Ok(())
 }
@@ -206,8 +206,10 @@ fn keygen(private_path: &str, public_path: &str) -> Result<()> {
     mrml_runtime::fill_random(&mut private).map_err(|_| anyhow!("OS random generation failed"))?;
     let mut public = [0u8; LAMPORT_PUBLIC_KEY_BYTES];
     lamport_public_key(&private, &mut public).map_err(|_| anyhow!("key derivation failed"))?;
-    mrml_runtime::write_file(private_path, &private)?;
-    mrml_runtime::write_file(public_path, &public)?;
+    // Publish the non-secret half first. A failure can leave an unusable public
+    // key behind, but never a private key without its corresponding public key.
+    mrml_runtime::write_new_file(public_path, &public)?;
+    mrml_runtime::write_new_file(private_path, &private)?;
     println!("generated one-time Lamport key; destroy PRIVATE after exactly one signature");
     Ok(())
 }
@@ -242,8 +244,8 @@ fn sign(
     }
     lamport_verify(&public, &statement, &signature)
         .map_err(|_| anyhow!("self-verification failed; signature was not written"))?;
-    mrml_runtime::write_file(signature_path, &signature)?;
     mrml_runtime::remove_file(private_path)?;
+    mrml_runtime::write_new_file(signature_path, &signature)?;
     println!(
         "signed {:?} version {}; consumed and removed the one-time private key",
         kind, version
@@ -279,3 +281,54 @@ fn parse_kind(value: &str) -> Result<ArtifactKind> {
 }
 
 mrml_runtime::mrml_entrypoint!(application_main);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signer_never_replaces_output_and_consumes_key_before_publication() {
+        let root = mrml_runtime::join_path(
+            &mrml_runtime::temporary_directory(),
+            &mrml_runtime::mrml_format!("mrml-sign-exclusive-{}", mrml_runtime::process_id()),
+        );
+        mrml_runtime::create_dir_all(&root).unwrap();
+        let artifact = mrml_runtime::join_path(&root, "artifact.bin");
+        let private = mrml_runtime::join_path(&root, "release.private");
+        let public = mrml_runtime::join_path(&root, "release.public");
+        let signature = mrml_runtime::join_path(&root, "artifact.sig");
+        mrml_runtime::write_file(&artifact, b"release artifact").unwrap();
+
+        keygen(&private, &public).unwrap();
+        mrml_runtime::write_file(&signature, b"occupied").unwrap();
+        assert!(
+            sign(
+                ArtifactKind::LaunchPolicy,
+                7,
+                &artifact,
+                &private,
+                &signature
+            )
+            .is_err()
+        );
+        assert!(mrml_runtime::path_exists(&private));
+        assert_eq!(&*mrml_runtime::read_file(&signature).unwrap(), b"occupied");
+
+        mrml_runtime::remove_file(&signature).unwrap();
+        sign(
+            ArtifactKind::LaunchPolicy,
+            7,
+            &artifact,
+            &private,
+            &signature,
+        )
+        .unwrap();
+        assert!(!mrml_runtime::path_exists(&private));
+        assert_eq!(
+            mrml_runtime::read_file(&signature).unwrap().len(),
+            LAMPORT_SIGNATURE_BYTES
+        );
+
+        mrml_runtime::remove_dir_all(&root).unwrap();
+    }
+}

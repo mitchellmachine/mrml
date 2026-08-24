@@ -689,6 +689,14 @@ impl NativeFile {
         (file >= 0).then_some(Self(file))
     }
 
+    pub fn create_new_write(path: &CStr) -> Option<Self> {
+        const O_WRONLY: c_int = 1;
+        const O_CREAT: c_int = 64;
+        const O_EXCL: c_int = 128;
+        let file = unsafe { open(path.as_ptr(), O_WRONLY | O_CREAT | O_EXCL, 0o666) };
+        (file >= 0).then_some(Self(file))
+    }
+
     pub fn open_write(path: &CStr) -> Option<Self> {
         const O_WRONLY: c_int = 1;
         let file = unsafe { open(path.as_ptr(), O_WRONLY) };

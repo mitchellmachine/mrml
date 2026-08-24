@@ -355,6 +355,13 @@ and independent source-to-artifact verification where practical; and documents
 key rotation and compromise recovery. A valid signature establishes identity and
 integrity under a trust policy, not software safety.
 
+**PARTIALLY IMPLEMENTED:** release-signer outputs use native exclusive creation
+and do not replace existing paths. Signing consumes the one-time private key
+before output publication, preferring a safely aborted release over publishing
+while reusable key material remains. This is a local tooling invariant, not
+evidence of independent custody, durable deletion, reproducibility, rotation,
+recovery, Secure Boot enrollment, or production security.
+
 Do not claim verified boot, rollback resistance, DMA isolation, device reset,
 confidential computing, side-channel resistance, formal noninterference,
 physical hardware validation, or production security until the corresponding

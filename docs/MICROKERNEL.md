@@ -1981,8 +1981,16 @@ The header binds kind, nonzero version, payload length, and SHA3-512 digest.
 The allocation-free decoder rejects unknown kinds, nonzero reserved bytes,
 integer overflow, empty payloads, truncation, trailing bytes, digest mismatch,
 wrong-type admission, rollback, unpinned keys, and invalid signatures. The
-signer self-verifies before writing and removes the one-time private key only
-after the completed bundle has been written successfully.
+signer self-verifies before publication. All signer-created paths use the host
+OS's exclusive create-if-absent operation rather than a racy existence check
+followed by truncating creation. Signing removes the one-time private key before
+publishing the signature or completed bundle: an output failure can abort that
+release, but cannot leave a published signature with reusable key material. Key
+generation publishes the non-secret public half before the private half, so
+failure cannot strand a private key without its corresponding public key.
+Failed exclusive writes make a best-effort removal of their partial output.
+This is host-filesystem tooling behavior, not proof of independent key custody,
+durable erasure, atomic multi-file publication, or reproducible builds.
 
 After generating distinct artifact keys and a next-release root, create and
 sign the canonical 408-byte release manifest:

@@ -1432,6 +1432,14 @@ can count as trusted consent.
    accessible owner-recovery exercises remain pending.
 4. Establish reproducible builds, independently controlled release keys,
    Secure Boot integration, recovery, and key rotation.
+   **PARTIALLY IMPLEMENTED:** signer outputs now use native exclusive creation,
+   never overwrite an existing path, and best-effort remove a partial new file
+   after a write error. A one-time private key is removed before its signature
+   or bundle is published, and key generation writes the public half before the
+   private half. Native runtime tests cover nonreplacement. This fail-closed
+   host-filesystem ordering does not establish reproducible builds, independent
+   custody, durable key erasure, atomic multi-file publication, Secure Boot
+   enrollment, recovery, rotation, or physical evidence.
 5. Bind inspectable system-generation metadata to the exact kernel, compositor,
    services, configuration root, and compiler/runtime artifacts.
 6. Implement owner-selectable trust-root enrollment, replacement, owner-build and
