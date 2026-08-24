@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `724f40b`
-  (`compiler: classify call and return moves`)
+- Compiler checkpoint commit: `1e0dc42`
+  (`compiler: order ownership events`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `3b8599e` (`compiler: distinguish borrow place
+- Preceding compiler commits: `724f40b` (`compiler: classify call and return
+  moves`), `3b8599e` (`compiler: distinguish borrow place
   effects`), `97b275d` (`compiler: classify exact Copy
   effects`), `147e15a` (`compiler: classify direct move and
   write effects`), `fbb7c27` (`compiler: project tuple move paths`), `1139f96`
@@ -96,6 +97,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   slice, read-modify-write on non-`Copy` paths, invalid IDs, holes, malformed
   spans, corrupt counts, incompatible `Copy` effects, and capacity exhaustion
   fail closed; and
+- a derived fixed bound of 1,280 ownership events spanning all 512 possible
+  initialization facts and 768 possible place effects. Each fact receives a
+  dense monotonic event ID when it is appended, preserving parameter entry,
+  RHS effects, successful local initialization, assignment effects, and return
+  effects in their actual preanalysis order. Final validation merges the two
+  append-only tables and requires exactly `0..event_count` with no holes,
+  duplicates, inversions, or uncounted entries. Event-capacity failure occurs
+  before mutating a path, initialization, read, effect, or counter. These event
+  IDs do not yet claim CFG-block membership or enforce initializedness; and
 - pre-emission typing and stable identity assignment for every declaration form
   represented by the supported runtime body and loop parsers, mirroring pre-loop,
   loop, nested-loop, conditional-arm, and post-loop emission order with exact
@@ -247,13 +257,15 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. compute bounded flow-sensitive initializedness and use-after-move rejection
-   over the existing CFG and precise tuple paths;
-2. extend contextual effects for implicit coercions and remaining indirect
+1. consume dense ownership order for initializedness and use-after-move
+   rejection in functions proven to have one reachable basic block;
+2. attach bounded explicit block provenance to ownership events, then compute
+   fixed-point initializedness across existing CFG edges and precise tuple paths;
+3. extend contextual effects for implicit coercions and remaining indirect
    call/return shapes without treating ambiguous pointee reads as moves;
-3. add array-element paths only after place facts retain exact constant element
+4. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
-4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
+5. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
    and flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
 

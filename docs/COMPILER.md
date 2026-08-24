@@ -223,6 +223,13 @@ reference root, now record distinct `SharedBorrow` or `MutableBorrow` effects;
 they do not yet claim loan lifetime or conflict enforcement. The facts do not
 yet compute flow-sensitive initializedness, reject use after move, or claim that
 unreachable or divergent declarations execute.
+A derived fixed 1,280-event ownership order now spans the maximum 512
+initializations and 768 effects. Event IDs are assigned at insertion time, so
+RHS effects precede the successful initialization of their destination local.
+Validation requires the initialization and effect tables to merge into one
+dense monotonic sequence without holes, duplicates, inversions, or corrupt
+counts. This is ordering evidence only: events do not yet claim CFG-block
+membership and are not yet used to reject source programs.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root
