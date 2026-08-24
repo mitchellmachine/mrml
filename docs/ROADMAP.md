@@ -1350,8 +1350,14 @@ can count as trusted consent.
    Clippy; Arch Linux/WSL2 passes all 452 kernel and 121 storage tests; the
    optimized native UEFI loader links. The Windows full storage run passes 118
    tests while three known large tests overflow the Windows test-process stack.
-   No TPM layout/transport adapter, provisioning, reboot, physical power-loss,
-   or rollback-resistance evidence is claimed.
+   A distinct UEFI TPM layout/transport adapter now admits one exact counter and
+   two exact 136-byte full-write slots by complete public area and recomputed
+   Name. It reuses the one-use exact-operation owner-policy session mechanism,
+   read-verifies writes, checks exact counter succession, and provides an
+   explicit cross-journal index-alias rejection gate. Arch Linux/WSL2 passes all
+   22 UEFI library tests, including hostile exact-size/alias admission and a
+   composed 136-byte publication simulation. This is not TPM provisioning,
+   reboot, physical power-loss, or rollback-resistance evidence.
 2. Bind measured boot to the exact coherent signed artifact set.
    **PARTIALLY IMPLEMENTED:** after independently extending the authenticated
    kernel and service payloads into PCR 11, the UEFI loader now extends one

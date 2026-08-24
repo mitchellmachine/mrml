@@ -201,7 +201,13 @@ its authenticated monotonic counter, then reloads the selected state. Corrupt
 slots, stale predecessors, failed writes, pre-commit failures, uncertain
 committed advances, read failure, and sequence exhaustion fail closed in
 deterministic tests. Its unsafe backend still requires fixed owner-provisioned
-objects and real power-loss-atomic behavior; no TPM or physical evidence exists.
+objects and real power-loss-atomic behavior. The UEFI adapter now admits a
+separate counter and two exact 136-byte full-write objects by complete public
+area and recomputed Name, consumes fresh exact-operation policy sessions,
+read-verifies writes, checks exact counter succession, and rejects index alias
+with the recovery journal when both layouts are checked together. Deterministic
+tests exercise these properties; no provisioning, reboot, physical power-loss,
+or rollback-resistance evidence exists.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

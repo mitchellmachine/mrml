@@ -2003,8 +2003,13 @@ magic, exact journal sequence, complete state, and SHA3-256 digest. Publication
 writes the inactive slot before advancing one monotonic counter and verifies
 the newly selected state afterward. The store's CAS now compares the complete
 predecessor, so a different current root at the same minimum release conflicts.
-This is deterministic unit/simulation evidence pending a separately admitted
-TPM layout and physical power-loss validation.
+The UEFI command layer now separately admits one release counter and two exact
+136-byte full-write NV objects by complete public area and recomputed Name. The
+adapter uses fresh exact-operation owner-policy sessions, verifies full writes,
+checks exact counter succession, and exposes a gate rejecting index alias with
+the 112-byte recovery journal. Deterministic unit/simulation tests cover the
+layout and composed publication path; TPM provisioning, reboot, and physical
+power-loss validation remain pending.
 
 Each digest argument is the 128-character SHA3-512 public-key digest printed by
 `key-digest`. The kernel now decodes this exact representation, verifies it

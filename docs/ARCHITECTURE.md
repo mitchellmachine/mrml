@@ -85,8 +85,12 @@ journal foundation rather than reusing storage-authority recovery state. Each
 bootstrap state, and SHA3-256 digest. Compare-and-store now matches the complete
 authenticated predecessor, including its current root, instead of only the
 release floor; the inactive slot is written before one exact counter advance.
-This is a backend-neutral deterministic model, not a TPM adapter or durability
-claim.
+The UEFI TPM command layer now has a distinct release-state layout and adapter:
+one exact counter and two exact 136-byte full-write slots, with recomputed TPM
+Names, shared owner-policy admission, fresh operation-bound sessions, verified
+writes, exact counter succession, and an explicit cross-journal index-alias
+check. This is unit/simulation evidence for the adapter, not provisioning,
+reboot, physical power-loss, or rollback-resistance evidence.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
 authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM

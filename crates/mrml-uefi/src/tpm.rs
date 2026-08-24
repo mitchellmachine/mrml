@@ -1,6 +1,7 @@
 use mrml_crypto::Sha256;
 use mrml_storage::{
-    AuthenticatedRecoveryJournal, RECOVERY_JOURNAL_SLOT_BYTES, RecoveryJournalBackend,
+    AuthenticatedRecoveryJournal, AuthenticatedReleaseStateJournal, RECOVERY_JOURNAL_SLOT_BYTES,
+    RELEASE_STATE_JOURNAL_SLOT_BYTES, RecoveryJournalBackend, ReleaseStateJournalBackend,
 };
 
 const TPM_ST_NO_SESSIONS: u16 = 0x8001;
@@ -194,22 +195,21 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
 
 /// Concrete one-use provider for an owner-configured SHA-256 `PolicyPCR`
 /// recipe. It serializes one pending NV authorization at a time.
-pub struct PcrPolicySessionTransport<T, N> {
+trait NvPolicyObjectAdmission: Copy {
+    fn admits(self, index: u32, name: [u8; 34], policy_digest: [u8; 32]) -> bool;
+}
+
+pub struct PcrPolicySessionTransport<T, N, A = VerifiedNvRecoveryLayout> {
     transport: T,
     nonce_source: N,
     policy: PcrPolicy,
-    verified: VerifiedNvRecoveryLayout,
+    verified: A,
     pending: Option<(u32, u32, NvPolicyOperation)>,
     last_nonce: Option<[u8; 32]>,
 }
 
-impl<T, N> PcrPolicySessionTransport<T, N> {
-    const fn new(
-        transport: T,
-        nonce_source: N,
-        policy: PcrPolicy,
-        verified: VerifiedNvRecoveryLayout,
-    ) -> Self {
+impl<T, N, A> PcrPolicySessionTransport<T, N, A> {
+    const fn new(transport: T, nonce_source: N, policy: PcrPolicy, verified: A) -> Self {
         Self {
             transport,
             nonce_source,
@@ -225,7 +225,7 @@ impl<T, N> PcrPolicySessionTransport<T, N> {
     }
 }
 
-impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
+impl<T: TpmTransport, N, A> TpmTransport for PcrPolicySessionTransport<T, N, A> {
     fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
         let pending = self.pending.take();
         if let Some((handle, index, operation)) = pending
@@ -257,8 +257,8 @@ impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
 // SAFETY: the wrapper creates a fresh TPM policy session from explicit entropy,
 // executes the exact configured PolicyPCR recipe, permits only one pending
 // command with the requested operation/handle, and flushes mismatched use.
-unsafe impl<T: TpmTransport, N: TpmNonceSource> NvPolicySessionProvider
-    for PcrPolicySessionTransport<T, N>
+unsafe impl<T: TpmTransport, N: TpmNonceSource, A: NvPolicyObjectAdmission> NvPolicySessionProvider
+    for PcrPolicySessionTransport<T, N, A>
 {
     fn authorize_nv(
         &mut self,
@@ -363,6 +363,12 @@ impl VerifiedNvRecoveryLayout {
     }
 }
 
+impl NvPolicyObjectAdmission for VerifiedNvRecoveryLayout {
+    fn admits(self, index: u32, name: [u8; 34], policy_digest: [u8; 32]) -> bool {
+        self.admits(index, name, policy_digest)
+    }
+}
+
 pub fn verify_recovery_layout<T: TpmTransport>(
     transport: &mut T,
     layout: NvRecoveryLayout,
@@ -395,6 +401,138 @@ pub fn verify_recovery_layout<T: TpmTransport>(
         return Err(NvCounterError::InvalidIndex);
     }
     Ok(VerifiedNvRecoveryLayout {
+        counter: layout.counter,
+        counter_name: counter.name,
+        slots: layout.slots,
+        slot_names: [first.name, second.name],
+        policy_digest: layout.policy_digest,
+    })
+}
+
+/// Owner-provisioned NV objects dedicated to the release bootstrap journal.
+/// These indices must not alias the recovery-authority journal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NvReleaseStateLayout {
+    counter: u32,
+    slots: [u32; 2],
+    policy_digest: [u8; 32],
+}
+
+impl NvReleaseStateLayout {
+    pub fn new(
+        counter: u32,
+        slots: [u32; 2],
+        policy_digest: [u8; 32],
+    ) -> Result<Self, NvCounterError> {
+        if !valid_index(counter)
+            || slots.iter().any(|index| !valid_index(*index))
+            || counter == slots[0]
+            || counter == slots[1]
+            || slots[0] == slots[1]
+            || policy_digest.iter().all(|byte| *byte == 0)
+        {
+            return Err(NvCounterError::InvalidIndex);
+        }
+        Ok(Self {
+            counter,
+            slots,
+            policy_digest,
+        })
+    }
+
+    pub const fn counter(self) -> u32 {
+        self.counter
+    }
+
+    pub const fn slots(self) -> [u32; 2] {
+        self.slots
+    }
+}
+
+/// Rejects any numeric NV-index alias between the two journal domains before
+/// either layout is provisioned or opened.
+pub fn verify_distinct_journal_layouts(
+    recovery: NvRecoveryLayout,
+    release: NvReleaseStateLayout,
+) -> Result<(), NvCounterError> {
+    let recovery_indices = [recovery.counter, recovery.slots[0], recovery.slots[1]];
+    let release_indices = [release.counter, release.slots[0], release.slots[1]];
+    if recovery_indices
+        .iter()
+        .any(|index| release_indices.contains(index))
+    {
+        Err(NvCounterError::InvalidIndex)
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedNvReleaseStateLayout {
+    counter: u32,
+    counter_name: [u8; 34],
+    slots: [u32; 2],
+    slot_names: [[u8; 34]; 2],
+    policy_digest: [u8; 32],
+}
+
+impl VerifiedNvReleaseStateLayout {
+    pub const fn counter_name(self) -> [u8; 34] {
+        self.counter_name
+    }
+
+    pub const fn slot_names(self) -> [[u8; 34]; 2] {
+        self.slot_names
+    }
+}
+
+impl NvPolicyObjectAdmission for VerifiedNvReleaseStateLayout {
+    fn admits(self, index: u32, name: [u8; 34], policy_digest: [u8; 32]) -> bool {
+        if policy_digest != self.policy_digest {
+            return false;
+        }
+        if index == self.counter {
+            return name == self.counter_name;
+        }
+        if index == self.slots[0] {
+            return name == self.slot_names[0];
+        }
+        index == self.slots[1] && name == self.slot_names[1]
+    }
+}
+
+pub fn verify_release_state_layout<T: TpmTransport>(
+    transport: &mut T,
+    layout: NvReleaseStateLayout,
+) -> Result<VerifiedNvReleaseStateLayout, NvCounterError> {
+    let counter = read_public(transport, layout.counter)?;
+    validate_recovery_public(
+        counter,
+        layout.counter,
+        TPMA_NV_COUNTER,
+        8,
+        layout.policy_digest,
+    )?;
+    let first = read_public(transport, layout.slots[0])?;
+    validate_recovery_public(
+        first,
+        layout.slots[0],
+        0,
+        RELEASE_STATE_JOURNAL_SLOT_BYTES as u16,
+        layout.policy_digest,
+    )?;
+    let second = read_public(transport, layout.slots[1])?;
+    validate_recovery_public(
+        second,
+        layout.slots[1],
+        0,
+        RELEASE_STATE_JOURNAL_SLOT_BYTES as u16,
+        layout.policy_digest,
+    )?;
+    if counter.name == first.name || counter.name == second.name || first.name == second.name {
+        return Err(NvCounterError::InvalidIndex);
+    }
+    Ok(VerifiedNvReleaseStateLayout {
         counter: layout.counter,
         counter_name: counter.name,
         slots: layout.slots,
@@ -544,6 +682,150 @@ unsafe impl<T: NvPolicySessionProvider> RecoveryJournalBackend for TpmRecoveryJo
     }
 }
 
+pub struct TpmReleaseStateJournalBackend<T> {
+    transport: T,
+    layout: NvReleaseStateLayout,
+    verified: VerifiedNvReleaseStateLayout,
+}
+
+impl<T: NvPolicySessionProvider> TpmReleaseStateJournalBackend<T> {
+    pub fn new(mut transport: T, layout: NvReleaseStateLayout) -> Result<Self, NvCounterError> {
+        let verified = verify_release_state_layout(&mut transport, layout)?;
+        Ok(Self {
+            transport,
+            layout,
+            verified,
+        })
+    }
+
+    pub fn into_transport(self) -> T {
+        self.transport
+    }
+
+    fn from_verified(
+        transport: T,
+        layout: NvReleaseStateLayout,
+        verified: VerifiedNvReleaseStateLayout,
+    ) -> Self {
+        Self {
+            transport,
+            layout,
+            verified,
+        }
+    }
+
+    fn read_exact<const N: usize>(
+        &mut self,
+        index: u32,
+        name: [u8; 34],
+    ) -> Result<[u8; N], NvCounterError> {
+        let session = self.transport.authorize_nv(
+            index,
+            name,
+            self.layout.policy_digest,
+            NvPolicyOperation::Read,
+        )?;
+        policy_read(&mut self.transport, index, session)
+    }
+}
+
+/// Composes the exact policy-session transport and the distinct release-state
+/// NV journal. Recovery-authority objects cannot be substituted because their
+/// public sizes and admitted Names differ.
+pub type PcrReleaseStateJournal<T, N> = AuthenticatedReleaseStateJournal<
+    TpmReleaseStateJournalBackend<PcrPolicySessionTransport<T, N, VerifiedNvReleaseStateLayout>>,
+>;
+
+pub fn open_release_state_journal<T: TpmTransport, N: TpmNonceSource>(
+    mut transport: T,
+    nonce_source: N,
+    layout: NvReleaseStateLayout,
+    policy: PcrPolicy,
+) -> Result<PcrReleaseStateJournal<T, N>, NvCounterError> {
+    if layout.policy_digest != policy.policy_digest {
+        return Err(NvCounterError::InvalidIndex);
+    }
+    let verified = verify_release_state_layout(&mut transport, layout)?;
+    let provider = PcrPolicySessionTransport::new(transport, nonce_source, policy, verified);
+    let backend = TpmReleaseStateJournalBackend::from_verified(provider, layout, verified);
+    Ok(AuthenticatedReleaseStateJournal::new(backend))
+}
+
+// SAFETY: construction admits three distinct, exact-size NV public objects in
+// one owner policy. Each operation consumes a fresh exact-operation session;
+// writes are read-verified and counter publication checks predecessor and
+// exact successor.
+unsafe impl<T: NvPolicySessionProvider> ReleaseStateJournalBackend
+    for TpmReleaseStateJournalBackend<T>
+{
+    type Error = NvCounterError;
+
+    fn read_counter(&mut self) -> Result<u64, Self::Error> {
+        Ok(u64::from_be_bytes(self.read_exact::<8>(
+            self.layout.counter,
+            self.verified.counter_name,
+        )?))
+    }
+
+    fn read_slot(
+        &mut self,
+        slot: u8,
+        output: &mut [u8; RELEASE_STATE_JOURNAL_SLOT_BYTES],
+    ) -> Result<(), Self::Error> {
+        let index = usize::from(slot);
+        let handle = *self
+            .layout
+            .slots
+            .get(index)
+            .ok_or(NvCounterError::InvalidIndex)?;
+        *output = self.read_exact(handle, self.verified.slot_names[index])?;
+        Ok(())
+    }
+
+    fn write_and_verify_slot(
+        &mut self,
+        slot: u8,
+        input: &[u8; RELEASE_STATE_JOURNAL_SLOT_BYTES],
+    ) -> Result<(), Self::Error> {
+        let index = usize::from(slot);
+        let handle = *self
+            .layout
+            .slots
+            .get(index)
+            .ok_or(NvCounterError::InvalidIndex)?;
+        let name = self.verified.slot_names[index];
+        let session = self.transport.authorize_nv(
+            handle,
+            name,
+            self.layout.policy_digest,
+            NvPolicyOperation::Write,
+        )?;
+        policy_write(&mut self.transport, handle, session, input)?;
+        if self.read_exact::<RELEASE_STATE_JOURNAL_SLOT_BYTES>(handle, name)? != *input {
+            return Err(NvCounterError::Conflict);
+        }
+        Ok(())
+    }
+
+    fn increment_counter(&mut self, expected: u64) -> Result<u64, Self::Error> {
+        if self.read_counter()? != expected {
+            return Err(NvCounterError::Conflict);
+        }
+        let session = self.transport.authorize_nv(
+            self.layout.counter,
+            self.verified.counter_name,
+            self.layout.policy_digest,
+            NvPolicyOperation::Increment,
+        )?;
+        policy_increment(&mut self.transport, self.layout.counter, session)?;
+        let advanced = self.read_counter()?;
+        if expected.checked_add(1) != Some(advanced) {
+            return Err(NvCounterError::Conflict);
+        }
+        Ok(advanced)
+    }
+}
+
 fn operation_for_command(command: &[u8]) -> Option<NvPolicyOperation> {
     let code = u32::from_be_bytes(command.get(6..10)?.try_into().ok()?);
     match code {
@@ -637,7 +919,7 @@ fn policy_read<T: TpmTransport, const N: usize>(
     index: u32,
     session: AuthorizedNvSession,
 ) -> Result<[u8; N], NvCounterError> {
-    if N == 0 || N > RECOVERY_JOURNAL_SLOT_BYTES {
+    if N == 0 || N > RELEASE_STATE_JOURNAL_SLOT_BYTES {
         return Err(NvCounterError::InvalidIndex);
     }
     let mut command = [0; 35];
@@ -659,21 +941,25 @@ fn policy_read<T: TpmTransport, const N: usize>(
         .map_err(|_| NvCounterError::MalformedResponse)
 }
 
-fn policy_write<T: TpmTransport>(
+fn policy_write<T: TpmTransport, const N: usize>(
     transport: &mut T,
     index: u32,
     session: AuthorizedNvSession,
-    input: &[u8; RECOVERY_JOURNAL_SLOT_BYTES],
+    input: &[u8; N],
 ) -> Result<(), NvCounterError> {
-    let mut command = [0; 35 + RECOVERY_JOURNAL_SLOT_BYTES];
+    if N == 0 || N > RELEASE_STATE_JOURNAL_SLOT_BYTES {
+        return Err(NvCounterError::InvalidIndex);
+    }
+    let mut command = [0; 35 + RELEASE_STATE_JOURNAL_SLOT_BYTES];
     sessions_header(&mut command, TPM_CC_NV_WRITE);
     command[10..14].copy_from_slice(&index.to_be_bytes());
     command[14..18].copy_from_slice(&index.to_be_bytes());
     encode_policy_authorization(&mut command[18..31], session)?;
-    command[31..33].copy_from_slice(&(RECOVERY_JOURNAL_SLOT_BYTES as u16).to_be_bytes());
-    command[33..33 + RECOVERY_JOURNAL_SLOT_BYTES].copy_from_slice(input);
+    command[2..6].copy_from_slice(&((35 + N) as u32).to_be_bytes());
+    command[31..33].copy_from_slice(&(N as u16).to_be_bytes());
+    command[33..33 + N].copy_from_slice(input);
     let mut response = [0; 96];
-    let length = transport.submit(&command, &mut response)?;
+    let length = transport.submit(&command[..35 + N], &mut response)?;
     if !parse_policy_response(&response[..length])?.is_empty() {
         return Err(NvCounterError::MalformedResponse);
     }
@@ -977,6 +1263,7 @@ fn parse_empty_auth(response: &[u8]) -> Result<(), NvCounterError> {
 mod tests {
     use super::*;
     use mrml_crypto::Sha3_256;
+    use mrml_kernel::{BOOTSTRAP_STATE_BYTES, BootstrapState, MonotonicStateStore};
     use mrml_storage::{AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore};
 
     struct Counter {
@@ -1146,6 +1433,72 @@ mod tests {
 
     fn layout(policy: [u8; 32]) -> NvRecoveryLayout {
         NvRecoveryLayout::new(0x0180_0010, [0x0180_0011, 0x0180_0012], policy).unwrap()
+    }
+
+    struct ReleaseLayoutTransport {
+        policy: [u8; 32],
+        slot_size: u16,
+    }
+
+    impl TpmTransport for ReleaseLayoutTransport {
+        fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
+            if u32::from_be_bytes(command[6..10].try_into().unwrap()) != TPM_CC_NV_READ_PUBLIC {
+                return Err(NvCounterError::Transport);
+            }
+            let index = u32::from_be_bytes(command[10..14].try_into().unwrap());
+            let counter = index == 0x0180_0020;
+            Ok(public_response(
+                response,
+                index,
+                TPMA_NV_POLICYWRITE
+                    | TPMA_NV_POLICYREAD
+                    | TPMA_NV_NO_DA
+                    | if counter {
+                        TPMA_NV_COUNTER
+                    } else {
+                        TPMA_NV_WRITEALL
+                    },
+                &self.policy,
+                if counter { 8 } else { self.slot_size },
+                false,
+            ))
+        }
+    }
+
+    fn release_layout(policy: [u8; 32]) -> NvReleaseStateLayout {
+        NvReleaseStateLayout::new(0x0180_0020, [0x0180_0021, 0x0180_0022], policy).unwrap()
+    }
+
+    #[test]
+    fn release_layout_is_distinct_and_requires_exact_public_objects() {
+        let policy = [0x6d; 32];
+        let mut transport = ReleaseLayoutTransport {
+            policy,
+            slot_size: RELEASE_STATE_JOURNAL_SLOT_BYTES as u16,
+        };
+        let verified = verify_release_state_layout(&mut transport, release_layout(policy)).unwrap();
+        assert_ne!(verified.counter_name(), verified.slot_names()[0]);
+        assert_ne!(verified.slot_names()[0], verified.slot_names()[1]);
+
+        transport.slot_size = RECOVERY_JOURNAL_SLOT_BYTES as u16;
+        assert_eq!(
+            verify_release_state_layout(&mut transport, release_layout(policy)),
+            Err(NvCounterError::InvalidIndex)
+        );
+        assert_eq!(
+            NvReleaseStateLayout::new(0x0180_0020, [0x0180_0020, 0x0180_0022], policy),
+            Err(NvCounterError::InvalidIndex)
+        );
+        assert_eq!(
+            verify_distinct_journal_layouts(layout(policy), release_layout(policy)),
+            Ok(())
+        );
+        let aliased =
+            NvReleaseStateLayout::new(0x0180_0020, [0x0180_0012, 0x0180_0022], policy).unwrap();
+        assert_eq!(
+            verify_distinct_journal_layouts(layout(policy), aliased),
+            Err(NvCounterError::InvalidIndex)
+        );
     }
 
     #[test]
@@ -1484,6 +1837,165 @@ mod tests {
             self.authorizations += 1;
             Ok(unsafe { AuthorizedNvSession::from_satisfied_policy(handle) })
         }
+    }
+
+    struct ReleaseJournalTransport {
+        policy: [u8; 32],
+        counter: u64,
+        slots: [[u8; RELEASE_STATE_JOURNAL_SLOT_BYTES]; 2],
+        next_session: u32,
+        pending: Option<(u32, u32, NvPolicyOperation)>,
+    }
+
+    impl ReleaseJournalTransport {
+        fn new(policy: [u8; 32], initial: [u8; BOOTSTRAP_STATE_BYTES]) -> Self {
+            let mut slots = [[0; RELEASE_STATE_JOURNAL_SLOT_BYTES]; 2];
+            slots[0][..8].copy_from_slice(b"MRLSTJ01");
+            slots[0][16..16 + BOOTSTRAP_STATE_BYTES].copy_from_slice(&initial);
+            let digest = Sha3_256::digest(&slots[0][..16 + BOOTSTRAP_STATE_BYTES]);
+            slots[0][16 + BOOTSTRAP_STATE_BYTES..].copy_from_slice(&digest);
+            Self {
+                policy,
+                counter: 0,
+                slots,
+                next_session: 0x0300_0001,
+                pending: None,
+            }
+        }
+
+        fn expected_name(&self, index: u32) -> Option<[u8; 34]> {
+            let (kind, size) = match index {
+                0x0180_0020 => (TPMA_NV_COUNTER, 8),
+                0x0180_0021 | 0x0180_0022 => {
+                    (TPMA_NV_WRITEALL, RELEASE_STATE_JOURNAL_SLOT_BYTES as u16)
+                }
+                _ => return None,
+            };
+            let mut response = [0; 192];
+            let length = public_response(
+                &mut response,
+                index,
+                TPMA_NV_POLICYWRITE | TPMA_NV_POLICYREAD | TPMA_NV_NO_DA | kind,
+                &self.policy,
+                size,
+                false,
+            );
+            response[length - 34..length].try_into().ok()
+        }
+
+        fn consume(
+            &mut self,
+            command: &[u8],
+            operation: NvPolicyOperation,
+        ) -> Result<(), NvCounterError> {
+            let handle = u32::from_be_bytes(command[22..26].try_into().unwrap());
+            let index = u32::from_be_bytes(command[14..18].try_into().unwrap());
+            if self.pending.take() != Some((handle, index, operation)) {
+                return Err(NvCounterError::InvalidSession);
+            }
+            Ok(())
+        }
+    }
+
+    impl TpmTransport for ReleaseJournalTransport {
+        fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
+            let code = u32::from_be_bytes(command[6..10].try_into().unwrap());
+            let index = u32::from_be_bytes(command[10..14].try_into().unwrap());
+            if code == TPM_CC_NV_READ_PUBLIC {
+                let (kind, size) = match index {
+                    0x0180_0020 => (TPMA_NV_COUNTER, 8),
+                    0x0180_0021 | 0x0180_0022 => {
+                        (TPMA_NV_WRITEALL, RELEASE_STATE_JOURNAL_SLOT_BYTES as u16)
+                    }
+                    _ => return Err(NvCounterError::InvalidIndex),
+                };
+                return Ok(public_response(
+                    response,
+                    index,
+                    TPMA_NV_POLICYWRITE | TPMA_NV_POLICYREAD | TPMA_NV_NO_DA | kind,
+                    &self.policy,
+                    size,
+                    false,
+                ));
+            }
+            match code {
+                TPM_CC_NV_READ => {
+                    self.consume(command, NvPolicyOperation::Read)?;
+                    let size = u16::from_be_bytes(command[31..33].try_into().unwrap()) as usize;
+                    let mut parameters = [0; 2 + RELEASE_STATE_JOURNAL_SLOT_BYTES];
+                    parameters[..2].copy_from_slice(&(size as u16).to_be_bytes());
+                    if index == 0x0180_0020 {
+                        parameters[2..10].copy_from_slice(&self.counter.to_be_bytes());
+                    } else {
+                        let slot = usize::from(index == 0x0180_0022);
+                        parameters[2..2 + size].copy_from_slice(&self.slots[slot][..size]);
+                    }
+                    Ok(policy_response(response, &parameters[..2 + size]))
+                }
+                TPM_CC_NV_WRITE => {
+                    self.consume(command, NvPolicyOperation::Write)?;
+                    let size = u16::from_be_bytes(command[31..33].try_into().unwrap()) as usize;
+                    if size != RELEASE_STATE_JOURNAL_SLOT_BYTES || command.len() != 35 + size {
+                        return Err(NvCounterError::InvalidIndex);
+                    }
+                    let slot = usize::from(index == 0x0180_0022);
+                    self.slots[slot].copy_from_slice(&command[33..33 + size]);
+                    Ok(policy_response(response, &[]))
+                }
+                TPM_CC_NV_INCREMENT => {
+                    self.consume(command, NvPolicyOperation::Increment)?;
+                    self.counter = self
+                        .counter
+                        .checked_add(1)
+                        .ok_or(NvCounterError::Conflict)?;
+                    Ok(policy_response(response, &[]))
+                }
+                _ => Err(NvCounterError::Transport),
+            }
+        }
+    }
+
+    // SAFETY: the mock admits the exact verified Name and consumes each unique
+    // session on the immediately following exact NV operation.
+    unsafe impl NvPolicySessionProvider for ReleaseJournalTransport {
+        fn authorize_nv(
+            &mut self,
+            index: u32,
+            name: [u8; 34],
+            policy_digest: [u8; 32],
+            operation: NvPolicyOperation,
+        ) -> Result<AuthorizedNvSession, NvCounterError> {
+            if self.pending.is_some()
+                || policy_digest != self.policy
+                || self.expected_name(index) != Some(name)
+            {
+                return Err(NvCounterError::InvalidSession);
+            }
+            let handle = self.next_session;
+            self.next_session += 1;
+            self.pending = Some((handle, index, operation));
+            Ok(unsafe { AuthorizedNvSession::from_satisfied_policy(handle) })
+        }
+    }
+
+    #[test]
+    fn release_backend_publishes_exact_bootstrap_state_through_136_byte_objects() {
+        let policy = [0x6d; 32];
+        let original = BootstrapState::genesis([0x31; 64], 7).encode();
+        let replacement = BootstrapState::genesis([0x52; 64], 8).encode();
+        let backend = TpmReleaseStateJournalBackend::new(
+            ReleaseJournalTransport::new(policy, original),
+            release_layout(policy),
+        )
+        .unwrap();
+        let mut journal = AuthenticatedReleaseStateJournal::new(backend);
+        journal.compare_and_store(&original, &replacement).unwrap();
+        let mut loaded = [0; BOOTSTRAP_STATE_BYTES];
+        journal.load_authenticated(&mut loaded).unwrap();
+        assert_eq!(loaded, replacement);
+        let transport = journal.into_backend().into_transport();
+        assert_eq!(transport.counter, 1);
+        assert!(transport.pending.is_none());
     }
 
     #[test]
