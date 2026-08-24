@@ -4455,15 +4455,21 @@ fn preanalyze_runtime_local_binding<
             kind: CodegenErrorKind::Expression(error.kind),
             span: translate_span(body_start + local.initializer_span.start, error.span),
         })?;
-    let conditional_reference_generation = local.name != "_"
-        && matches!(ty, RuntimeExpressionType::Reference { .. })
-        && matches!(
-            tree.expression(tree.root())
-                .map(|expression| expression.kind),
-            Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
-        );
+    let expression_reference_generation =
+        local.name != "_"
+            && matches!(ty, RuntimeExpressionType::Reference { .. })
+            && (matches!(
+                tree.expression(tree.root())
+                    .map(|expression| expression.kind),
+                Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+            ) || runtime_expression_reference_call_origin::<
+                R,
+                MAX_PARAMETERS,
+                MAX_EXPRESSION_NODES,
+            >(resolver, &tree, tree.root())
+            .is_some());
     facts.pending_loan_generation_borrower =
-        conditional_reference_generation.then_some(RuntimeLocalId(facts.local_count));
+        expression_reference_generation.then_some(RuntimeLocalId(facts.local_count));
     let literal_aggregate = matches!(
         tree.expression(tree.root())
             .map(|expression| expression.kind),
@@ -5511,9 +5517,15 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         | crate::ScalarType::SliceReference { .. }
                         | crate::ScalarType::StrReference { .. }
                 );
-                for (parameter, argument) in target.parameters[..target.parameter_count]
+                let result_origin_parameter = runtime_reference_call_origin_parameter::<
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(target);
+                for (parameter_index, (parameter, argument)) in target.parameters
+                    [..target.parameter_count]
                     .iter()
                     .zip(arguments[..argument_count].iter())
+                    .enumerate()
                 {
                     let parameter = parameter.ok_or(CodegenError {
                         kind: CodegenErrorKind::RuntimeExpressionUnsupported,
@@ -5765,20 +5777,39 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 tree.expression(argument).map(|expression| expression.kind),
                                 Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
                             );
-                        let argument_context =
-                            match (coercion_root && !result_may_carry_reference, expected) {
-                                (true, RuntimeExpressionType::Reference { mutable: true, .. }) => {
-                                    RuntimeReadEffectContext::MutableBorrow
-                                }
-                                (true, RuntimeExpressionType::Reference { mutable: false, .. }) => {
-                                    RuntimeReadEffectContext::SharedBorrow
-                                }
-                                _ if runtime_type_is_copy(expected) => {
-                                    RuntimeReadEffectContext::Value
-                                }
-                                _ => RuntimeReadEffectContext::Move,
-                            };
-                        visit_as!(argument, argument_context)?;
+                        let carries_result_origin =
+                            result_origin_parameter == Some(parameter_index);
+                        let argument_context = match (
+                            coercion_root && (!result_may_carry_reference || carries_result_origin),
+                            expected,
+                        ) {
+                            (true, RuntimeExpressionType::Reference { mutable: true, .. }) => {
+                                RuntimeReadEffectContext::MutableBorrow
+                            }
+                            (true, RuntimeExpressionType::Reference { mutable: false, .. }) => {
+                                RuntimeReadEffectContext::SharedBorrow
+                            }
+                            _ if runtime_type_is_copy(expected) => RuntimeReadEffectContext::Value,
+                            _ => RuntimeReadEffectContext::Move,
+                        };
+                        let generation_borrower = facts.current_loan_generation_borrower;
+                        if carries_result_origin {
+                            facts.current_loan_generation_borrower =
+                                facts.pending_loan_generation_borrower;
+                        }
+                        let result = recurse(
+                            facts,
+                            locals,
+                            function,
+                            resolver,
+                            tree,
+                            argument,
+                            argument_context,
+                            depth + 1,
+                            assignment_span,
+                        );
+                        facts.current_loan_generation_borrower = generation_borrower;
+                        result?;
                     }
                 }
             }
@@ -6312,14 +6343,21 @@ fn preanalyze_runtime_assignment_reads<
     } else {
         RuntimeReadEffectContext::Move
     };
-    let conditional_reference_generation = if assignment.projection.is_none()
+    let expression_reference_generation = if assignment.projection.is_none()
         && assignment.operator == crate::AssignmentOperator::Assign
         && matches!(ty, RuntimeExpressionType::Reference { .. })
-        && matches!(
+        && (matches!(
             tree.expression(tree.root())
                 .map(|expression| expression.kind),
             Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
-        ) {
+        )
+            || runtime_expression_reference_call_origin::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                resolver,
+                &tree,
+                tree.root(),
+            )
+            .is_some())
+    {
         resolve_runtime_assignment_place(function, locals, assignment)
             .ok()
             .and_then(|target| match target.base {
@@ -6329,7 +6367,7 @@ fn preanalyze_runtime_assignment_reads<
     } else {
         None
     };
-    facts.pending_loan_generation_borrower = conditional_reference_generation;
+    facts.pending_loan_generation_borrower = expression_reference_generation;
     let result = preanalyze_runtime_expression_at_reads_with_tuple(
         facts,
         locals,
@@ -10881,6 +10919,110 @@ fn runtime_call_arguments_preanalysis_supported<
         return Ok(false);
     }
     Ok(true)
+}
+
+fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
+    target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+) -> Option<usize> {
+    fn compatible_parameter<const MAX_PARAMETERS: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        name: &str,
+    ) -> Option<usize> {
+        let RuntimeExpressionType::Reference {
+            target: result_target,
+            mutable: result_mutable,
+        } = runtime_type_from_scalar(target.return_type)
+        else {
+            return None;
+        };
+        target.parameters[..target.parameter_count]
+            .iter()
+            .enumerate()
+            .find_map(|(index, parameter)| {
+                let parameter = parameter.as_ref()?;
+                let RuntimeExpressionType::Reference {
+                    target: parameter_target,
+                    mutable: parameter_mutable,
+                } = runtime_type_from_scalar(parameter.ty)
+                else {
+                    return None;
+                };
+                (parameter.name == name
+                    && parameter_target == result_target
+                    && (!result_mutable || parameter_mutable))
+                    .then_some(index)
+            })
+    }
+
+    fn recurse<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        id: crate::ExprId,
+        depth: usize,
+    ) -> Option<usize> {
+        if depth == 64 {
+            return None;
+        }
+        if let Some(place) = discover_runtime_read_place(tree, id).ok().flatten() {
+            return compatible_parameter(target, place.name);
+        }
+        match tree.expression(id)?.kind {
+            ExprKind::Unary {
+                operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
+                operand,
+            }
+            | ExprKind::Ascribe { operand, .. }
+            | ExprKind::InlineConst { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::LoopBreak { operand } => recurse(target, tree, operand, depth + 1),
+            ExprKind::Sequence { then, .. } => recurse(target, tree, then, depth + 1),
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let then_origin = recurse(target, tree, then_branch, depth + 1)?;
+                let else_origin = recurse(target, tree, else_branch, depth + 1)?;
+                (then_origin == else_origin).then_some(then_origin)
+            }
+            _ => None,
+        }
+    }
+
+    let body =
+        crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
+            .ok()?;
+    if body.statement_count() != 0 || body.tail_diverges || body.tail_expression.is_empty() {
+        return None;
+    }
+    let tree = body.parse_tail::<MAX_NODES>().ok()?;
+    recurse(target, &tree, tree.root(), 0)
+}
+
+fn runtime_expression_reference_call_origin<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    resolver: &R,
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+) -> Option<usize> {
+    let ExprKind::Call {
+        callee,
+        argument_count,
+        ..
+    } = tree.expression(id)?.kind
+    else {
+        return None;
+    };
+    let target = resolver.resolve_runtime_call::<MAX_PARAMETERS>(callee, argument_count)?;
+    runtime_reference_call_origin_parameter::<MAX_PARAMETERS, MAX_NODES>(target)
 }
 
 fn runtime_tuple_value_preanalysis_supported<
@@ -27852,7 +27994,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_place_effects_move_non_copy_call_arguments_and_returns() {
+    fn runtime_place_effects_link_identity_call_arguments_to_returns() {
         let source = "fn value(input: &mut u16) -> &mut u16 { let returned: &mut u16 = identity(input); returned }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -27902,7 +28044,10 @@ mod tests {
             facts.effects[1].unwrap().location,
             RuntimeOwnershipEventLocation::Tail
         );
-        assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Move);
+        assert_eq!(
+            facts.effects[0].unwrap().kind,
+            RuntimePlaceEffectKind::MutableBorrow
+        );
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
         assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Move);
         assert_eq!(facts.effects[1].unwrap().path, RuntimeMovePathId(1));
@@ -27972,8 +28117,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_single_block_initializedness_rejects_a_second_move() {
-        let source = "fn value(input: &mut u16) -> &mut u16 { let first: &mut u16 = identity(input); let second: &mut u16 = identity(input); second }";
+    fn runtime_identity_call_results_reject_a_competing_reborrow() {
+        let source = "fn value(input: &mut u16) -> u16 { let first: &mut u16 = identity(input); let second: &mut u16 = identity(input); *first + *second }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
@@ -27985,14 +28130,51 @@ mod tests {
                 &function,
                 &MutableReferenceCallResolver,
                 &body,
-                "&mut u16",
+                "u16",
                 function.body_expression_span.start,
                 &mut facts,
             )
             .unwrap_err()
             .kind,
-            CodegenErrorKind::RuntimeUseAfterMove
+            CodegenErrorKind::RuntimeBorrowConflict
         );
+    }
+
+    #[test]
+    fn runtime_identity_call_results_retain_argument_loan_origins() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+        ] {
+            analyze(source).unwrap();
+        }
     }
 
     #[test]
@@ -28160,7 +28342,7 @@ mod tests {
                 .flatten()
                 .filter(|effect| effect.kind == RuntimePlaceEffectKind::Move)
                 .count(),
-            2
+            1
         );
         assert!(
             facts.effects[..facts.effect_count]
@@ -28180,7 +28362,7 @@ mod tests {
                 .iter()
                 .flatten()
                 .any(|effect| {
-                    effect.kind == RuntimePlaceEffectKind::Move
+                    effect.kind == RuntimePlaceEffectKind::MutableBorrow
                         && effect.location
                             == (RuntimeOwnershipEventLocation::ConditionalReturnValue {
                                 statement_index: 0,
@@ -28567,7 +28749,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_cfg_initializedness_rejects_moves_on_only_one_join_path() {
+    fn runtime_cfg_reborrow_ends_when_conditional_result_is_unused() {
         let source = "fn identity(value: &mut u16) -> &mut u16 { value } fn value(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = identity(second); } second }";
         let module = Parser::new(source).parse_module::<3, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[1] else {
@@ -28583,10 +28765,7 @@ mod tests {
             function.body_expression_span.start,
             &mut facts,
         );
-        assert_eq!(
-            result.unwrap_err().kind,
-            CodegenErrorKind::RuntimeUseAfterMove
-        );
+        result.unwrap();
     }
 
     #[test]
@@ -28643,7 +28822,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_cfg_initializedness_rejects_moves_reaching_a_loop_exit() {
+    fn runtime_cfg_reborrow_ends_before_a_loop_exit_when_result_is_unused() {
         let source = "fn identity(value: &mut u16) -> &mut u16 { value } fn value(input: &mut u16) -> &mut u16 { loop { let moved: &mut u16 = identity(input); break; } input }";
         let module = Parser::new(source).parse_module::<2, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[1] else {
@@ -28651,19 +28830,15 @@ mod tests {
         };
         let body = function.parse_body::<4>().unwrap();
         let mut facts = RuntimeBodyFacts::EMPTY;
-        assert_eq!(
-            preanalyze_runtime_body_declarations::<_, 4, 16>(
-                &function,
-                &MutableReferenceCallResolver,
-                &body,
-                "&mut u16",
-                function.body_expression_span.start,
-                &mut facts,
-            )
-            .unwrap_err()
-            .kind,
-            CodegenErrorKind::RuntimeUseAfterMove
-        );
+        preanalyze_runtime_body_declarations::<_, 4, 16>(
+            &function,
+            &MutableReferenceCallResolver,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
     }
 
     #[test]

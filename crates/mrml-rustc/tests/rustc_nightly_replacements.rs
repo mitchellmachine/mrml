@@ -4286,13 +4286,40 @@ fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
 }
 
 #[test]
-fn rustc_single_block_initializedness_rejects_second_moves_and_accepts_writes() {
+fn rustc_identity_call_results_retain_argument_origins_like_the_oracle() {
+    let rejected = [
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
+fn rustc_single_block_identity_calls_reject_competing_reborrows_and_accept_writes() {
     let rejected = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let first: &mut u16 = identity(input); let second: &mut u16 = identity(input); *first + *second }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
         assert_eq!(
             compile_wide(rejected, format),
             Err(CompileErrorKind::Codegen(
-                CodegenErrorKind::RuntimeUseAfterMove
+                CodegenErrorKind::RuntimeBorrowConflict
             ))
         );
     }
@@ -4320,19 +4347,14 @@ fn rustc_tuple_field_partial_moves_and_restoration_reach_native_objects() {
 }
 
 #[test]
-fn rustc_cfg_initializedness_rejects_branch_and_loop_exit_use_after_move() {
-    let rejected = [
+fn rustc_cfg_reborrows_end_when_call_results_are_unused() {
+    let accepted = [
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = identity(second); } second }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { loop { let moved: &mut u16 = identity(input); break; } input }",
     ];
-    for source in rejected {
+    for source in accepted {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
-            assert_eq!(
-                compile_wide(source, format),
-                Err(CompileErrorKind::Codegen(
-                    CodegenErrorKind::RuntimeUseAfterMove
-                ))
-            );
+            assert_eq!(compile_wide(source, format), Ok(()));
         }
     }
 
