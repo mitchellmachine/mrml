@@ -91,6 +91,9 @@ Names, shared owner-policy admission, fresh operation-bound sessions, verified
 writes, exact counter succession, and an explicit cross-journal index-alias
 check. This is unit/simulation evidence for the adapter, not provisioning,
 reboot, physical power-loss, or rollback-resistance evidence.
+The firmware TPM wrapper accepts a bounded 192-byte command, which covers the
+171-byte full release-slot write; its former 128-byte ceiling could not carry
+either journal's full-write command.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
 authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM

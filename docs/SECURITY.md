@@ -208,6 +208,8 @@ read-verifies writes, checks exact counter succession, and rejects index alias
 with the recovery journal when both layouts are checked together. Deterministic
 tests exercise these properties; no provisioning, reboot, physical power-loss,
 or rollback-resistance evidence exists.
+The firmware submission boundary is explicitly bounded at 192 command bytes,
+large enough for the 171-byte release write without permitting unbounded input.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

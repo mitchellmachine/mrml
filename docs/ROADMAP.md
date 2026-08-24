@@ -1358,6 +1358,9 @@ can count as trusted consent.
    22 UEFI library tests, including hostile exact-size/alias admission and a
    composed 136-byte publication simulation. This is not TPM provisioning,
    reboot, physical power-loss, or rollback-resistance evidence.
+   The native UEFI submission wrapper is now bounded at 192 bytes rather than
+   the previous 128-byte limit, so it can represent the 147-byte recovery and
+   171-byte release full-slot write commands.
 2. Bind measured boot to the exact coherent signed artifact set.
    **PARTIALLY IMPLEMENTED:** after independently extending the authenticated
    kernel and service payloads into PCR 11, the UEFI loader now extends one

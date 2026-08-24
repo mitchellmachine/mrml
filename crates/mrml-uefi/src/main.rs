@@ -102,6 +102,9 @@ struct FirmwareRng {
     protocol: *mut RngProtocol,
 }
 
+const MAX_TPM_COMMAND_BYTES: usize = 192;
+const _: () = assert!(MAX_TPM_COMMAND_BYTES >= 35 + mrml_storage::RELEASE_STATE_JOURNAL_SLOT_BYTES);
+
 impl TpmNonceSource for FirmwareRng {
     fn fill_nonce(&mut self, output: &mut [u8; 32]) -> Result<(), NvCounterError> {
         let protocol = unsafe { self.protocol.as_mut() }.ok_or(NvCounterError::Transport)?;
@@ -119,11 +122,11 @@ impl TpmNonceSource for FirmwareRng {
 
 impl TpmTransport for FirmwareTpm {
     fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
-        if command.len() > 128 || response.len() < 10 {
+        if command.len() > MAX_TPM_COMMAND_BYTES || response.len() < 10 {
             return Err(NvCounterError::Transport);
         }
         let protocol = unsafe { self.protocol.as_mut() }.ok_or(NvCounterError::Transport)?;
-        let mut input = [0u8; 128];
+        let mut input = [0u8; MAX_TPM_COMMAND_BYTES];
         input[..command.len()].copy_from_slice(command);
         check(unsafe {
             (protocol.submit_command)(
