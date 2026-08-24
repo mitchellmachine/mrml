@@ -23,6 +23,7 @@ mod identity;
 mod kernel_transport;
 mod object_id_allocator;
 mod recovery;
+mod recovery_journal;
 mod service_loop;
 mod transaction;
 
@@ -105,6 +106,10 @@ pub use recovery::{
     ReachableRecoveryValidator, RecoveredReachableState, RecoveredSuperblock, RecoveryError,
     RecoveryMetadataBackend, recover_reachable_state, recover_reachable_superblock,
     recover_superblock,
+};
+pub use recovery_journal::{
+    AuthenticatedRecoveryJournal, RECOVERY_JOURNAL_SLOT_BYTES, RecoveryJournalBackend,
+    RecoveryJournalError,
 };
 pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,

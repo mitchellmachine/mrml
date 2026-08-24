@@ -625,6 +625,16 @@ authority; unrelated domains continue.
    authority table unless compare-and-store matches the entire prior canonical
    record before replacement; corrupt state, stale conflicts, and backend
    uncertainty fail closed.
+   A backend-neutral two-slot authenticated journal now implements that store
+   contract over an unsafe exact backend. Each 112-byte slot binds its journal
+   sequence and complete 64-byte state with SHA3-256. The authenticated
+   monotonic counter selects one parity slot and is the sole publication point:
+   the inactive successor must be durably written and verified before one exact
+   serialized counter advance. Tests inject every protocol boundary, including
+   a committed-but-uncertain increment, and never search or silently select an
+   older slot. A policy-authorized TPM NV adapter, provisioning/recovery path,
+   and physical power-cut validation remain pending, so Phase 6 item 1 is not
+   complete.
    A generic consumed validation transaction now keeps that rebuilt table
    private while a dependent recovery validator uses one exact reconstructed
    file handle. The configuration adapter recovers only the selected file

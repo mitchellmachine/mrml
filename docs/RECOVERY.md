@@ -304,9 +304,20 @@ explicitly and downgrade the status rather than guessing.
   root regression fail closed. Compare-and-store matches the entire prior
   canonical record before replacement. Integrated recovery releases no fresh
   authority table unless that exact transition commits; corruption, conflict,
-  and backend uncertainty fail closed. Dependent recovery can now run before
-  that commit:
-  one consumed transaction keeps the rebuilt table private while a narrowly
+  and backend uncertainty fail closed. A backend-neutral authenticated journal
+  now provides one conforming protocol
+  shape for the state store. Two fixed 112-byte slots each bind journal
+  sequence, complete recovery state, and SHA3-256 digest. The authenticated
+  monotonic counter selects exactly one parity slot; recovery never searches
+  the older slot. Replacement writes and durably verifies the inactive slot,
+  then advances the counter exactly once as the sole publication point.
+  Deterministic tests cover write failure, failure before counter commit,
+  committed-but-uncertain advance, corrupt/stale slots, conflict, read
+  uncertainty, and exhaustion. The unsafe backend contract—not this simulation—
+  must provide policy-authorized exact slots and a power-loss-atomic counter.
+  No TPM implementation or physical evidence is claimed. Dependent recovery
+  can run before that commit: one consumed transaction keeps the rebuilt table
+  private while a narrowly
   unsafe side-effect-free validator reads the exact selected configuration file,
   reconstructs canonical configuration, and binds its exact service restart
   policy. Only after all validation succeeds does compare-and-store advance and

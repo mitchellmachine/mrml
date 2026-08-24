@@ -453,9 +453,20 @@ record before replacing it. Genesis state has no volume/root binding; after the
 first accepted recovery, normal transitions reject cross-volume substitution
 and root-generation regression. Integrated recovery releases no reconstructed
 capabilities until that exact transition commits, and corrupt, conflicting, or
-uncertain state fails closed. A consumed dependent-validation transaction now
-keeps the fresh
-authority table private while an unsafe side-effect-free validator recovers an
+uncertain state fails closed. A backend-neutral two-slot journal can now
+implement the authenticated store contract: each fixed slot binds a journal sequence,
+the complete 64-byte state, and a complete-record SHA3-256 digest. Recovery
+reads only the parity slot selected by the authenticated monotonic counter and
+requires its exact sequence. Publication durably writes and verifies the
+inactive slot before one serialized exact counter advance; that advance is the
+only publication point. Failed pre-advance writes leave the old slot selected,
+while a committed-but-uncertain advance is observed as new state and conflicts
+with an old retry. The unsafe backend must still provide fixed owner-provisioned
+slot identities, authenticated exact I/O, durable verification, and a
+power-loss-atomic counter. No TPM policy-bound implementation or physical
+power-cut evidence exists yet. A consumed dependent-validation transaction now
+keeps the fresh authority table private while an unsafe side-effect-free
+validator recovers an
 exact selected configuration-file generation and binds its service restart
 policy. Validation failure leaves authenticated monotonic state unchanged;
 compare-and-store failure drops both reconstructed authority and the validated
@@ -466,7 +477,8 @@ generation. The configuration recovery validator can include that plan before
 monotonic commit; only the committed-authority wrapper can consume it into a
 released configuration, authority table, and running service. Epoch mismatch or
 stale supervisor state releases no recovered system. This is typed in-memory
-boot orchestration, not a real reboot path. No TPM NV or equivalent power-loss-atomic backend has been
+boot orchestration, not a real reboot path. No TPM NV or equivalent power-loss-
+atomic backend has been
 implemented or physically tested. The platform owner-policy authenticator/UI
 and complete boot orchestration are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
