@@ -285,10 +285,11 @@ deny writes through read-only bindings, and preserve backend uncertainty while
 passing no raw address across the interface. Service-side selection now derives
 the unique binding from the exact transferred capability plus kernel-known
 VM/task identity; absent, ambiguous, or stale candidates fail before I/O, and
-request bytes cannot nominate a binding. There is not yet an isolated service
-process, block-specific syscall/receive loop, or physical device
-implementation, persistent allocation/free engine, complete COW tree, or
-concrete native block I/O. The syscall decoder admits bounded capability-
+request bytes cannot nominate a binding. The focused signed KVM/WHP controlled
+probe now instantiates the isolated block-specific syscall/receive loop against
+a volatile in-image page. There is not yet a physical device implementation,
+persistent allocation/free engine, complete COW tree, or concrete native block
+I/O. The syscall decoder admits bounded capability-
 selected shared-buffer copy operations without binding IDs or shared addresses.
 A generic executor binds those requests to the current task capability space,
 kernel-known VM/task identity, exact live binding, direction-validated user-copy
@@ -411,6 +412,24 @@ be valid for the recovered kind, and the fresh handle retains parent lineage so
 revocation is transitive. `LOOKUP` alone cannot manufacture authority. Reboot-
 time capability checkpoint/reconstruction, block service/device integration, and
 physical power-loss evidence remain pending.
+A bounded storage durable-grant checkpoint foundation now addresses the first
+part without treating a saved token as authority. Its canonical v1 header binds
+one nonzero monotonic recovery epoch, volume identity, selected root generation,
+nonzero handle-generation high-water mark, record count, and complete SHA3-256
+digest. Each fixed grant names a stable object, kind, principal, rights, and
+either an externally authenticated root or
+an earlier parent grant. Parent order makes cycles unrepresentable; derived
+grants must preserve object/kind, remain within parent rights, and require
+`DELEGATE`. Reconstruction consumes an unsafe proof that trusted recovery bound
+to the exact digest and builds a separate fresh authority table before advancing
+the replay and handle-generation guards. Reconstructed slots start at the
+authenticated high-water mark and the table computes the next value strictly
+above every issued slot, so a stale pre-reboot token cannot collide after
+recovery. Live handles are never serialized, and
+transient live capabilities are not automatically made durable. This remains a
+foundation: the proof issuer, stable-file publication, owner policy UI,
+authenticated boot/recovery binding, and rollback-resistant accepted-epoch
+persistence are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

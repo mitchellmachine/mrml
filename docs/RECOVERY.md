@@ -272,8 +272,20 @@ explicitly and downgrade the status rather than guessing.
   surviving parent-directory capability carrying `OPEN_CHILD` to derive a
   fresh, kind-valid child handle. The name identifies but does not authorize;
   `LOOKUP` alone is insufficient, and parent revocation transitively invalidates
-  the reopened child. Reboot-time capability checkpoint/reconstruction and
-  concrete block durability remain pending.
+  the reopened child. A canonical bounded durable-grant checkpoint can now
+  reconstruct a separate fresh storage-authority table from an exact externally
+  authenticated volume/root-generation/digest tuple, a newer recovery epoch,
+  and a strictly newer handle-generation high-water mark.
+  It records stable object policy and attenuated parent lineage, never bearer
+  handles; rejects hidden bytes, capacity mismatch, cycles/forward parents,
+  substitution, amplification, corruption, and replay; and advances the
+  volatile epoch/generation guards only after complete reconstruction. Fresh
+  slots start at that high-water mark and expose the next value above every
+  issued generation, preventing stale pre-reboot token collision. Stable
+  publication, owner-policy admission, authenticated boot/recovery proof issuance, and
+  rollback-resistant persistence of the accepted epoch remain pending, so
+  reboot-time capability reconstruction and concrete block durability remain
+  partial.
   Configuration checkpoints can now participate in this same exact stable-file
   publication protocol. Preparation binds configuration-root READ and file
   WRITE/RESIZE to the exact object, successor generation, length, digest,

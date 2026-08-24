@@ -107,6 +107,10 @@ impl StoragePrincipal {
             Ok(Self(value))
         }
     }
+
+    pub const fn value(self) -> u64 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,6 +139,7 @@ impl Entry {
 
 pub struct StorageAuthorityTable<const N: usize> {
     entries: [Entry; N],
+    initial_generation: u32,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -150,9 +155,37 @@ pub struct StorageAuthorityReservation {
 
 impl<const N: usize> StorageAuthorityTable<N> {
     pub fn new() -> Self {
-        Self {
-            entries: array::from_fn(|_| Entry::EMPTY),
+        Self::with_generation(1)
+    }
+
+    pub(crate) fn from_recovery_generation(generation: u32) -> Result<Self, StorageAuthorityError> {
+        if generation == 0 {
+            return Err(StorageAuthorityError::GenerationExhausted);
         }
+        Ok(Self::with_generation(generation))
+    }
+
+    fn with_generation(generation: u32) -> Self {
+        Self {
+            entries: array::from_fn(|_| Entry {
+                generation,
+                ..Entry::EMPTY
+            }),
+            initial_generation: generation,
+        }
+    }
+
+    /// Returns a generation strictly newer than every slot ever issued by this
+    /// table. Persisting this authenticated high-water value prevents a stale
+    /// pre-reboot token from colliding with a reconstructed handle.
+    pub fn next_recovery_generation(&self) -> Result<u32, StorageAuthorityError> {
+        self.entries
+            .iter()
+            .map(|entry| entry.generation)
+            .max()
+            .unwrap_or(self.initial_generation)
+            .checked_add(1)
+            .ok_or(StorageAuthorityError::GenerationExhausted)
     }
     pub fn insert(
         &mut self,
@@ -498,6 +531,7 @@ pub enum StorageAuthorityError {
     Denied,
     DelegationDenied,
     InvalidReservation,
+    GenerationExhausted,
 }
 
 #[cfg(test)]
@@ -696,6 +730,17 @@ mod tests {
                 StorageRights::LOOKUP.union(StorageRights::REMOVE_CHILD)
             ),
             Err(StorageAuthorityError::Denied)
+        );
+    }
+
+    #[test]
+    fn recovery_generation_is_monotonic_even_without_slots_and_exhausts_closed() {
+        let empty = StorageAuthorityTable::<0>::from_recovery_generation(41).unwrap();
+        assert_eq!(empty.next_recovery_generation(), Ok(42));
+        let exhausted = StorageAuthorityTable::<1>::from_recovery_generation(u32::MAX).unwrap();
+        assert_eq!(
+            exhausted.next_recovery_generation(),
+            Err(StorageAuthorityError::GenerationExhausted)
         );
     }
 }

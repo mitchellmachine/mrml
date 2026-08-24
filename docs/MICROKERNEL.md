@@ -3483,6 +3483,45 @@ the exact surviving parent handle with `OPEN_CHILD`; `LOOKUP` alone fails. The
 fresh handle carries kind-valid requested rights and parent lineage, so revoking
 the parent invalidates it transitively. This is in-memory fail-stop evidence,
 not reboot-time persistent capability reconstruction.
+
+The first reboot-time storage-authority reconstruction foundation is now
+implemented without serializing live capability tokens. A canonical v1
+durable-grant checkpoint binds a nonzero monotonic recovery epoch, exact volume,
+authenticated reachable-root generation, nonzero handle-generation high-water
+mark, record count, and a complete SHA3-256 digest. Fixed records contain only
+stable object identity, object kind, principal identity, requested rights, and an optional earlier parent-record
+index. Root grants require an externally authenticated proof for the complete
+checkpoint. Derived grants must retain the parent's object and kind, require
+the parent to carry `DELEGATE`, and preserve or reduce rights. Earlier-only
+parent indices exclude cycles and make reconstruction order canonical.
+
+`AuthorityRecoveryGuard` first decodes and validates the complete checkpoint,
+matches a consumed non-clonable proof across epoch, volume, selected root
+generation, handle-generation high-water mark, and digest, and rejects either
+monotonic value when it is not newer than authenticated starting state. It
+builds a separate fresh fixed-capacity authority table whose slots start at the
+authenticated handle generation. The table exposes a next recovery generation
+strictly above every slot it has issued, so a stale token retained outside the
+checkpoint cannot collide after reboot. The caller receives nothing and the
+guards do not advance if any record fails. Parent revocation remains transitive
+after reconstruction.
+The proof constructor is an explicit unsafe recovery boundary: a raw file,
+digest, object ID, principal number, or signature alone cannot authorize a
+grant. Its caller must authenticate owner-approved policy and enforce one-use
+proof issuance. The codec intentionally does not export the current live table,
+because doing so would silently convert transient or time-bounded authority into
+persistent authority.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 105 `mrml-storage` tests and scoped strict Clippy. Focused tests
+cover fresh attenuated lineage, descendant revocation, and cross-recovery stale-
+token rejection; corruption and root-generation substitution; replay without
+guard advancement; rights
+amplification, forward lineage, hidden reserved data even with a recomputed
+digest, and capacity mismatch. This is unit/simulation evidence only. Stable-
+file transaction binding, trusted proof issuance, owner-facing durable-grant
+policy, boot integration, and rollback-resistant persistence of the accepted
+epoch remain unimplemented, so complete reboot reconstruction is not claimed.
 This agent review is not
 independent human audit.
 

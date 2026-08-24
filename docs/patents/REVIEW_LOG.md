@@ -1366,3 +1366,14 @@ identity, generational session validation, monotonic request IDs, bounded host
 exit handling, canonical responses, and byte comparisons are defensive systems
 integration. No new patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
+
+# 2026-08-24 — Storage durable-grant checkpoint foundation
+
+**Result: NOT_TRIGGERED.** The change uses a conventional fixed-record,
+checksummed recovery manifest to rebuild fresh generational capability handles
+after exact external authentication. Topologically ordered parent indices,
+rights-subset checks, monotonic epoch and handle-generation guards, and build-
+before-commit behavior are standard defensive capability and recovery
+techniques. No live bearer token
+is serialized and no patent-candidate mechanism was identified. This agent
+review does not replace the required independent human dual review.

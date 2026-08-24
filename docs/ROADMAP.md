@@ -404,8 +404,9 @@ authority; unrelated domains continue.
    a mutation. Its unsafe syscall contract forbids manufacturing sender identity,
    capability tokens, mappings, or reply peers. The UEFI service image compiles
    a concrete adapter for receive/send operations 5/4 and shared-buffer
-   operations 7/8 with launch-bound endpoint and reply task. The loop is not yet
-   instantiated as a separately provisioned hosted service task, and a hosted or
+   operations 7/8 with launch-bound endpoint and reply task. A focused signed
+   KVM/WHP probe now instantiates the loop as a separately provisioned hosted
+   service task against a volatile one-page in-image backend. A hosted or
    physical device backend plus physical durability evidence remain pending.
    The syscall decoder now admits capability-selected shared-buffer reads and
    writes with implicit exact access modes, nonempty transfers capped at 1 MiB,
@@ -545,8 +546,22 @@ authority; unrelated domains continue.
    consumed. Persistent object-ID allocation, inactive authority reservation,
    complete in-memory prepared-create coupling, and deterministic interrupted-
    create publication recovery and surviving-parent post-fail-stop child
-   reconciliation are implemented in memory. Reboot-time capability
-   checkpoint/reconstruction, a hosted/physical device backend, and physical
+   reconciliation are implemented in memory. A canonical bounded durable-grant
+   checkpoint foundation now reconstructs fresh storage handles only from an
+   exact externally authenticated volume, selected root generation, monotonic
+   epoch, nonzero handle-generation high-water mark, and complete checkpoint
+   digest. It serializes no bearer handle,
+   rejects hidden bytes, capacity mismatch, forward/cyclic lineage, object/kind
+   substitution, and rights amplification, and atomically advances its volatile
+   replay/generation guards only after the complete fresh table is built. The
+   table exposes the next generation strictly above every slot for the
+   following authenticated checkpoint, preventing stale pre-reboot token
+   collision. The grant policy is explicit rather than an automatic snapshot
+   of transient capabilities.
+   Stable-file publication, authenticated boot/recovery integration, and
+   rollback-resistant persistence of the accepted epoch remain pending, so
+   reboot-time capability reconstruction is still partial. A hosted/physical
+   device backend and physical
    power-loss evidence remain pending. A focused signed KVM/WHP controlled
    probe now instantiates the bounded block-service loop in an isolated CPL3
    process against a volatile one-page in-image backend. A separate client has

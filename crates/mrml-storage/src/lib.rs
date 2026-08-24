@@ -9,6 +9,7 @@
 
 mod allocation;
 mod authority;
+mod authority_checkpoint;
 mod block;
 mod block_protocol;
 mod block_service;
@@ -33,6 +34,12 @@ pub use allocation::{
 pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,
     StorageObjectKind, StoragePrincipal, StorageRights,
+};
+pub use authority_checkpoint::{
+    AUTHORITY_CHECKPOINT_GRANT_BYTES, AUTHORITY_CHECKPOINT_HEADER_BYTES,
+    AuthenticatedAuthorityCheckpoint, AuthorityCheckpointError, AuthorityRecoveryGuard,
+    RecoveredStorageAuthorities, StorageRecoveryGrant, authority_checkpoint_digest,
+    encode_authority_checkpoint,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{
