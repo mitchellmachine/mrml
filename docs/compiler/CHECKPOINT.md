@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8ce26b1`
-  (`compiler: move exact assignment sources`)
+- Compiler checkpoint commit: `2104bd4`
+  (`compiler: retain conditional expression paths`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `8ddd42f` (`compiler: refine conditional event
@@ -120,6 +120,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   source-order claims. Validation rejects unassigned origins, parameter-origin
   misuse, statement indexes outside the parsed body, tail origins on bodies
   without a tail, and invalid local-initialization origins; and
+- a fixed-width conditional-expression branch path on every initialization and
+  effect. The parent path owns condition evaluation; then/else traversal appends
+  a zero/one bit, nested branches extend the path, and traversal restores the
+  parent before post-join events. The existing parser/expression nesting bound
+  limits paths to 64 branches. Final validation rejects excessive depth, set
+  bits outside the declared depth, parameter facts outside the root path, and a
+  leaked non-root traversal state. These paths are retained provenance, not yet
+  CFG program points, so conditional-expression initializedness remains gated;
+  and
 - parser-shape-validated conditional program points. Conditional-return events
   distinguish each branch condition from its true-return value and final else
   value. Conditional-assignment events distinguish each branch condition and
@@ -145,7 +154,8 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   adds no per-event table; and
 - bounded fixed-point initializedness enforcement across every reachable block
   and edge of a complete supported statement/loop CFG whose expression events
-  do not contain a still-coarse conditional-expression path split. Two fixed
+  do not contain a conditional-expression path split that is not yet mapped
+  into that CFG. Two fixed
   64-block by 22-word bitset matrices retain definite input/output state for
   all 1,360 move paths. Incoming paths use intersection, entry participates as
   an explicit predecessor, and exact edge events transfer before successor
@@ -316,8 +326,9 @@ compatibility gaps:
 1. extend contextual effects for implicit coercions and remaining indirect
    call/return and aggregate-materialization shapes without treating ambiguous
    pointee or projected reads as moves;
-2. give conditional-expression arms exact program points, then enable the
-   existing fixed-point initializedness pass for those expression paths;
+2. map the retained conditional-expression paths to exact condition, arm, and
+   join program points, then enable the existing fixed-point initializedness
+   pass for those expression paths;
 3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
 4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
@@ -345,8 +356,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 692 tests on each host: 381
-library tests, 10 conformance tests, 299 replacement tests, and 2 driver tests.
+The checkpoint source passed 693 tests on each host: 381
+library tests, 10 conformance tests, 300 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
