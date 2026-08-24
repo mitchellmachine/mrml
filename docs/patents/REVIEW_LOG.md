@@ -1110,3 +1110,14 @@ compiler-analysis technique.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded compiler fact collection
 and source-order traversal.
+
+## 2026-08-23 — authorized opaque shared-buffer I/O
+
+MRML source: `crates/mrml-kernel/src/{ipc,shared_memory}.rs`.
+
+The kernel conventionally repeats exact receiver-capability and live
+shared-binding validation before a bounded read or write through an opaque
+resource handle. Checked ranges, read-only enforcement, and explicit backend
+errors add no novel IPC, capability, mapping, or buffer-I/O technique.
+
+Patent review: `NOT_TRIGGERED` — conventional authorized bounded I/O.

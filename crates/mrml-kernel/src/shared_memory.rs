@@ -177,6 +177,27 @@ struct Binding {
     pages: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedSharedBinding {
+    handle: HostResourceHandle,
+    access: SharedAccess,
+    bytes: u64,
+}
+
+impl ResolvedSharedBinding {
+    pub(crate) const fn handle(self) -> HostResourceHandle {
+        self.handle
+    }
+
+    pub(crate) const fn access(self) -> SharedAccess {
+        self.access
+    }
+
+    pub(crate) const fn bytes(self) -> u64 {
+        self.bytes
+    }
+}
+
 /// Fixed-capacity binding between one live guest mapping and one opaque host
 /// resource. The token is never placed in guest memory. Every resolution
 /// repeats capability, VM, mapping-identity, and liveness checks.
@@ -333,6 +354,19 @@ impl<const N: usize> SharedMemoryBindings<N> {
         memory: &GuestMemory<MAPPINGS>,
         endpoint: SharedEndpoint,
     ) -> Result<HostResourceHandle, SharedBindingError> {
+        Ok(self
+            .resolve_resource(id, capabilities, authority, memory, endpoint)?
+            .handle())
+    }
+
+    pub(crate) fn resolve_resource<const CAPS: usize, const MAPPINGS: usize>(
+        &self,
+        id: SharedBindingId,
+        capabilities: &CapabilitySpace<CAPS>,
+        authority: Capability,
+        memory: &GuestMemory<MAPPINGS>,
+        endpoint: SharedEndpoint,
+    ) -> Result<ResolvedSharedBinding, SharedBindingError> {
         let object = capabilities.authorize(authority, endpoint.access.rights())?;
         let entry = self.entry(id)?;
         if object != entry.object {
@@ -357,7 +391,15 @@ impl<const N: usize> SharedMemoryBindings<N> {
         if !entry.access.permits(endpoint.access) {
             return Err(SharedBindingError::AccessDenied);
         }
-        Ok(entry.handle)
+        let bytes = entry
+            .pages
+            .checked_mul(crate::PAGE_SIZE)
+            .ok_or(SharedBindingError::ResourceMismatch)?;
+        Ok(ResolvedSharedBinding {
+            handle: entry.handle,
+            access: entry.access,
+            bytes,
+        })
     }
 
     pub fn revoke<const CAPS: usize>(
@@ -617,9 +659,51 @@ mod tests {
     use super::*;
     use crate::arch::x86_64::{TrapDisposition, UserContext};
     use crate::{
-        GuestRegion, KernelScheduler, Message, PhysAddr, Priority, ScheduleOutcome,
-        ServiceSupervisor, TaskRuntime, VmBackend, VmExit, VmTable,
+        GuestRegion, IpcSharedBufferBackend, IpcSharedBufferError, IpcSharedBufferIoError,
+        KernelScheduler, Message, PhysAddr, Priority, ScheduleOutcome, ServiceSupervisor,
+        TaskRuntime, VmBackend, VmExit, VmTable,
     };
+
+    struct BufferBackend {
+        handle: HostResourceHandle,
+        bytes: [u8; crate::PAGE_SIZE as usize],
+        calls: usize,
+        fail: bool,
+    }
+
+    unsafe impl IpcSharedBufferBackend for BufferBackend {
+        type Error = &'static str;
+
+        fn read(
+            &mut self,
+            handle: HostResourceHandle,
+            offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            self.calls += 1;
+            if self.fail || handle != self.handle {
+                return Err("backend");
+            }
+            let start = usize::try_from(offset).map_err(|_| "offset")?;
+            output.copy_from_slice(&self.bytes[start..start + output.len()]);
+            Ok(())
+        }
+
+        fn write(
+            &mut self,
+            handle: HostResourceHandle,
+            offset: u64,
+            input: &[u8],
+        ) -> Result<(), Self::Error> {
+            self.calls += 1;
+            if self.fail || handle != self.handle {
+                return Err("backend");
+            }
+            let start = usize::try_from(offset).map_err(|_| "offset")?;
+            self.bytes[start..start + input.len()].copy_from_slice(input);
+            Ok(())
+        }
+    }
 
     struct CleanupBackend {
         fail: bool,
@@ -841,6 +925,213 @@ mod tests {
                 crate::IpcError::Unauthorized
             ))
         );
+    }
+
+    #[test]
+    fn shared_buffer_io_revalidates_authority_bounds_and_backend_results() {
+        let vm = vm();
+        let (memory, mapping) = mapped();
+        let source_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let buffer_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let mut source = CapabilitySpace::<1>::new();
+        let root = source.insert(OBJECT, source_rights).unwrap();
+        let endpoint = SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite);
+        let host = HostResourceHandle::new(124).unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        let binding = bindings
+            .bind(&source, root, &memory, endpoint, host)
+            .unwrap();
+        let mut receiver = CapabilitySpace::<1>::new();
+        let message = Message::transfer(
+            b"buffer-io",
+            &[(root, buffer_rights)],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        let mut backend = BufferBackend {
+            handle: host,
+            bytes: [0; crate::PAGE_SIZE as usize],
+            calls: 0,
+            fail: false,
+        };
+
+        message
+            .write_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                17,
+                b"bounded",
+                &mut backend,
+            )
+            .unwrap();
+        let mut output = [0; 7];
+        message
+            .read_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                17,
+                &mut output,
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(&output, b"bounded");
+        assert_eq!(backend.calls, 2);
+
+        assert_eq!(
+            message.write_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                crate::PAGE_SIZE,
+                b"x",
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::OutOfRange)
+        );
+        assert_eq!(
+            message.read_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                0,
+                &mut [],
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::Empty)
+        );
+        assert_eq!(
+            message.read_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                u64::MAX,
+                &mut [0],
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::OutOfRange)
+        );
+        assert_eq!(backend.calls, 2);
+
+        backend.fail = true;
+        assert_eq!(
+            message.write_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                0,
+                b"x",
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::Backend("backend"))
+        );
+        backend.fail = false;
+        let transferred = message.capabilities().next().unwrap();
+        receiver.revoke(transferred).unwrap();
+        assert_eq!(
+            message.write_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                0,
+                b"x",
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::Authorization(
+                IpcSharedBufferError::Ipc(crate::IpcError::Unauthorized)
+            ))
+        );
+        assert_eq!(backend.calls, 3);
+    }
+
+    #[test]
+    fn read_only_shared_buffer_rejects_writes_before_backend_use() {
+        let vm = vm();
+        let (memory, mapping) = mapped();
+        let rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let buffer_rights = Rights::MAP.union(Rights::READ);
+        let mut source = CapabilitySpace::<1>::new();
+        let root = source.insert(OBJECT, rights).unwrap();
+        let endpoint = SharedEndpoint::new(vm, mapping, SharedAccess::ReadOnly);
+        let host = HostResourceHandle::new(125).unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        let binding = bindings
+            .bind(&source, root, &memory, endpoint, host)
+            .unwrap();
+        let mut receiver = CapabilitySpace::<1>::new();
+        let message = Message::transfer(
+            b"read-only",
+            &[(root, buffer_rights)],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        let mut backend = BufferBackend {
+            handle: host,
+            bytes: [7; crate::PAGE_SIZE as usize],
+            calls: 0,
+            fail: false,
+        };
+        let mut output = [0];
+        message
+            .read_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                0,
+                &mut output,
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(output, [7]);
+        assert_eq!(
+            message.write_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+                0,
+                b"x",
+                &mut backend,
+            ),
+            Err(IpcSharedBufferIoError::AccessDenied)
+        );
+        assert_eq!(backend.calls, 1);
     }
 
     #[test]

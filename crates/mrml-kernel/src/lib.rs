@@ -49,8 +49,9 @@ pub use handoff::{
     encode_handoff_with_madt, encode_handoff_with_smp, encode_handoff_with_smp_and_service,
 };
 pub use ipc::{
-    AuthorizedIpcCapability, AuthorizedSharedIpcBuffer, Endpoint, IpcError, IpcSharedBufferError,
-    MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, MAX_WIRE_MESSAGE, Message, Receiver, WIRE_HEADER_LENGTH,
+    AuthorizedIpcCapability, AuthorizedSharedIpcBuffer, Endpoint, IpcError, IpcSharedBufferBackend,
+    IpcSharedBufferError, IpcSharedBufferIoError, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD,
+    MAX_WIRE_MESSAGE, Message, Receiver, WIRE_HEADER_LENGTH,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

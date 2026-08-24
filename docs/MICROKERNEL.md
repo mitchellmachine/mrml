@@ -2978,9 +2978,21 @@ Missing, multiple, insufficient, excessive, stale, and revoked capabilities all
 fail before object identity or mapping resolution; wrong object, VM/task,
 mapping, access, resource range, or executable state fails before the handle is
 returned. The block-specific receive loop, binding selection, mapped-slice
-construction, and syscall path remain
-pending, so this is kernel transfer authorization rather than end-to-end service
-execution.
+construction, and syscall path remain pending, so this is kernel transfer
+authorization rather than end-to-end service execution.
+
+The same generic gate now supports actual bounded buffer use without returning
+an address or a persistent mapping view. Each read or write repeats exact
+receiver-capability authorization and complete live-binding resolution
+immediately before passing only the opaque host-resource handle, byte offset,
+and caller-owned byte slice to a backend. Checked arithmetic rejects empty,
+overflowing, and out-of-range requests; writes additionally require the live
+binding to be read-write. Backend failures remain distinct, including uncertain
+outcomes. Safe callers cannot revoke the capability or mapping concurrently
+through the immutably borrowed authority state, and no authorization snapshot
+survives for later buffer use. Connecting the block dispatcher to these generic
+operations still requires the block-specific receive loop and binding
+selection.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3107,7 +3119,7 @@ This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-five focused storage tests and 311 focused kernel tests plus strict
+Ninety-five focused storage tests and 313 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
 block-service process and block-specific receive/shared-mapping integration, a
 concrete hosted/physical device backend,
@@ -3122,15 +3134,14 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 95 tests, both kernel runs pass 311 tests, and
+Both storage unit-test runs pass 95 tests, both kernel runs pass 313 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
-and kernel capability-transfer state, not
+kernel capability-transfer state, and opaque-handle bounded buffer I/O, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
-Patent review: `NOT_TRIGGERED` — conventional bounded directory ancestry,
-successor-state construction, metadata staging, and transactional COW
-publication; see
+Patent review: `NOT_TRIGGERED` — conventional exact capability/binding
+revalidation and opaque-handle bounded I/O; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The ancestry, successor-construction, and object-ID allocator increments also passed the two

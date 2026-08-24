@@ -1,6 +1,7 @@
 use crate::{
     Capability, CapabilityError, CapabilitySpace, GuestMemory, HostResourceHandle, ObjectId,
-    Rights, SharedBindingError, SharedBindingId, SharedEndpoint, SharedMemoryBindings,
+    Rights, SharedAccess, SharedBindingError, SharedBindingId, SharedEndpoint,
+    SharedMemoryBindings,
 };
 
 pub const MAX_INLINE_PAYLOAD: usize = 4096;
@@ -67,6 +68,41 @@ pub enum IpcSharedBufferError {
     Ipc(IpcError),
     AccessMismatch,
     Binding(SharedBindingError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IpcSharedBufferIoError<E> {
+    Authorization(IpcSharedBufferError),
+    Empty,
+    OutOfRange,
+    AccessDenied,
+    Backend(E),
+}
+
+/// Performs bounded I/O against an opaque resource selected by the kernel.
+///
+/// # Safety
+///
+/// Implementations must associate each handle with only its kernel-selected
+/// resource, perform the complete requested transfer or return an error, and
+/// return an error for stale, short, or otherwise indeterminate transfers.
+/// They must not redirect a handle or expose host addresses to the caller.
+pub unsafe trait IpcSharedBufferBackend {
+    type Error;
+
+    fn read(
+        &mut self,
+        handle: HostResourceHandle,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error>;
+
+    fn write(
+        &mut self,
+        handle: HostResourceHandle,
+        offset: u64,
+        input: &[u8],
+    ) -> Result<(), Self::Error>;
 }
 
 impl AuthorizedIpcCapability {
@@ -190,11 +226,120 @@ impl Message {
         if required != endpoint.access().rights() {
             return Err(IpcSharedBufferError::AccessMismatch);
         }
+        let (authority, resource) = self.resolve_single_shared_resource(
+            receiver_space,
+            required,
+            bindings,
+            binding,
+            memory,
+            endpoint,
+        )?;
+        Ok(AuthorizedSharedIpcBuffer {
+            authority,
+            binding,
+            handle: resource.handle(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_single_shared_buffer<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        binding: SharedBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        endpoint: SharedEndpoint,
+        offset: u64,
+        output: &mut [u8],
+        backend: &mut B,
+    ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
+        let (_, resource) = self
+            .resolve_single_shared_resource(
+                receiver_space,
+                required,
+                bindings,
+                binding,
+                memory,
+                endpoint,
+            )
+            .map_err(IpcSharedBufferIoError::Authorization)?;
+        validate_buffer_range(resource.bytes(), offset, output.len())?;
+        backend
+            .read(resource.handle(), offset, output)
+            .map_err(IpcSharedBufferIoError::Backend)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_single_shared_buffer<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        binding: SharedBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        endpoint: SharedEndpoint,
+        offset: u64,
+        input: &[u8],
+        backend: &mut B,
+    ) -> Result<(), IpcSharedBufferIoError<B::Error>> {
+        let (_, resource) = self
+            .resolve_single_shared_resource(
+                receiver_space,
+                required,
+                bindings,
+                binding,
+                memory,
+                endpoint,
+            )
+            .map_err(IpcSharedBufferIoError::Authorization)?;
+        if resource.access() != SharedAccess::ReadWrite {
+            return Err(IpcSharedBufferIoError::AccessDenied);
+        }
+        validate_buffer_range(resource.bytes(), offset, input.len())?;
+        backend
+            .write(resource.handle(), offset, input)
+            .map_err(IpcSharedBufferIoError::Backend)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_single_shared_resource<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        binding: SharedBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        endpoint: SharedEndpoint,
+    ) -> Result<
+        (
+            AuthorizedIpcCapability,
+            crate::shared_memory::ResolvedSharedBinding,
+        ),
+        IpcSharedBufferError,
+    > {
+        if required != endpoint.access().rights() {
+            return Err(IpcSharedBufferError::AccessMismatch);
+        }
         let authority = self
             .authorize_single_capability(receiver_space, required)
             .map_err(IpcSharedBufferError::Ipc)?;
-        let handle = bindings
-            .resolve(
+        let resource = bindings
+            .resolve_resource(
                 binding,
                 receiver_space,
                 authority.capability(),
@@ -202,11 +347,7 @@ impl Message {
                 endpoint,
             )
             .map_err(IpcSharedBufferError::Binding)?;
-        Ok(AuthorizedSharedIpcBuffer {
-            authority,
-            binding,
-            handle,
-        })
+        Ok((authority, resource))
     }
 
     /// Encodes without allocation. Tokens only have meaning in a
@@ -286,6 +427,24 @@ impl Message {
             },
         ))
     }
+}
+
+fn validate_buffer_range<E>(
+    bytes: u64,
+    offset: u64,
+    length: usize,
+) -> Result<(), IpcSharedBufferIoError<E>> {
+    if length == 0 {
+        return Err(IpcSharedBufferIoError::Empty);
+    }
+    let length = u64::try_from(length).map_err(|_| IpcSharedBufferIoError::OutOfRange)?;
+    let end = offset
+        .checked_add(length)
+        .ok_or(IpcSharedBufferIoError::OutOfRange)?;
+    if end > bytes {
+        return Err(IpcSharedBufferIoError::OutOfRange);
+    }
+    Ok(())
 }
 
 fn read_u64(bytes: &[u8]) -> u64 {

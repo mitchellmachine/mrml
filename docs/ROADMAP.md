@@ -331,9 +331,11 @@ authority; unrelated domains continue.
    stale, and revoked transfers fail before object identity is returned. The
    same gate now resolves one exact shared binding and revalidates object,
    VM/task, mapping generation, access mode, host range, writability, and
-   non-executable state before returning only an opaque host resource handle. An
-   isolated service process, block-specific receive/syscall, binding selection,
-   and mapped-slice
+   non-executable state before returning only an opaque host resource handle.
+   Generic bounded reads and writes repeat those checks at every use, reject
+   empty/overflowing ranges and read-only writes before backend access, expose
+   no address, and preserve backend errors. An isolated service process,
+   block-specific receive/syscall, binding selection and dispatcher-to-buffer
    wiring, concrete hosted/physical backend, and
    physical durability evidence remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is

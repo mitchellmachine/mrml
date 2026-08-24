@@ -140,8 +140,11 @@ explicitly and downgrade the status rather than guessing.
   shared-memory binding resolution is now composed into that gate and rechecks
   the exact object, VM/task, mapping generation, access, host range, writability,
   and non-executable state before returning only the opaque host resource
-  handle. No isolated service process or block-specific receive, binding
-  selection, and mapped-slice wiring,
+  handle. Generic buffer I/O repeats the exact capability and binding checks on
+  every use, checks nonempty bounded ranges and write access before calling an
+  opaque-handle backend, and preserves backend uncertainty. No isolated service
+  process or block-specific receive, binding selection and
+  dispatcher-to-buffer wiring,
   concrete hosted or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,

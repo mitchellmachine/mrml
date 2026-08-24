@@ -279,9 +279,12 @@ stale, or revoked transfers before returning object identity. Existing shared-
 memory resolution is now composed into the same receiver gate: the exact
 binding, object, VM/task, mapping generation, access mode, host range,
 writability, and non-executable state must agree before only the opaque host
-resource handle is returned. There is not yet an isolated service process,
-block-specific syscall/receive-loop, service binding selection/mapped-slice
-construction, or physical device
+resource handle is returned. Generic bounded buffer reads and writes now repeat
+that complete authorization at every use, reject empty or overflowing ranges,
+deny writes through read-only bindings, and preserve backend uncertainty while
+passing no raw address across the interface. There is not yet an isolated
+service process, block-specific syscall/receive-loop, service binding selection
+and dispatcher-to-buffer wiring, or physical device
 implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
