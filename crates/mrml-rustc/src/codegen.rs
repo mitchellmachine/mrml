@@ -3108,6 +3108,31 @@ fn preanalyze_runtime_expression_at_reads<
                             tree.expression(argument).map(|expression| expression.kind)
                     {
                         match tree.expression(then).map(|expression| expression.kind) {
+                            Some(ExprKind::Identifier(name)) => {
+                                let span = tree
+                                    .expression(then)
+                                    .ok_or(CodegenError {
+                                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                        span: assignment_span,
+                                    })?
+                                    .span;
+                                for _ in 0..count {
+                                    visit!(first)?;
+                                    push_read(
+                                        facts,
+                                        locals,
+                                        function,
+                                        RuntimeReadPlace {
+                                            name,
+                                            span,
+                                            projections: RuntimePlaceProjections::single(
+                                                RuntimePlaceProjection::Index,
+                                            ),
+                                        },
+                                        assignment_span,
+                                    )?;
+                                }
+                            }
                             Some(ExprKind::Array {
                                 elements,
                                 element_count,
@@ -4723,6 +4748,7 @@ fn runtime_wrapped_array_call_argument_preanalysis_supported<const MAX_NODES: us
     count: usize,
 ) -> bool {
     match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Identifier(_)) => true,
         Some(ExprKind::Array {
             elements,
             element_count,
@@ -20151,6 +20177,62 @@ mod tests {
         ]) {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_sequence_wrapped_identifier_array_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize) -> usize { let values = [first, second, third]; let selected: &[usize] = choose_wrapped({ prefix; values }, (left, right), bias); selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_read_count, 12);
+        for (index, fact) in facts.assignment_reads[..12].iter().enumerate() {
+            let fact = fact.unwrap();
+            let (base, projections) = match index {
+                0..=2 => (
+                    RuntimePlaceIdentity::Parameter(index),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                3 | 5 | 7 => (
+                    RuntimePlaceIdentity::Parameter(5),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                4 | 6 | 8 => (
+                    RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                ),
+                9 | 10 => (
+                    RuntimePlaceIdentity::Parameter(index - 6),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                11 => (
+                    RuntimePlaceIdentity::Parameter(6),
+                    RuntimePlaceProjections::EMPTY,
+                ),
+                _ => unreachable!(),
+            };
+            assert_eq!(fact.base, base);
+            assert_eq!(fact.projections, projections);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
