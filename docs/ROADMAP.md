@@ -727,9 +727,13 @@ two physical slots repeatedly wrap. Live presentation of the resume record is
 now implemented with KVM/WHP parity: one typed page must bind the exact
 configuration page and queue, remain disjoint from every launch range, is
 initialized and republished as a complete zero-padded canonical image through
-the device path, and is guest-read-only/NX. Exact quiescence/crash orchestration,
-guest reconstruction from that mapped page, hosted restart execution, unbounded
-progress, and PCI transport remain pending.
+the device path, and is guest-read-only/NX. The signed KVM/WHP workload now
+reaches one exact scalar stop boundary after 16 fully retired operations. The
+host accounts and validates that exit, publishes nonzero state while the vCPU
+is stopped, and the guest reconstructs from the complete page plus both request
+slots before continuing through operation 32. Crash orchestration, pending-work
+live reconstruction, hosted VM restart execution, unbounded progress, and PCI
+transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

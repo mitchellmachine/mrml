@@ -619,6 +619,20 @@ impl VirtualBlockResumePage {
                 .unwrap(),
         );
     }
+
+    /// Decodes only a complete canonical page. Hidden tail data is rejected so
+    /// a guest cannot reconstruct from bytes that differ from the published
+    /// device image.
+    pub fn decode_page(input: &[u8]) -> Result<VirtualBlockResumeState, VirtualBlockError> {
+        if input.len() != PAGE_SIZE as usize
+            || input[VIRTUAL_BLOCK_RESUME_STATE_BYTES..]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        VirtualBlockResumeState::decode(&input[..VIRTUAL_BLOCK_RESUME_STATE_BYTES])
+    }
 }
 
 impl VirtualBlockResumeState {
@@ -959,6 +973,19 @@ impl VirtualBlockGuestDriver {
             pending_count,
             terminal,
         })
+    }
+
+    /// Reconstructs from the complete zero-padded page presented by the device.
+    /// The caller must still establish a stopped execution boundary and bind
+    /// the page and request snapshot to the live capability-authorized device.
+    pub fn reconstruct_from_page(
+        encoded_page: &[u8],
+        encoded_requests: &[[u8; VIRTUAL_BLOCK_REQUEST_BYTES]],
+    ) -> Result<Self, VirtualBlockError> {
+        let state = VirtualBlockResumePage::decode_page(encoded_page)?;
+        let mut encoded_state = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        state.encode(&mut encoded_state);
+        Self::reconstruct(&encoded_state, encoded_requests)
     }
 
     /// Reinitializes state only after an exact reset completion and only from
@@ -3081,6 +3108,19 @@ mod tests {
                 .iter()
                 .all(|byte| *byte == 0)
         );
+        assert_eq!(
+            VirtualBlockResumePage::decode_page(&encoded),
+            Ok(page.state())
+        );
+        encoded[VIRTUAL_BLOCK_RESUME_STATE_BYTES] = 1;
+        assert_eq!(
+            VirtualBlockResumePage::decode_page(&encoded),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
+        assert_eq!(
+            VirtualBlockResumePage::decode_page(&encoded[..PAGE_SIZE as usize - 1]),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
 
         for invalid in [
             0,
@@ -3300,6 +3340,15 @@ mod tests {
         let next = driver.prepare_read(0, 1, 0x90_0000, 4096).unwrap();
         assert_eq!(next.request().request_id(), 51);
         assert_eq!(next.producer(), 6);
+
+        let configuration_page =
+            VirtualBlockConfigurationPage::new(0x30_0000, configuration).unwrap();
+        let page = VirtualBlockResumePage::new(0x31_0000, configuration_page, state).unwrap();
+        let mut encoded_page = [0; PAGE_SIZE as usize];
+        page.encode_page(&mut encoded_page);
+        let reconstructed =
+            VirtualBlockGuestDriver::reconstruct_from_page(&encoded_page, &requests).unwrap();
+        assert_eq!(reconstructed, driver);
 
         let exhausted = VirtualBlockResumeState {
             request_producer: u64::MAX,

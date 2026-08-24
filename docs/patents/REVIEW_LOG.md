@@ -1463,6 +1463,15 @@ protocol, authority model, persistent format, or patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Live virtual-block guest reconstruction
+
+**Result: NOT_TRIGGERED.** The change conventionally stops a vCPU at an exact
+scalar checkpoint, publishes an already defined canonical queue-state page,
+reconstructs bounded local driver state from that page and the existing request
+ring, and continues monotonic IDs and counters. It adds no new authority model,
+persistent format, device protocol, or patent-candidate mechanism. This agent
+review does not replace the required independent human dual review.
+
 # 2026-08-24 — Signed native virtual-block completion consumer
 
 **Result: NOT_TRIGGERED.** The change conventionally composes a second native

@@ -127,6 +127,11 @@ use mrml_kernel::{
     GpuQueueSender, GpuResourceResponse, GpuResourceResponseReceiver, GpuSharedRingIndices,
     ResourceCommand,
 };
+#[cfg(feature = "block-guest-driver-probe")]
+use mrml_kernel::{
+    PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_REQUEST_BYTES,
+    VirtualBlockGuestDriver,
+};
 #[cfg(any(
     feature = "timer-probe",
     feature = "preemption-probe",
@@ -137,8 +142,6 @@ use mrml_kernel::{
     feature = "smp-ipi-probe"
 ))]
 use mrml_kernel::{Priority, ScheduleOutcome};
-#[cfg(feature = "block-guest-driver-probe")]
-use mrml_kernel::{VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGuestDriver};
 
 #[cfg(feature = "gpu-benchmark")]
 const GPU_COMMAND_BASE: usize = 0x00b0_0000;
@@ -151,11 +154,17 @@ const GPU_BENCHMARK_ITERATIONS: u32 = 1_000;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
+#[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PAYLOAD_BASE: u64 = 0x00a0_0000;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_QUIESCE_PORT: u16 = 0x4d66;
+#[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROBE_CYCLES: u32 = 8;
+#[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_QUIESCE_CYCLE: u32 = BLOCK_PROBE_CYCLES / 2;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROBE_OPERATIONS: u32 = BLOCK_PROBE_CYCLES * 4;
 #[cfg(feature = "block-guest-driver-probe")]
@@ -2360,6 +2369,30 @@ unsafe fn run_block_guest_driver_probe() -> ! {
                     halt();
                 }
             }
+        }
+        if cycle + 1 == BLOCK_QUIESCE_CYCLE {
+            unsafe {
+                asm!(
+                    "out dx, eax",
+                    in("dx") BLOCK_QUIESCE_PORT,
+                    in("eax") BLOCK_QUIESCE_CYCLE * 4,
+                    options(nomem, nostack)
+                )
+            };
+            let mut resume_page = [0; PAGE_SIZE as usize];
+            for (offset, byte) in resume_page.iter_mut().enumerate() {
+                *byte = unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
+            }
+            let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+            for (slot, request) in requests.iter_mut().enumerate() {
+                let base =
+                    queue.request_base() + 128 + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
+                for (offset, byte) in request.iter_mut().enumerate() {
+                    *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
+                }
+            }
+            driver = VirtualBlockGuestDriver::reconstruct_from_page(&resume_page, &requests)
+                .unwrap_or_else(|_| halt());
         }
     }
     unsafe {

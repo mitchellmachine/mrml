@@ -3743,6 +3743,53 @@ Patent review: `NOT_TRIGGERED` — conventional canonical state-page publication
 read-only/NX guest mapping, exact overlap validation, and fail-stop backend
 handling; see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+Guest reconstruction now consumes the complete canonical page rather than only
+its 192-byte prefix. Exact 4 KiB length and an all-zero tail are required before
+state decoding, after which the existing request-slot and replay checks remain
+unchanged. The signed block workload adds one probe-specific scalar stop at the
+midpoint, after operation 16 is fully acknowledged and before operation 17 is
+published. That exit is admitted by an exact third I/O rule and charged to the
+VM's 65-exit budget. While the vCPU is stopped, each runner verifies the exact
+port, width, direction, and value; recaptures the live idle nonzero state;
+requires all four counters and both ID anchors to equal 16; and publishes the
+complete page through the device-only path. After the `OUT` resumes, the guest
+copies the complete page and both exact physical request slots, replaces its
+local driver with `reconstruct_from_page`, and continues request IDs 17 through
+32. Final payload and counter checks remain unchanged.
+
+Fresh one-time Lamport-signed version-1 execution on 2026-08-24 completed this
+path under both hosted backends. Windows WHP reported `verify=16957us
+prepare=3756us execute=514us total=25291us`; Arch Linux/WSL2 KVM reported
+`verify=16909us prepare=2917us execute=709us total=45070us`. Windows gnullvm
+also passed 387 kernel tests, 20 of 21 WHP tests, and all 5 WHP-run tests; Linux
+passed 387 kernel tests, 17 of 18 KVM tests, and all 6 KVM-run tests. Each
+ignored native case is the existing manual mapping-performance gate. Scoped
+strict Clippy passed for both kernel/backend/runner stacks and for the UEFI
+kernel image with `block-guest-driver-probe`. This is unit/simulation and
+hosted controlled-probe evidence for bounded idle-state reinitialization. The
+same VM and device continue running; no crash, VM rebuild, pending-work live
+reconstruction, persistence, durability, PCI, native boot, bare metal, or
+physical hardware was exercised.
+
+The live-reconstruction `DIGITAL-RIGHTS REVIEW` found no identity, collection,
+retention, correlation, disclosure, attestation, DRM, vendor/publisher control,
+first-party bypass, accessibility restriction, AI authority, or persistent
+owner-state change. The stop and state page are local volatile test mechanics
+and create no authority. The `HOSTILE SECURITY REVIEW` treats artifact
+admission, the stop tuple and exit budget, stopped-vCPU ordering, every page
+byte and tail byte, configuration/generation, counters, ID anchors, request
+slots, reconstruction result, subsequent doorbells/acknowledgements, payloads,
+and backend outcome as hostile. The stop occurs only after exact retirement;
+all host state is checked before publication; all guest bytes are checked before
+replacement; and mismatch or uncertainty fails the VM or guest without retry.
+Existing capability, revocation, rollback-resistance, accessibility, evidence,
+owner-sovereignty, and anti-persistence gates are unchanged. This agent review
+does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional stopped-vCPU checkpointing,
+canonical page decoding, bounded ring reconstruction, and monotonic continuation;
+see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE
