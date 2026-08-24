@@ -231,14 +231,18 @@ local-array bases retain the exact `Subslice` projection. The recursion is
 bounded to 64 levels. Call-derived fat-reference initializers also use the same
 visitor when every argument is a one-slot scalar, another supported fat
 reference, a direct identifier-backed array or tuple, an array literal or
-single-evaluation repeat, a direct conditional array with literal branches, or
-a supported literal/conditional/wrapped tuple.
+single-evaluation repeat, a direct conditional array with literal branches, a
+sequence-wrapped array literal/repeat/direct conditional with literal branches,
+or a supported literal/conditional/wrapped tuple.
 Prefix expressions and call arguments are reserved left-to-right before
 inlined-helper emission; identifier-backed arrays reserve one `Index` read per
 element and tuples reserve numbered `TupleField` reads. Direct conditional
-arrays repeat condition/then-element/else-element for every index. Other
-aggregate call arguments remain emission-time work because their specialized
-materializers need separate traversal facts.
+arrays repeat condition/then-element/else-element for every index. Supported
+sequence-wrapped arrays additionally repeat the prefix before every materialized
+element, matching the emitter rather than treating the prefix as a one-time
+wrapper. Other wrapped or non-literal aggregate call arguments remain
+emission-time work because their specialized materializers need separate
+traversal facts.
 Supported direct identifier, range-derived, and recursively conditional fat-
 reference explicit returns and final tails now use the same bounded read
 preanalysis. Their conditions, runtime endpoints, and bases retain exact source
