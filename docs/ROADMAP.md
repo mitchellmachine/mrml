@@ -899,6 +899,16 @@ function. Tests cover exact mapping/unmapping identity, deny-by-default enable,
 failure preservation, independent successful transitions, mapper-free BAR
 assignment, and common-runner VM failure on mapping rejection. Native KVM/WHP
 BAR mapper adapters and an authorized concrete function remain pending.
+The first authorized concrete-function policy slice now binds one routed PCI
+generation to an active MRML-native block generation, exact queue/vector, and
+capability-selected backend region. A block-specific mapper records only a
+confirmed exact BAR window; reset/removal composes external resource cleanup
+before both block and PCI lifecycle mutation. Focused hostile tests cover stale
+generations, class/geometry substitution, poisoned queues, mapping rejection and
+uncertainty, cleanup failure, reset, and detach. This is host-side unit/
+simulation policy. Guest-visible discovery, MMIO request transport, native
+KVM/WHP BAR/interrupt adapters, MSI/MSI-X, DMA, and a production PCI identity
+remain pending, so the PCI attachment gate is still partial.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

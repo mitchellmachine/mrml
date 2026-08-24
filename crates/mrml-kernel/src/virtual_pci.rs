@@ -96,6 +96,25 @@ pub struct VirtualPciAttachedResources {
     mmio_window: Option<VirtualPciMmioWindow>,
 }
 
+/// Read-only description of one exact routed function generation. This is
+/// trusted router state but still carries no authority to use the function or
+/// any backend resource.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualPciAttachedFunction {
+    resources: VirtualPciAttachedResources,
+    identity: VirtualPciIdentity,
+}
+
+impl VirtualPciAttachedFunction {
+    pub const fn resources(self) -> VirtualPciAttachedResources {
+        self.resources
+    }
+
+    pub const fn identity(self) -> VirtualPciIdentity {
+        self.identity
+    }
+}
+
 impl VirtualPciAttachedResources {
     pub const fn attachment(self) -> VirtualPciAttachmentId {
         self.attachment
@@ -244,6 +263,14 @@ impl VirtualPciIdentity {
 
     pub const fn class(self) -> u8 {
         self.class
+    }
+
+    pub const fn subclass(self) -> u8 {
+        self.subclass
+    }
+
+    pub const fn programming_interface(self) -> u8 {
+        self.programming_interface
     }
 }
 
@@ -658,6 +685,22 @@ impl VirtualPciConfigurationRouter {
         Ok(VirtualPciAttachmentId {
             slot: slot as u8,
             generation,
+        })
+    }
+
+    pub fn describe_attachment(
+        &self,
+        id: VirtualPciAttachmentId,
+    ) -> Result<VirtualPciAttachedFunction, VirtualPciError> {
+        let entry = self.attachment(id)?;
+        Ok(VirtualPciAttachedFunction {
+            resources: VirtualPciAttachedResources {
+                attachment: id,
+                location: entry.location,
+                function_generation: entry.function.generation(),
+                mmio_window: entry.function.assigned_mmio_window(),
+            },
+            identity: entry.function.identity(),
         })
     }
 

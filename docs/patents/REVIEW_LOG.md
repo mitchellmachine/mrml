@@ -1960,3 +1960,17 @@ protocol, host-share mechanism, accessibility device, browser semantic
 interface, JavaScript/WebAssembly runtime, media mechanism, authority model, or
 other patent-candidate mechanism. This agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Exact MRML-native block/PCI lifecycle attachment
+
+**Result: NOT_TRIGGERED.** The change conventionally binds exact generational
+PCI routing state to an existing active MRML-native block queue, interrupt
+vector, and capability-selected backend region; tracks confirmed BAR mapping;
+and composes resource cleanup before reset or removal. Exact-match preflight,
+transactional rejection, and fail-closed uncertain-state handling are standard
+defensive virtual-device lifecycle techniques. It introduces no VirtIO
+transport, host-share mechanism, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, media mechanism, compatibility claim,
+or new patent-candidate mechanism. The previously recorded planned mechanisms
+remain `TRIGGERED`; this agent review does not replace the required independent
+human dual review.

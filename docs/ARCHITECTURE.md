@@ -724,6 +724,14 @@ command. The default router, transport, and common-runner paths use a deny
 mapper, so a present function cannot silently enable decode; an explicitly
 authorized mapper-aware runner is required. BAR assignment remains routing data
 and invokes no mapper by itself.
+The first concrete host-side composition now binds one exact routed PCI function
+generation to one active MRML-native block generation, its queue, interrupt
+vector, and capability-selected backend region. Its block-specific mapper tracks
+only confirmed mapping of the exact assigned window, and its reset/removal
+adapter performs external resource cleanup before changing either lifecycle.
+This is focused unit/simulation policy, not an MMIO block transport, native
+KVM/WHP BAR adapter, assigned production identity, or guest-visible PCI discovery
+result.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector

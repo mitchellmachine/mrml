@@ -367,6 +367,14 @@ requires the architectural all-ones absent-function result before continuing.
 Its separate proof exit demonstrates completion without assigning an identity,
 advertising a device, mapping a BAR, or granting interrupt, DMA, or device
 authority.
+The common block/PCI attachment now exact-matches PCI and block generations,
+queue layout, interrupt vector, backend object/range, and confirmed BAR-mapping
+state. Its unsafe cleanup contract covers every mapping, interrupt, DMA binding,
+queue, backend-capability descendant, cached decision, device state, and handle
+before block and PCI reset/removal commit. Clean rejection preserves state;
+uncertain native mutation requires VM quarantine. This contract has focused
+unit/simulation tests only and no native adapter or guest-visible attached-device
+evidence.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

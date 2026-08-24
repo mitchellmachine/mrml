@@ -545,6 +545,12 @@ restart, poison-on-uncertainty, and bounded-runner evidence. VirtIO and QEMU are
 compatibility/testing layers, not authority. Host shares use exact capability
 roots rather than raw paths, and accessibility emulators remain distinct from
 physical-device and user evidence.
+The current host-side PCI/block composition binds exact routed-function and
+active-block generations, queue/vector state, capability-selected backend range,
+confirmed BAR mapping, and revoke-before-reset/removal cleanup. It remains
+unit/simulation policy: do not recover it as guest-visible PCI attachment,
+native KVM/WHP BAR integration, MMIO transport, MSI/MSI-X, DMA, VirtIO, or an
+assigned production PCI identity.
 
 For every future device, recover and update its classification, exact feature
 bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU

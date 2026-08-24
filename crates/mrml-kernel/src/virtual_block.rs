@@ -1,7 +1,9 @@
 use crate::{
     Capability, CapabilityError, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter,
     InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, ObjectId, PAGE_SIZE, Rights,
-    VirtualBlockInterruptError, VmBackend, VmError, VmId, VmRunError, VmTable,
+    VirtualBlockInterruptError, VirtualPciAttachedFunction, VirtualPciAttachedResources,
+    VirtualPciFunctionRevoker, VirtualPciMemoryMapper, VirtualPciMmioWindow,
+    VirtualPciNativeResourceError, VmBackend, VmError, VmId, VmRunError, VmTable,
     inject_virtual_block_interrupt, run_vm_once,
 };
 
@@ -2341,6 +2343,355 @@ impl VirtualBlockBackendAuthority {
 
     pub const fn exposed_block_count(self) -> u64 {
         self.exposed_block_count
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockPciAttachmentState {
+    Attached,
+    Reset,
+    Removed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockPciError {
+    InvalidPciClass,
+    InvalidState,
+    StalePciGeneration,
+    StaleBlockGeneration,
+    GeometryMismatch,
+}
+
+/// Exact common and native authority that must be retired for one PCI-presented
+/// MRML-native block generation. This record identifies cleanup; it grants no
+/// cleanup or backend authority by itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockPciCleanupRecord {
+    pci: VirtualPciAttachedResources,
+    block_generation: u32,
+    queue: VirtualBlockQueueLayout,
+    interrupt_vector: u8,
+    backend: VirtualBlockBackendAuthority,
+    mapped_window: Option<VirtualPciMmioWindow>,
+}
+
+impl VirtualBlockPciCleanupRecord {
+    pub const fn pci(self) -> VirtualPciAttachedResources {
+        self.pci
+    }
+
+    pub const fn block_generation(self) -> u32 {
+        self.block_generation
+    }
+
+    pub const fn queue(self) -> VirtualBlockQueueLayout {
+        self.queue
+    }
+
+    pub const fn interrupt_vector(self) -> u8 {
+        self.interrupt_vector
+    }
+
+    pub const fn backend(self) -> VirtualBlockBackendAuthority {
+        self.backend
+    }
+
+    pub const fn mapped_window(self) -> Option<VirtualPciMmioWindow> {
+        self.mapped_window
+    }
+}
+
+/// Cleanup boundary below the common block lifecycle.
+///
+/// # Safety
+///
+/// Success must make every native mapping, interrupt route, DMA binding,
+/// backend-capability descendant, cached decision, queue mapping, and derived
+/// handle identified by `record` unusable. Execution must remain stopped across
+/// this call and the following common device reset/removal. Partial or uncertain
+/// cleanup must return an error and quarantine the VM.
+pub unsafe trait VirtualBlockPciResourceRevoker {
+    type Error;
+
+    fn revoke_block_resources(
+        &mut self,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> Result<(), Self::Error>;
+}
+
+/// Exact relationship between one routed PCI function generation and one
+/// active MRML-native block generation. PCI identity and BDF remain data; the
+/// separately held block and cleanup capabilities carry authority.
+pub struct VirtualBlockPciAttachment {
+    pci: VirtualPciAttachedResources,
+    block_generation: u32,
+    queue: VirtualBlockQueueLayout,
+    interrupt_vector: u8,
+    backend: VirtualBlockBackendAuthority,
+    mapped_window: Option<VirtualPciMmioWindow>,
+    state: VirtualBlockPciAttachmentState,
+    invalidated_requests: usize,
+}
+
+impl VirtualBlockPciAttachment {
+    pub fn new<const N: usize>(
+        pci: VirtualPciAttachedFunction,
+        device: &VirtualBlockDevice<N>,
+        bridge: &VirtualBlockQueueBridge<N>,
+        backend: VirtualBlockBackendAuthority,
+    ) -> Result<Self, VirtualBlockPciError> {
+        if pci.identity().class() != 1
+            || pci.identity().subclass() != 0x80
+            || pci.identity().programming_interface() != 0
+        {
+            return Err(VirtualBlockPciError::InvalidPciClass);
+        }
+        if pci.resources().mmio_window().is_some()
+            || device.state() != VirtualBlockDeviceState::Active
+            || bridge.is_poisoned()
+        {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        let queue = device.queue().ok_or(VirtualBlockPciError::InvalidState)?;
+        if queue != bridge.layout() {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        let interrupt_vector = device
+            .interrupt_vector()
+            .ok_or(VirtualBlockPciError::InvalidState)?;
+        if backend.exposed_block_count() != device.block_count() {
+            return Err(VirtualBlockPciError::GeometryMismatch);
+        }
+        Ok(Self {
+            pci: pci.resources(),
+            block_generation: device.generation(),
+            queue,
+            interrupt_vector,
+            backend,
+            mapped_window: None,
+            state: VirtualBlockPciAttachmentState::Attached,
+            invalidated_requests: 0,
+        })
+    }
+
+    pub const fn state(&self) -> VirtualBlockPciAttachmentState {
+        self.state
+    }
+
+    pub const fn pci(&self) -> VirtualPciAttachedResources {
+        self.pci
+    }
+
+    pub const fn block_generation(&self) -> u32 {
+        self.block_generation
+    }
+
+    pub const fn backend(&self) -> VirtualBlockBackendAuthority {
+        self.backend
+    }
+
+    pub const fn invalidated_requests(&self) -> usize {
+        self.invalidated_requests
+    }
+
+    pub const fn mapped_window(&self) -> Option<VirtualPciMmioWindow> {
+        self.mapped_window
+    }
+
+    fn cleanup_record<const N: usize>(
+        &self,
+        pci: VirtualPciAttachedResources,
+        device: &VirtualBlockDevice<N>,
+    ) -> Result<VirtualBlockPciCleanupRecord, VirtualBlockPciError> {
+        if self.state != VirtualBlockPciAttachmentState::Attached {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        if pci.attachment() != self.pci.attachment()
+            || pci.location() != self.pci.location()
+            || pci.function_generation() != self.pci.function_generation()
+        {
+            return Err(VirtualBlockPciError::StalePciGeneration);
+        }
+        if device.generation() != self.block_generation {
+            return Err(VirtualBlockPciError::StaleBlockGeneration);
+        }
+        if device.queue() != Some(self.queue)
+            || device.interrupt_vector() != Some(self.interrupt_vector)
+            || self.backend.exposed_block_count() != device.block_count()
+        {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        if self.mapped_window.is_some() && self.mapped_window != pci.mmio_window() {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        Ok(VirtualBlockPciCleanupRecord {
+            pci,
+            block_generation: self.block_generation,
+            queue: self.queue,
+            interrupt_vector: self.interrupt_vector,
+            backend: self.backend,
+            mapped_window: self.mapped_window,
+        })
+    }
+
+    fn window_record<const N: usize>(
+        &self,
+        pci: VirtualPciAttachedResources,
+        device: &VirtualBlockDevice<N>,
+        mapping: bool,
+    ) -> Result<VirtualBlockPciCleanupRecord, VirtualBlockPciError> {
+        let record = self.cleanup_record(pci, device)?;
+        let window = pci
+            .mmio_window()
+            .ok_or(VirtualBlockPciError::InvalidState)?;
+        if (mapping && self.mapped_window.is_some())
+            || (!mapping && self.mapped_window != Some(window))
+        {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        Ok(record)
+    }
+}
+
+/// Native BAR mapping below the exact block/PCI attachment.
+///
+/// # Safety
+///
+/// Success from map must establish only the exact window in `record`; success
+/// from unmap must make it unusable. Partial or uncertain state must return
+/// `Uncertain` and the VM must not resume.
+pub unsafe trait VirtualBlockPciWindowBackend {
+    fn map_block_window(
+        &mut self,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+
+    fn unmap_block_window(
+        &mut self,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+}
+
+pub struct VirtualBlockPciMemoryMapper<'a, M, const N: usize> {
+    attachment: &'a mut VirtualBlockPciAttachment,
+    device: &'a VirtualBlockDevice<N>,
+    backend: &'a mut M,
+}
+
+impl<'a, M, const N: usize> VirtualBlockPciMemoryMapper<'a, M, N> {
+    pub fn new(
+        attachment: &'a mut VirtualBlockPciAttachment,
+        device: &'a VirtualBlockDevice<N>,
+        backend: &'a mut M,
+    ) -> Self {
+        Self {
+            attachment,
+            device,
+            backend,
+        }
+    }
+}
+
+unsafe impl<M: VirtualBlockPciWindowBackend, const N: usize> VirtualPciMemoryMapper
+    for VirtualBlockPciMemoryMapper<'_, M, N>
+{
+    fn map_window(
+        &mut self,
+        pci: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError> {
+        let record = self
+            .attachment
+            .window_record(pci, self.device, true)
+            .map_err(|_| VirtualPciNativeResourceError::Rejected)?;
+        self.backend.map_block_window(record)?;
+        self.attachment.mapped_window = pci.mmio_window();
+        Ok(())
+    }
+
+    fn unmap_window(
+        &mut self,
+        pci: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError> {
+        let record = self
+            .attachment
+            .window_record(pci, self.device, false)
+            .map_err(|_| VirtualPciNativeResourceError::Rejected)?;
+        self.backend.unmap_block_window(record)?;
+        self.attachment.mapped_window = None;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockPciCleanupMode {
+    Reset,
+    Remove,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockPciCleanupError<E> {
+    Attachment(VirtualBlockPciError),
+    Resource(E),
+    Device(VirtualBlockError),
+}
+
+/// One-use synchronous composition supplied to the PCI router's existing
+/// revoke-before-reset/removal boundary.
+pub struct VirtualBlockPciFunctionRevoker<'a, R, const N: usize> {
+    attachment: &'a mut VirtualBlockPciAttachment,
+    device: &'a mut VirtualBlockDevice<N>,
+    resources: &'a mut R,
+    mode: VirtualBlockPciCleanupMode,
+}
+
+impl<'a, R, const N: usize> VirtualBlockPciFunctionRevoker<'a, R, N> {
+    pub fn new(
+        attachment: &'a mut VirtualBlockPciAttachment,
+        device: &'a mut VirtualBlockDevice<N>,
+        resources: &'a mut R,
+        mode: VirtualBlockPciCleanupMode,
+    ) -> Self {
+        Self {
+            attachment,
+            device,
+            resources,
+            mode,
+        }
+    }
+}
+
+unsafe impl<R: VirtualBlockPciResourceRevoker, const N: usize> VirtualPciFunctionRevoker
+    for VirtualBlockPciFunctionRevoker<'_, R, N>
+{
+    type Error = VirtualBlockPciCleanupError<R::Error>;
+
+    fn revoke_function(&mut self, pci: VirtualPciAttachedResources) -> Result<(), Self::Error> {
+        let record = self
+            .attachment
+            .cleanup_record(pci, self.device)
+            .map_err(VirtualBlockPciCleanupError::Attachment)?;
+        self.resources
+            .revoke_block_resources(record)
+            .map_err(VirtualBlockPciCleanupError::Resource)?;
+        let invalidated = match self.mode {
+            VirtualBlockPciCleanupMode::Reset => self.device.reset(),
+            VirtualBlockPciCleanupMode::Remove => self.device.remove(),
+        };
+        match invalidated {
+            Ok(invalidated) => {
+                self.attachment.invalidated_requests = invalidated;
+                self.attachment.state = match self.mode {
+                    VirtualBlockPciCleanupMode::Reset => VirtualBlockPciAttachmentState::Reset,
+                    VirtualBlockPciCleanupMode::Remove => VirtualBlockPciAttachmentState::Removed,
+                };
+                Ok(())
+            }
+            Err(error) => {
+                self.attachment.state = VirtualBlockPciAttachmentState::Failed;
+                Err(VirtualBlockPciCleanupError::Device(error))
+            }
+        }
     }
 }
 
@@ -5494,6 +5845,510 @@ mod tests {
         assert!(backend.bytes[4096..8192].iter().all(|byte| *byte == 0x65));
         assert!(backend.bytes[8192..12288].iter().all(|byte| *byte == 0x5a));
         assert!(backend.bytes[12288..].iter().all(|byte| *byte == 0));
+    }
+
+    struct RecordingBlockPciRevoker {
+        fail: bool,
+        last: Option<VirtualBlockPciCleanupRecord>,
+    }
+
+    unsafe impl VirtualBlockPciResourceRevoker for RecordingBlockPciRevoker {
+        type Error = MockError;
+
+        fn revoke_block_resources(
+            &mut self,
+            record: VirtualBlockPciCleanupRecord,
+        ) -> Result<(), Self::Error> {
+            self.last = Some(record);
+            if self.fail {
+                Err(MockError::Injected)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct RecordingBlockPciWindowBackend {
+        map_result: Result<(), VirtualPciNativeResourceError>,
+        unmap_result: Result<(), VirtualPciNativeResourceError>,
+        maps: usize,
+        unmaps: usize,
+        last: Option<VirtualBlockPciCleanupRecord>,
+    }
+
+    unsafe impl VirtualBlockPciWindowBackend for RecordingBlockPciWindowBackend {
+        fn map_block_window(
+            &mut self,
+            record: VirtualBlockPciCleanupRecord,
+        ) -> Result<(), VirtualPciNativeResourceError> {
+            self.maps += 1;
+            self.last = Some(record);
+            self.map_result
+        }
+
+        fn unmap_block_window(
+            &mut self,
+            record: VirtualBlockPciCleanupRecord,
+        ) -> Result<(), VirtualPciNativeResourceError> {
+            self.unmaps += 1;
+            self.last = Some(record);
+            self.unmap_result
+        }
+    }
+
+    fn block_pci_function(class: u8) -> crate::VirtualPciType0Function {
+        let identity =
+            crate::VirtualPciIdentity::new(0x1234, 0x5678, 1, 0, 0x80, class, 0x1234, 0x5678)
+                .unwrap();
+        crate::VirtualPciType0Function::new(
+            identity,
+            crate::VirtualPciMemoryBar::new(4096).unwrap(),
+        )
+    }
+
+    fn block_pci_function_with_subclass(subclass: u8) -> crate::VirtualPciType0Function {
+        let identity =
+            crate::VirtualPciIdentity::new(0x1234, 0x5678, 1, 0, subclass, 1, 0x1234, 0x5678)
+                .unwrap();
+        crate::VirtualPciType0Function::new(
+            identity,
+            crate::VirtualPciMemoryBar::new(4096).unwrap(),
+        )
+    }
+
+    #[test]
+    fn pci_block_attachment_binds_exact_generations_and_resets_after_cleanup() {
+        let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let description = router.describe_attachment(pci_id).unwrap();
+        let mut device = active::<1>();
+        let bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let block_capability = capabilities
+            .insert(
+                ObjectId(0x300),
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(block_capability, ObjectId(0x300), 8, 64).unwrap();
+        let mut attachment =
+            VirtualBlockPciAttachment::new(description, &device, &bridge, authority).unwrap();
+        assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Attached);
+        assert_eq!(attachment.pci(), description.resources());
+        assert_eq!(attachment.block_generation(), 1);
+        assert_eq!(attachment.backend(), authority);
+
+        device
+            .admit(&encoded(VirtualBlockRequest::read(
+                1, 1, 0, 1, 0x4000, 4096,
+            )))
+            .unwrap();
+        router.write(location, 16, 4, 0x20_0000).unwrap();
+        let mut resource_revoker = RecordingBlockPciRevoker {
+            fail: false,
+            last: None,
+        };
+        let mut revoker = VirtualBlockPciFunctionRevoker::new(
+            &mut attachment,
+            &mut device,
+            &mut resource_revoker,
+            VirtualBlockPciCleanupMode::Reset,
+        );
+        assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
+        drop(revoker);
+
+        assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Reset);
+        assert_eq!(attachment.invalidated_requests(), 1);
+        assert_eq!(device.state(), VirtualBlockDeviceState::Created);
+        assert_eq!(device.generation(), 2);
+        let cleaned = resource_revoker.last.unwrap();
+        assert_eq!(cleaned.pci().attachment(), pci_id);
+        assert_eq!(cleaned.pci().location(), location);
+        assert_eq!(cleaned.pci().function_generation(), 1);
+        assert_eq!(cleaned.pci().mmio_window().unwrap().address(), 0x20_0000);
+        assert_eq!(cleaned.block_generation(), 1);
+        assert_eq!(cleaned.queue(), layout::<1>());
+        assert_eq!(cleaned.interrupt_vector(), 48);
+        assert_eq!(cleaned.backend(), authority);
+        assert_eq!(
+            router
+                .describe_attachment(pci_id)
+                .unwrap()
+                .resources()
+                .function_generation(),
+            2
+        );
+    }
+
+    #[test]
+    fn pci_block_detach_removes_device_only_after_exact_resource_cleanup() {
+        let location = crate::VirtualPciLocation::new(0, 0, 5, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let mut device = active::<1>();
+        let bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(ObjectId(0x301), crate::Rights::READ)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x301), 0, 64).unwrap();
+        let mut attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            &device,
+            &bridge,
+            authority,
+        )
+        .unwrap();
+        let mut resource_revoker = RecordingBlockPciRevoker {
+            fail: false,
+            last: None,
+        };
+        let mut revoker = VirtualBlockPciFunctionRevoker::new(
+            &mut attachment,
+            &mut device,
+            &mut resource_revoker,
+            VirtualBlockPciCleanupMode::Remove,
+        );
+        let detached = router.detach_with_revoker(pci_id, &mut revoker).unwrap();
+        assert_eq!(detached.identity().class(), 1);
+        drop(revoker);
+        assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Removed);
+        assert_eq!(device.state(), VirtualBlockDeviceState::Removed);
+        assert_eq!(device.generation(), 2);
+        assert_eq!(
+            router.describe_attachment(pci_id),
+            Err(crate::VirtualPciError::StaleAttachment)
+        );
+        assert_eq!(resource_revoker.last.unwrap().backend(), authority);
+    }
+
+    #[test]
+    fn pci_block_cleanup_failure_and_stale_state_preserve_pci_configuration() {
+        let location = crate::VirtualPciLocation::new(0, 0, 6, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let mut device = active::<1>();
+        let bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(ObjectId(0x302), crate::Rights::READ)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x302), 0, 64).unwrap();
+        let description = router.describe_attachment(pci_id).unwrap();
+        let mut attachment =
+            VirtualBlockPciAttachment::new(description, &device, &bridge, authority).unwrap();
+        let mut resource_revoker = RecordingBlockPciRevoker {
+            fail: true,
+            last: None,
+        };
+        let mut revoker = VirtualBlockPciFunctionRevoker::new(
+            &mut attachment,
+            &mut device,
+            &mut resource_revoker,
+            VirtualBlockPciCleanupMode::Reset,
+        );
+        assert_eq!(
+            router.reset_with_revoker(pci_id, &mut revoker),
+            Err(crate::VirtualPciResetError::Revocation(
+                VirtualBlockPciCleanupError::Resource(MockError::Injected)
+            ))
+        );
+        drop(revoker);
+        assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Attached);
+        assert_eq!(device.state(), VirtualBlockDeviceState::Active);
+        assert_eq!(device.generation(), 1);
+        assert_eq!(router.describe_attachment(pci_id), Ok(description));
+
+        device.reset().unwrap();
+        resource_revoker.fail = false;
+        let mut revoker = VirtualBlockPciFunctionRevoker::new(
+            &mut attachment,
+            &mut device,
+            &mut resource_revoker,
+            VirtualBlockPciCleanupMode::Reset,
+        );
+        assert_eq!(
+            router.reset_with_revoker(pci_id, &mut revoker),
+            Err(crate::VirtualPciResetError::Revocation(
+                VirtualBlockPciCleanupError::Attachment(VirtualBlockPciError::StaleBlockGeneration)
+            ))
+        );
+        assert_eq!(router.describe_attachment(pci_id), Ok(description));
+    }
+
+    #[test]
+    fn pci_block_attachment_rejects_identity_state_and_geometry_substitution() {
+        let location = crate::VirtualPciLocation::new(0, 0, 7, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let non_block_id = router.attach(location, block_pci_function(2)).unwrap();
+        let device = active::<1>();
+        let mut poisoned_bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        poisoned_bridge.fail_stop();
+        let clean_bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(ObjectId(0x303), crate::Rights::READ)
+            .unwrap();
+        let exact = VirtualBlockBackendAuthority::new(capability, ObjectId(0x303), 0, 64).unwrap();
+        assert_eq!(
+            VirtualBlockPciAttachment::new(
+                router.describe_attachment(non_block_id).unwrap(),
+                &device,
+                &clean_bridge,
+                exact,
+            )
+            .map(|_| ()),
+            Err(VirtualBlockPciError::InvalidPciClass)
+        );
+        let mut subclass_router = crate::VirtualPciConfigurationRouter::new();
+        let subclass_id = subclass_router
+            .attach(location, block_pci_function_with_subclass(0x01))
+            .unwrap();
+        assert_eq!(
+            VirtualBlockPciAttachment::new(
+                subclass_router.describe_attachment(subclass_id).unwrap(),
+                &device,
+                &clean_bridge,
+                exact,
+            )
+            .map(|_| ()),
+            Err(VirtualBlockPciError::InvalidPciClass)
+        );
+
+        let mut block_router = crate::VirtualPciConfigurationRouter::new();
+        let block_id = block_router
+            .attach(location, block_pci_function(1))
+            .unwrap();
+        let description = block_router.describe_attachment(block_id).unwrap();
+        assert_eq!(
+            VirtualBlockPciAttachment::new(description, &device, &poisoned_bridge, exact)
+                .map(|_| ()),
+            Err(VirtualBlockPciError::InvalidState)
+        );
+        let narrow = VirtualBlockBackendAuthority::new(capability, ObjectId(0x303), 0, 63).unwrap();
+        assert_eq!(
+            VirtualBlockPciAttachment::new(description, &device, &clean_bridge, narrow).map(|_| ()),
+            Err(VirtualBlockPciError::GeometryMismatch)
+        );
+    }
+
+    #[test]
+    fn pci_block_bar_mapping_tracks_only_the_exact_attachment_window() {
+        let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let mut device = active::<1>();
+        let bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(ObjectId(0x304), crate::Rights::READ)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x304), 8, 64).unwrap();
+        let mut attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            &device,
+            &bridge,
+            authority,
+        )
+        .unwrap();
+        router.write(location, 16, 4, 0x20_0000).unwrap();
+        let expected_window = router
+            .describe_attachment(pci_id)
+            .unwrap()
+            .resources()
+            .mmio_window()
+            .unwrap();
+        let mut backend = RecordingBlockPciWindowBackend {
+            map_result: Ok(()),
+            unmap_result: Ok(()),
+            maps: 0,
+            unmaps: 0,
+            last: None,
+        };
+
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut backend);
+            router
+                .write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+                .unwrap();
+        }
+        assert_eq!(attachment.mapped_window(), Some(expected_window));
+        assert_eq!(backend.maps, 1);
+        let mapped = backend.last.unwrap();
+        assert_eq!(mapped.pci().attachment(), pci_id);
+        assert_eq!(mapped.pci().mmio_window(), Some(expected_window));
+        assert_eq!(mapped.mapped_window(), None);
+        assert_eq!(mapped.backend(), authority);
+
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut backend);
+            router
+                .write_with_mapper(location, 4, 2, 0, &mut mapper)
+                .unwrap();
+        }
+        assert_eq!(attachment.mapped_window(), None);
+        assert_eq!(backend.unmaps, 1);
+        let unmapped = backend.last.unwrap();
+        assert_eq!(unmapped.pci().mmio_window(), Some(expected_window));
+        assert_eq!(unmapped.mapped_window(), Some(expected_window));
+
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut backend);
+            router
+                .write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+                .unwrap();
+        }
+        let mut resources = RecordingBlockPciRevoker {
+            fail: false,
+            last: None,
+        };
+        let mut revoker = VirtualBlockPciFunctionRevoker::new(
+            &mut attachment,
+            &mut device,
+            &mut resources,
+            VirtualBlockPciCleanupMode::Reset,
+        );
+        assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
+        drop(revoker);
+        assert_eq!(
+            resources.last.unwrap().mapped_window(),
+            Some(expected_window)
+        );
+    }
+
+    #[test]
+    fn pci_block_bar_mapping_failures_preserve_configuration_and_attachment_state() {
+        for error in [
+            VirtualPciNativeResourceError::Rejected,
+            VirtualPciNativeResourceError::Uncertain,
+        ] {
+            let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+            let mut router = crate::VirtualPciConfigurationRouter::new();
+            let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+            let device = active::<1>();
+            let bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+            let mut capabilities = CapabilitySpace::<1>::new();
+            let capability = capabilities
+                .insert(ObjectId(0x305), crate::Rights::READ)
+                .unwrap();
+            let authority =
+                VirtualBlockBackendAuthority::new(capability, ObjectId(0x305), 0, 64).unwrap();
+            let mut attachment = VirtualBlockPciAttachment::new(
+                router.describe_attachment(pci_id).unwrap(),
+                &device,
+                &bridge,
+                authority,
+            )
+            .unwrap();
+            router.write(location, 16, 4, 0x20_0000).unwrap();
+            let before = router.read(location, 4, 2).unwrap();
+            let mut backend = RecordingBlockPciWindowBackend {
+                map_result: Err(error),
+                unmap_result: Ok(()),
+                maps: 0,
+                unmaps: 0,
+                last: None,
+            };
+            let result = {
+                let mut mapper =
+                    VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut backend);
+                router.write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+            };
+            let expected = match error {
+                VirtualPciNativeResourceError::Rejected => {
+                    crate::VirtualPciError::NativeResourceRejected
+                }
+                VirtualPciNativeResourceError::Uncertain => {
+                    crate::VirtualPciError::NativeResourceUncertain
+                }
+            };
+            assert_eq!(result, Err(expected));
+            assert_eq!(router.read(location, 4, 2), Ok(before));
+            assert_eq!(attachment.mapped_window(), None);
+            assert_eq!(backend.maps, 1);
+        }
+    }
+
+    #[test]
+    fn pci_block_bar_unmap_failure_preserves_decode_and_mapping_state() {
+        let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let device = active::<1>();
+        let bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(ObjectId(0x306), crate::Rights::READ)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x306), 0, 64).unwrap();
+        let mut attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            &device,
+            &bridge,
+            authority,
+        )
+        .unwrap();
+        router.write(location, 16, 4, 0x20_0000).unwrap();
+        let mut backend = RecordingBlockPciWindowBackend {
+            map_result: Ok(()),
+            unmap_result: Err(VirtualPciNativeResourceError::Uncertain),
+            maps: 0,
+            unmaps: 0,
+            last: None,
+        };
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut backend);
+            router
+                .write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+                .unwrap();
+        }
+        let mapped = attachment.mapped_window();
+        let command = router.read(location, 4, 2).unwrap();
+        let result = {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut backend);
+            router.write_with_mapper(location, 4, 2, 0, &mut mapper)
+        };
+        assert_eq!(result, Err(crate::VirtualPciError::NativeResourceUncertain));
+        assert_eq!(router.read(location, 4, 2), Ok(command));
+        assert_eq!(attachment.mapped_window(), mapped);
+        assert_eq!(backend.unmaps, 1);
     }
 
     #[test]

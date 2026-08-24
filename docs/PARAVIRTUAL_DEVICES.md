@@ -181,6 +181,17 @@ vCPU entry. Nonzero translation and denial are simulation-tested; hosted probes
 currently exercise an exact full-backend region. A production backend and the
 complete `BLOCK` acceptance scenario remain pending.
 
+**IMPLEMENTED for host-side PCI/block lifecycle composition:** one exact routed
+PCI function generation can be bound to one active MRML-native block generation,
+queue layout, interrupt vector, and capability-selected backend region. The
+common adapter tracks confirmed BAR mapping separately from BAR assignment and
+requires exact resource cleanup before block reset/removal and PCI reset/detach.
+Stale generations, class or geometry substitution, poisoned queue state, mapping
+failure, and cleanup failure preserve state or fail closed. This is unit/
+simulation policy only: no guest-visible attached-function probe, MMIO block
+transport, MSI/MSI-X, DMA, native KVM/WHP BAR adapter, or production PCI identity
+is implemented.
+
 Sector, offset, and length are checked request data. They cannot select another
 object. Bounded-region capabilities may expose a whole disk, partition, image,
 snapshot, ephemeral volume, or capability-native object.

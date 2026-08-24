@@ -5791,6 +5791,67 @@ Patent review: `NOT_TRIGGERED` — conventional checked subrange translation and
 capability-bounded block dispatch. No triggered compatibility, host-share,
 accessibility-device, browser, JavaScript/Wasm, or media mechanism is introduced.
 
+### Exact MRML-native block/PCI lifecycle attachment
+
+The common kernel now binds one exact routed PCI function generation to one
+active MRML-native block generation, its canonical queue, interrupt vector, and
+capability-selected backend region. It rejects non-block class data, stale PCI
+or block generations, poisoned or substituted queue state, and backend geometry
+mismatch before native resource access. PCI identity, BDF, BAR address, queue
+data, and block numbers remain data and cannot select backend authority.
+
+A block-specific unsafe BAR adapter records mapping state only after the external
+backend confirms the exact assigned window. Rejection or uncertainty preserves
+PCI command and attachment state; uncertainty still requires VM quarantine. The
+reset/removal adapter supplies an exact cleanup record covering PCI generation/
+window, block generation, queue, interrupt vector, backend object/range, and
+confirmed mapping. External cleanup must retire every mapping, interrupt, DMA
+binding, backend-capability descendant, cached decision, queue mapping, device
+state, and handle before block and PCI lifecycle state advances.
+
+Windows gnullvm evidence on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel --lib --no-default-features pci_block_
+  PASS: 7 passed
+
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel --lib --no-default-features --no-deps -- -D warnings
+  PASS
+
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel --lib --no-default-features
+  PARTIAL: 429 passed; the pre-existing
+  task_runtime::tests::delegation_capacity_is_preflighted_and_reusable_after_revocation
+  overflowed the Windows test-process stack
+
+wsl.exe -d archlinux -- bash -lc 'cd /mnt/c/Users/Mitch/Documents/mrml && CARGO_TARGET_DIR=target/pci-block-attachment-linux cargo test -q -p mrml-kernel --lib --no-default-features pci_block_ && CARGO_TARGET_DIR=target/pci-block-attachment-linux cargo clippy -q -p mrml-kernel --lib --no-default-features --no-deps -- -D warnings'
+  PASS: 7 tests; strict Clippy passed
+
+wsl.exe -d archlinux -- bash -lc 'cd /mnt/c/Users/Mitch/Documents/mrml && CARGO_TARGET_DIR=target/pci-block-attachment-linux cargo test -q -p mrml-kernel --lib --no-default-features'
+  PASS: 430 passed
+```
+
+This is `UNIT`/`SIMULATION` evidence only. It does not establish guest-visible
+attached PCI discovery, MMIO block transport, native KVM/WHP BAR or interrupt
+adapters, MSI/MSI-X, DMA, assigned production PCI identity, QEMU compatibility,
+physical-device behavior, or host-resistant isolation.
+
+DIGITAL-RIGHTS REVIEW: no publisher/vendor/verifier authority, DRM, persistence,
+telemetry, content inspection, AI privilege, accessibility restriction, or host
+path is introduced. The backend remains selected only by exact owner-policy-
+derived capabilities, and test identity is non-authorizing data.
+
+HOSTILE SECURITY REVIEW: attachment/function/block generations, BDF, class, BAR
+window, queue, vector, backend object/range, lifecycle, mapping result, and
+cleanup result are hostile. Exact preflight occurs before external mutation;
+clean failure preserves state; uncertain mutation requires quarantine; cleanup
+precedes both device and PCI lifetime changes.
+
+Patent review: `NOT_TRIGGERED` — conventional exact-generation virtual-device
+lifecycle composition and map-before-enable/revoke-before-reset ordering. The
+planned VirtIO, host-share, accessibility-device, browser, script/Wasm, and media
+scopes remain `TRIGGERED`. Agent review does not replace independent human dual
+review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered
