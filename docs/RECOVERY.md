@@ -572,6 +572,12 @@ and resumes only after exact nonzero reconstruction. A scalar-transport
 substitution is rejected before restoration. Recover this as orderly hosted
 replacement evidence only, not crash capture, pending-I/O recovery, durable
 backend recovery, reset, hotplug, or physical evidence.
+After final replacement proof, the controlled runners destroy the remaining
+native execution container and then perform exact revoke-before-reset cleanup.
+Backend and interrupt capabilities are preflighted and revoked before the block
+attachment resets and PCI generation advances with BAR/decode cleared. Recover
+this only as destroyed-VM cleanup evidence; in-place BAR unmapping, hotplug,
+durable backend recovery, and production native cleanup remain pending.
 
 For every future device, recover and update its classification, exact feature
 bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU

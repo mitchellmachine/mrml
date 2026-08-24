@@ -898,9 +898,12 @@ invoking it, including residual window identity after decode is disabled;
 revocation failure preserves configuration, while success precedes reset or
 removal mutation. Focused tests cover exact cleanup identity, stale-window
 invalidation, quarantine-preserving reset/detach failures, independent success,
-and no cleanup call after preflight failure. Native KVM/WHP revoker adapters
-remain pending until a concrete function has separately authorized native
-resources.
+and no cleanup call after preflight failure. Controlled KVM/WHP destroyed-VM
+revokers now retire the exact native execution container, preflight the complete
+cleanup record and both capabilities, revoke backend and interrupt authority,
+reset the block attachment, and then allow PCI generation advance with BAR/
+decode clear. Live dynamic unmapping, hotplug, and production native revokers
+remain pending.
 Memory-decode command writes are now transactionally coupled to native BAR
 state. `VirtualPciMemoryMapper` is an unsafe exact-generation boundary: enable
 must map the complete assigned window before the command bit publishes, while

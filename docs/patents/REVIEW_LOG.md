@@ -2037,6 +2037,19 @@ The planned compatibility, host-share, accessibility-device, browser,
 JavaScript/Wasm, and media scopes remain `TRIGGERED`; this agent review does not
 replace the required independent human dual review.
 
+# 2026-08-24 — Destroyed-VM PCI block cleanup
+
+**Result: NOT_TRIGGERED.** The change conventionally destroys the controlled
+KVM/WHP execution container before using the existing exact block/PCI
+revoke-before-reset composition. It validates the existing cleanup record,
+revokes existing backend and interrupt capabilities, and advances existing
+block/PCI generations. It introduces no live-unmap technique, compatibility
+protocol, host-share mechanism, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, media mechanism, or patent-candidate
+mechanism. Planned compatibility, host-share, accessibility-device, browser,
+JavaScript/Wasm, and media scopes remain `TRIGGERED`; this agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Mutable-reference tuple-field initializedness
 
 **Result: NOT_TRIGGERED.** The change conventionally retains thin scalar

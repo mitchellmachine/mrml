@@ -6285,6 +6285,66 @@ accessibility-device, browser, JavaScript/Wasm, or media mechanism. Those
 planned scopes remain `TRIGGERED`; agent review does not replace independent
 human dual review.
 
+### Destroyed-VM PCI block cleanup
+
+After the replacement guest emits proof, both controlled runners now destroy
+that final native VM or WHP partition before invoking the existing common
+revoke-before-reset composition. Native destruction retires the complete guest
+address space, first-level trapped BAR leaf, second-level execution container,
+pending native exit state, and interrupt-injection context. The cleanup adapter
+then exact-matches attachment and function generation, active BAR window,
+command state, block generation, queue, vector, backend object/range, and the
+attachment's confirmed mapped window.
+
+Before any revocation mutation, the adapter requires the exact live block
+capability with `READ|WRITE|FLUSH` and the exact interrupt capability with
+`SIGNAL`. It revokes both, then the common function revoker resets the block
+device and attachment. Only after that succeeds does the PCI router advance the
+function generation and clear command/BAR state. Duplicate or substituted
+cleanup records fail before capability mutation; common hostile tests continue
+to cover stale generations, preflight failure, cleanup rejection/uncertainty,
+and configuration preservation.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kvm-run -p mrml-whp-run --release --no-default-features
+  PASS: KVM-run 4; WHP-run 6
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kvm-run -p mrml-whp-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+  PASS
+wsl.exe -d archlinux --cd /mnt/c/Users/Mitch/Documents/mrml -- bash -lc 'CARGO_TARGET_DIR=target/pci-cleanup-kvm cargo test -p mrml-kvm-run --release --no-default-features && CARGO_TARGET_DIR=target/pci-cleanup-kvm cargo clippy -p mrml-kvm-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err'
+  PASS: KVM-run 7; strict Clippy passed
+target/pci-cleanup-kvm/release/mrml-kvm-run target/pci-restart-evidence/kernel.signed target/pci-restart-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=16941us prepare=2571us execute=62091us total=102662us
+target/pci-cleanup-evidence/release/mrml-whp-run.exe target/pci-restart-evidence/kernel.signed target/pci-restart-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=17582us prepare=3958us execute=5085us total=30811us
+```
+
+The native runners used the identical previously fresh one-time-signed UEFI
+artifact; this increment changes only host cleanup after guest proof. Its
+private key had already been consumed. This is hosted controlled destroyed-VM
+cleanup evidence, not live dynamic BAR unmapping, TLB invalidation, detach/
+hotplug, production interrupt routing, durable storage, VirtIO/QEMU, physical
+hardware, bare metal, or host-resistant isolation.
+
+DIGITAL-RIGHTS REVIEW: cleanup adds no ambient path, telemetry, retention,
+disclosure, attestation, DRM, vendor authority, secret export, AI-only
+interface, accessibility restriction, or persistence. It removes backend and
+interrupt authority rather than manufacturing or retaining it.
+
+HOSTILE SECURITY REVIEW: native execution state, cleanup record, generations,
+BAR/command data, queue, vector, backend authority, and both capabilities are
+hostile. Success requires irreversible native destruction plus exact complete
+preflight; capability revocation precedes common device/attachment reset and
+PCI mutation. Any mismatch or uncertainty fails closed without a runnable VM.
+
+Patent review: `NOT_TRIGGERED` — this conventionally composes native VM
+destruction, capability revocation, and the existing block/PCI reset boundary.
+It adds no live-unmap technique, compatibility, host-share,
+accessibility-device, browser, JavaScript/Wasm, or media mechanism. Those
+planned scopes remain `TRIGGERED`; agent review does not replace independent
+human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

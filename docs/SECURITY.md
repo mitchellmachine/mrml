@@ -397,6 +397,14 @@ transport-bound canonical queue/resume image into fresh queue pages. Stale,
 noncanonical, or scalar-transport substitution fails before restoration, and
 resume occurs only after complete validation.
 
+Final controlled cleanup succeeds only after the replacement native VM or
+partition is destroyed, so no runnable translation, trapped BAR leaf, pending
+native exit, or interrupt injection context survives. The revoker exact-matches
+the cleanup record and preflights both exact capabilities before revoking block
+and interrupt authority. Common block reset and attachment invalidation precede
+PCI generation advance and BAR/decode clearing. This does not claim live TLB-
+safe dynamic unmapping; that path remains fail-closed and unavailable.
+
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
 are distinct capabilities. The MRML-specific compute path retains exact signed

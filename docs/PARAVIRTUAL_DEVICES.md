@@ -85,6 +85,14 @@ accepts only the exact canonical idle queue/resume image and transport identity.
 This is hosted controlled replacement evidence, not hot-unplug, asynchronous
 crash capture, backend-in-flight recovery, or durable-device evidence.
 
+After replacement proof, both hosted runners now destroy the final native VM or
+partition before invoking the common revoke-before-reset boundary. The
+controlled revoker exact-matches attachment/function generation, BAR window,
+queue, block generation, backend range, and vector; preflights exact backend and
+interrupt capabilities; revokes both; resets the block device/attachment; and
+only then permits PCI generation advance with BAR/decode clear. This proves
+destroyed-execution cleanup, not live dynamic unmapping or production hotplug.
+
 ## Capability projection into application microVMs
 
 A microVM receives devices derived from exactly the application's capabilities:

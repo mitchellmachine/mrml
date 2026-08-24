@@ -704,9 +704,12 @@ native revoker to confirm retirement of every mapping, interrupt, DMA binding,
 queue, cached decision, device state, and derived handle for the exact
 attachment/function generation before configuration mutation. Preflight or
 revocation failure preserves configuration; uncertainty must quarantine or fail
-the VM. Production native revoker adapters remain absent; the controlled probe
-adapter can confirm its fixed launch-time trap but deliberately reports
-unmapping as uncertain. MRML still has no assigned production PCI identity,
+the VM. A controlled KVM/WHP adapter now succeeds only after the exact native
+VM/partition is destroyed: it exact-matches the complete cleanup record, revokes
+the backend and interrupt capabilities, resets the block attachment, and only
+then permits PCI generation advance with BAR/decode clear. Live dynamic unmap
+and production native revoker adapters remain absent; the mapping adapter still
+reports in-place unmapping as uncertain. MRML still has no assigned production PCI identity,
 PCI capability list, MSI/MSI-X, multiple BARs, DMA, QEMU comparison, or
 PCI/VirtIO compatibility claim. A fixed-capacity backend-neutral configuration
 router now attaches at most eight of these generic functions to exact validated
@@ -741,7 +744,7 @@ RAM backing, and native completion blocks re-entry until each exact accepted
 write is retired. This is hosted controlled evidence for configuration, trapped
 routing, five bounded block operations against a volatile capability-selected
 backend, existing legacy interrupt injection, and protected MMIO retirement. It
-is not a production native PCI interrupt adapter, durable block backend,
+is not a production live-unmap/native PCI interrupt adapter, durable block backend,
 MSI/MSI-X, DMA, VirtIO, production identity, physical device, or host-resistant
 isolation.
 The legacy completion path now binds delivery to the exact live routed PCI

@@ -17,14 +17,17 @@ use mrml_kernel::{
     ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
     VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockBackendAuthority, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciCleanupRecord,
-    VirtualBlockPciMemoryMapper, VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualPciConfigurationMechanismOne,
+    VirtualBlockDeviceState, VirtualBlockMutationError, VirtualBlockPciAttachment,
+    VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord,
+    VirtualBlockPciFunctionRevoker, VirtualBlockPciMemoryMapper, VirtualBlockPciResourceRevoker,
+    VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockTransactionOutcome,
+    VirtualBlockTransport, VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
-    VirtualPciMemoryBar, VirtualPciNativeResourceError, VirtualPciType0Function, VmBackend, VmExit,
-    VmTable, run_pci_configuration_once, run_pci_configuration_once_with_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
+    run_pci_configuration_once_with_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -135,6 +138,62 @@ struct DriverProbeBlock([u8; 8192], usize);
 #[cfg(target_os = "windows")]
 struct PreinstalledPciMmioWindow {
     mapped: bool,
+}
+
+#[cfg(target_os = "windows")]
+struct DestroyedPciBlockResources<'a> {
+    capabilities: &'a mut CapabilitySpace<2>,
+    block_capability: mrml_kernel::Capability,
+    interrupt_capability: mrml_kernel::Capability,
+    expected_pci: VirtualPciAttachedResources,
+    expected_block_generation: u32,
+    expected_queue: VirtualBlockQueueLayout,
+    expected_backend: VirtualBlockBackendAuthority,
+    expected_window: VirtualPciMmioWindow,
+    execution_destroyed: bool,
+    revoked: bool,
+}
+
+#[cfg(target_os = "windows")]
+unsafe impl VirtualBlockPciResourceRevoker for DestroyedPciBlockResources<'_> {
+    type Error = ();
+
+    fn revoke_block_resources(
+        &mut self,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> core::result::Result<(), Self::Error> {
+        if !self.execution_destroyed
+            || self.revoked
+            || record.pci() != self.expected_pci
+            || record.block_generation() != self.expected_block_generation
+            || record.queue() != self.expected_queue
+            || record.interrupt_vector() != 48
+            || record.backend() != self.expected_backend
+            || record.mapped_window() != Some(self.expected_window)
+        {
+            return Err(());
+        }
+        let backend = record.backend();
+        if self.capabilities.authorize_exact(
+            self.block_capability,
+            Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
+        ) != Ok(backend.object())
+            || self
+                .capabilities
+                .authorize_exact(self.interrupt_capability, Rights::SIGNAL)
+                != Ok(ObjectId(0x315))
+        {
+            return Err(());
+        }
+        self.capabilities
+            .revoke(self.block_capability)
+            .map_err(|_| ())?;
+        self.capabilities
+            .revoke(self.interrupt_capability)
+            .map_err(|_| ())?;
+        self.revoked = true;
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -844,6 +903,60 @@ fn run_pci_configuration_probe<'system>(
     {
         return Err(anyhow!("WHP PCI proof mismatch: {:?}", proof));
     }
+    let expected_pci = router
+        .describe_attachment(pci)
+        .map_err(|_| anyhow!("PCI cleanup attachment disappeared"))?
+        .resources();
+    let expected_window = expected_pci
+        .mmio_window()
+        .ok_or_else(|| anyhow!("PCI cleanup window disappeared"))?;
+    let expected_block_generation = device.generation();
+    drop(guest);
+    let mut destroyed = DestroyedPciBlockResources {
+        capabilities: &mut capabilities,
+        block_capability,
+        interrupt_capability,
+        expected_pci,
+        expected_block_generation,
+        expected_queue: layout,
+        expected_backend: authority,
+        expected_window,
+        execution_destroyed: true,
+        revoked: false,
+    };
+    let next_generation = {
+        let mut revoker = VirtualBlockPciFunctionRevoker::new(
+            &mut attachment,
+            &mut device,
+            &mut destroyed,
+            VirtualBlockPciCleanupMode::Reset,
+        );
+        router
+            .reset_with_revoker(pci, &mut revoker)
+            .map_err(|error| anyhow!("destroyed WHP PCI cleanup failed: {:?}", error))?
+    };
+    let reset_pci = router
+        .describe_attachment(pci)
+        .map_err(|_| anyhow!("reset PCI attachment disappeared"))?
+        .resources();
+    if next_generation != 2
+        || !destroyed.revoked
+        || attachment.state() != VirtualBlockPciAttachmentState::Reset
+        || device.state() != VirtualBlockDeviceState::Created
+        || reset_pci.function_generation() != 2
+        || reset_pci.command() != 0
+        || reset_pci.mmio_window().is_some()
+        || destroyed
+            .capabilities
+            .authorize(block_capability, Rights::READ)
+            .is_ok()
+        || destroyed
+            .capabilities
+            .authorize(interrupt_capability, Rights::SIGNAL)
+            .is_ok()
+    {
+        return Err(anyhow!("destroyed WHP PCI cleanup state mismatch"));
+    }
     Ok(())
 }
 
@@ -1206,7 +1319,7 @@ fn application_main() -> Result<()> {
     if pci_configuration_mode {
         run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/flush and orderly VM replacement under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, and destroyed-VM cleanup under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),
