@@ -87,7 +87,10 @@ use mrml_kernel::arch::x86_64::{
     ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
     PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
 };
-#[cfg(feature = "block-guest-driver-probe")]
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
 use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::arch::x86_64::{PreallocatedPageTableStore, ServiceAddressSpace};
@@ -127,11 +130,11 @@ use mrml_kernel::{
     GpuQueueSender, GpuResourceResponse, GpuResourceResponseReceiver, GpuSharedRingIndices,
     ResourceCommand,
 };
-#[cfg(feature = "block-guest-driver-probe")]
-use mrml_kernel::{
-    PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_REQUEST_BYTES,
-    VirtualBlockGuestDriver, VirtualBlockResumePage,
-};
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
+use mrml_kernel::{PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGuestDriver};
 #[cfg(any(
     feature = "timer-probe",
     feature = "preemption-probe",
@@ -142,6 +145,8 @@ use mrml_kernel::{
     feature = "smp-ipi-probe"
 ))]
 use mrml_kernel::{Priority, ScheduleOutcome};
+#[cfg(feature = "block-guest-driver-probe")]
+use mrml_kernel::{VIRTUAL_BLOCK_REQUEST_BYTES, VirtualBlockResumePage};
 
 #[cfg(feature = "gpu-benchmark")]
 const GPU_COMMAND_BASE: usize = 0x00b0_0000;
@@ -151,11 +156,17 @@ const GPU_COMPLETION_BASE: usize = 0x00b0_1000;
 const GPU_BENCHMARK_ELEMENTS: u32 = 1 << 22;
 #[cfg(feature = "gpu-benchmark")]
 const GPU_BENCHMARK_ITERATIONS: u32 = 1_000;
-#[cfg(feature = "block-guest-driver-probe")]
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
 const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
-#[cfg(feature = "block-guest-driver-probe")]
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
 const BLOCK_PAYLOAD_BASE: u64 = 0x00a0_0000;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
@@ -167,7 +178,10 @@ const BLOCK_QUIESCE_CYCLE: u32 = BLOCK_PROBE_CYCLES / 2;
 const BLOCK_QUIESCE_REQUESTS: u32 = (BLOCK_QUIESCE_CYCLE - 1) * 4 + 2;
 #[cfg(feature = "block-guest-driver-probe")]
 const BLOCK_PROBE_OPERATIONS: u32 = BLOCK_PROBE_CYCLES * 4;
-#[cfg(feature = "block-guest-driver-probe")]
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
 const BLOCK_VECTOR: u8 = 48;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_PROOF_PORT: u16 = 0x4d66;
@@ -185,6 +199,8 @@ const PCI_TEST_MMIO_BASE: u64 = 0x00c0_0000;
 const PCI_TEST_VENDOR_DEVICE: u32 = 0x5678_1234;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_CLASS: u32 = 0x0180_0001;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_BLOCK_PROBE_OPERATIONS: u32 = 4;
 #[cfg(feature = "fault-probe")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
 #[cfg(any(
@@ -689,7 +705,10 @@ unsafe extern "C" {
     fn mrml_timer_interrupt() -> !;
     #[cfg(feature = "smp-ipi-probe")]
     fn mrml_reschedule_interrupt() -> !;
-    #[cfg(feature = "block-guest-driver-probe")]
+    #[cfg(any(
+        feature = "block-guest-driver-probe",
+        feature = "pci-configuration-probe"
+    ))]
     fn mrml_block_interrupt() -> !;
     #[cfg(feature = "preemption-probe")]
     fn mrml_preemption_spin() -> !;
@@ -2509,19 +2528,114 @@ unsafe fn run_pci_configuration_probe() -> ! {
             in("ax") mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
             options(nomem, nostack)
         );
-        // This deliberately fixed encoding is the only write form translated
-        // by the initial WHP MMIO boundary.
-        asm!(
-            "mov dword ptr [rax], 1",
-            in("rax") PCI_TEST_MMIO_BASE,
-            options(nostack)
-        );
+    }
+
+    let mut encoded_configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+    for (offset, byte) in encoded_configuration.iter_mut().enumerate() {
+        // SAFETY: the dedicated launch path maps this exact canonical page
+        // read-only and keeps it live for the complete probe.
+        *byte = unsafe { ((BLOCK_CONFIGURATION_BASE as *const u8).add(offset)).read_volatile() };
+    }
+    let configuration = mrml_kernel::VirtualBlockConfiguration::decode(&encoded_configuration)
+        .unwrap_or_else(|_| halt());
+    if configuration.transport() != mrml_kernel::VirtualBlockTransport::MrmlSpecificPciMmio {
+        halt();
+    }
+    let queue = configuration.queue();
+    let request_published = unsafe { (queue.request_base() as *const u64).read_volatile() };
+    let request_consumed = unsafe { ((queue.request_base() + 64) as *const u64).read_volatile() };
+    let completion_published = unsafe { (queue.completion_base() as *const u64).read_volatile() };
+    let completion_consumed =
+        unsafe { ((queue.completion_base() + 64) as *const u64).read_volatile() };
+    let mut driver = VirtualBlockGuestDriver::discover(
+        &encoded_configuration,
+        request_published,
+        request_consumed,
+        completion_published,
+        completion_consumed,
+    )
+    .unwrap_or_else(|_| halt());
+    // SAFETY: the launch path maps the exact queue pages directionally and
+    // installs a non-RAM trap leaf for this exact one-page BAR.
+    let mut queue_transport = unsafe {
+        X86VirtualBlockGuestQueueTransport::new_pci_mmio(
+            NativeX86VirtualBlockPortIo,
+            PCI_TEST_MMIO_BASE,
+            PAGE_SIZE as u32,
+        )
+        .unwrap_or_else(|_| halt())
+    };
+
+    unsafe { asm!("sti", options(nomem, nostack)) };
+    let patterns = [0x5au8, 0xa5u8];
+    for (block, pattern) in patterns.into_iter().enumerate() {
+        let base = BLOCK_PAYLOAD_BASE + block as u64 * PAGE_SIZE;
+        for offset in 0..PAGE_SIZE as usize {
+            unsafe { ((base as *mut u8).add(offset)).write_volatile(pattern) };
+        }
+        let submission = driver
+            .prepare_write(block as u64, 1, base, PAGE_SIZE as u32)
+            .unwrap_or_else(|_| halt());
+        driver
+            .publish_submission(&mut queue_transport, submission)
+            .unwrap_or_else(|_| halt());
+    }
+    for _ in 0..2 {
+        let completion = driver
+            .prepare_completion_from_transport(&mut queue_transport)
+            .unwrap_or_else(|_| halt());
+        if completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+            || completion.transferred() != PAGE_SIZE as u32
+        {
+            halt();
+        }
+        driver
+            .acknowledge_completion_with_transport(&mut queue_transport, completion)
+            .unwrap_or_else(|_| halt());
+    }
+
+    for offset in 0..(PAGE_SIZE as usize * 2) {
+        unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0) };
+    }
+    for block in 0..2u64 {
+        let submission = driver
+            .prepare_read(
+                block,
+                1,
+                BLOCK_PAYLOAD_BASE + block * PAGE_SIZE,
+                PAGE_SIZE as u32,
+            )
+            .unwrap_or_else(|_| halt());
+        driver
+            .publish_submission(&mut queue_transport, submission)
+            .unwrap_or_else(|_| halt());
+    }
+    for _ in 0..2 {
+        let completion = driver
+            .prepare_completion_from_transport(&mut queue_transport)
+            .unwrap_or_else(|_| halt());
+        if completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+            || completion.transferred() != PAGE_SIZE as u32
+        {
+            halt();
+        }
+        driver
+            .acknowledge_completion_with_transport(&mut queue_transport, completion)
+            .unwrap_or_else(|_| halt());
+    }
+    for (block, pattern) in patterns.into_iter().enumerate() {
+        let base = BLOCK_PAYLOAD_BASE + block as u64 * PAGE_SIZE;
+        for offset in 0..PAGE_SIZE as usize {
+            if unsafe { ((base as *const u8).add(offset)).read_volatile() } != pattern {
+                halt();
+            }
+        }
     }
     unsafe {
         asm!(
             "out dx, eax",
             in("dx") PCI_PROOF_PORT,
-            in("eax") vendor_device,
+            in("eax") PCI_BLOCK_PROBE_OPERATIONS,
             options(nomem, nostack)
         )
     };
@@ -3963,7 +4077,10 @@ unsafe fn install_descriptor_state(
     {
         halt();
     }
-    #[cfg(feature = "block-guest-driver-probe")]
+    #[cfg(any(
+        feature = "block-guest-driver-probe",
+        feature = "pci-configuration-probe"
+    ))]
     if unsafe {
         state.install_external(
             BLOCK_VECTOR,

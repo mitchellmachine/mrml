@@ -365,18 +365,22 @@ failure, so re-entry and stale or duplicate completion fail closed.
 The native configuration probe originally selected only a deliberately
 unattached BDF and required the architectural all-ones result. It now uses the
 same bounded path to read two dwords from one deliberately test-only attached
-block-class function. The fixed identity and BDF remain non-authorizing data;
-the separate proof demonstrates discovery without assigning a production
-identity, mapping a BAR, routing an interrupt, enabling DMA, or issuing a block
-operation.
+block-class function, assigns its one BAR, enables memory decode through an
+exact mapper, and completes a bounded two-write/two-read queue cycle. The fixed
+identity, BDF, BAR, and request data remain non-authorizing; the backend object,
+operation rights, mapping, and legacy interrupt delivery remain separately
+capability checked. This assigns no production identity, MSI/MSI-X, DMA, or
+durable backend authority.
 The common block/PCI attachment now exact-matches PCI and block generations,
 queue layout, interrupt vector, backend object/range, and confirmed BAR-mapping
 state. Its unsafe cleanup contract covers every mapping, interrupt, DMA binding,
 queue, backend-capability descendant, cached decision, device state, and handle
 before block and PCI reset/removal commit. Clean rejection preserves state;
 uncertain native mutation requires VM quarantine. The cleanup contract remains
-unit/simulation tested; the new KVM/WHP evidence covers read-only guest discovery
-only and does not exercise a native resource adapter.
+unit/simulation tested. The KVM/WHP probes exercise only a narrow preinstalled
+trap-window mapper and bounded volatile block I/O; they do not prove production
+mapping revocation, native PCI interrupt routing, durability, or physical-device
+cleanup.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

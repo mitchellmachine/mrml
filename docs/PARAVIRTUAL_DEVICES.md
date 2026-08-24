@@ -188,15 +188,19 @@ common adapter tracks confirmed BAR mapping separately from BAR assignment and
 requires exact resource cleanup before block reset/removal and PCI reset/detach.
 Stale generations, class or geometry substitution, poisoned queue state, mapping
 failure, and cleanup failure preserve state or fail closed. The MRML-native
-transport now also has two fixed write-only PCI-MMIO notification registers in
-one exact generational BAR window. A signed test-only guest discovers the
-attached identity, assigns and enables the BAR through Configuration Mechanism
-#1, and rings an idle doorbell through the common MMIO runner on KVM and WHP.
-Both native backends block re-entry until that exact accepted write is retired.
-This is hosted controlled evidence for PCI configuration, trapped MMIO routing,
-and an idle MRML-native notification only: no completed MMIO block transfer,
-MSI/MSI-X, DMA, VirtIO, QEMU comparison, production PCI identity, physical
-device, or host-resistant isolation is implemented.
+transport also has two fixed write-only PCI-MMIO notification registers in one
+exact generational BAR window. A signed test-only guest discovers the attached
+identity, assigns and enables the BAR through Configuration Mechanism #1, then
+uses the canonical guest driver to publish two writes, retire their protected
+completions, reuse both slots for reads, retire those completions, and verify
+both complete payload pages. KVM and WHP run the same common transaction path
+and block re-entry until each exact accepted write is retired. This is hosted
+controlled evidence for PCI configuration, trapped MMIO routing, four bounded
+block operations, capability-selected volatile backend access, existing
+capability-authorized legacy interrupt injection, and protected MMIO
+acknowledgement. It is not production block I/O or evidence for durability,
+native PCI interrupt routing, MSI/MSI-X, DMA, VirtIO, QEMU comparison,
+production PCI identity, physical devices, or host-resistant isolation.
 
 Sector, offset, and length are checked request data. They cannot select another
 object. Bounded-region capabilities may expose a whole disk, partition, image,

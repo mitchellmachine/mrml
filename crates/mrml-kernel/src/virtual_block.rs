@@ -345,6 +345,32 @@ impl VirtualBlockTransport {
             Self::MrmlSpecificPciMmio => Some(VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET),
         }
     }
+
+    pub const fn doorbell_notification(self) -> VirtualBlockGuestNotification {
+        match self {
+            Self::MrmlSpecificScalarIo => VirtualBlockGuestNotification::ScalarIo {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            },
+            Self::MrmlSpecificPciMmio => VirtualBlockGuestNotification::PciMmio {
+                offset: VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            },
+        }
+    }
+
+    pub const fn completion_acknowledgement_notification(self) -> VirtualBlockGuestNotification {
+        match self {
+            Self::MrmlSpecificScalarIo => VirtualBlockGuestNotification::ScalarIo {
+                port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            },
+            Self::MrmlSpecificPciMmio => VirtualBlockGuestNotification::PciMmio {
+                offset: VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            },
+        }
+    }
 }
 
 impl VirtualBlockQueueLayout {
@@ -954,13 +980,23 @@ pub enum VirtualBlockGuestQueueTransportError<E> {
     Transport(E),
 }
 
+/// Non-authorizing notification route derived from one canonical block
+/// transport. The concrete guest adapter must already hold the separately
+/// established scalar-I/O privilege or live PCI BAR mapping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockGuestNotification {
+    ScalarIo { port: u16, value: u32 },
+    PciMmio { offset: u32, value: u32 },
+}
+
 /// Exact guest-side memory and notification operations for the MRML-specific
 /// block queues.
 ///
 /// # Safety
 ///
 /// Implementations must access exactly the supplied addresses and lengths and
-/// use exactly the supplied ports and values. `publish_request_and_notify`
+/// use exactly the supplied notification route and value.
+/// `publish_request_and_notify`
 /// must make the complete slot visible before release-publishing the producer,
 /// notify only after that publication, and leave the producer unchanged without
 /// notifying on error.
@@ -979,8 +1015,7 @@ pub unsafe trait VirtualBlockGuestQueueTransport {
         request: &[u8; VIRTUAL_BLOCK_REQUEST_BYTES],
         producer_address: u64,
         producer: u64,
-        doorbell_port: u16,
-        doorbell_value: u32,
+        notification: VirtualBlockGuestNotification,
     ) -> Result<(), Self::Error>;
 
     fn read_completion(
@@ -995,8 +1030,7 @@ pub unsafe trait VirtualBlockGuestQueueTransport {
         &mut self,
         consumer_address: u64,
         consumer: u64,
-        acknowledgement_port: u16,
-        acknowledgement_value: u32,
+        notification: VirtualBlockGuestNotification,
     ) -> Result<(), Self::Error>;
 }
 
@@ -1338,17 +1372,13 @@ impl VirtualBlockGuestDriver {
         }
         let mut encoded = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
         submission.request.encode(&mut encoded);
-        let doorbell_port = configuration.transport().doorbell_port().ok_or(
-            VirtualBlockGuestQueueTransportError::Protocol(VirtualBlockError::InvalidConfiguration),
-        )?;
         transport
             .publish_request_and_notify(
                 request_address,
                 &encoded,
                 configuration.queue().request_base(),
                 submission.producer,
-                doorbell_port,
-                configuration.transport().doorbell_value(),
+                configuration.transport().doorbell_notification(),
             )
             .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         self.finish_submission(submission, slot, pending_count);
@@ -1513,21 +1543,13 @@ impl VirtualBlockGuestDriver {
             .ok_or(VirtualBlockGuestQueueTransportError::Protocol(
                 VirtualBlockError::RangeOverflow,
             ))?;
-        let acknowledgement_port = self
-            .configuration
-            .transport()
-            .completion_acknowledgement_port()
-            .ok_or(VirtualBlockGuestQueueTransportError::Protocol(
-                VirtualBlockError::InvalidConfiguration,
-            ))?;
         transport
             .acknowledge_completion(
                 consumer_address,
                 acknowledgement,
-                acknowledgement_port,
                 self.configuration
                     .transport()
-                    .completion_acknowledgement_value(),
+                    .completion_acknowledgement_notification(),
             )
             .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
         Ok(self.finish_completion(slot, pending_count, acknowledgement, ticket.completion))
@@ -4358,6 +4380,8 @@ where
     memory
         .complete_mmio_write(vcpu, guest_address, size, value)
         .map_err(|error| {
+            bridge.fail_stop();
+            let _ = device.fail();
             let _ = vms.fail(vm);
             VirtualBlockTransactionRunError::Completion(error)
         })?;
@@ -4758,11 +4782,17 @@ mod tests {
     }
 
     struct MockGuestQueueTransport {
-        published_request: Option<(u64, [u8; VIRTUAL_BLOCK_REQUEST_BYTES], u64, u64, u16, u32)>,
+        published_request: Option<(
+            u64,
+            [u8; VIRTUAL_BLOCK_REQUEST_BYTES],
+            u64,
+            u64,
+            VirtualBlockGuestNotification,
+        )>,
         completion_published: u64,
         completion: [u8; VIRTUAL_BLOCK_COMPLETION_BYTES],
         completion_read: Option<(u64, u64)>,
-        acknowledgement: Option<(u64, u64, u16, u32)>,
+        acknowledgement: Option<(u64, u64, VirtualBlockGuestNotification)>,
         fail_publish: bool,
         fail_read: bool,
         fail_acknowledge: bool,
@@ -4792,8 +4822,7 @@ mod tests {
             request: &[u8; VIRTUAL_BLOCK_REQUEST_BYTES],
             producer_address: u64,
             producer: u64,
-            doorbell_port: u16,
-            doorbell_value: u32,
+            notification: VirtualBlockGuestNotification,
         ) -> Result<(), Self::Error> {
             if self.fail_publish {
                 return Err(GuestQueueTransportError::Injected);
@@ -4803,8 +4832,7 @@ mod tests {
                 *request,
                 producer_address,
                 producer,
-                doorbell_port,
-                doorbell_value,
+                notification,
             ));
             Ok(())
         }
@@ -4829,18 +4857,12 @@ mod tests {
             &mut self,
             consumer_address: u64,
             consumer: u64,
-            acknowledgement_port: u16,
-            acknowledgement_value: u32,
+            notification: VirtualBlockGuestNotification,
         ) -> Result<(), Self::Error> {
             if self.fail_acknowledge {
                 return Err(GuestQueueTransportError::Injected);
             }
-            self.acknowledgement = Some((
-                consumer_address,
-                consumer,
-                acknowledgement_port,
-                acknowledgement_value,
-            ));
+            self.acknowledgement = Some((consumer_address, consumer, notification));
             Ok(())
         }
     }
@@ -5197,22 +5219,21 @@ mod tests {
         driver
             .publish_submission(&mut transport, submission)
             .unwrap();
-        let (
-            request_address,
-            encoded_request,
-            producer_address,
-            producer,
-            doorbell_port,
-            doorbell_value,
-        ) = transport.published_request.unwrap();
+        let (request_address, encoded_request, producer_address, producer, notification) =
+            transport.published_request.unwrap();
         assert_eq!(
             request_address,
             layout::<2>().request_base() + QUEUE_HEADER_BYTES
         );
         assert_eq!(producer_address, layout::<2>().request_base());
         assert_eq!(producer, 1);
-        assert_eq!(doorbell_port, VIRTUAL_BLOCK_DOORBELL_PORT);
-        assert_eq!(doorbell_value, VIRTUAL_BLOCK_DOORBELL_VALUE);
+        assert_eq!(
+            notification,
+            VirtualBlockGuestNotification::ScalarIo {
+                port: VIRTUAL_BLOCK_DOORBELL_PORT,
+                value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+            }
+        );
         assert_eq!(
             VirtualBlockRequest::decode(&encoded_request),
             Ok(submission.request())
@@ -5269,8 +5290,10 @@ mod tests {
             Some((
                 layout::<2>().completion_base() + 64,
                 1,
-                VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
-                VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+                VirtualBlockGuestNotification::ScalarIo {
+                    port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                    value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+                },
             ))
         );
         assert_eq!(driver.completion_consumer(), 1);
@@ -7600,6 +7623,104 @@ mod tests {
     }
 
     #[test]
+    fn mmio_transaction_runner_completes_request_and_protected_acknowledgement() {
+        let interrupt_object = ObjectId(0x325);
+        let block_object = ObjectId(0x326);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(block_object, crate::Rights::WRITE)
+            .unwrap();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(0x327), ObjectId(0x328), ObjectId(0x329));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = IoPortPolicy::<0>::deny_all();
+        let mut device = active_mmio::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let attachment = mapped_mmio_attachment(&device, &bridge, authority);
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0; 4096];
+        let request = encoded(VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096));
+        vmm.bytes[0x4000..0x5000].fill(0x6b);
+        vmm.write_guest(0x1000 + QUEUE_HEADER_BYTES, &request)
+            .unwrap();
+        vmm.write_guest(0x1000, &1u64.to_le_bytes()).unwrap();
+        vmm.next_exit = Some(VmExit::Mmio {
+            guest_address: 0x20_0000,
+            size: 4,
+            write: true,
+            value: 1,
+        });
+
+        assert!(matches!(
+            run_virtual_block_mmio_transaction_once(
+                &mut vmm,
+                &mut backend,
+                authority,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &attachment,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockTransactionOutcome::Doorbell(
+                VirtualBlockProcessOutcome::Completed(_)
+            ))
+        ));
+        assert_eq!(vmm.injected, Some((0, 48)));
+        assert_eq!(backend.writes, 1);
+
+        // Model the native backend having consumed its exact pending tuple.
+        vmm.completed_mmio = None;
+        vmm.next_exit = Some(VmExit::Mmio {
+            guest_address: 0x20_0004,
+            size: 4,
+            write: true,
+            value: 1,
+        });
+        assert_eq!(
+            run_virtual_block_mmio_transaction_once(
+                &mut vmm,
+                &mut backend,
+                authority,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &attachment,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockTransactionOutcome::CompletionAcknowledged(1))
+        );
+        assert_eq!(bridge.completion_consumed, 1);
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+    }
+
+    #[test]
     fn mmio_completion_uncertainty_fail_stops_the_vm() {
         let interrupt_object = ObjectId(0x330);
         let block_object = ObjectId(0x331);
@@ -7658,6 +7779,8 @@ mod tests {
         );
         assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
         assert_eq!(vmm.completed_mmio, None);
+        assert!(bridge.is_poisoned());
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
     }
 
     #[test]

@@ -643,8 +643,8 @@ capacity before consumption, distinguishes idle and backpressure, rejects a
 consumed malformed request before backend access, executes once, and publishes
 the bound completion. If completion publication becomes uncertain after possible
 mutation, the device and bridge fail rather than retry. A production block
-backend, completed PCI-MMIO block operations, QEMU comparison, and fuzzing remain
-pending. This is
+backend, QEMU comparison, and fuzzing remain pending. The bounded signed
+PCI-MMIO write/read/acknowledgement probe described below is complete. This is
 not VirtIO-compatible. Completion publication now latches one coalesced
 notification. Delivery uses the device-configured vector through the existing
 allowlisted, exact-`SIGNAL`-capability VM interrupt boundary and acknowledges
@@ -818,10 +818,10 @@ runner all derive their mechanics from that same binding. Implemented
 identities are deliberately named `MrmlSpecificScalarIo` and
 `MrmlSpecificPciMmio`; their record encodings remain canonical and carry no
 authority. The PCI-MMIO slice covers one test-only function, exact BAR
-assignment/memory enable, and an idle notification. It does not implement
-MSI/MSI-X, completed MMIO block requests, VirtIO compatibility, or a QEMU
-differential harness. Those gates remain before broader virtual-device
-coverage.
+assignment/memory enable, and a bounded two-write/two-read queue cycle with
+protected acknowledgement. It does not implement production native interrupt
+routing, MSI/MSI-X, DMA, VirtIO compatibility, or a QEMU differential harness.
+Those gates remain before broader virtual-device coverage.
 The KVM and WHP launchers now also derive their complete two-rule VM I/O
 allowlist transactionally from that exact transport binding and construct the
 device with the same value. Admission no longer repeats independent global
@@ -859,9 +859,9 @@ implemented. It owns the `0xCF8` selector, derives the complete eight-rule
 dword data-port geometry, decodes segment-zero BDF/register state, and composes
 present accesses with the router. Disabled or absent reads return only the
 appropriate all-ones width and writes are ignored. KVM/WHP runner integration,
-guest register completion, one test-only attached block function, and one
-trapped BAR notification are now implemented. Production identity, native
-interrupt routing, completed MMIO block operations, and QEMU comparison remain
+guest register completion, one test-only attached block function, and bounded
+trapped BAR block notifications are now implemented. Production identity,
+native PCI interrupt routing, MSI/MSI-X, DMA, and QEMU comparison remain
 pending.
 A common one-transaction PCI runner now composes the existing VM exit budget and
 deny-by-default dispatcher with Mechanism #1 and the router. Read outcomes cross
@@ -879,9 +879,10 @@ the common runner with both native backends for an absent BDF and exact all-ones
 completion. It now discovers one exact test-only block attachment at BDF
 `00:04.0`, reading fixed vendor/device and mass-storage-class dwords before proof
 continuation on KVM and WHP. The same signed probe now assigns and enables one
-exact BAR and completes an idle MRML-native MMIO doorbell on both backends.
-Completed MMIO block operations, native interrupt routing, MSI/MSI-X, DMA,
-production identity, and QEMU comparison remain pending.
+exact BAR, publishes two writes, retires their protected completions, reuses
+both slots for reads, retires those completions, and verifies both payload pages
+on both backends. Production native PCI interrupt routing, MSI/MSI-X, DMA,
+production identity, durable block I/O, and QEMU comparison remain pending.
 Attached reset/removal ordering is now enforced at the router boundary.
 `VirtualPciFunctionRevoker` is an unsafe exact-generation contract whose success
 must retire every native mapping, interrupt, DMA binding, queue, cached decision,
@@ -914,12 +915,13 @@ confirmed exact BAR window; reset/removal composes external resource cleanup
 before both block and PCI lifecycle mutation. Focused hostile tests cover stale
 generations, class/geometry substitution, poisoned queues, mapping rejection and
 uncertainty, cleanup failure, reset, and detach. This is host-side unit/
-simulation policy. Signed guest-visible identity/class discovery plus guest BAR
-assignment, memory-decode enable, trapped idle MMIO doorbell dispatch, and exact
-native write retirement now pass on KVM and WHP. Completed MMIO block requests,
-completion acknowledgement in the signed MMIO probe, native interrupt routing,
-MSI/MSI-X, DMA, QEMU comparison, and a production PCI identity remain pending,
-so the broader PCI attachment/transport gate is still partial.
+simulation policy. Signed guest-visible identity/class discovery, guest BAR
+assignment, memory-decode enable, four trapped MMIO block notifications,
+protected MMIO acknowledgements, exact native write retirement, and complete
+payload comparison now pass on KVM and WHP. Production native PCI interrupt
+routing, MSI/MSI-X, DMA, durable block I/O, QEMU comparison, and a production
+PCI identity remain pending, so the broader PCI attachment/transport gate is
+still partial.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

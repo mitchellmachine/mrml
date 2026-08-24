@@ -655,9 +655,9 @@ one-exit runner now composes native backend execution, exit-budget accounting,
 the common deny-by-default I/O dispatcher, exact doorbell validation, one queue
 transaction, and capability-authorized completion interruption. A notification
 already pending is delivered before another vCPU entry, and any runner-stage
-error fails the VM. It has no production hosted or physical block backend or
-PCI transport. Controlled signed KVM and WHP probes now emit exact native
-doorbells into this runner. The bounded probe repeats eight cycles over a two-
+error fails the VM. It has no production hosted or physical block backend.
+Controlled signed KVM and WHP probes now emit exact native scalar and PCI-MMIO
+notifications into the common runners. The scalar bounded probe repeats eight cycles over a two-
 slot queue. Each cycle publishes two disjoint writes before retiring either,
 drains both protected completions in order, reuses both slots for reads, and
 verifies both complete payload pages before continuing. Distinct per-cycle
@@ -704,11 +704,11 @@ native revoker to confirm retirement of every mapping, interrupt, DMA binding,
 queue, cached decision, device state, and derived handle for the exact
 attachment/function generation before configuration mutation. Preflight or
 revocation failure preserves configuration; uncertainty must quarantine or fail
-the VM. No native revoker adapter exists yet because this core remains
-unattached: MRML has no assigned PCI
-identity here, block does not use it, and PCI capabilities, MSI/MSI-X, multiple
-BARs, native VMM configuration exits, QEMU comparison, and a PCI-compatible
-device remain unimplemented. A fixed-capacity backend-neutral configuration
+the VM. Production native revoker adapters remain absent; the controlled probe
+adapter can confirm its fixed launch-time trap but deliberately reports
+unmapping as uncertain. MRML still has no assigned production PCI identity,
+PCI capability list, MSI/MSI-X, multiple BARs, DMA, QEMU comparison, or
+PCI/VirtIO compatibility claim. A fixed-capacity backend-neutral configuration
 router now attaches at most eight of these generic functions to exact validated
 segment/bus/device/function locations. Attachment requires reset, unassigned,
 non-probing configuration state. Duplicate or absent locations, malformed
@@ -732,13 +732,17 @@ only confirmed mapping of the exact assigned window, and its reset/removal
 adapter performs external resource cleanup before changing either lifecycle.
 The signed test-only guest now discovers that exact attached function's vendor/
 device and block-class configuration dwords, assigns BAR0, enables memory
-decode through the exact attachment mapper, and issues one idle MRML-native
-MMIO doorbell through native KVM and WHP. Initial page-table builders install a
-first-level MMIO leaf without second-level RAM backing, and native completion
-blocks re-entry until the exact accepted write is retired. This is hosted
-controlled evidence for configuration, trapped routing, and idle notification,
-not a completed block transfer, native interrupt adapter, MSI/MSI-X, DMA,
-VirtIO, production identity, physical device, or host-resistant isolation.
+decode through the exact attachment mapper, and uses the canonical driver for
+two writes, two protected acknowledgements, two reads, two more
+acknowledgements, and complete payload verification through native KVM and WHP.
+Initial page-table builders install a first-level MMIO leaf without second-level
+RAM backing, and native completion blocks re-entry until each exact accepted
+write is retired. This is hosted controlled evidence for configuration, trapped
+routing, four bounded block operations against a volatile capability-selected
+backend, existing legacy interrupt injection, and protected MMIO retirement. It
+is not a production native PCI interrupt adapter, durable block backend,
+MSI/MSI-X, DMA, VirtIO, production identity, physical device, or host-resistant
+isolation.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector
@@ -756,9 +760,10 @@ pending. The signed controlled KVM/WHP probe first established absent-BDF
 selector, all-ones scalar-input completion, and proof continuation. It now
 attaches the exact test-only block binding above at BDF `00:04.0`; the guest
 reads its fixed test vendor/device and mass-storage/other class dwords through
-the same common runner on both native backends. BAR assignment/mapping,
-MSI/MSI-X, DMA, MMIO requests, production identity, and QEMU comparison remain
-unimplemented.
+the same common runner on both native backends. BAR assignment/mapping and
+bounded MMIO requests are now exercised as described above. Native PCI interrupt
+routing, MSI/MSI-X, DMA, production identity, durable block I/O, and QEMU
+comparison remain unimplemented.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path
@@ -866,8 +871,8 @@ KVM and WHP place confirmation immediately after `drop(guest)` and before any
 replacement preparation. The
 VM policy budget is exactly 64 common block exits; the former guest checkpoint
 exit and third I/O permission no longer exist. Asynchronous/unplanned crash
-capture, backend-in-flight recovery, unbounded progress, and completed PCI-MMIO
-block operations remain pending. One freshly
+capture, backend-in-flight recovery, unbounded progress, and PCI-MMIO restart
+recovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining
@@ -884,19 +889,21 @@ consumer before local commit. A watermark may be ahead without authorizing
 skipped retirement. A reported transport error guarantees that no counter or
 notification may have become visible and leaves driver state unchanged; stale
 tickets fail before transport access. Implementations must guarantee exact,
-non-redirected, non-shortened access and may not substitute a port or value.
-The x86_64 direct transport now performs exact volatile byte copies, aligned
-volatile counter access, release/acquire fencing, exact 32-bit port output, and
-fail-stop verification that protected acknowledgement is visible before local
-retirement. Its unsafe constructor requires live identity mappings and the same
-configured device. The controlled port model is unit/simulation evidence; the
-native `OUT` path is now live-executed by freshly one-time-signed compiled KVM
-and WHP images through the same shared fail-closed dispatcher and exact
-`SIGNAL`-capability interrupt. This is hosted controlled-probe evidence only;
-native boot, durability, PCI, and physical hardware remain unverified.
+non-redirected, non-shortened access and may not substitute a scalar port, MMIO
+offset, or value. The x86_64 direct transport now performs exact volatile byte
+copies, aligned volatile counter access, release/acquire fencing, typed scalar-
+or-MMIO notification, and fail-stop verification that protected acknowledgement
+is visible before local retirement. Its unsafe constructors require live
+identity mappings and either the exact scalar privilege or exact one-page PCI
+BAR for the same configured device. Controlled scalar/MMIO models are unit/
+simulation evidence; the native `OUT` and fixed 32-bit MMIO paths are live-
+executed by freshly one-time-signed compiled KVM and WHP images through shared
+fail-closed dispatch and exact `SIGNAL`-capability interrupt. This is hosted
+controlled-probe evidence only; native boot, durability, production PCI
+interrupt routing, and physical hardware remain unverified.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
-devices; PCI transport; and any required compatibility emulation. No
+devices; production PCI transport completion; and any required compatibility emulation. No
 VirtIO-compatible MRML device currently exists.
 
 Each device is explicitly classified as **VirtIO-compatible**,

@@ -125,6 +125,10 @@ const PCI_TEST_BAR_SELECTOR: u32 = PCI_TEST_SELECTOR + 16;
 const PCI_TEST_COMMAND_SELECTOR: u32 = PCI_TEST_SELECTOR + 4;
 #[cfg(target_os = "linux")]
 const PCI_TEST_MMIO_BASE: u64 = 0x00c0_0000;
+#[cfg(target_os = "linux")]
+const PCI_BLOCK_PROBE_OPERATIONS: u32 = 4;
+#[cfg(target_os = "linux")]
+const PCI_PROBE_POLICY_EXITS: u64 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -544,7 +548,7 @@ fn run_block_guest_driver_probe(
 fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
     let mut vms = VmTable::<1>::new();
     let vm = vms
-        .create(9)
+        .create(PCI_PROBE_POLICY_EXITS)
         .map_err(|_| anyhow!("failed to create PCI probe VM state"))?;
     vms.mark_loaded(vm)
         .and_then(|()| vms.start(vm))
@@ -571,7 +575,7 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
         .map_err(|_| anyhow!("invalid PCI block queue layout"))?;
     let mut device = VirtualBlockDevice::<2>::new_with_transport(
         4096,
-        64,
+        2,
         0,
         VirtualBlockTransport::MrmlSpecificPciMmio,
     )
@@ -593,7 +597,7 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
     let interrupt_capability = capabilities
         .insert(interrupt_object, Rights::SIGNAL)
         .map_err(|_| anyhow!("failed to create PCI block interrupt capability"))?;
-    let authority = VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64)
+    let authority = VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 2)
         .map_err(|_| anyhow!("invalid PCI block backend authority"))?;
     let mut attachment = VirtualBlockPciAttachment::new(
         router
@@ -758,28 +762,54 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
         .map_err(|_| anyhow!("failed to allow PCI block interrupt"))?;
     let mut backend = DriverProbeBlock([0; 8192]);
     let mut scratch = [0u8; 4096];
-    let mmio = run_virtual_block_mmio_transaction_once(
-        &mut guest,
-        &mut backend,
-        authority,
-        0,
-        &mut vms,
-        vm,
-        &mut hypercalls,
-        &capabilities,
-        &memory,
-        &io,
-        &interrupt_policy,
-        interrupt_capability,
-        interrupt_object,
-        &attachment,
-        &mut device,
-        &mut bridge,
-        &mut scratch,
-    )
-    .map_err(|error| anyhow!("KVM PCI-MMIO doorbell failed: {:?}", error))?;
-    if mmio != VirtualBlockTransactionOutcome::Doorbell(VirtualBlockProcessOutcome::Idle) {
-        return Err(anyhow!("KVM PCI-MMIO outcome mismatch: {:?}", mmio));
+    for transaction in 0..8usize {
+        let mmio = run_virtual_block_mmio_transaction_once(
+            &mut guest,
+            &mut backend,
+            authority,
+            0,
+            &mut vms,
+            vm,
+            &mut hypercalls,
+            &capabilities,
+            &memory,
+            &io,
+            &interrupt_policy,
+            interrupt_capability,
+            interrupt_object,
+            &attachment,
+            &mut device,
+            &mut bridge,
+            &mut scratch,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "KVM PCI-MMIO block transaction {} failed: {:?}",
+                transaction + 1,
+                error
+            )
+        })?;
+        let expected_doorbell = matches!(transaction, 0 | 1 | 4 | 5);
+        if (expected_doorbell
+            && !matches!(
+                mmio,
+                VirtualBlockTransactionOutcome::Doorbell(VirtualBlockProcessOutcome::Completed(_))
+            ))
+            || (!expected_doorbell
+                && !matches!(
+                    mmio,
+                    VirtualBlockTransactionOutcome::CompletionAcknowledged(_)
+                ))
+        {
+            return Err(anyhow!(
+                "KVM PCI-MMIO transaction {} outcome mismatch: {:?}",
+                transaction + 1,
+                mmio
+            ));
+        }
+    }
+    if backend.0[..4096] != [0x5a; 4096] || backend.0[4096..] != [0xa5; 4096] {
+        return Err(anyhow!("KVM PCI-MMIO block backend payload mismatch"));
     }
     let proof = VmBackend::run(&mut guest, 0)
         .map_err(|error| anyhow!("KVM PCI proof execution failed: {:?}", error))?;
@@ -788,7 +818,7 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
             port: PCI_PROOF_PORT,
             size: 4,
             write: true,
-            value: PCI_TEST_VENDOR_DEVICE,
+            value: PCI_BLOCK_PROBE_OPERATIONS,
         })
     {
         return Err(anyhow!("KVM PCI proof mismatch: {:?}", proof));
@@ -1162,7 +1192,7 @@ fn application_main() -> Result<()> {
     if mode == LaunchMode::PciConfigurationProbe {
         run_pci_configuration_probe(guest)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO doorbell under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/acknowledgement under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),
@@ -2382,6 +2412,16 @@ mod tests {
         assert_eq!(
             vms.account_exit(vm),
             Err(mrml_kernel::VmError::ExitBudgetExceeded)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pci_block_probe_budget_covers_configuration_and_exact_queue_transactions() {
+        assert_eq!(PCI_BLOCK_PROBE_OPERATIONS, 4);
+        assert_eq!(
+            PCI_PROBE_POLICY_EXITS,
+            8 + 2 * u64::from(PCI_BLOCK_PROBE_OPERATIONS)
         );
     }
 

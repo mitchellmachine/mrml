@@ -6006,6 +6006,97 @@ reentry for the existing MRML-native device. The planned VirtIO, host-share,
 accessibility-device, browser, JavaScript/Wasm, and media scopes remain
 `TRIGGERED`. Agent review does not replace independent human dual review.
 
+### Completed bounded PCI-MMIO block transactions
+
+The reusable guest queue boundary now receives a typed notification descriptor
+instead of assuming scalar ports. Each descriptor is exactly either a scalar
+port/value or a PCI-MMIO offset/value derived from the canonical active-device
+configuration. The x86_64 adapter is constructed for exactly one of those
+transport classes. Its PCI constructor requires an exact aligned one-page BAR;
+mixing a scalar descriptor with an MMIO binding, substituting an offset/value,
+overflowing the BAR, or redirecting to ordinary RAM fail-stops the guest. The
+native MMIO method retains the single fixed `C7 00 01 00 00 00` encoding admitted
+by the bounded WHP decoder.
+
+The signed PCI probe now discovers the test-only function, assigns BAR0, enables
+memory decode, loads the canonical guest configuration page, and constructs the
+ordinary allocation-free block driver for `MrmlSpecificPciMmio`. It fills two
+separate 4 KiB payloads, publishes both write requests before retirement, drains
+and acknowledges both protected completions through BAR offset `4`, clears both
+payload pages, reuses the two slots for reads, drains and acknowledges those
+completions, and compares every returned byte. The host admits exactly eight PCI
+configuration exits plus eight MMIO writes. Each doorbell reauthorizes the exact
+backend object and operation right, processes at most one request, publishes one
+protected completion, retires the exact native write, and uses the existing
+separate `SIGNAL` capability for legacy vector `48`. Each acknowledgement
+revalidates the live attachment/window and advances exactly one protected
+consumer before native retirement. If retirement becomes uncertain after either
+queue mutation, the VM, device, and bridge now all fail-stop.
+
+Fresh verification on 2026-08-24 used one release UEFI image and one newly
+generated one-use Lamport signature. The signer consumed the private key. Both
+native runners used the identical `kernel.signed` and `release.public` files:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel native_transport_ --lib
+  PASS: 2
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel mmio_transaction_runner_ --lib
+  PASS: 2
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp --lib
+  PASS: 22; 1 unrelated manual performance test ignored
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp-run
+  PASS: 6
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --lib --no-default-features
+  PARTIAL: 435 passed; the pre-existing task-runtime capacity test overflowed
+  the Windows test-process stack
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel -p mrml-kvm -p mrml-whp -p mrml-kvm-run -p mrml-whp-run --all-targets --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+  PASS
+cargo +nightly-x86_64-pc-windows-gnullvm build -p mrml-kernel-image --target x86_64-unknown-uefi --no-default-features --features pci-configuration-probe
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel-image --target x86_64-unknown-uefi --no-default-features --features pci-configuration-probe -- -D warnings -A clippy::result_unit_err
+  PASS
+
+wsl.exe -d archlinux --cd /mnt/c/Users/Mitch/Documents/mrml -- bash -lc 'CARGO_TARGET_DIR=target/pci-mmio-block-linux cargo test -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --no-default-features && CARGO_TARGET_DIR=target/pci-mmio-block-linux cargo clippy -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --all-targets --no-default-features --no-deps -- -D warnings'
+  PASS: kernel 436; KVM 18 passed/1 ignored; KVM-run 7; strict Clippy passed
+
+target/pci-mmio-block-kvm/release/mrml-kvm-run target/pci-mmio-block-evidence/artifacts/kernel.signed target/pci-mmio-block-evidence/artifacts/release.public 1 pci-configuration-probe
+  PASS: verify=17027us prepare=2571us execute=45313us total=90982us
+target/pci-mmio-block-evidence/release/mrml-whp-run.exe target/pci-mmio-block-evidence/artifacts/kernel.signed target/pci-mmio-block-evidence/artifacts/release.public 1 pci-configuration-probe
+  PASS: verify=17907us prepare=4473us execute=3157us total=29945us
+```
+
+This is `UNIT`/`SIMULATION` evidence for the typed guest transport and hostile
+runner cases plus `VMM` hosted-controlled evidence for the exact bounded KVM and
+WHP sequence. It is not production block I/O, persistence or durability,
+PCI-transport restart recovery, a production BAR mapper/revoker, native PCI
+interrupt routing, MSI/MSI-X, DMA/IOMMU isolation, VirtIO, QEMU differential
+evidence, physical-device behavior, native boot, bare metal, or host-resistant
+isolation.
+
+DIGITAL-RIGHTS REVIEW: this increment adds no host path, filesystem namespace,
+telemetry, retention, correlation, remote disclosure, secret access, attestation,
+DRM, publisher/vendor preference, first-party bypass, AI-only interface,
+accessibility restriction, or persistence. Owner policy still selects the exact
+volatile backend through independently revocable object and operation
+capabilities; PCI identity, BAR, queue records, and payloads never authorize it.
+
+HOSTILE SECURITY REVIEW: signed admission, the exact sixteen-exit budget,
+configuration selectors, BDF, identity/class, command and BAR state, transport
+descriptor, BAR bounds, MMIO GPA/width/direction/value/instruction encoding,
+function/block/queue generations, request counters/slots/IDs, payload ranges,
+backend region and rights, protected completion order, interrupt authority,
+pending native write, and every backend result are hostile. Exact preflight and
+capability checks precede access; mutation uncertainty poisons the device/bridge;
+native retirement uncertainty additionally fails the VM; no mismatch can resume
+execution or reach the proof tuple.
+
+Patent review: `NOT_TRIGGERED` — typed dispatch between conventional scalar and
+fixed MMIO notification mechanics, plus bounded write/read verification over the
+already reviewed MRML-native queue, does not enter the recorded planned
+compatibility, host-share, accessibility-device, browser, JavaScript/Wasm, or
+media scopes. Those planned scopes remain `TRIGGERED` in
+[`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md). Agent review does not replace
+independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

@@ -472,8 +472,8 @@ explicitly and downgrade the status rather than guessing.
   It is type state, not authenticated evidence or lifecycle authority. The VM
   budget contains exactly 64 common block exits. This proves deterministic
   host-forced execution loss only; asynchronous/unplanned crash orchestration,
-  backend-in-flight recovery, unbounded progress, and PCI transport remain
-  pending. A common
+  backend-in-flight recovery, unbounded progress, and PCI-transport restart
+  recovery remain pending. A common
   unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer
@@ -533,8 +533,10 @@ explicitly and downgrade the status rather than guessing.
   `virtual_block.rs`, `virtual_gpu.rs`, and both native backends. Currently the common lifecycle,
   guest-memory, exit, I/O-policy, hypercall, and interrupt mechanisms are
   implemented; the MRML-specific mediated GPU queues and virtual-block
-  queue/lifecycle/execution policy are partial. No MRML VirtIO, PCI device
-  transport, UART device, attached block backend, NIC, input, sound, USB, or
+  queue/lifecycle/execution policy are partial. The test-only MRML-specific PCI-
+  MMIO slice now completes two volatile writes and reads with protected
+  acknowledgement on KVM and WHP. No MRML VirtIO, production PCI device,
+  durable attached block backend, UART device, NIC, input, sound, USB, or
   general display device is implemented. QEMU VirtIO devices appearing in boot
   commands are external test infrastructure, not MRML VMM implementations.
 
@@ -548,9 +550,11 @@ physical-device and user evidence.
 The current host-side PCI/block composition binds exact routed-function and
 active-block generations, queue/vector state, capability-selected backend range,
 confirmed BAR mapping, and revoke-before-reset/removal cleanup. Signed hosted KVM
-and WHP probes now discover a test-only attached identity/class through
-Configuration Mechanism #1. Do not recover that narrow result as native BAR
-integration, MMIO block operation, MSI/MSI-X, DMA, VirtIO, physical evidence, or
+and WHP probes discover a test-only attached identity/class through
+Configuration Mechanism #1, assign and enable its BAR, and complete one bounded
+two-write/two-read queue cycle with protected MMIO acknowledgement. Do not
+recover that narrow result as production BAR lifecycle/revocation, durable
+block I/O, native PCI interrupts, MSI/MSI-X, DMA, VirtIO, physical evidence, or
 an assigned production PCI identity.
 
 For every future device, recover and update its classification, exact feature
