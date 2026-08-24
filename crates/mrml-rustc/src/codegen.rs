@@ -3106,7 +3106,7 @@ fn preanalyze_runtime_expression_at_reads<
                     if let RuntimeExpressionType::Array { count, .. } = expected {
                         if matches!(
                             tree.expression(argument).map(|expression| expression.kind),
-                            Some(ExprKind::ArrayRepeat { .. })
+                            Some(ExprKind::ArrayRepeat { .. } | ExprKind::Call { .. })
                         ) {
                             visit!(argument)?;
                         } else {
@@ -3428,6 +3428,16 @@ fn preanalyze_runtime_expression_at_reads<
                 resolver,
                 tree,
                 base,
+                depth + 1,
+                assignment_span,
+            ),
+            ExprKind::Call { .. } => recurse(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                id,
                 depth + 1,
                 assignment_span,
             ),
@@ -4825,6 +4835,19 @@ fn runtime_call_arguments_preanalysis_supported<
         {
             continue;
         }
+        if matches!(expected, RuntimeExpressionType::Array { .. })
+            && runtime_array_call_argument_preanalysis_supported(
+                function,
+                resolver,
+                locals,
+                tree,
+                *argument,
+                expected,
+                depth + 1,
+            )?
+        {
+            continue;
+        }
         if runtime_aggregate_call_argument_preanalysis_supported(
             tree,
             *argument,
@@ -4836,6 +4859,90 @@ fn runtime_call_arguments_preanalysis_supported<
         return Ok(false);
     }
     Ok(true)
+}
+
+fn runtime_array_call_argument_preanalysis_supported<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'_>>],
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    expected: RuntimeExpressionType,
+    depth: usize,
+) -> Result<bool, CodegenErrorKind> {
+    if depth == 64 {
+        return Ok(false);
+    }
+    match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Call { .. }) => runtime_call_arguments_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            id,
+            depth + 1,
+        ),
+        Some(
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            },
+        ) => Ok(runtime_array_call_argument_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then_branch,
+            expected,
+            depth + 1,
+        )? && runtime_array_call_argument_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            else_branch,
+            expected,
+            depth + 1,
+        )?),
+        Some(
+            ExprKind::InlineConst { operand }
+            | ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand },
+        ) => runtime_array_call_argument_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            operand,
+            expected,
+            depth + 1,
+        ),
+        Some(ExprKind::Sequence { then, .. }) => runtime_array_call_argument_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then,
+            expected,
+            depth + 1,
+        ),
+        _ => Ok(runtime_aggregate_call_argument_preanalysis_supported(
+            tree,
+            id,
+            expected,
+            depth + 1,
+        )),
+    }
 }
 
 fn runtime_aggregate_call_argument_preanalysis_supported<const MAX_NODES: usize>(
@@ -19023,6 +19130,24 @@ mod tests {
             name: &str,
             argument_count: usize,
         ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+            if name == "make_array" && argument_count == 3 && MAX_PARAMETERS >= 3 {
+                let element = CallArrayElement::Integer(crate::IntegerType::Usize);
+                let mut parameters = [None; MAX_PARAMETERS];
+                for (index, parameter_name) in ["first", "second", "third"].iter().enumerate() {
+                    parameters[index] = Some(RuntimeCallParameter {
+                        name: parameter_name,
+                        ty: ScalarType::Integer(crate::IntegerType::Usize),
+                    });
+                }
+                return Some(RuntimeCallTarget {
+                    name: "make_array",
+                    parameters,
+                    parameter_count: 3,
+                    return_type: ScalarType::Array { element, count: 3 },
+                    return_type_name: "[usize; 3]",
+                    body_expression: "[first, second, third]",
+                });
+            }
             let slice = ScalarType::SliceReference {
                 element: CallArrayElement::Integer(crate::IntegerType::Usize),
                 mutable: false,
@@ -20699,6 +20824,43 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_array_producing_call_arguments() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, third: usize, left: usize, right: usize, prefix: usize, bias: usize, choose: bool) -> usize { let direct: &[usize] = choose_wrapped(make_array(first, second, third), (left, right), bias); let wrapped: &[usize] = choose_wrapped({ prefix; if choose { make_array(first, second, third) } else { make_array(third, second, first) } }, (left, right), bias); direct.len() + wrapped.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_read_count, 33);
+        let expected = [
+            0, 1, 2, 3, 4, 6, 5, 7, 0, 1, 2, 2, 1, 0, 5, 7, 0, 1, 2, 2, 1, 0, 5, 7, 0, 1, 2, 2, 1,
+            0, 3, 4, 6,
+        ];
+        for (fact, parameter) in facts.assignment_reads[..33].iter().zip(expected) {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 8, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
