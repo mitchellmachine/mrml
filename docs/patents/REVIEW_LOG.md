@@ -1961,6 +1961,17 @@ interface, JavaScript/WebAssembly runtime, media mechanism, authority model, or
 other patent-candidate mechanism. This agent review does not replace the
 required independent human dual review.
 
+# 2026-08-24 — Exact constant array-element place identity
+
+**Result: NOT_TRIGGERED.** The change conventionally retains an in-bounds
+compile-time fixed-array index as a typed compiler-local place projection while
+keeping runtime, reference/slice, compound-base, and aggregate-materialization
+indexes conservative. It grants no indexed move semantics, authority, device or
+compatibility protocol, host-share mechanism, accessibility interface, browser
+semantic interface, JavaScript/WebAssembly runtime, media mechanism, or other
+patent-candidate mechanism. This agent review does not replace the required
+independent human dual review.
+
 # 2026-08-24 — Exact MRML-native block/PCI lifecycle attachment
 
 **Result: NOT_TRIGGERED.** The change conventionally binds exact generational

@@ -9,11 +9,12 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `40a035c`
-  (`compiler: analyze initializedness through expressions`)
+- Compiler checkpoint commit: `480a198`
+  (`compiler: identify constant array elements`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
-- Preceding compiler commits: `daf9fb9` (`compiler: connect conditional
+- Preceding compiler commits: `40a035c` (`compiler: analyze initializedness
+  through expressions`), `daf9fb9` (`compiler: connect conditional
   expression flow`), `cbc6cc5` (`compiler: map conditional expression
   program points`), `7003640` (`compiler: identify conditional
   expression occurrences`), `8ddd42f` (`compiler: refine conditional event
@@ -59,10 +60,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
 - fixed tables of 256 retained local facts and 256 ordered place-access facts;
 - stable local or parameter identity, type, span, and `Read`, `Write`, or
   `ReadModifyWrite` access intent;
-- source-independent projection lists of at most four `Dereference`, `Index`,
-  `TupleField`, or `Subslice` steps;
-- projection/type validation, hole detection, tuple-bound checks, and explicit
-  capacity failures; and
+- source-independent projection lists of at most four `Dereference`, summary
+  `Index`, exact `ArrayElement`, `TupleField`, or `Subslice` steps. Direct
+  owned-array reads and assignments refine an in-bounds compile-time index to
+  its exact element number; runtime indexes, reference/slice indexes, compound
+  bases, and internal aggregate materialization remain conservative summaries;
+- projection/type validation, hole detection, tuple-field and exact-array-
+  element bound checks, and explicit capacity failures; and
 - read facts for direct identifiers plus the specialized local tuple-field,
   array-element, range, and address paths that bypass the scalar loader;
 - bounded syntax discovery for identifier, dereference, index, tuple-field,
@@ -355,8 +359,10 @@ compatibility gaps:
 1. extend contextual effects for implicit coercions and remaining indirect
    call/return and aggregate-materialization shapes without treating ambiguous
    pointee or projected reads as moves;
-2. add array-element paths only after place facts retain exact constant element
-   identity rather than the current summary `Index` projection;
+2. exact constant owned-array element identity is now retained. Add array move
+   paths only for a modern Rust operation that can legally move an element
+   (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
+   summary runtime indexes into exact paths;
 3. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
    and flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
@@ -382,7 +388,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 694 tests on each host: 382
+The checkpoint source passed 695 tests on each host: 383
 library tests, 10 conformance tests, 300 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 

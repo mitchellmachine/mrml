@@ -66,10 +66,14 @@ Runtime identifier loads append `Read` facts for the same stable base identity,
 including specialized tuple, array, range, and address paths that do not use the
 ordinary scalar loader. Constants do not become local/parameter access facts.
 Persistent facts use a source-independent list of at most four `Dereference`,
-`Index`, `TupleField`, or `Subslice` projections rather than borrowing the
+summary `Index`, exact `ArrayElement`, `TupleField`, or `Subslice` projections rather than borrowing the
 assignment parser representation. Assignment facts translate their existing
-single projection into that list; specialized local tuple-field, array-element,
-and local-array range reads now retain their corresponding projection. Each
+single projection into that list. An in-bounds constant index on a directly
+owned fixed-array local or parameter retains its exact element number, while
+runtime indexes, reference/slice indexes, compound bases, and aggregate
+materialization retain the conservative summary `Index`. Specialized local
+tuple-field, array-element, and local-array range reads retain their
+corresponding projection. Each
 projection is validated against the type produced by the preceding step, and
 overflow fails with `TooManyRuntimePlaceProjections`.
 Final emission validates their identity, projection/type, and mutability
@@ -2405,6 +2409,16 @@ The corresponding Boolean ordering and bitwise ELF64 objects were 520, 512,
 512, and 512 bytes and passed the same native truth-table assertions.
 The Boolean compound and loop-parity ELF64 objects were 584 and 624 bytes and
 passed the identical truth-table and iteration assertions.
+
+The exact constant array-element identity milestone passed all 695 compiler and
+driver tests on Windows gnullvm and all 695 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+that an owned `values[1]` read and assignment retain `ArrayElement(1)`, a
+`values[index]` assignment remains summary `Index`, and an out-of-bounds exact
+projection fails validation. Existing native array-index replacements preserve
+the differential COFF/ELF execution gate. This is precise place evidence only:
+it neither adds array move paths nor permits rustc-rejected indexed moves from
+non-`Copy` arrays.
 
 Security review searched both crates for direct `std`/`alloc` imports and unsafe
 blocks and found none. `cargo tree -p mrml-rustc-driver --offline` showed only
