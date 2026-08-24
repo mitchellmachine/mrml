@@ -548,7 +548,8 @@ pub struct VirtualBlockGuestCompletion {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VirtualBlockGuestCompletionTicket {
     completion: VirtualBlockCompletion,
-    published: u64,
+    completion_published: u64,
+    acknowledgement: u64,
     pending: VirtualBlockGuestSubmission,
     slot: u16,
 }
@@ -563,7 +564,7 @@ impl VirtualBlockGuestCompletionTicket {
     }
 
     pub const fn acknowledgement(self) -> u64 {
-        self.published
+        self.acknowledgement
     }
 }
 
@@ -572,6 +573,49 @@ pub enum VirtualBlockGuestTerminalReason {
     Reset,
     Removed,
     SequenceExhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockGuestQueueError<E> {
+    Protocol(VirtualBlockError),
+    Memory(E),
+}
+
+/// Exact guest-side memory operations for the MRML-specific block queues.
+///
+/// # Safety
+///
+/// Implementations must access exactly the supplied addresses and lengths.
+/// `publish_request` must make the complete slot visible before release-
+/// publishing the producer and must leave the producer unchanged on error.
+/// `read_completion` must acquire the published counter before copying the
+/// corresponding complete slot. `acknowledge_completion` must release-publish
+/// the exact consumer and leave it unchanged on error. No operation may redirect
+/// or shorten a copy.
+pub unsafe trait VirtualBlockGuestQueueMemory {
+    type Error;
+
+    fn publish_request(
+        &mut self,
+        request_address: u64,
+        request: &[u8; VIRTUAL_BLOCK_REQUEST_BYTES],
+        producer_address: u64,
+        producer: u64,
+    ) -> Result<(), Self::Error>;
+
+    fn read_completion(
+        &mut self,
+        published_address: u64,
+        completion_address: u64,
+        published: &mut u64,
+        completion: &mut [u8; VIRTUAL_BLOCK_COMPLETION_BYTES],
+    ) -> Result<(), Self::Error>;
+
+    fn acknowledge_completion(
+        &mut self,
+        consumer_address: u64,
+        consumer: u64,
+    ) -> Result<(), Self::Error>;
 }
 
 impl VirtualBlockGuestCompletion {
@@ -748,6 +792,50 @@ impl VirtualBlockGuestDriver {
         &mut self,
         submission: VirtualBlockGuestSubmission,
     ) -> Result<(), VirtualBlockError> {
+        let (slot, pending_count) = self.validate_submission(submission)?;
+        self.finish_submission(submission, slot, pending_count);
+        Ok(())
+    }
+
+    pub fn publish_submission<M: VirtualBlockGuestQueueMemory>(
+        &mut self,
+        memory: &mut M,
+        submission: VirtualBlockGuestSubmission,
+    ) -> Result<(), VirtualBlockGuestQueueError<M::Error>> {
+        let (slot, pending_count) = self
+            .validate_submission(submission)
+            .map_err(VirtualBlockGuestQueueError::Protocol)?;
+        let configuration = self.configuration;
+        let request_address = slot_address(
+            configuration.queue().request_base(),
+            submission.producer,
+            usize::from(configuration.queue().slots()),
+            VIRTUAL_BLOCK_REQUEST_BYTES,
+        )
+        .map_err(VirtualBlockGuestQueueError::Protocol)?;
+        if slot != usize::from(submission.slot) {
+            return Err(VirtualBlockGuestQueueError::Protocol(
+                VirtualBlockError::StaleTicket,
+            ));
+        }
+        let mut encoded = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
+        submission.request.encode(&mut encoded);
+        memory
+            .publish_request(
+                request_address,
+                &encoded,
+                configuration.queue().request_base(),
+                submission.producer,
+            )
+            .map_err(VirtualBlockGuestQueueError::Memory)?;
+        self.finish_submission(submission, slot, pending_count);
+        Ok(())
+    }
+
+    fn validate_submission(
+        &self,
+        submission: VirtualBlockGuestSubmission,
+    ) -> Result<(usize, u16), VirtualBlockError> {
         self.prepare_ready()?;
         let expected_producer = self
             .request_producer
@@ -769,6 +857,15 @@ impl VirtualBlockGuestDriver {
             .pending_count
             .checked_add(1)
             .ok_or(VirtualBlockError::SequenceExhausted)?;
+        Ok((slot, pending_count))
+    }
+
+    fn finish_submission(
+        &mut self,
+        submission: VirtualBlockGuestSubmission,
+        slot: usize,
+        pending_count: u16,
+    ) {
         self.request_producer = submission.producer;
         self.pending[slot] = Some(submission);
         self.pending_count = pending_count;
@@ -776,7 +873,6 @@ impl VirtualBlockGuestDriver {
             Some(next) => self.next_request_id = next,
             None => self.request_ids_exhausted = true,
         }
-        Ok(())
     }
 
     pub fn accept_completion(
@@ -795,12 +891,46 @@ impl VirtualBlockGuestDriver {
     ) -> Result<VirtualBlockGuestCompletionTicket, VirtualBlockError> {
         let completion = VirtualBlockCompletion::decode(encoded_completion)?;
         let (slot, pending) = self.validate_completion(published, completion)?;
+        let acknowledgement = self
+            .completion_consumer
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
         Ok(VirtualBlockGuestCompletionTicket {
             completion,
-            published,
+            completion_published: published,
+            acknowledgement,
             pending,
             slot: slot as u16,
         })
+    }
+
+    pub fn prepare_completion_from_memory<M: VirtualBlockGuestQueueMemory>(
+        &self,
+        memory: &mut M,
+    ) -> Result<VirtualBlockGuestCompletionTicket, VirtualBlockGuestQueueError<M::Error>> {
+        let position = self.completion_consumer.checked_add(1).ok_or(
+            VirtualBlockGuestQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+        )?;
+        let configuration = self.configuration;
+        let completion_address = slot_address(
+            configuration.queue().completion_base(),
+            position,
+            usize::from(configuration.queue().slots()),
+            VIRTUAL_BLOCK_COMPLETION_BYTES,
+        )
+        .map_err(VirtualBlockGuestQueueError::Protocol)?;
+        let mut published = 0;
+        let mut encoded = [0; VIRTUAL_BLOCK_COMPLETION_BYTES];
+        memory
+            .read_completion(
+                configuration.queue().completion_base(),
+                completion_address,
+                &mut published,
+                &mut encoded,
+            )
+            .map_err(VirtualBlockGuestQueueError::Memory)?;
+        self.prepare_completion(published, &encoded)
+            .map_err(VirtualBlockGuestQueueError::Protocol)
     }
 
     pub fn commit_completion(
@@ -808,12 +938,62 @@ impl VirtualBlockGuestDriver {
         ticket: VirtualBlockGuestCompletionTicket,
     ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
         let (slot, pending) = self
-            .validate_completion(ticket.published, ticket.completion)
+            .validate_completion(ticket.completion_published, ticket.completion)
             .map_err(|_| VirtualBlockError::StaleTicket)?;
-        if slot != usize::from(ticket.slot) || pending != ticket.pending {
+        let acknowledgement = self
+            .completion_consumer
+            .checked_add(1)
+            .ok_or(VirtualBlockError::SequenceExhausted)?;
+        if slot != usize::from(ticket.slot)
+            || pending != ticket.pending
+            || ticket.acknowledgement != acknowledgement
+        {
             return Err(VirtualBlockError::StaleTicket);
         }
-        self.finish_completion(slot, ticket.published, ticket.completion)
+        let pending_count = self
+            .pending_count
+            .checked_sub(1)
+            .ok_or(VirtualBlockError::InvalidState)?;
+        Ok(self.finish_completion(slot, pending_count, acknowledgement, ticket.completion))
+    }
+
+    pub fn acknowledge_completion_with_memory<M: VirtualBlockGuestQueueMemory>(
+        &mut self,
+        memory: &mut M,
+        ticket: VirtualBlockGuestCompletionTicket,
+    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockGuestQueueError<M::Error>> {
+        let (slot, pending) = self
+            .validate_completion(ticket.completion_published, ticket.completion)
+            .map_err(|_| VirtualBlockGuestQueueError::Protocol(VirtualBlockError::StaleTicket))?;
+        let acknowledgement = self.completion_consumer.checked_add(1).ok_or(
+            VirtualBlockGuestQueueError::Protocol(VirtualBlockError::SequenceExhausted),
+        )?;
+        if slot != usize::from(ticket.slot)
+            || pending != ticket.pending
+            || ticket.acknowledgement != acknowledgement
+        {
+            return Err(VirtualBlockGuestQueueError::Protocol(
+                VirtualBlockError::StaleTicket,
+            ));
+        }
+        let pending_count =
+            self.pending_count
+                .checked_sub(1)
+                .ok_or(VirtualBlockGuestQueueError::Protocol(
+                    VirtualBlockError::InvalidState,
+                ))?;
+        let consumer_address = self
+            .configuration
+            .queue()
+            .completion_base()
+            .checked_add(64)
+            .ok_or(VirtualBlockGuestQueueError::Protocol(
+                VirtualBlockError::RangeOverflow,
+            ))?;
+        memory
+            .acknowledge_completion(consumer_address, acknowledgement)
+            .map_err(VirtualBlockGuestQueueError::Memory)?;
+        Ok(self.finish_completion(slot, pending_count, acknowledgement, ticket.completion))
     }
 
     fn validate_completion(
@@ -828,7 +1008,7 @@ impl VirtualBlockGuestDriver {
         let slot =
             (self.completion_consumer % u64::from(self.configuration.queue().slots())) as usize;
         let pending = self.pending[slot].ok_or(VirtualBlockError::InvalidState)?;
-        if published != expected_published
+        if published < expected_published
             || published > self.request_producer
             || completion.generation() != self.configuration.generation()
             || completion.request_id() != pending.request.request_id()
@@ -843,13 +1023,10 @@ impl VirtualBlockGuestDriver {
     fn finish_completion(
         &mut self,
         slot: usize,
+        pending_count: u16,
         published: u64,
         completion: VirtualBlockCompletion,
-    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
-        let pending_count = self
-            .pending_count
-            .checked_sub(1)
-            .ok_or(VirtualBlockError::InvalidState)?;
+    ) -> VirtualBlockGuestCompletion {
         self.completion_consumer = published;
         self.pending[slot] = None;
         self.pending_count = pending_count;
@@ -873,11 +1050,11 @@ impl VirtualBlockGuestDriver {
             self.pending.fill(None);
             self.pending_count = 0;
         }
-        Ok(VirtualBlockGuestCompletion {
+        VirtualBlockGuestCompletion {
             status: completion.status(),
             transferred: completion.transferred(),
             acknowledgement: published,
-        })
+        }
     }
 
     fn prepare_ready(&self) -> Result<(), VirtualBlockError> {
@@ -2487,6 +2664,83 @@ mod tests {
         encoded
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum GuestQueueMemoryError {
+        Injected,
+    }
+
+    struct MockGuestQueueMemory {
+        published_request: Option<(u64, [u8; VIRTUAL_BLOCK_REQUEST_BYTES], u64, u64)>,
+        completion_published: u64,
+        completion: [u8; VIRTUAL_BLOCK_COMPLETION_BYTES],
+        completion_read: Option<(u64, u64)>,
+        acknowledgement: Option<(u64, u64)>,
+        fail_publish: bool,
+        fail_read: bool,
+        fail_acknowledge: bool,
+    }
+
+    impl MockGuestQueueMemory {
+        fn new() -> Self {
+            Self {
+                published_request: None,
+                completion_published: 0,
+                completion: [0; VIRTUAL_BLOCK_COMPLETION_BYTES],
+                completion_read: None,
+                acknowledgement: None,
+                fail_publish: false,
+                fail_read: false,
+                fail_acknowledge: false,
+            }
+        }
+    }
+
+    unsafe impl VirtualBlockGuestQueueMemory for MockGuestQueueMemory {
+        type Error = GuestQueueMemoryError;
+
+        fn publish_request(
+            &mut self,
+            request_address: u64,
+            request: &[u8; VIRTUAL_BLOCK_REQUEST_BYTES],
+            producer_address: u64,
+            producer: u64,
+        ) -> Result<(), Self::Error> {
+            if self.fail_publish {
+                return Err(GuestQueueMemoryError::Injected);
+            }
+            self.published_request = Some((request_address, *request, producer_address, producer));
+            Ok(())
+        }
+
+        fn read_completion(
+            &mut self,
+            published_address: u64,
+            completion_address: u64,
+            published: &mut u64,
+            completion: &mut [u8; VIRTUAL_BLOCK_COMPLETION_BYTES],
+        ) -> Result<(), Self::Error> {
+            if self.fail_read {
+                return Err(GuestQueueMemoryError::Injected);
+            }
+            self.completion_read = Some((published_address, completion_address));
+            *published = self.completion_published;
+            completion.copy_from_slice(&self.completion);
+            Ok(())
+        }
+
+        fn acknowledge_completion(
+            &mut self,
+            consumer_address: u64,
+            consumer: u64,
+        ) -> Result<(), Self::Error> {
+            if self.fail_acknowledge {
+                return Err(GuestQueueMemoryError::Injected);
+            }
+            self.acknowledgement = Some((consumer_address, consumer));
+            Ok(())
+        }
+    }
+
     #[test]
     fn guest_driver_discovery_requires_one_exact_idle_queue_snapshot() {
         let configuration = active::<2>().configuration().unwrap();
@@ -2614,6 +2868,98 @@ mod tests {
             driver.accept_completion(5, &invalidated),
             Err(VirtualBlockError::InvalidState)
         );
+    }
+
+    #[test]
+    fn guest_driver_memory_transport_is_exact_and_transactional() {
+        let device = active::<2>();
+        let mut driver = discovered_driver(&device);
+        let submission = driver.prepare_write(0, 1, 0x80_0000, 4096).unwrap();
+        let mut memory = MockGuestQueueMemory::new();
+
+        memory.fail_publish = true;
+        assert_eq!(
+            driver.publish_submission(&mut memory, submission),
+            Err(VirtualBlockGuestQueueError::Memory(
+                GuestQueueMemoryError::Injected
+            ))
+        );
+        assert_eq!(driver.request_producer(), 0);
+        assert_eq!(driver.pending_count(), 0);
+        memory.fail_publish = false;
+        driver.publish_submission(&mut memory, submission).unwrap();
+        let (request_address, encoded_request, producer_address, producer) =
+            memory.published_request.unwrap();
+        assert_eq!(
+            request_address,
+            layout::<2>().request_base() + QUEUE_HEADER_BYTES
+        );
+        assert_eq!(producer_address, layout::<2>().request_base());
+        assert_eq!(producer, 1);
+        assert_eq!(
+            VirtualBlockRequest::decode(&encoded_request),
+            Ok(submission.request())
+        );
+        assert_eq!(driver.request_producer(), 1);
+        assert_eq!(driver.pending_count(), 1);
+
+        let second = driver.prepare_read(1, 1, 0x81_0000, 4096).unwrap();
+        driver.publish_submission(&mut memory, second).unwrap();
+        assert_eq!(driver.request_producer(), 2);
+        assert_eq!(driver.pending_count(), 2);
+
+        memory.completion_published = 2;
+        memory.completion = completion_bytes(1, 1, VirtualBlockCompletionStatus::Ok, 4096);
+        memory.fail_read = true;
+        assert_eq!(
+            driver.prepare_completion_from_memory(&mut memory),
+            Err(VirtualBlockGuestQueueError::Memory(
+                GuestQueueMemoryError::Injected
+            ))
+        );
+        assert_eq!(driver.completion_consumer(), 0);
+        assert_eq!(driver.pending_count(), 2);
+        memory.fail_read = false;
+        let ticket = driver.prepare_completion_from_memory(&mut memory).unwrap();
+        assert_eq!(
+            memory.completion_read,
+            Some((
+                layout::<2>().completion_base(),
+                layout::<2>().completion_base() + QUEUE_HEADER_BYTES,
+            ))
+        );
+        assert_eq!(ticket.acknowledgement(), 1);
+        assert_eq!(driver.completion_consumer(), 0);
+
+        memory.fail_acknowledge = true;
+        assert_eq!(
+            driver.acknowledge_completion_with_memory(&mut memory, ticket),
+            Err(VirtualBlockGuestQueueError::Memory(
+                GuestQueueMemoryError::Injected
+            ))
+        );
+        assert_eq!(driver.completion_consumer(), 0);
+        assert_eq!(driver.pending_count(), 2);
+        memory.fail_acknowledge = false;
+        let outcome = driver
+            .acknowledge_completion_with_memory(&mut memory, ticket)
+            .unwrap();
+        assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Ok);
+        assert_eq!(
+            memory.acknowledgement,
+            Some((layout::<2>().completion_base() + 64, 1))
+        );
+        assert_eq!(driver.completion_consumer(), 1);
+        assert_eq!(driver.pending_count(), 1);
+
+        memory.acknowledgement = None;
+        assert_eq!(
+            driver.acknowledge_completion_with_memory(&mut memory, ticket),
+            Err(VirtualBlockGuestQueueError::Protocol(
+                VirtualBlockError::StaleTicket
+            ))
+        );
+        assert_eq!(memory.acknowledgement, None);
     }
 
     #[test]
