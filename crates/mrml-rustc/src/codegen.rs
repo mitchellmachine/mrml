@@ -2462,42 +2462,7 @@ fn preanalyze_runtime_local_binding<
         _ => None,
     };
     let simple_fat_reference = runtime_type_is_fat_reference(ty)
-        && match tree
-            .expression(tree.root())
-            .map(|expression| expression.kind)
-        {
-            Some(ExprKind::Identifier(_)) => true,
-            Some(ExprKind::Unary {
-                operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
-                operand,
-            }) => matches!(
-                tree.expression(operand).map(|expression| expression.kind),
-                Some(ExprKind::RangeIndex { .. })
-            ),
-            Some(
-                ExprKind::If {
-                    then_branch,
-                    else_branch,
-                    ..
-                }
-                | ExprKind::LoopBreakIf {
-                    then_branch,
-                    else_branch,
-                    ..
-                },
-            ) => {
-                matches!(
-                    tree.expression(then_branch)
-                        .map(|expression| expression.kind),
-                    Some(ExprKind::Identifier(_))
-                ) && matches!(
-                    tree.expression(else_branch)
-                        .map(|expression| expression.kind),
-                    Some(ExprKind::Identifier(_))
-                )
-            }
-            _ => false,
-        };
+        && runtime_fat_reference_preanalysis_supported(&tree, tree.root(), 0);
     let simple_fat_sequence = if runtime_type_is_fat_reference(ty)
         && let Some(ExprKind::Sequence { first, then }) = tree
             .expression(tree.root())
@@ -2813,6 +2778,21 @@ fn preanalyze_runtime_expression_at_reads<
             kind: CodegenErrorKind::RuntimeExpressionUnsupported,
             span: assignment_span,
         })?;
+        if let ExprKind::Sequence { first, then } = expression.kind {
+            for operand in [first, then] {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    operand,
+                    depth + 1,
+                    assignment_span,
+                )?;
+            }
+            return Ok(());
+        }
         if let ExprKind::Index { base, index } = expression.kind {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -4192,6 +4172,50 @@ fn runtime_type_is_fat_reference(ty: RuntimeExpressionType) -> bool {
             ..
         }
     )
+}
+
+fn runtime_fat_reference_preanalysis_supported<const MAX_NODES: usize>(
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    depth: usize,
+) -> bool {
+    if depth == 64 {
+        return false;
+    }
+    match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Identifier(_)) => true,
+        Some(ExprKind::Unary {
+            operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
+            operand,
+        }) => matches!(
+            tree.expression(operand).map(|expression| expression.kind),
+            Some(ExprKind::RangeIndex { .. })
+        ),
+        Some(
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            },
+        ) => {
+            runtime_fat_reference_preanalysis_supported(tree, then_branch, depth + 1)
+                && runtime_fat_reference_preanalysis_supported(tree, else_branch, depth + 1)
+        }
+        Some(
+            ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::InlineConst { operand },
+        ) => runtime_fat_reference_preanalysis_supported(tree, operand, depth + 1),
+        Some(ExprKind::Sequence { then, .. }) => {
+            runtime_fat_reference_preanalysis_supported(tree, then, depth + 1)
+        }
+        _ => false,
+    }
 }
 
 fn runtime_type_is_array(ty: RuntimeExpressionType) -> bool {
@@ -19280,6 +19304,58 @@ mod tests {
             assert_eq!(
                 fact.projections,
                 if index == 2 {
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice)
+                } else {
+                    RuntimePlaceProjections::EMPTY
+                }
+            );
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_conditional_wrapped_fat_reference_initializers() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &[usize], choose: bool, prefix: usize, start: usize, end: usize, left: usize) -> usize { let local = [10usize, 20usize, 30usize, 40usize]; let selected: &[usize] = if choose { { prefix; &local[start..end] } } else { &input[left..] }; selected.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 2);
+        assert_eq!(facts.assignment_read_count, 7);
+        for (index, (fact, identity)) in facts.assignment_reads[..7]
+            .iter()
+            .zip([
+                RuntimePlaceIdentity::Parameter(1),
+                RuntimePlaceIdentity::Parameter(2),
+                RuntimePlaceIdentity::Parameter(3),
+                RuntimePlaceIdentity::Parameter(4),
+                RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+                RuntimePlaceIdentity::Parameter(5),
+                RuntimePlaceIdentity::Parameter(0),
+            ])
+            .enumerate()
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, identity);
+            assert_eq!(
+                fact.projections,
+                if index == 4 {
                     RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice)
                 } else {
                     RuntimePlaceProjections::EMPTY
