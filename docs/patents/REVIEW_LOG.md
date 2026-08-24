@@ -977,6 +977,20 @@ encoding, hashing, filesystem, transaction, or persistence technique.
 
 Patent review: `NOT_TRIGGERED` — conventional zero-padded image hashing.
 
+## 2026-08-23 — interrupted create publication recovery simulation
+
+MRML source: `crates/mrml-storage/src/create.rs` using the existing COW and
+reachable-recovery primitives.
+
+The test model conventionally separates staged metadata and redundant
+superblocks, injects failure at each publication operation, models the two
+permitted atomic-replacement persistence outcomes, and validates either the old
+or complete new filesystem graph. Capability activation still requires a
+successful receipt. This adds no novel crash-recovery, filesystem, transaction,
+capability, or persistence technique.
+
+Patent review: `NOT_TRIGGERED` — conventional cut-point recovery simulation.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

@@ -325,8 +325,14 @@ successor states or activating authority. Focused empty-file and empty-directory
 creates exercise both admitted child kinds. Directory preparation retains its
 exact parent, the coordinator requires that parent to be the unique directory
 successor containing the generation-1 child entry, and the committed child state
-preserves it. Concrete block integration and interrupted-create/recovery
-evidence remain pending.
+preserves it. A deterministic durability simulation now materializes the exact
+six staged create images, verifies their complete digests, crashes at every COW
+publication event, and runs the full reachable validator. It selects only the
+complete old or complete new graph. Authority remains inactive unless a
+successful publication returns the exact receipt; a fail-stop whose superblock
+became durable can therefore recover the new graph without a handle, and
+capability reconciliation after that outcome remains pending. Concrete block
+integration and physical power-loss evidence remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

@@ -291,8 +291,13 @@ authority; unrelated domains continue.
    and authority activation. Empty-file and empty-directory creates are covered
    end to end in the in-memory model. Directory child metadata retains its exact
    parent; the coordinator requires it to equal the unique inserting directory
-   successor and preserves it in committed state. Concrete block integration
-   and interrupted-create recovery remain pending.
+   successor and preserves it in committed state. A deterministic create
+   durability simulation materializes and verifies all staged bytes, fails at
+   every publication event, and runs complete reachable recovery. Only the old
+   graph or fully valid new graph is selected, and authority activates only from
+   a successful exact receipt. Post-fail-stop reconciliation when the new root
+   became durable, concrete block integration, and physical power-loss evidence
+   remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -390,9 +395,10 @@ authority; unrelated domains continue.
    both ranges to a directory transaction participant, and expose the immutable
    next object generation only after its one-use publication receipt is
    consumed. Persistent object-ID allocation, inactive authority reservation,
-   and complete in-memory prepared-create coupling are implemented. Concrete
-   block integration, interrupted-create recovery, and physical power-loss
-   evidence remain pending.
+   complete in-memory prepared-create coupling, and deterministic interrupted-
+   create publication recovery are implemented. Post-fail-stop capability
+   reconciliation, concrete block integration, and physical power-loss evidence
+   remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features

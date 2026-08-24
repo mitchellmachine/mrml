@@ -177,14 +177,21 @@ explicitly and downgrade the status rather than guessing.
   evidence covers both empty-file and empty-directory creates. The directory
   child's retained canonical parent must equal the unique directory successor
   containing its generation-1 entry and remains available after commit.
-  Recovery traversal of interrupted creates and concrete block durability remain
+  A deterministic durability backend now materializes those six exact staged
+  images, verifies their complete digests, fails at every COW publication event,
+  and invokes full reachable recovery. Pre-replacement failures select the old
+  graph; uncertain replacement/final flush permits only the complete old or
+  complete new graph; success selects new. Authority stays inactive without a
+  successful receipt. If fail-stop recovery selects the durable new graph,
+  capability reconciliation remains pending. Concrete block durability remains
   pending.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks
   single-candidate fallback. Validator uncertainty aborts rather than becoming
-  rollback. The complete reachable-tree validator, real block backend,
-  power-loss evidence, repair, and anti-rollback state do not yet exist. A
+  rollback. The complete reachable-tree validator exists over immutable
+  simulated metadata; a real block backend, physical power-loss evidence,
+  repair, and authenticated anti-rollback state do not yet exist. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

@@ -2990,9 +2990,9 @@ state, and complete-byte publication binding. This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Seventy-six focused unit tests and strict crate-local clippy pass on Windows
+Seventy-seven focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
-complete directory hierarchy/lifetime handling, interrupted-create recovery,
+complete directory hierarchy/lifetime handling, post-fail-stop capability reconciliation,
 complete crash recovery, snapshots, a block-device service, and
 configuration-checkpoint persistence remain unimplemented.
 
@@ -3003,7 +3003,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both current unit-test runs pass 76 tests, and both strict crate-local clippy
+Both current unit-test runs pass 77 tests, and both strict crate-local clippy
 invocations pass.
 These are unit tests and simulation of in-memory metadata/authority state, not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
@@ -3056,7 +3056,11 @@ Recovery additionally treats the allocator as a mandatory reachable volume
 resource: exact record cardinality, owner, generation, purpose, range,
 canonical bytes, and forward next-ID relation are checked; exhaustion is
 accepted as the more restrictive state, and backend uncertainty never becomes
-permission to roll back.
+permission to roll back. The create cut-point model uses the exact staged bytes
+and complete allocation graph, injects every verification/flush/replacement
+failure, and accepts only complete generation 5 or 6 recovery. No error path
+activates the reserved handle; a durable-new fail-stop is explicitly left for
+later capability reconciliation rather than manufacturing authority.
 This agent review is not
 independent human audit.
 

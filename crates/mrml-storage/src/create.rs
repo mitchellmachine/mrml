@@ -347,11 +347,12 @@ mod tests {
     use super::*;
     use crate::{
         AllocationChange, AllocationRecord, AllocationWriteBackend, CowMetadataWrite,
-        CowPublicationBackend, DirectoryAncestryBackend, DirectoryEntry, DirectoryMetadata,
-        DirectorySuccessorBackend, DirectorySuccessorLayout, DirectoryWriteBackend,
-        InitialFileWriteBackend, ObjectIdAllocatorWriteBackend, StorageName, StoragePrincipal,
-        StorageRights, VolumeId, prepare_initial_directory, prepare_initial_file,
-        prove_directory_mutation_ancestry,
+        CowPublicationBackend, CowPublishError, DirectoryAncestryBackend, DirectoryEntry,
+        DirectoryImage, DirectoryMetadata, DirectorySuccessorBackend, DirectorySuccessorLayout,
+        DirectoryWriteBackend, InitialFileWriteBackend, ObjectIdAllocatorWriteBackend,
+        RecoveryMetadataBackend, StorageName, StoragePrincipal, StorageRights,
+        TransactionPublishError, VolumeId, prepare_initial_directory, prepare_initial_file,
+        prove_directory_mutation_ancestry, recover_reachable_superblock,
     };
 
     fn volume() -> VolumeId {
@@ -375,6 +376,40 @@ mod tests {
         staged: usize,
         verified: usize,
         replaced: usize,
+        images: [[u8; 4096]; 6],
+        present: [bool; 6],
+    }
+
+    impl Backend {
+        fn new(root: DirectoryState<2>) -> Self {
+            Self {
+                root,
+                staged: 0,
+                verified: 0,
+                replaced: 0,
+                images: [[0; 4096]; 6],
+                present: [false; 6],
+            }
+        }
+
+        fn stage(&mut self, image: CowMetadataImage, encoded: &[u8]) -> Result<(), ()> {
+            let index = usize::try_from(image.pointer().block().checked_sub(60).ok_or(())?)
+                .map_err(|_| ())?;
+            let output = self.images.get_mut(index).ok_or(())?;
+            if encoded.len() > output.len() || image.pointer().blocks() != 1 {
+                return Err(());
+            }
+            output.fill(0);
+            output[..encoded.len()].copy_from_slice(encoded);
+            let mut digest = mrml_crypto::Sha3_256::new();
+            digest.update(output);
+            if digest.finalize() != image.digest() {
+                return Err(());
+            }
+            self.present[index] = true;
+            self.staged += 1;
+            Ok(())
+        }
     }
 
     unsafe impl DirectoryAncestryBackend for Backend {
@@ -407,20 +442,18 @@ mod tests {
 
         fn stage_directory_metadata(
             &mut self,
-            _image: CowMetadataImage,
-            _encoded: &[u8; crate::DIRECTORY_METADATA_BYTES],
+            image: CowMetadataImage,
+            encoded: &[u8; crate::DIRECTORY_METADATA_BYTES],
         ) -> Result<(), Self::Error> {
-            self.staged += 1;
-            Ok(())
+            self.stage(image, encoded)
         }
 
         fn stage_directory_entries(
             &mut self,
-            _image: CowMetadataImage,
-            _encoded: &[u8],
+            image: CowMetadataImage,
+            encoded: &[u8],
         ) -> Result<(), Self::Error> {
-            self.staged += 1;
-            Ok(())
+            self.stage(image, encoded)
         }
 
         fn flush_directory_update(&mut self) -> Result<(), Self::Error> {
@@ -433,20 +466,18 @@ mod tests {
 
         fn stage_initial_file_metadata(
             &mut self,
-            _image: CowMetadataImage,
-            _encoded: &[u8; crate::FILE_METADATA_BYTES],
+            image: CowMetadataImage,
+            encoded: &[u8; crate::FILE_METADATA_BYTES],
         ) -> Result<(), Self::Error> {
-            self.staged += 1;
-            Ok(())
+            self.stage(image, encoded)
         }
 
         fn stage_initial_file_extents(
             &mut self,
-            _image: CowMetadataImage,
-            _encoded: &[u8],
+            image: CowMetadataImage,
+            encoded: &[u8],
         ) -> Result<(), Self::Error> {
-            self.staged += 1;
-            Ok(())
+            self.stage(image, encoded)
         }
 
         fn flush_initial_file(&mut self) -> Result<(), Self::Error> {
@@ -459,11 +490,10 @@ mod tests {
 
         fn stage_object_id_allocator(
             &mut self,
-            _image: CowMetadataImage,
-            _encoded: &[u8],
+            image: CowMetadataImage,
+            encoded: &[u8],
         ) -> Result<(), Self::Error> {
-            self.staged += 1;
-            Ok(())
+            self.stage(image, encoded)
         }
 
         fn flush_object_id_allocator(&mut self) -> Result<(), Self::Error> {
@@ -476,11 +506,10 @@ mod tests {
 
         fn stage_allocation_image(
             &mut self,
-            _image: CowMetadataImage,
-            _encoded: &[u8],
+            image: CowMetadataImage,
+            encoded: &[u8],
         ) -> Result<(), Self::Error> {
-            self.staged += 1;
-            Ok(())
+            self.stage(image, encoded)
         }
 
         fn flush_allocation_image(&mut self) -> Result<(), Self::Error> {
@@ -491,7 +520,18 @@ mod tests {
     unsafe impl CowPublicationBackend for Backend {
         type Error = ();
 
-        fn verify_new_metadata(&mut self, _write: CowMetadataWrite) -> Result<(), Self::Error> {
+        fn verify_new_metadata(&mut self, write: CowMetadataWrite) -> Result<(), Self::Error> {
+            let index = usize::try_from(write.pointer().block().checked_sub(60).ok_or(())?)
+                .map_err(|_| ())?;
+            let image = self.images.get(index).ok_or(())?;
+            if !self.present.get(index).copied().unwrap_or(false) {
+                return Err(());
+            }
+            let mut digest = mrml_crypto::Sha3_256::new();
+            digest.update(image);
+            if digest.finalize() != write.digest() {
+                return Err(());
+            }
             self.verified += 1;
             Ok(())
         }
@@ -515,6 +555,197 @@ mod tests {
         }
     }
 
+    struct CrashBackend {
+        images: [[u8; 4096]; 6],
+        primary: [u8; crate::SUPERBLOCK_BYTES],
+        secondary: [u8; crate::SUPERBLOCK_BYTES],
+        volatile_secondary: Option<[u8; crate::SUPERBLOCK_BYTES]>,
+        event: usize,
+        fail_at: Option<usize>,
+        persist_on_replace: bool,
+        persist_on_failed_flush: bool,
+    }
+
+    impl CrashBackend {
+        fn new(
+            images: [[u8; 4096]; 6],
+            fail_at: Option<usize>,
+            persist_on_replace: bool,
+            persist_on_failed_flush: bool,
+        ) -> Self {
+            let mut primary = [0; crate::SUPERBLOCK_BYTES];
+            Superblock::new(header(), 5, 4, object(1), pointer(10), pointer(20))
+                .unwrap()
+                .encode(&mut primary);
+            Self {
+                images,
+                primary,
+                secondary: [0; crate::SUPERBLOCK_BYTES],
+                volatile_secondary: None,
+                event: 0,
+                fail_at,
+                persist_on_replace,
+                persist_on_failed_flush,
+            }
+        }
+
+        fn fails_now(&mut self) -> bool {
+            let fails = self.fail_at == Some(self.event);
+            self.event += 1;
+            fails
+        }
+
+        fn recovered_generation(&self) -> u64 {
+            let mut scratch = [0; 4096];
+            recover_reachable_superblock::<_, 8, 2, 0, 2>(
+                header(),
+                &self.primary,
+                &self.secondary,
+                RecoveryImages::new(self.images),
+                &mut scratch,
+            )
+            .unwrap()
+            .superblock()
+            .generation()
+        }
+    }
+
+    unsafe impl CowPublicationBackend for CrashBackend {
+        type Error = usize;
+
+        fn verify_new_metadata(&mut self, write: CowMetadataWrite) -> Result<(), Self::Error> {
+            let index = usize::try_from(write.pointer().block() - 60).unwrap();
+            let mut digest = mrml_crypto::Sha3_256::new();
+            digest.update(&self.images[index]);
+            assert_eq!(digest.finalize(), write.digest());
+            if self.fails_now() {
+                Err(self.event - 1)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            if self.fails_now() {
+                Err(self.event - 1)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            encoded: &[u8; crate::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            assert_eq!(block, 2);
+            self.volatile_secondary = Some(*encoded);
+            if self.persist_on_replace {
+                self.secondary = *encoded;
+            }
+            if self.fails_now() {
+                Err(self.event - 1)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            let fails = self.fails_now();
+            if !fails || self.persist_on_failed_flush {
+                self.secondary = self.volatile_secondary.unwrap();
+            }
+            if fails { Err(self.event - 1) } else { Ok(()) }
+        }
+    }
+
+    struct RecoveryImages {
+        old_root: [u8; 4096],
+        old_entries: [u8; 4096],
+        old_allocation: [u8; 4096],
+        old_allocator: [u8; 4096],
+        new: [[u8; 4096]; 6],
+    }
+
+    impl RecoveryImages {
+        fn new(new: [[u8; 4096]; 6]) -> Self {
+            let root = object(1);
+            let mut old_root = [0; 4096];
+            DirectoryMetadata::new(header(), root, 5, None, 0, pointer(11))
+                .unwrap()
+                .encode(
+                    (&mut old_root[..crate::DIRECTORY_METADATA_BYTES])
+                        .try_into()
+                        .unwrap(),
+                );
+            let mut old_entries = [0; 4096];
+            DirectoryImage::<2>::build(header(), root, 5, pointer(11), &[])
+                .unwrap()
+                .encode(&mut old_entries)
+                .unwrap();
+            let mut old_allocation = [0; 4096];
+            AllocationImage::<8>::build(
+                header(),
+                5,
+                pointer(20),
+                &[
+                    AllocationRecord::new(root, 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+                    AllocationRecord::new(root, 5, 11, 1, AllocationKind::DirectoryEntries)
+                        .unwrap(),
+                    AllocationRecord::new(root, 5, 20, 1, AllocationKind::AllocationMetadata)
+                        .unwrap(),
+                    AllocationRecord::new(
+                        root,
+                        5,
+                        30,
+                        1,
+                        AllocationKind::ObjectIdAllocatorMetadata,
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap()
+            .encode(&mut old_allocation)
+            .unwrap();
+            let mut old_allocator = [0; 4096];
+            ObjectIdAllocatorImage::build(header(), 5, Some(10), pointer(30))
+                .unwrap()
+                .encode(&mut old_allocator)
+                .unwrap();
+            Self {
+                old_root,
+                old_entries,
+                old_allocation,
+                old_allocator,
+                new,
+            }
+        }
+    }
+
+    unsafe impl RecoveryMetadataBackend for RecoveryImages {
+        type Error = ();
+
+        fn read_metadata(
+            &mut self,
+            requested: MetadataPointer,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            let source = match requested.block() {
+                10 => &self.old_root,
+                11 => &self.old_entries,
+                20 => &self.old_allocation,
+                30 => &self.old_allocator,
+                60..=65 => &self.new[usize::try_from(requested.block() - 60).unwrap()],
+                _ => return Err(()),
+            };
+            if requested.blocks() != 1 || output.len() != source.len() {
+                return Err(());
+            }
+            output.copy_from_slice(source);
+            Ok(())
+        }
+    }
+
     fn prepared_directory_create(
         metadata_parent: StorageObjectId,
     ) -> Result<
@@ -528,12 +759,7 @@ mod tests {
     > {
         let root = object(1);
         let child = object(10);
-        let mut backend = Backend {
-            root: DirectoryState::new(root, 5, &[]).unwrap(),
-            staged: 0,
-            verified: 0,
-            replaced: 0,
-        };
+        let mut backend = Backend::new(DirectoryState::new(root, 5, &[]).unwrap());
         let proof = prove_directory_mutation_ancestry::<1, _>(root, root, 5, &mut backend).unwrap();
         let entry = DirectoryEntry::new(
             StorageName::new("created-directory").unwrap(),
@@ -581,11 +807,24 @@ mod tests {
             pointer(20),
             &[
                 AllocationRecord::new(root, 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+                AllocationRecord::new(root, 5, 11, 1, AllocationKind::DirectoryEntries).unwrap(),
                 AllocationRecord::new(root, 5, 20, 1, AllocationKind::AllocationMetadata).unwrap(),
+                AllocationRecord::new(root, 5, 30, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                    .unwrap(),
             ],
         )
         .unwrap();
         let changes = [
+            AllocationChange::Free(
+                AllocationRecord::new(root, 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Free(
+                AllocationRecord::new(root, 5, 11, 1, AllocationKind::DirectoryEntries).unwrap(),
+            ),
+            AllocationChange::Free(
+                AllocationRecord::new(root, 5, 30, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                    .unwrap(),
+            ),
             AllocationChange::Allocate(
                 AllocationRecord::new(root, 6, 60, 1, AllocationKind::ObjectMetadata).unwrap(),
             ),
@@ -634,12 +873,7 @@ mod tests {
     fn complete_file_create_publishes_and_activates_as_one_receipt_set() {
         let root = object(1);
         let child = object(10);
-        let mut backend = Backend {
-            root: DirectoryState::new(root, 5, &[]).unwrap(),
-            staged: 0,
-            verified: 0,
-            replaced: 0,
-        };
+        let mut backend = Backend::new(DirectoryState::new(root, 5, &[]).unwrap());
         let proof = prove_directory_mutation_ancestry::<1, _>(root, root, 5, &mut backend).unwrap();
         let entry = DirectoryEntry::new(
             StorageName::new("created").unwrap(),
@@ -686,11 +920,24 @@ mod tests {
             pointer(20),
             &[
                 AllocationRecord::new(root, 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+                AllocationRecord::new(root, 5, 11, 1, AllocationKind::DirectoryEntries).unwrap(),
                 AllocationRecord::new(root, 5, 20, 1, AllocationKind::AllocationMetadata).unwrap(),
+                AllocationRecord::new(root, 5, 30, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                    .unwrap(),
             ],
         )
         .unwrap();
         let changes = [
+            AllocationChange::Free(
+                AllocationRecord::new(root, 5, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
+            ),
+            AllocationChange::Free(
+                AllocationRecord::new(root, 5, 11, 1, AllocationKind::DirectoryEntries).unwrap(),
+            ),
+            AllocationChange::Free(
+                AllocationRecord::new(root, 5, 30, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                    .unwrap(),
+            ),
             AllocationChange::Allocate(
                 AllocationRecord::new(root, 6, 60, 1, AllocationKind::ObjectMetadata).unwrap(),
             ),
@@ -846,5 +1093,113 @@ mod tests {
         assert_eq!(directory.state().object(), object(10));
         assert_eq!(directory.state().generation(), 1);
         assert!(directory.state().is_empty());
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CrashOutcome {
+        Rejected,
+        FailStop,
+        Committed,
+    }
+
+    fn run_directory_create_crash(
+        fail_at: Option<usize>,
+        persist_on_replace: bool,
+        persist_on_failed_flush: bool,
+    ) -> (CrashOutcome, u64) {
+        let (prepared, mut authorities, staged, principal) =
+            prepared_directory_create(object(1)).unwrap();
+        let transaction = prepared
+            .transaction::<4, 6>(StorageTransactionId::new(60).unwrap(), 6)
+            .unwrap();
+        let active = Superblock::new(header(), 5, 4, object(1), pointer(10), pointer(20)).unwrap();
+        let publication = prepared
+            .publication_plan::<6>(
+                header(),
+                1,
+                active,
+                object(1),
+                &[pointer(10), pointer(11), pointer(20), pointer(30)],
+            )
+            .unwrap();
+        let mut crash = CrashBackend::new(
+            staged.images,
+            fail_at,
+            persist_on_replace,
+            persist_on_failed_flush,
+        );
+        let outcome = match transaction.publish(&publication, &mut crash) {
+            Ok(mut receipt) => {
+                let committed = match prepared.commit(&mut receipt, &mut authorities) {
+                    Ok(committed) => committed,
+                    Err((_, error)) => panic!("successful publication did not commit: {error:?}"),
+                };
+                assert_eq!(receipt.remaining(), 0);
+                assert_eq!(
+                    authorities.authorize(
+                        committed.handle,
+                        principal,
+                        StorageObjectKind::Directory,
+                        StorageRights::LOOKUP,
+                    ),
+                    Ok(object(10))
+                );
+                CrashOutcome::Committed
+            }
+            Err(TransactionPublishError::Publication(CowPublishError::Rejected(_))) => {
+                assert_eq!(
+                    authorities.authorize(
+                        StorageHandle::from_token(1_u64 << 32),
+                        principal,
+                        StorageObjectKind::Directory,
+                        StorageRights::LOOKUP,
+                    ),
+                    Err(StorageAuthorityError::InvalidHandle)
+                );
+                prepared.cancel(&mut authorities).unwrap();
+                CrashOutcome::Rejected
+            }
+            Err(TransactionPublishError::Publication(CowPublishError::FailStop(_))) => {
+                assert_eq!(
+                    authorities.authorize(
+                        StorageHandle::from_token(1_u64 << 32),
+                        principal,
+                        StorageObjectKind::Directory,
+                        StorageRights::LOOKUP,
+                    ),
+                    Err(StorageAuthorityError::InvalidHandle)
+                );
+                prepared.cancel(&mut authorities).unwrap();
+                CrashOutcome::FailStop
+            }
+            Err(TransactionPublishError::WrongPlan) => panic!("complete create plan rejected"),
+        };
+        (outcome, crash.recovered_generation())
+    }
+
+    #[test]
+    fn interrupted_directory_create_recovers_only_complete_old_or_new_graph() {
+        for failure in 0..7 {
+            assert_eq!(
+                run_directory_create_crash(Some(failure), false, false),
+                (CrashOutcome::Rejected, 5)
+            );
+        }
+        for persists in [false, true] {
+            assert_eq!(
+                run_directory_create_crash(Some(7), persists, false),
+                (CrashOutcome::FailStop, if persists { 6 } else { 5 },)
+            );
+        }
+        for persists in [false, true] {
+            assert_eq!(
+                run_directory_create_crash(Some(8), false, persists),
+                (CrashOutcome::FailStop, if persists { 6 } else { 5 },)
+            );
+        }
+        assert_eq!(
+            run_directory_create_crash(None, false, false),
+            (CrashOutcome::Committed, 6)
+        );
     }
 }
