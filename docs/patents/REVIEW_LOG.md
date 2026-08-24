@@ -1396,6 +1396,16 @@ defensive virtual-device techniques. No patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Initial guest virtual-block page mappings
+
+**Result: NOT_TRIGGERED.** The change conventionally preflights disjoint native
+and virtual ranges, maps request pages read-write/non-executable, maps completion
+pages read-only/non-executable, and constructs the mappings before returning a
+guest. Symmetric KVM/WHP permission tests and transactional failure are standard
+defensive virtual-device integration. No patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Signed native virtual-block doorbell probe
 
 **Result: NOT_TRIGGERED.** The change conventionally uses a signed minimal guest

@@ -3426,6 +3426,17 @@ injects the separately authorized vector. The probe intentionally stops after
 this transaction. It is not a guest queue producer, reusable guest driver,
 concrete hosted storage service, or PCI transport.
 
+The dedicated `prepare_kernel_block_guest` launch path now makes those queues
+guest-addressable without post-launch page-table mutation. KVM and WHP perform
+complete physical/virtual overlap preflight, create disjoint native request and
+completion mappings, and install identity mappings in the initial page tables.
+Request pages are shared RW/NX; completion pages are shared R/NX to the guest
+and remain writable only through `VirtualBlockVmmMemory`. KVM additionally
+preflights the two native mapping slots. Any overlap, slot undercapacity, native
+mapping failure, or page-table failure prevents a prepared guest from being
+returned. The older consuming native-only attachment remains available for
+host-side queue-memory tests; it does not imply guest page-table visibility.
+
 Recorded verification on 2026-08-24: Windows gnullvm passes 20 active `mrml-whp`
 release tests with one manual mapping benchmark ignored, including the live WHP
 signed-doorbell transaction. Arch Linux under WSL2 passes 17 active `mrml-kvm`
@@ -3435,6 +3446,14 @@ host platforms; the opposite-platform ABI suites pass six KVM tests on Windows
 and ten WHP tests on Linux. This is controlled hosted-hypervisor evidence only.
 It does not prove protection from the host, durability, power-loss behavior,
 PCI behavior, a guest driver, bare metal, or physical-device operation.
+
+The same 20-active-test WHP and 17-active-test KVM release suites now verify the
+initial block mappings by native page walk, including exact GPA identity,
+writable/NX request leaves, read-only/NX completion leaves, overlap rejection,
+and KVM slot undercapacity. Strict Clippy, the six-test Windows KVM ABI suite,
+and the ten-test Linux WHP ABI suite pass. This remains hosted controlled-probe
+evidence; the guest image still emits only the doorbell while host code seeds
+the queue and payload.
 
 The native-doorbell `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
 retention, identity expansion, DRM, attestation, remote disclosure, vendor
@@ -3447,6 +3466,18 @@ policy, and injection as hostile; the common runner fails the VM on every
 uncertain stage. Existing capability, revocation, rollback-resistance,
 accessibility, and evidence gates remain unchanged. This agent review does not
 replace the required independent human dual review.
+
+The guest-mapping `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
+retention, identity expansion, DRM, attestation, remote disclosure, vendor
+preference, accessibility restriction, or persistent owner-state change. The
+`HOSTILE SECURITY REVIEW` treats queue arithmetic, every physical and virtual
+range, aliasing, native slot and page-table capacity, mapping results, leaf
+permissions, and partial construction as hostile; full preflight and
+transactional preparation prevent a partially mapped guest from being returned.
+Completion authority remains outside the guest and all mappings remain NX.
+Existing revocation, rollback-resistance, accessibility, and evidence gates are
+unchanged. This agent review does not replace the required independent human
+dual review.
 
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one

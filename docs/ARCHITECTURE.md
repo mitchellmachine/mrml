@@ -647,7 +647,9 @@ Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path
 retains completion-write access. This is queue-memory attachment, not a complete
-device.
+device. Dedicated initial-launch builders now also identity-map both ranges into
+the guest page tables with request RW/NX and completion R/NX permissions. Range
+overlap and KVM native-slot undercapacity fail before a guest is returned.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

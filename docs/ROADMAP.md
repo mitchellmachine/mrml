@@ -662,9 +662,12 @@ Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the
 ordinary guest-write path and remains writable by the isolated device path.
-Controlled live tests cover both backends. The signed doorbell probe exercises
-the attached queues through the common runner, but host code still seeds the
-request and payload.
+Dedicated kernel-block launch builders now install the same directionality in
+the initial guest page tables: request ranges are identity-mapped RW/NX and
+completion ranges R/NX. Controlled live tests cover both backends, including
+overlap rejection and KVM native-slot undercapacity. The signed doorbell probe
+exercises these mappings through the common runner, but host code still seeds
+the request and payload.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

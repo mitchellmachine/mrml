@@ -359,11 +359,13 @@ explicitly and downgrade the status rather than guessing.
   evidence exists yet.
   Prepared KVM and WHP guests attach the same validated request and guest-read-
   only completion ranges transactionally; ordinary completion writes fail while
-  the device-memory path can publish. Controlled signed probes now emit the
-  exact native doorbell and complete one host-seeded write through the common
-  runner on each backend. This is hosted controlled-probe evidence, not a guest
-  block driver, concrete device backend, durability result, or physical-device
-  result. A
+  the device-memory path can publish. Dedicated initial-launch builders also
+  identity-map request pages RW/NX and completion pages R/NX in guest page
+  tables, rejecting aliases and KVM native-slot undercapacity before launch.
+  Controlled signed probes emit the exact native doorbell and complete one
+  host-seeded write through the common runner on each backend. This is hosted
+  controlled-probe evidence, not a guest block driver, concrete device backend,
+  durability result, or physical-device result. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

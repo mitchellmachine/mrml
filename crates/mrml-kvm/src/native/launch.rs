@@ -23,6 +23,7 @@ struct KernelDevices {
     framebuffer: bool,
     local_apic: bool,
     gpu_queue: Option<GpuSharedQueueLayout>,
+    block_queue: Option<VirtualBlockQueueLayout>,
     cpus: u8,
     service_shared: bool,
 }
@@ -846,6 +847,7 @@ impl KvmSystem {
                 framebuffer: false,
                 local_apic: false,
                 gpu_queue: None,
+                block_queue: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -870,6 +872,7 @@ impl KvmSystem {
                 framebuffer: true,
                 local_apic: false,
                 gpu_queue: None,
+                block_queue: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -894,6 +897,7 @@ impl KvmSystem {
                 framebuffer: true,
                 local_apic: false,
                 gpu_queue: None,
+                block_queue: None,
                 cpus: 1,
                 service_shared: true,
             },
@@ -917,6 +921,7 @@ impl KvmSystem {
                 framebuffer: true,
                 local_apic: true,
                 gpu_queue: None,
+                block_queue: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -940,6 +945,7 @@ impl KvmSystem {
                 framebuffer: true,
                 local_apic: true,
                 gpu_queue: None,
+                block_queue: None,
                 cpus: 2,
                 service_shared: false,
             },
@@ -966,6 +972,34 @@ impl KvmSystem {
                 framebuffer: true,
                 local_apic: false,
                 gpu_queue: Some(queue),
+                block_queue: None,
+                cpus: 1,
+                service_shared: false,
+            },
+        )
+    }
+
+    /// Prepares a kernel guest with one MRML-specific virtual-block queue in
+    /// its initial address space. Request pages are writable/NX and completion
+    /// pages are read-only/NX to the guest while retaining device-path writes.
+    pub fn prepare_kernel_block_guest<const N: usize>(
+        &self,
+        vcpu_id: u32,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: KvmLaunchLayout,
+        queue: VirtualBlockQueueLayout,
+    ) -> Result<PreparedKvmGuest<N>, KvmError> {
+        self.prepare_guest_inner(
+            vcpu_id,
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: false,
+                gpu_queue: None,
+                block_queue: Some(queue),
                 cpus: 1,
                 service_shared: false,
             },
@@ -983,11 +1017,13 @@ impl KvmSystem {
         let map_framebuffer = devices.framebuffer;
         let local_apic = devices.local_apic;
         let queue = devices.gpu_queue;
+        let block_queue = devices.block_queue;
         let smp = devices.cpus == 2;
         if !matches!(devices.cpus, 1 | 2)
             || N < 4
                 + usize::from(map_framebuffer)
                 + usize::from(queue.is_some()) * 2
+                + usize::from(block_queue.is_some()) * 2
                 + usize::from(smp)
         {
             return Err(KvmError::MemoryTableFull);
@@ -1043,6 +1079,16 @@ impl KvmSystem {
         let (command_base, completion_base) = queue
             .map(|value| (value.command_base(), value.completion_base()))
             .unwrap_or((0, 0));
+        let block_queue_bytes = match block_queue {
+            Some(value) => value
+                .pages_per_queue()
+                .checked_mul(PAGE_SIZE)
+                .ok_or(KvmError::MemoryOverflow)?,
+            None => PAGE_SIZE,
+        };
+        let (block_request_base, block_completion_base) = block_queue
+            .map(|value| (value.request_base(), value.completion_base()))
+            .unwrap_or((0, 0));
         if smp {
             validate_ranges(&[
                 (layout.table_physical, table_bytes),
@@ -1059,26 +1105,47 @@ impl KvmSystem {
                 (trampoline, PAGE_SIZE),
             ])?;
         } else {
-            let physical_ranges = [
+            let mut physical_ranges = [(0, 0); 9];
+            physical_ranges[..4].copy_from_slice(&[
                 (layout.table_physical, table_bytes),
                 (layout.image_physical, image_bytes),
                 (layout.handoff_physical, handoff_bytes),
                 (layout.stack_physical, stack_bytes),
-                (framebuffer.base().get(), framebuffer_bytes),
-                (command_base, queue_bytes),
-                (completion_base, queue_bytes),
-            ];
-            let physical_count =
-                4 + usize::from(map_framebuffer) + usize::from(queue.is_some()) * 2;
+            ]);
+            let mut physical_count = 4;
+            if map_framebuffer {
+                physical_ranges[physical_count] = (framebuffer.base().get(), framebuffer_bytes);
+                physical_count += 1;
+            }
+            if queue.is_some() {
+                physical_ranges[physical_count] = (command_base, queue_bytes);
+                physical_ranges[physical_count + 1] = (completion_base, queue_bytes);
+                physical_count += 2;
+            }
+            if block_queue.is_some() {
+                physical_ranges[physical_count] = (block_request_base, block_queue_bytes);
+                physical_ranges[physical_count + 1] = (block_completion_base, block_queue_bytes);
+                physical_count += 2;
+            }
             validate_ranges(&physical_ranges[..physical_count])?;
-            let virtual_ranges = [
+            let mut virtual_ranges = [(0, 0); 7];
+            virtual_ranges[..3].copy_from_slice(&[
                 (layout.image_virtual, image_bytes),
                 (layout.handoff_virtual, handoff_bytes),
                 (layout.stack_virtual, stack_bytes),
-                (command_base, queue_bytes),
-                (completion_base, queue_bytes),
-            ];
-            validate_ranges(&virtual_ranges[..3 + usize::from(queue.is_some()) * 2])?;
+            ]);
+            let mut virtual_count = 3;
+            if queue.is_some() {
+                virtual_ranges[virtual_count] = (command_base, queue_bytes);
+                virtual_ranges[virtual_count + 1] = (completion_base, queue_bytes);
+                virtual_count += 2;
+            }
+            if block_queue.is_some() {
+                virtual_ranges[virtual_count] = (block_request_base, block_queue_bytes);
+                virtual_ranges[virtual_count + 1] = (block_completion_base, block_queue_bytes);
+                virtual_count += 2;
+            }
+            validate_ranges(&virtual_ranges[..virtual_count])?;
         }
 
         let mut backend = if smp {
@@ -1101,6 +1168,11 @@ impl KvmSystem {
         if let Some(queue) = queue {
             let bytes = usize::try_from(queue_bytes).map_err(|_| KvmError::MemoryOverflow)?;
             backend.map_memory(queue.command_base(), bytes, false)?;
+            backend.map_memory(queue.completion_base(), bytes, true)?;
+        }
+        if let Some(queue) = block_queue {
+            let bytes = usize::try_from(block_queue_bytes).map_err(|_| KvmError::MemoryOverflow)?;
+            backend.map_memory(queue.request_base(), bytes, false)?;
             backend.map_memory(queue.completion_base(), bytes, true)?;
         }
         let loaded_image = backend.memory.load_verified_executable(
@@ -1263,6 +1335,34 @@ impl KvmSystem {
                         PhysAddr::new(queue.completion_base())
                             .map_err(|_| KvmError::InvalidMapping)?,
                         queue.pages_per_ring(),
+                        PagePermissions::KERNEL_SHARED_READ,
+                    )
+                    .map_err(|_| KvmError::InvalidMapping)?,
+                )
+                .map_err(|_| KvmError::PageTable)?;
+        }
+        if let Some(queue) = block_queue {
+            tables
+                .map(
+                    Mapping::new(
+                        VirtAddr::new(queue.request_base())
+                            .map_err(|_| KvmError::InvalidMapping)?,
+                        PhysAddr::new(queue.request_base())
+                            .map_err(|_| KvmError::InvalidMapping)?,
+                        queue.pages_per_queue(),
+                        PagePermissions::KERNEL_SHARED_READ_WRITE,
+                    )
+                    .map_err(|_| KvmError::InvalidMapping)?,
+                )
+                .map_err(|_| KvmError::PageTable)?;
+            tables
+                .map(
+                    Mapping::new(
+                        VirtAddr::new(queue.completion_base())
+                            .map_err(|_| KvmError::InvalidMapping)?,
+                        PhysAddr::new(queue.completion_base())
+                            .map_err(|_| KvmError::InvalidMapping)?,
+                        queue.pages_per_queue(),
                         PagePermissions::KERNEL_SHARED_READ,
                     )
                     .map_err(|_| KvmError::InvalidMapping)?,
@@ -1697,13 +1797,46 @@ mod tests {
             false,
         )
         .unwrap();
-        let gpu = GpuSharedQueueLayout::new(0x50_0000, 0x50_2000, 64).unwrap();
         let layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 64).unwrap();
+        let overlapping = VirtualBlockQueueLayout::new(0x20_0000, 0x60_2000, 64).unwrap();
+        assert!(matches!(
+            system.prepare_kernel_block_guest::<9>(
+                0,
+                &executable,
+                &valid_handoff(),
+                launch,
+                overlapping,
+            ),
+            Err(KvmError::MemoryOverlap)
+        ));
+        assert!(matches!(
+            system.prepare_kernel_block_guest::<6>(
+                0,
+                &executable,
+                &valid_handoff(),
+                launch,
+                layout,
+            ),
+            Err(KvmError::MemoryTableFull)
+        ));
         let mut guest = system
-            .prepare_kernel_gpu_guest::<9>(0, &executable, &valid_handoff(), launch, gpu)
-            .unwrap()
-            .attach_virtual_block_queue_memory(layout)
+            .prepare_kernel_block_guest::<9>(0, &executable, &valid_handoff(), launch, layout)
             .unwrap();
+
+        let request_walk = guest.page_walk(layout.request_base()).unwrap();
+        assert_eq!(
+            request_walk.physical_address(layout.request_base()),
+            Some(layout.request_base())
+        );
+        assert_ne!(request_walk.entries()[3] & (1 << 1), 0);
+        assert_ne!(request_walk.entries()[3] & (1 << 63), 0);
+        let completion_walk = guest.page_walk(layout.completion_base()).unwrap();
+        assert_eq!(
+            completion_walk.physical_address(layout.completion_base()),
+            Some(layout.completion_base())
+        );
+        assert_eq!(completion_walk.entries()[3] & (1 << 1), 0);
+        assert_ne!(completion_walk.entries()[3] & (1 << 63), 0);
 
         let payload_address = 0x40_0000;
         VmBackend::write_guest(&mut guest, payload_address, &[0x6d; 4096]).unwrap();

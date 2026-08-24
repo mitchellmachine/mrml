@@ -22,6 +22,7 @@ struct KernelDevices {
     framebuffer: bool,
     local_apic: bool,
     gpu_queue: Option<GpuSharedQueueLayout>,
+    block_queue: Option<VirtualBlockQueueLayout>,
     intercept_breakpoint: bool,
     cpus: u8,
 }
@@ -984,6 +985,7 @@ impl WhpSystem {
                 framebuffer: false,
                 local_apic: false,
                 gpu_queue: None,
+                block_queue: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1006,6 +1008,7 @@ impl WhpSystem {
                 framebuffer: false,
                 local_apic: false,
                 gpu_queue: None,
+                block_queue: None,
                 intercept_breakpoint: false,
                 cpus: 1,
             },
@@ -1027,6 +1030,7 @@ impl WhpSystem {
                 framebuffer: true,
                 local_apic: true,
                 gpu_queue: None,
+                block_queue: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1048,6 +1052,7 @@ impl WhpSystem {
                 framebuffer: true,
                 local_apic: true,
                 gpu_queue: None,
+                block_queue: None,
                 intercept_breakpoint: false,
                 cpus: 1,
             },
@@ -1072,6 +1077,7 @@ impl WhpSystem {
                 framebuffer: false,
                 local_apic: false,
                 gpu_queue: Some(queue),
+                block_queue: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1095,6 +1101,32 @@ impl WhpSystem {
                 framebuffer: true,
                 local_apic: false,
                 gpu_queue: Some(queue),
+                block_queue: None,
+                intercept_breakpoint: true,
+                cpus: 1,
+            },
+        )
+    }
+
+    /// Prepares a kernel guest with one MRML-specific virtual-block queue in
+    /// its initial address space. Request pages are writable/NX and completion
+    /// pages are read-only/NX to the guest while retaining device-path writes.
+    pub fn prepare_kernel_block_guest<'system>(
+        &'system self,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: WhpLaunchLayout,
+        queue: VirtualBlockQueueLayout,
+    ) -> Result<PreparedWhpGuest<'system>, WhpError> {
+        self.prepare_guest_inner(
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: false,
+                gpu_queue: None,
+                block_queue: Some(queue),
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1118,6 +1150,7 @@ impl WhpSystem {
                 framebuffer: true,
                 local_apic: true,
                 gpu_queue: None,
+                block_queue: None,
                 intercept_breakpoint: true,
                 cpus: 2,
             },
@@ -1133,6 +1166,7 @@ impl WhpSystem {
     ) -> Result<PreparedWhpGuest<'system>, WhpError> {
         let map_framebuffer = devices.framebuffer;
         let queue = devices.gpu_queue;
+        let block_queue = devices.block_queue;
         let smp = devices.cpus == 2;
         if !matches!(devices.cpus, 1 | 2) {
             return Err(WhpError::InvalidVcpu);
@@ -1188,7 +1222,17 @@ impl WhpSystem {
         let (command_base, completion_base) = queue
             .map(|value| (value.command_base(), value.completion_base()))
             .unwrap_or((0, 0));
-        let mut physical_ranges = [(0, 0); 8];
+        let block_queue_bytes = match block_queue {
+            Some(value) => value
+                .pages_per_queue()
+                .checked_mul(PAGE_SIZE)
+                .ok_or(WhpError::MemoryOverflow)?,
+            None => PAGE_SIZE,
+        };
+        let (block_request_base, block_completion_base) = block_queue
+            .map(|value| (value.request_base(), value.completion_base()))
+            .unwrap_or((0, 0));
+        let mut physical_ranges = [(0, 0); 10];
         physical_ranges[..4].copy_from_slice(&[
             (layout.table_physical, table_bytes),
             (layout.image_physical, image_bytes),
@@ -1205,12 +1249,17 @@ impl WhpSystem {
             physical_ranges[physical_count + 1] = (completion_base, queue_bytes);
             physical_count += 2;
         }
+        if block_queue.is_some() {
+            physical_ranges[physical_count] = (block_request_base, block_queue_bytes);
+            physical_ranges[physical_count + 1] = (block_completion_base, block_queue_bytes);
+            physical_count += 2;
+        }
         if let Some(trampoline) = trampoline {
             physical_ranges[physical_count] = (trampoline, PAGE_SIZE);
             physical_count += 1;
         }
         validate_ranges(&physical_ranges[..physical_count])?;
-        let mut virtual_ranges = [(0, 0); 8];
+        let mut virtual_ranges = [(0, 0); 10];
         virtual_ranges[..4].copy_from_slice(&[
             (layout.table_physical, PAGE_SIZE),
             (layout.image_virtual, image_bytes),
@@ -1225,6 +1274,11 @@ impl WhpSystem {
         if queue.is_some() {
             virtual_ranges[virtual_count] = (command_base, queue_bytes);
             virtual_ranges[virtual_count + 1] = (completion_base, queue_bytes);
+            virtual_count += 2;
+        }
+        if block_queue.is_some() {
+            virtual_ranges[virtual_count] = (block_request_base, block_queue_bytes);
+            virtual_ranges[virtual_count + 1] = (block_completion_base, block_queue_bytes);
             virtual_count += 2;
         }
         if let Some(trampoline) = trampoline {
@@ -1259,6 +1313,18 @@ impl WhpSystem {
             partition.map_zeroed_service_readonly(range(
                 queue.completion_base(),
                 queue_bytes,
+                MapPermissions::read_only(),
+            )?)?;
+        }
+        if let Some(queue) = block_queue {
+            partition.map_zeroed(range(
+                queue.request_base(),
+                block_queue_bytes,
+                MapPermissions::read_write(),
+            )?)?;
+            partition.map_zeroed_service_readonly(range(
+                queue.completion_base(),
+                block_queue_bytes,
                 MapPermissions::read_only(),
             )?)?;
         }
@@ -1312,6 +1378,7 @@ impl WhpSystem {
                     .then_some((framebuffer.base().get(), framebuffer_bytes)),
                 local_apic: devices.local_apic,
                 queue,
+                block_queue,
                 cpus: devices.cpus,
                 trampoline,
                 service_shared: !devices.intercept_breakpoint && !devices.framebuffer,
@@ -1354,6 +1421,7 @@ struct PageTableLaunchContext {
     framebuffer: Option<(u64, u64)>,
     local_apic: bool,
     queue: Option<GpuSharedQueueLayout>,
+    block_queue: Option<VirtualBlockQueueLayout>,
     cpus: u8,
     trampoline: Option<u64>,
     service_shared: bool,
@@ -1370,6 +1438,7 @@ fn build_page_tables(
         framebuffer,
         local_apic,
         queue,
+        block_queue,
         cpus,
         trampoline,
         service_shared,
@@ -1544,6 +1613,30 @@ fn build_page_tables(
                     VirtAddr::new(queue.completion_base()).map_err(|_| WhpError::InvalidMapping)?,
                     PhysAddr::new(queue.completion_base()).map_err(|_| WhpError::InvalidMapping)?,
                     queue.pages_per_ring(),
+                    PagePermissions::KERNEL_SHARED_READ,
+                )
+                .map_err(|_| WhpError::InvalidMapping)?,
+            )
+            .map_err(|_| WhpError::PageTable)?;
+    }
+    if let Some(queue) = block_queue {
+        tables
+            .map(
+                Mapping::new(
+                    VirtAddr::new(queue.request_base()).map_err(|_| WhpError::InvalidMapping)?,
+                    PhysAddr::new(queue.request_base()).map_err(|_| WhpError::InvalidMapping)?,
+                    queue.pages_per_queue(),
+                    PagePermissions::KERNEL_SHARED_READ_WRITE,
+                )
+                .map_err(|_| WhpError::InvalidMapping)?,
+            )
+            .map_err(|_| WhpError::PageTable)?;
+        tables
+            .map(
+                Mapping::new(
+                    VirtAddr::new(queue.completion_base()).map_err(|_| WhpError::InvalidMapping)?,
+                    PhysAddr::new(queue.completion_base()).map_err(|_| WhpError::InvalidMapping)?,
+                    queue.pages_per_queue(),
                     PagePermissions::KERNEL_SHARED_READ,
                 )
                 .map_err(|_| WhpError::InvalidMapping)?,
@@ -2174,13 +2267,30 @@ mod tests {
             true,
         )
         .unwrap();
-        let gpu = GpuSharedQueueLayout::new(0x50_0000, 0x50_2000, 64).unwrap();
         let layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 64).unwrap();
+        let overlapping = VirtualBlockQueueLayout::new(0x20_0000, 0x60_2000, 64).unwrap();
+        assert!(matches!(
+            system.prepare_kernel_block_guest(&executable, &valid_handoff(), launch, overlapping,),
+            Err(WhpError::MemoryOverlap)
+        ));
         let mut guest = system
-            .prepare_gpu_guest(&executable, &valid_handoff(), launch, gpu)
-            .unwrap()
-            .attach_virtual_block_queue_memory(layout)
+            .prepare_kernel_block_guest(&executable, &valid_handoff(), launch, layout)
             .unwrap();
+
+        let request_walk = guest.page_walk(layout.request_base()).unwrap();
+        assert_eq!(
+            request_walk.physical_address(layout.request_base()),
+            Some(layout.request_base())
+        );
+        assert_ne!(request_walk.entries()[3] & (1 << 1), 0);
+        assert_ne!(request_walk.entries()[3] & (1 << 63), 0);
+        let completion_walk = guest.page_walk(layout.completion_base()).unwrap();
+        assert_eq!(
+            completion_walk.physical_address(layout.completion_base()),
+            Some(layout.completion_base())
+        );
+        assert_eq!(completion_walk.entries()[3] & (1 << 1), 0);
+        assert_ne!(completion_walk.entries()[3] & (1 << 63), 0);
 
         let payload_address = 0x40_0000;
         VmBackend::write_guest(&mut guest, payload_address, &[0x6d; 4096]).unwrap();
