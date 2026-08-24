@@ -87,6 +87,8 @@ use mrml_kernel::arch::x86_64::{
     ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
     PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
 };
+#[cfg(feature = "block-guest-driver-probe")]
+use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::arch::x86_64::{PreallocatedPageTableStore, ServiceAddressSpace};
 #[cfg(feature = "uefi-service-preemption-probe")]
@@ -135,6 +137,8 @@ use mrml_kernel::{
     feature = "smp-ipi-probe"
 ))]
 use mrml_kernel::{Priority, ScheduleOutcome};
+#[cfg(feature = "block-guest-driver-probe")]
+use mrml_kernel::{VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGuestDriver};
 
 #[cfg(feature = "gpu-benchmark")]
 const GPU_COMMAND_BASE: usize = 0x00b0_0000;
@@ -144,6 +148,14 @@ const GPU_COMPLETION_BASE: usize = 0x00b0_1000;
 const GPU_BENCHMARK_ELEMENTS: u32 = 1 << 22;
 #[cfg(feature = "gpu-benchmark")]
 const GPU_BENCHMARK_ITERATIONS: u32 = 1_000;
+#[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
+#[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_PAYLOAD_BASE: u64 = 0x00a0_0000;
+#[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_PROOF_PORT: u16 = 0x4d65;
+#[cfg(feature = "block-guest-driver-probe")]
+const BLOCK_VECTOR: u8 = 48;
 #[cfg(feature = "fault-probe")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
 #[cfg(any(
@@ -553,6 +565,10 @@ mrml_reschedule_interrupt:
     call mrml_reschedule_dispatch
     ud2
 
+    .global mrml_block_interrupt
+mrml_block_interrupt:
+    iretq
+
     .global mrml_user_probe
 mrml_user_probe:
     int 0x80
@@ -644,6 +660,8 @@ unsafe extern "C" {
     fn mrml_timer_interrupt() -> !;
     #[cfg(feature = "smp-ipi-probe")]
     fn mrml_reschedule_interrupt() -> !;
+    #[cfg(feature = "block-guest-driver-probe")]
+    fn mrml_block_interrupt() -> !;
     #[cfg(feature = "preemption-probe")]
     fn mrml_preemption_spin() -> !;
     #[cfg(feature = "preemption-probe")]
@@ -2247,6 +2265,93 @@ fn smp_trace(stage: u8) {
 #[cfg(all(not(feature = "fault-probe"), not(feature = "ap-startup-trace")))]
 const fn smp_trace(_: u8) {}
 
+#[cfg(feature = "block-guest-driver-probe")]
+unsafe fn run_block_guest_driver_probe() -> ! {
+    let mut configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+    for (offset, byte) in configuration.iter_mut().enumerate() {
+        // SAFETY: the dedicated launch path maps this exact signed-device
+        // configuration page read-only and keeps it live for the VM lifetime.
+        *byte = unsafe { ((BLOCK_CONFIGURATION_BASE as *const u8).add(offset)).read_volatile() };
+    }
+    let decoded =
+        mrml_kernel::VirtualBlockConfiguration::decode(&configuration).unwrap_or_else(|_| halt());
+    let queue = decoded.queue();
+    let request_published = unsafe { (queue.request_base() as *const u64).read_volatile() };
+    let request_consumed = unsafe { ((queue.request_base() + 64) as *const u64).read_volatile() };
+    let completion_published = unsafe { (queue.completion_base() as *const u64).read_volatile() };
+    let completion_consumed =
+        unsafe { ((queue.completion_base() + 64) as *const u64).read_volatile() };
+    let mut driver = VirtualBlockGuestDriver::discover(
+        &configuration,
+        request_published,
+        request_consumed,
+        completion_published,
+        completion_consumed,
+    )
+    .unwrap_or_else(|_| halt());
+    // SAFETY: the launch builder identity-maps the exact configured request
+    // and completion pages with their required directionality.
+    let mut transport =
+        unsafe { X86VirtualBlockGuestQueueTransport::new(NativeX86VirtualBlockPortIo) };
+
+    for offset in 0..4096usize {
+        unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0x6d) };
+    }
+    unsafe { asm!("sti", options(nomem, nostack)) };
+    let write = driver
+        .prepare_write(0, 1, BLOCK_PAYLOAD_BASE, 4096)
+        .unwrap_or_else(|_| halt());
+    driver
+        .publish_submission(&mut transport, write)
+        .unwrap_or_else(|_| halt());
+    let write_completion = driver
+        .prepare_completion_from_transport(&mut transport)
+        .unwrap_or_else(|_| halt());
+    if write_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+        || write_completion.transferred() != 4096
+    {
+        halt();
+    }
+    driver
+        .acknowledge_completion_with_transport(&mut transport, write_completion)
+        .unwrap_or_else(|_| halt());
+
+    for offset in 0..4096usize {
+        unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0) };
+    }
+    let read = driver
+        .prepare_read(0, 1, BLOCK_PAYLOAD_BASE, 4096)
+        .unwrap_or_else(|_| halt());
+    driver
+        .publish_submission(&mut transport, read)
+        .unwrap_or_else(|_| halt());
+    let read_completion = driver
+        .prepare_completion_from_transport(&mut transport)
+        .unwrap_or_else(|_| halt());
+    if read_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+        || read_completion.transferred() != 4096
+    {
+        halt();
+    }
+    driver
+        .acknowledge_completion_with_transport(&mut transport, read_completion)
+        .unwrap_or_else(|_| halt());
+    for offset in 0..4096usize {
+        if unsafe { ((BLOCK_PAYLOAD_BASE as *const u8).add(offset)).read_volatile() } != 0x6d {
+            halt();
+        }
+    }
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") BLOCK_PROOF_PORT,
+            in("eax") 2u32,
+            options(nomem, nostack)
+        )
+    };
+    halt()
+}
+
 #[cfg(not(feature = "fault-probe"))]
 #[allow(unreachable_code)]
 unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
@@ -2282,6 +2387,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     smp_trace(0x02);
     if region_count != handoff.region_count() {
         halt();
+    }
+    #[cfg(feature = "block-guest-driver-probe")]
+    unsafe {
+        run_block_guest_driver_probe()
     }
     #[cfg(feature = "vmx-root-probe")]
     if unsafe { vmx_probe::run() }.is_err() {
@@ -3668,6 +3777,17 @@ unsafe fn install_descriptor_state(
         state.install_external(
             RESCHEDULE_VECTOR,
             mrml_reschedule_interrupt as *const () as usize as u64,
+        )
+    }
+    .is_err()
+    {
+        halt();
+    }
+    #[cfg(feature = "block-guest-driver-probe")]
+    if unsafe {
+        state.install_external(
+            BLOCK_VECTOR,
+            mrml_block_interrupt as *const () as usize as u64,
         )
     }
     .is_err()

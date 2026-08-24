@@ -3596,11 +3596,43 @@ transport-failure nonmutation, no-transport stale-ticket rejection, slot
 progression, geometry/buffer
 arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
 and permanently terminal removal/exhaustion. This is
-unit/simulation evidence only. The native transport test executes volatile
-memory access and a controlled port model, not the privileged `OUT` instruction.
-The signed KVM/WHP producer still uses its
-bounded fixed mechanics; mapped-image use of the common state, nonzero resume,
-unbounded progress, PCI, native boot, and physical hardware remain unverified.
+unit/simulation evidence for the broad adversarial matrix. A freshly generated
+one-time Lamport key additionally signed the exact compiled
+`block-guest-driver-probe` image. On Arch Linux/WSL2 KVM that image decoded the
+read-only configuration page, discovered the common driver from four zero
+counters, executed the concrete native `OUT` transport, completed one exact 4
+KiB write and read through the shared fail-closed host runners, received vector
+48 only through the exact `SIGNAL` capability and allowlist, published both
+protected acknowledgements, and proved the complete read-back page. The
+one-page backend was volatile and launcher-local. Verification reported
+`verify=16896us prepare=2391us execute=347us total=41039us`; timings are this
+controlled run only, not a performance claim. WHP signed-image use, nonzero
+resume, unbounded progress, persistence/durability, PCI, native boot, and
+physical hardware remain unverified.
+
+This live probe also exposed a descriptor-transition defect before the first
+returning interrupt: loading the private GDT replaced the launcher's selectors
+with the TSS while leaving cached CS/SS unchanged. Table installation now
+validates both the pre-accessed ring-zero long-code descriptor and its adjacent
+pre-accessed writable ring-zero data descriptor, then reloads CS, DS, ES, and SS
+after `LGDT`/`LIDT`. Invalid selector state is rejected before privileged table
+mutation. The clean signed probe completed only after that general fix; the
+interrupt handler contains no probe-specific selector substitution.
+
+The integration `DIGITAL-RIGHTS REVIEW` found no owner-identity binding,
+collection, retention, correlation, disclosure, attestation mandate, DRM,
+vendor preference, accessibility restriction, persistence, or third-party
+authority. The fixed payload and volatile backend are discarded with the
+launcher. The `HOSTILE SECURITY REVIEW` treats the signed image and handoff,
+configuration bytes, mappings, queue counters and records, payload addresses
+and lengths, I/O exits, backend result, interrupt vector and capability,
+acknowledgements, and descriptor state as hostile. Admission remains signed and
+rollback-checked; data never grants authority; every scalar tuple and protected
+counter is revalidated; malformed exits or uncertain mutation fail the VM; and
+the driver retires no request before exact protected acknowledgement. Existing
+capability, revocation, rollback-resistance, accessibility, and evidence gates
+are unchanged. This agent review does not replace the required independent
+human dual review.
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,

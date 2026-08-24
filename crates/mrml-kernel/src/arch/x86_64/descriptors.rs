@@ -431,24 +431,16 @@ pub unsafe fn install_fail_stop_tables(
     }
     let gate = InterruptGate::fail_stop(handler, selector)?;
     let descriptor = unsafe { gdt.add(usize::from(selector >> 3)).read() };
-    if !valid_long_mode_code_descriptor(descriptor) {
+    let data_descriptor = unsafe { gdt.add(usize::from((selector - 8) >> 3)).read() };
+    if !valid_long_mode_code_descriptor(descriptor)
+        || !valid_kernel_data_descriptor(data_descriptor)
+    {
         return Err(DescriptorError::InvalidSelectorDescriptor);
     }
     for index in 0..idt_entries {
         unsafe { idt.add(index).write(gate) };
     }
-    let gdtr = DescriptorPointer {
-        limit: (gdt_bytes - 1) as u16,
-        base: gdt as u64,
-    };
-    let idtr = DescriptorPointer {
-        limit: (idt_bytes - 1) as u16,
-        base: idt as u64,
-    };
-    unsafe {
-        asm!("lgdt [{}]", in(reg) &gdtr, options(readonly, nostack, preserves_flags));
-        asm!("lidt [{}]", in(reg) &idtr, options(readonly, nostack, preserves_flags));
-    }
+    unsafe { load_tables(gdt, gdt_entries, idt, idt_entries, selector) };
     Ok(())
 }
 
@@ -484,7 +476,7 @@ pub unsafe fn install_exception_tables(
     for vector in 32..idt_entries {
         unsafe { idt.add(vector).write(fallback) };
     }
-    unsafe { load_tables(gdt, gdt_entries, idt, idt_entries) };
+    unsafe { load_tables(gdt, gdt_entries, idt, idt_entries, selector) };
     Ok(())
 }
 
@@ -510,6 +502,7 @@ fn validate_table_storage(
         || idt_bytes > usize::from(u16::MAX) + 1
         || selector == 0
         || selector & 7 != 0
+        || selector < 8
         || usize::from(selector >> 3) >= gdt_entries
         || !canonical(gdt as u64)
         || !canonical(idt as u64)
@@ -525,7 +518,10 @@ fn validate_table_storage(
         return Err(DescriptorError::InvalidTableSize);
     }
     let descriptor = unsafe { gdt.add(usize::from(selector >> 3)).read() };
-    if !valid_long_mode_code_descriptor(descriptor) {
+    let data_descriptor = unsafe { gdt.add(usize::from((selector - 8) >> 3)).read() };
+    if !valid_long_mode_code_descriptor(descriptor)
+        || !valid_kernel_data_descriptor(data_descriptor)
+    {
         return Err(DescriptorError::InvalidSelectorDescriptor);
     }
     Ok(())
@@ -536,6 +532,7 @@ unsafe fn load_tables(
     gdt_entries: usize,
     idt: *const InterruptGate,
     idt_entries: usize,
+    code_selector: u16,
 ) {
     let gdtr = DescriptorPointer {
         limit: (gdt_entries * core::mem::size_of::<u64>() - 1) as u16,
@@ -548,6 +545,20 @@ unsafe fn load_tables(
     unsafe {
         asm!("lgdt [{}]", in(reg) &gdtr, options(readonly, nostack, preserves_flags));
         asm!("lidt [{}]", in(reg) &idtr, options(readonly, nostack, preserves_flags));
+        asm!(
+            "push {selector}",
+            "lea rax, [rip + 2f]",
+            "push rax",
+            "retfq",
+            "2:",
+            "mov ds, {data_selector:x}",
+            "mov es, {data_selector:x}",
+            "mov ss, {data_selector:x}",
+            selector = in(reg) u64::from(code_selector),
+            data_selector = in(reg) code_selector - 8,
+            out("rax") _,
+            options(preserves_flags)
+        );
     }
 }
 
@@ -567,6 +578,15 @@ const fn valid_long_mode_code_descriptor(descriptor: u64) -> bool {
         && descriptor & (3 << 45) == 0
         && descriptor & (1 << 53) != 0
         && descriptor & (1 << 54) == 0
+}
+
+const fn valid_kernel_data_descriptor(descriptor: u64) -> bool {
+    descriptor & (1 << 47) != 0
+        && descriptor & (1 << 44) != 0
+        && descriptor & (1 << 43) == 0
+        && descriptor & (1 << 41) != 0
+        && descriptor & (3 << 45) == 0
+        && descriptor & (1 << 40) != 0
 }
 
 #[cfg(test)]
@@ -683,11 +703,16 @@ mod tests {
         assert!(!valid_long_mode_code_descriptor(0x00af_9a00_0000_ffff));
         assert!(!valid_long_mode_code_descriptor(0x00af_9300_0000_ffff));
         assert!(!valid_long_mode_code_descriptor(0x00cf_9b00_0000_ffff));
+        assert!(valid_kernel_data_descriptor(0x00cf_9300_0000_ffff));
+        assert!(!valid_kernel_data_descriptor(0x00cf_9200_0000_ffff));
+        assert!(!valid_kernel_data_descriptor(0x00cf_9b00_0000_ffff));
+        assert!(!valid_kernel_data_descriptor(0x00cf_f300_0000_ffff));
     }
 
     #[test]
     fn exception_table_validation_is_transactional() {
         let mut gdt = [0u64; 8];
+        gdt[6] = 0x00cf_9300_0000_ffff;
         gdt[7] = 0x00af_9b00_0000_ffff;
         let mut idt = [InterruptGate::MISSING; 256];
         let mut handlers = [0xffff_8000_0000_1000; 32];

@@ -355,8 +355,11 @@ explicitly and downgrade the status rather than guessing.
   composes backend execution, exit accounting, common I/O dispatch, the exact
   doorbell, one queue transaction, and capability-authorized interruption;
   pending delivery precedes another vCPU entry and any stage error fails the VM.
-  No concrete hosted/physical backend, signed guest driver, or durability
-  evidence exists yet.
+  No production hosted/physical backend or durability evidence exists yet. A
+  freshly one-time-signed compiled KVM image now exercises the common guest
+  driver against a volatile one-page backend; this is controlled hosted
+  evidence, not recovery or persistence evidence, and WHP signed-image use
+  remains pending.
   Prepared KVM and WHP guests attach the same validated request and guest-read-
   only completion ranges transactionally; ordinary completion writes fail while
   the device-memory path can publish. Dedicated initial-launch builders also

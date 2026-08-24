@@ -638,8 +638,8 @@ one-exit runner now composes native backend execution, exit-budget accounting,
 the common deny-by-default I/O dispatcher, exact doorbell validation, one queue
 transaction, and capability-authorized completion interruption. A notification
 already pending is delivered before another vCPU entry, and any runner-stage
-error fails the VM. It has no concrete hosted or physical block backend, PCI
-transport, or guest driver yet. Controlled signed KVM and WHP probes now emit
+error fails the VM. It has no production hosted or physical block backend or
+PCI transport. Controlled signed KVM and WHP probes now emit
 the exact native doorbell into this runner. The bounded probe first produces a
 canonical 4 KiB write, validates and acknowledges its completion, then reuses
 the single queue slot for a canonical read of the same block. Each request is
@@ -697,7 +697,10 @@ rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal
 state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
 queue resume, mapped signed-guest consumption of this state, unbounded progress,
-and PCI discovery remain pending.
+and PCI discovery remain pending. A freshly one-time-signed compiled KVM image
+now discovers this common state from the mapped configuration page and uses it
+for one exact write/read cycle over a volatile one-page backend. WHP signed-image
+use remains pending.
 A backend-neutral unsafe guest queue-transport contract now composes those
 transactions with canonical queue addresses and exact configured I/O tuples.
 Request publication copies the exact slot, release-publishes its producer, and
@@ -714,7 +717,10 @@ volatile counter access, release/acquire fencing, exact 32-bit port output, and
 fail-stop verification that protected acknowledgement is visible before local
 retirement. Its unsafe constructor requires live identity mappings and the same
 configured device. The controlled port model is unit/simulation evidence; the
-native `OUT` path and signed-guest integration remain unexecuted.
+native `OUT` path is now live-executed by a freshly one-time-signed compiled KVM
+image through the shared fail-closed dispatcher and exact `SIGNAL`-capability
+interrupt. This is KVM controlled-probe evidence only; WHP, native boot,
+durability, PCI, and physical hardware remain unverified.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

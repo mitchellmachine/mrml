@@ -8,10 +8,16 @@ use mrml_error::{Result, anyhow};
 use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
 #[cfg(target_os = "linux")]
 use mrml_kernel::{
-    ArtifactKind, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity,
-    GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
-    GpuVmmQueueBridge, ResourceCommand, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VmBackend, VmExit, verify_gpu_kernel_bundle,
+    ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
+    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
+    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
+    IoDirection, IoPortPolicy, IoPortRule, ObjectId, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+    VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
+    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout, VmBackend,
+    VmExit, VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
+    verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -19,7 +25,7 @@ use mrml_kernel::{
     encode_handoff_with_smp,
 };
 #[cfg(target_os = "linux")]
-use mrml_kvm::{KvmLaunchLayout, KvmSystem};
+use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
 use mrml_runtime::Instant;
 #[cfg(target_os = "linux")]
@@ -80,6 +86,8 @@ const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
 const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
 #[cfg(target_os = "linux")]
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
+#[cfg(target_os = "linux")]
+const BLOCK_PROOF_PORT: u16 = 0x4d65;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -91,6 +99,7 @@ enum LaunchMode {
     UserProbe,
     ServiceProbe,
     BlockServiceProbe,
+    BlockGuestDriverProbe,
     ServiceRestartRequestProbe,
     ServicePreemptionProbe,
     GpuBenchmark,
@@ -112,6 +121,7 @@ impl LaunchMode {
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
             "block-service-probe" => Ok(Self::BlockServiceProbe),
+            "block-guest-driver-probe" => Ok(Self::BlockGuestDriverProbe),
             "service-restart-request-probe" => Ok(Self::ServiceRestartRequestProbe),
             "service-preemption-probe" => Ok(Self::ServicePreemptionProbe),
             "gpu-benchmark" => Ok(Self::GpuBenchmark),
@@ -121,10 +131,206 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, block-service-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, block-service-probe, block-guest-driver-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+struct DriverProbeBlock([u8; 4096]);
+
+#[cfg(target_os = "linux")]
+unsafe impl VirtualBlockBackend for DriverProbeBlock {
+    type Error = ();
+
+    fn read_blocks(
+        &mut self,
+        block: u64,
+        output: &mut [u8],
+    ) -> core::result::Result<(), Self::Error> {
+        if block != 0 || output.len() != self.0.len() {
+            return Err(());
+        }
+        output.copy_from_slice(&self.0);
+        Ok(())
+    }
+
+    fn write_blocks(
+        &mut self,
+        block: u64,
+        input: &[u8],
+    ) -> core::result::Result<(), VirtualBlockMutationError<Self::Error>> {
+        if block != 0 || input.len() != self.0.len() {
+            return Err(VirtualBlockMutationError::Rejected(()));
+        }
+        self.0.copy_from_slice(input);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> core::result::Result<(), VirtualBlockMutationError<Self::Error>> {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn block_configuration(
+    layout: VirtualBlockQueueLayout,
+) -> Result<mrml_kernel::VirtualBlockConfiguration> {
+    let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0)
+        .map_err(|_| anyhow!("invalid block probe geometry"))?;
+    device
+        .negotiate(0)
+        .and_then(|_| device.activate(layout, 48))
+        .map_err(|_| anyhow!("invalid block probe configuration"))?;
+    device
+        .configuration()
+        .map_err(|_| anyhow!("block probe configuration is unavailable"))
+}
+
+#[cfg(target_os = "linux")]
+fn run_block_guest_driver_probe(
+    guest: &mut PreparedKvmGuest<16>,
+    layout: VirtualBlockQueueLayout,
+) -> Result<()> {
+    let interrupt_object = ObjectId(0x301);
+    let mut capabilities = CapabilitySpace::<1>::new();
+    let interrupt_capability = capabilities
+        .insert(interrupt_object, Rights::SIGNAL)
+        .map_err(|_| anyhow!("failed to create block interrupt capability"))?;
+    let mut interrupt_policy = InterruptPolicy::deny_all();
+    interrupt_policy
+        .allow(48)
+        .map_err(|_| anyhow!("failed to allow block interrupt vector"))?;
+    let mut io_policy = IoPortPolicy::<2>::deny_all();
+    io_policy
+        .allow(
+            IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write)
+                .map_err(|_| anyhow!("invalid block doorbell policy"))?,
+        )
+        .and_then(|()| {
+            IoPortRule::new(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, IoDirection::Write)
+                .and_then(|rule| io_policy.allow(rule))
+        })
+        .map_err(|_| anyhow!("failed to install block I/O policy"))?;
+    let mut vms = VmTable::<1>::new();
+    let vm = vms
+        .create(8)
+        .map_err(|_| anyhow!("failed to create block VM state"))?;
+    vms.mark_loaded(vm)
+        .and_then(|()| vms.start(vm))
+        .map_err(|_| anyhow!("failed to start block VM policy state"))?;
+    let mut router = HypercallRouter::new(ObjectId(0x302), ObjectId(0x303), ObjectId(0x304));
+    let guest_memory = GuestMemory::<0>::new();
+    let mut device =
+        VirtualBlockDevice::<1>::new(4096, 1, 0).map_err(|_| anyhow!("invalid block device"))?;
+    device
+        .negotiate(0)
+        .and_then(|_| device.activate(layout, 48))
+        .map_err(|_| anyhow!("failed to activate block device"))?;
+    let mut bridge = VirtualBlockQueueBridge::<1>::new(layout)
+        .map_err(|_| anyhow!("failed to bind block queue bridge"))?;
+    let mut storage = DriverProbeBlock([0; 4096]);
+    let mut scratch = [0; 4096];
+
+    for operation in 0..2 {
+        let outcome = match run_virtual_block_doorbell_once(
+            guest,
+            &mut storage,
+            0,
+            &mut vms,
+            vm,
+            &mut router,
+            &capabilities,
+            &guest_memory,
+            &io_policy,
+            &interrupt_policy,
+            interrupt_capability,
+            interrupt_object,
+            &mut device,
+            &mut bridge,
+            &mut scratch,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let state = guest.snapshot().map_err(|snapshot| {
+                    anyhow!(
+                        "block doorbell {} failed: {:?}; snapshot failed: {:?}",
+                        operation + 1,
+                        error,
+                        snapshot
+                    )
+                })?;
+                return Err(anyhow!(
+                    "block doorbell {} failed: {:?}; rip={:#x} rsp={:#x} cr2={:#x} cr3={:#x}",
+                    operation + 1,
+                    error,
+                    state.instruction_pointer(),
+                    state.stack_pointer(),
+                    state.fault_address(),
+                    state.page_table_root()
+                ));
+            }
+        };
+        if !matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
+            return Err(anyhow!(
+                "block operation {} was not completed",
+                operation + 1
+            ));
+        }
+        let acknowledgement = match run_virtual_block_completion_ack_once(
+            guest,
+            0,
+            &mut vms,
+            vm,
+            &mut router,
+            &capabilities,
+            &guest_memory,
+            &io_policy,
+            &mut device,
+            &mut bridge,
+        ) {
+            Ok(acknowledgement) => acknowledgement,
+            Err(error) => {
+                let state = guest.snapshot().map_err(|snapshot| {
+                    anyhow!(
+                        "block acknowledgement {} failed: {:?}; snapshot failed: {:?}",
+                        operation + 1,
+                        error,
+                        snapshot
+                    )
+                })?;
+                return Err(anyhow!(
+                    "block acknowledgement {} failed: {:?}; rip={:#x} rsp={:#x} cr2={:#x} cr3={:#x}",
+                    operation + 1,
+                    error,
+                    state.instruction_pointer(),
+                    state.stack_pointer(),
+                    state.fault_address(),
+                    state.page_table_root()
+                ));
+            }
+        };
+        if acknowledgement != (operation + 1) as u64 {
+            return Err(anyhow!("block acknowledgement position mismatch"));
+        }
+    }
+    if storage.0 != [0x6d; 4096] {
+        return Err(anyhow!("block backend payload mismatch"));
+    }
+    let proof = VmBackend::run(guest, 0)
+        .map_err(|error| anyhow!("block proof execution failed: {:?}", error))?;
+    if proof
+        != (VmExit::Io {
+            port: BLOCK_PROOF_PORT,
+            size: 4,
+            write: true,
+            value: 2,
+        })
+    {
+        return Err(anyhow!("block common-driver proof mismatch: {:?}", proof));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -299,6 +505,9 @@ fn application_main() -> Result<()> {
     let preparation_started = Instant::now();
     let queue_layout = GpuSharedQueueLayout::new(0x00b0_0000, 0x00b0_1000, 1)
         .map_err(|_| anyhow!("invalid fixed GPU queue layout"))?;
+    let block_layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 1)
+        .map_err(|_| anyhow!("invalid fixed block queue layout"))?;
+    let block_configuration = block_configuration(block_layout)?;
     let mut guest = match mode {
         LaunchMode::GpuBenchmark => system.prepare_kernel_gpu_guest::<16>(
             0,
@@ -306,6 +515,15 @@ fn application_main() -> Result<()> {
             handoff.as_slice(),
             layout,
             queue_layout,
+        ),
+        LaunchMode::BlockGuestDriverProbe => system.prepare_kernel_block_guest::<16>(
+            0,
+            &executable,
+            handoff.as_slice(),
+            layout,
+            block_layout,
+            VirtualBlockConfigurationPage::new(0x0060_4000, block_configuration)
+                .map_err(|_| anyhow!("invalid block configuration page"))?,
         ),
         LaunchMode::TimerProbe
         | LaunchMode::PreemptionProbe
@@ -447,6 +665,17 @@ fn application_main() -> Result<()> {
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
+    if mode == LaunchMode::BlockGuestDriverProbe {
+        run_block_guest_driver_probe(&mut guest, block_layout)?;
+        println!(
+            "verified signed compiled common block guest driver under KVM: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
+    }
     let mut exit = if smp_mode {
         let (bootstrap, application) = guest
             .run_smp()
