@@ -9,10 +9,10 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a94c7d3`
-  (`Preanalyze tuple producing call arguments`)
-- Remote state when recorded: the named compiler checkpoint is committed
-  locally on `main`; this recovery-document commit follows it.
+- Compiler checkpoint commit: `d237ee6`
+  (`compiler: mirror tuple field read schedules`)
+- Remote state when recorded: the named compiler checkpoint is pushed to
+  `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
   accesses`), `996ac72` (`Preanalyze runtime loop declarations`), `e393097`
   (`Preanalyze sequential runtime declarations`), `8b4a529`
@@ -99,15 +99,18 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   identifiers, contextual defaults, literals, repeats, integer-to-byte arrays,
   direct and wrapped array-producing calls, conditionals, transparent return/
   break/inline-const wrappers, and nested sequences, plus tuple-producing calls
-  and their supported whole-value wrappers,
+  and bounded tuple value/field planners that mirror whole-value condition,
+  sequence, inline-const, literal, identifier, and call lowering as well as
+  per-field return, loop-break, ascription, and nested-sequence lowering,
   with one `Index` read per identifier-array element and numbered `TupleField`
   reads for identifier tuples, and with a sequence-array prefix repeated before
   every materialized element and nested branch prefix, exact `Index` reads
   retained for identifier tails, no invented element-place reads for contextual
   defaults, direct root repeats kept on their single-evaluation path, and scalar
   integer bases repeated once per emitted byte, direct array calls planned once,
-  wrapped array calls planned once per materialized element, and direct or
-  wrapped tuple calls planned once per whole tuple;
+  wrapped array calls planned once per materialized element, direct or
+  whole-value-wrapped tuple calls planned once per tuple, and tuple calls below
+  a per-field wrapper planned once per materialized field;
   and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
@@ -167,8 +170,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 624 tests on each host: 342
-library tests, 10 conformance tests, 270 replacement tests, and 2 driver tests.
+The checkpoint source passed 626 tests on each host: 343
+library tests, 10 conformance tests, 271 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
@@ -179,8 +182,8 @@ cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driv
 
 ```sh
 cd /mnt/c/Users/Mitch/Documents/mrml
-cargo +nightly-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --release --offline
-cargo +nightly-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --release --all-targets --no-deps --offline -- -D warnings
+cargo +nightly-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --offline
+cargo +nightly-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --all-targets --no-deps --offline -- -D warnings
 ```
 
 The hygiene scan must remain empty:
