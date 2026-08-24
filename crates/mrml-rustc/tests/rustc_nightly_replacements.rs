@@ -4394,6 +4394,33 @@ fn rustc_direct_loop_return_call_results_retain_argument_origins_like_the_oracle
 }
 
 #[test]
+fn rustc_conditional_loop_block_call_results_retain_argument_origins_like_the_oracle() {
+    let rejected = [
+        "fn loop_branch(value: &mut u16, first: bool) -> &mut u16 { loop { if first { return value; } else { return value; } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = loop_branch(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+        "fn loop_branch(value: &mut u16, first: bool) -> &mut u16 { loop { if first { return value; } else { return value; } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = loop_branch(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "fn loop_branch(value: &mut u16, first: bool) -> &mut u16 { loop { if first { return value; } else { return value; } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = loop_branch(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+        "fn loop_branch(value: &mut u16, first: bool) -> &mut u16 { loop { if first { return value; } else { return value; } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = loop_branch(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_single_block_identity_calls_reject_competing_reborrows_and_accept_writes() {
     let rejected = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let first: &mut u16 = identity(input); let second: &mut u16 = identity(input); *first + *second }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
