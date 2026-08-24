@@ -687,8 +687,11 @@ derives slots and request geometry from the configuration, prepares requests
 without mutation, commits only the exact fresh publication ticket, permits one
 configured-capacity window of in-flight requests, and accepts completions only
 in protected consumer order when counter, slot, generation, request ID, status,
-and transferred length match. Capacity exhaustion rejects before mutation and
-slot reuse follows exact retirement. Reset/removal completions and
+and transferred length match. Completion preparation is non-mutating; the
+caller can publish the exact protected acknowledgement before committing the
+fresh completion ticket. Stale ticket replay cannot retire another slot.
+Capacity exhaustion rejects before mutation and slot reuse follows exact
+retirement. Reset/removal completions and
 request-ID exhaustion record an explicit terminal cause. Only reset may recover:
 rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal

@@ -702,8 +702,11 @@ record cannot reconstruct prior request-ID history safely. Request preparation
 is non-mutating, exact publication tickets fill at most the configured queue
 capacity, and completion acceptance binds the next published counter and slot,
 generation, request ID, status, and expected byte count before returning an
-acknowledgement. Slots cannot be reused before exact in-order retirement, and
-reset/removal invalidates every outstanding descendant. Geometry, buffer
+acknowledgement. Completion preparation changes no state, allowing the exact
+protected acknowledgement to be published before a fresh ticket commits
+retirement. Stale ticket replay cannot free capacity. Slots cannot be reused
+before exact in-order retirement, and reset/removal invalidates every
+outstanding descendant. Geometry, buffer
 arithmetic, flush features, replay, stale tickets, terminal reset/removal, and
 exhaustion fail closed. Reset rediscovery now records the exact terminal cause,
 accepts only a canonical exact-successor generation with four zero queue

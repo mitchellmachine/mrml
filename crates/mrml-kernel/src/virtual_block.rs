@@ -543,6 +543,30 @@ pub struct VirtualBlockGuestCompletion {
     acknowledgement: u64,
 }
 
+/// A non-mutating proof that one exact completion may be acknowledged. The
+/// protected acknowledgement must be published before this ticket is committed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockGuestCompletionTicket {
+    completion: VirtualBlockCompletion,
+    published: u64,
+    pending: VirtualBlockGuestSubmission,
+    slot: u16,
+}
+
+impl VirtualBlockGuestCompletionTicket {
+    pub const fn status(self) -> VirtualBlockCompletionStatus {
+        self.completion.status()
+    }
+
+    pub const fn transferred(self) -> u32 {
+        self.completion.transferred()
+    }
+
+    pub const fn acknowledgement(self) -> u64 {
+        self.published
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VirtualBlockGuestTerminalReason {
     Reset,
@@ -760,6 +784,43 @@ impl VirtualBlockGuestDriver {
         published: u64,
         encoded_completion: &[u8],
     ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
+        let ticket = self.prepare_completion(published, encoded_completion)?;
+        self.commit_completion(ticket)
+    }
+
+    pub fn prepare_completion(
+        &self,
+        published: u64,
+        encoded_completion: &[u8],
+    ) -> Result<VirtualBlockGuestCompletionTicket, VirtualBlockError> {
+        let completion = VirtualBlockCompletion::decode(encoded_completion)?;
+        let (slot, pending) = self.validate_completion(published, completion)?;
+        Ok(VirtualBlockGuestCompletionTicket {
+            completion,
+            published,
+            pending,
+            slot: slot as u16,
+        })
+    }
+
+    pub fn commit_completion(
+        &mut self,
+        ticket: VirtualBlockGuestCompletionTicket,
+    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
+        let (slot, pending) = self
+            .validate_completion(ticket.published, ticket.completion)
+            .map_err(|_| VirtualBlockError::StaleTicket)?;
+        if slot != usize::from(ticket.slot) || pending != ticket.pending {
+            return Err(VirtualBlockError::StaleTicket);
+        }
+        self.finish_completion(slot, ticket.published, ticket.completion)
+    }
+
+    fn validate_completion(
+        &self,
+        published: u64,
+        completion: VirtualBlockCompletion,
+    ) -> Result<(usize, VirtualBlockGuestSubmission), VirtualBlockError> {
         let expected_published = self
             .completion_consumer
             .checked_add(1)
@@ -767,7 +828,6 @@ impl VirtualBlockGuestDriver {
         let slot =
             (self.completion_consumer % u64::from(self.configuration.queue().slots())) as usize;
         let pending = self.pending[slot].ok_or(VirtualBlockError::InvalidState)?;
-        let completion = VirtualBlockCompletion::decode(encoded_completion)?;
         if published != expected_published
             || published > self.request_producer
             || completion.generation() != self.configuration.generation()
@@ -777,6 +837,15 @@ impl VirtualBlockGuestDriver {
         {
             return Err(VirtualBlockError::InvalidCompletion);
         }
+        Ok((slot, pending))
+    }
+
+    fn finish_completion(
+        &mut self,
+        slot: usize,
+        published: u64,
+        completion: VirtualBlockCompletion,
+    ) -> Result<VirtualBlockGuestCompletion, VirtualBlockError> {
         let pending_count = self
             .pending_count
             .checked_sub(1)
@@ -2492,11 +2561,22 @@ mod tests {
             driver.accept_completion(0, &completed),
             Err(VirtualBlockError::InvalidCompletion)
         );
-        let outcome = driver.accept_completion(1, &completed).unwrap();
+        let completion_ticket = driver.prepare_completion(1, &completed).unwrap();
+        assert_eq!(completion_ticket.status(), VirtualBlockCompletionStatus::Ok);
+        assert_eq!(completion_ticket.transferred(), 4096);
+        assert_eq!(completion_ticket.acknowledgement(), 1);
+        assert_eq!(driver.completion_consumer(), 0);
+        assert_eq!(driver.pending_count(), 2);
+        let outcome = driver.commit_completion(completion_ticket).unwrap();
         assert_eq!(outcome.status(), VirtualBlockCompletionStatus::Ok);
         assert_eq!(outcome.transferred(), 4096);
         assert_eq!(outcome.acknowledgement(), 1);
         assert!(driver.has_pending());
+        assert_eq!(driver.pending_count(), 1);
+        assert_eq!(
+            driver.commit_completion(completion_ticket),
+            Err(VirtualBlockError::StaleTicket)
+        );
         assert_eq!(driver.pending_count(), 1);
 
         let third = driver.prepare_read(0, 1, 0x80_0000, 4096).unwrap();
@@ -2520,7 +2600,10 @@ mod tests {
         driver.commit_submission(fifth).unwrap();
         assert_eq!(driver.pending_count(), 2);
         let reset = completion_bytes(1, 4, VirtualBlockCompletionStatus::Reset, 0);
-        driver.accept_completion(4, &reset).unwrap();
+        let reset_ticket = driver.prepare_completion(4, &reset).unwrap();
+        assert_eq!(driver.pending_count(), 2);
+        assert_eq!(driver.terminal_reason(), None);
+        driver.commit_completion(reset_ticket).unwrap();
         assert_eq!(
             driver.terminal_reason(),
             Some(VirtualBlockGuestTerminalReason::Reset)

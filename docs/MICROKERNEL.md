@@ -3551,8 +3551,11 @@ fresh ticket and fills at most the configured slot count. Completion acceptance
 retires only the next protected consumer slot and preserves pending state on
 every malformed, stale, misordered, wrong-generation,
 wrong-request, or wrong-length record, then advances its local acknowledgement
-position only after exact validation. Reset/removal and request-ID exhaustion
-record an explicit terminal cause. Only reset is recoverable: rediscovery
+position only after exact validation. It is now explicitly two-phase:
+preparation returns a copied completion ticket without mutation, the caller may
+publish the protected acknowledgement, and only the matching fresh ticket can
+commit retirement. Ticket replay cannot free a later slot. Reset/removal and
+request-ID exhaustion record an explicit terminal cause. Only reset is recoverable: rediscovery
 requires the canonical exact-successor generation and four zero queue counters.
 Every corrupt record, stale or skipped generation, nonzero counter, removal,
 and exhausted sequence rejects without changing the terminal state. Reset or
@@ -3566,7 +3569,8 @@ corrupt configuration and counter disagreement, non-mutating preparation,
 canonical request encoding, stale/replayed publication tickets, forged and
 misordered completions without state loss, exact capacity denial, multi-slot
 fill and ordered retirement, post-retirement slot reuse, descendant
-invalidation, the maximum 64-slot boundary, slot progression, geometry/buffer
+invalidation only on completion-ticket commit, completion-ticket replay, the
+maximum 64-slot boundary, slot progression, geometry/buffer
 arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
 and permanently terminal removal/exhaustion. This is
 unit/simulation evidence only. The signed KVM/WHP producer still uses its
@@ -3583,7 +3587,7 @@ does not grant device or backend authority, preparation cannot silently commit,
 invalid completion data cannot release pending ownership, and only an exact
 reset successor can clear reset-terminal state. Capacity and request-ID
 exhaustion cannot wrap, and terminal lifecycle invalidates outstanding derived
-state. Existing
+state only after the exact acknowledgement ticket commits. Existing
 capability, revocation, rollback-resistance, accessibility, and evidence gates
 are unchanged. This agent review does not replace the required independent
 human dual review.

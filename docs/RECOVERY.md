@@ -384,8 +384,10 @@ explicitly and downgrade the status rather than guessing.
   exact publication tickets, fills only the configured-capacity in-flight
   window, and binds ordered completion acceptance to the exact
   counter/slot/generation/request/status/length. A slot is reusable only after
-  exact retirement, and a terminal completion invalidates all outstanding
-  descendants. An accepted
+  exact retirement. Completion preparation is non-mutating so the caller can
+  publish the protected acknowledgement before committing the fresh ticket;
+  replay cannot retire another slot. A terminal completion invalidates all
+  outstanding descendants only on commit. An accepted
   reset records its terminal cause and can rediscover only the exact canonical
   successor generation with four zero counters; rejection changes nothing,
   while removal and sequence exhaustion remain permanent. Nonzero restart
