@@ -650,8 +650,14 @@ authority; unrelated domains continue.
    code was corrected from `NV_Write` to the actual `NV_Increment`. A concrete
    provider now starts a fresh unsalted, unbound SHA-256 policy session from
    explicit nonzero caller entropy, executes one exact owner-configured
-   `PolicyPCR` recipe, and permits only the requested next NV operation;
-   immediate nonce reuse fails closed, and mismatch or policy failure triggers
+   `PolicyPCR` recipe, and permits only the requested next NV operation. The
+   safe composition path admits the complete layout before constructing this
+   provider; authorization must match one exact admitted index/Name/policy
+   tuple, and both command handle fields must repeat that index. Hostile tests
+   reject Name, index, authorization-handle, and NV-index substitution before
+   the target NV command reaches the backend. Immediate nonce reuse fails
+   closed, and mismatch or policy
+   failure triggers
    best-effort cleanup. Ambiguous NV transport failure now also clears the
    pending authorization and best-effort flushes the satisfied TPM session
    while returning the original error. A safe constructor now composes this
@@ -713,7 +719,7 @@ authority; unrelated domains continue.
    volatile compare-and-store behavior only; a conforming authenticated,
    power-loss-atomic backend and physical evidence remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 447 kernel tests, all 17 `mrml-uefi` library tests, all 116
+   each pass all 447 kernel tests, all 18 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict
    Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
    enabled; strict Linux crate-local Clippy also passes. The direct UEFI crypto

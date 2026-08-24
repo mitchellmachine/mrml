@@ -478,7 +478,11 @@ issued by an unsafe owner-policy provider for the exact TPM Name, shared policy
 digest, and operation. A concrete provider now starts a fresh unsalted,
 unbound SHA-256 policy session from caller entropy, executes one exact
 owner-configured `PolicyPCR` recipe, and permits only the requested next NV
-operation. Mismatch and policy failure trigger best-effort session cleanup.
+operation. The concrete provider is constructed only from the admitted three-
+object layout; authorization requires the exact admitted NV index/Name/policy
+tuple, and the following command must repeat that index in both TPM handle
+fields together with the exact operation and session handle. Mismatch and
+policy failure trigger best-effort session cleanup.
 An ambiguous NV transport failure also best-effort flushes the already-satisfied
 session while preserving the original error; the wrapper clears its pending
 authorization and never treats the uncertain TPM handle as reusable.

@@ -71,11 +71,12 @@ impl AuthorizedNvSession {
 /// # Safety
 ///
 /// Implementations must authenticate the owner-approved policy, bind the
-/// session to `name`, `policy_digest`, and `operation`, serialize the NV domain,
-/// and never return the same live session twice.
+/// session to `index`, `name`, `policy_digest`, and `operation`, serialize the
+/// NV domain, and never return the same live session twice.
 pub unsafe trait NvPolicySessionProvider: TpmTransport {
     fn authorize_nv(
         &mut self,
+        index: u32,
         name: [u8; 34],
         policy_digest: [u8; 32],
         operation: NvPolicyOperation,
@@ -197,16 +198,23 @@ pub struct PcrPolicySessionTransport<T, N> {
     transport: T,
     nonce_source: N,
     policy: PcrPolicy,
-    pending: Option<(u32, NvPolicyOperation)>,
+    verified: VerifiedNvRecoveryLayout,
+    pending: Option<(u32, u32, NvPolicyOperation)>,
     last_nonce: Option<[u8; 32]>,
 }
 
 impl<T, N> PcrPolicySessionTransport<T, N> {
-    pub const fn new(transport: T, nonce_source: N, policy: PcrPolicy) -> Self {
+    const fn new(
+        transport: T,
+        nonce_source: N,
+        policy: PcrPolicy,
+        verified: VerifiedNvRecoveryLayout,
+    ) -> Self {
         Self {
             transport,
             nonce_source,
             policy,
+            verified,
             pending: None,
             last_nonce: None,
         }
@@ -220,8 +228,10 @@ impl<T, N> PcrPolicySessionTransport<T, N> {
 impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
     fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
         let pending = self.pending.take();
-        if let Some((handle, operation)) = pending
+        if let Some((handle, index, operation)) = pending
             && (command.len() < 31
+                || u32::from_be_bytes(command[10..14].try_into().unwrap()) != index
+                || u32::from_be_bytes(command[14..18].try_into().unwrap()) != index
                 || u32::from_be_bytes(command[22..26].try_into().unwrap()) != handle
                 || operation_for_command(command) != Some(operation))
         {
@@ -235,7 +245,7 @@ impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
                 // that failed in flight. Retire the satisfied session in either
                 // case; an already-consumed handle simply makes this best-effort
                 // cleanup fail harmlessly.
-                if let Some((handle, _)) = pending {
+                if let Some((handle, _, _)) = pending {
                     let _ = flush_context(&mut self.transport, handle);
                 }
                 Err(error)
@@ -252,13 +262,15 @@ unsafe impl<T: TpmTransport, N: TpmNonceSource> NvPolicySessionProvider
 {
     fn authorize_nv(
         &mut self,
+        index: u32,
         name: [u8; 34],
         policy_digest: [u8; 32],
         operation: NvPolicyOperation,
     ) -> Result<AuthorizedNvSession, NvCounterError> {
         if self.pending.is_some()
+            || !valid_index(index)
             || policy_digest != self.policy.policy_digest
-            || name[..2] != TPM_ALG_SHA256.to_be_bytes()
+            || !self.verified.admits(index, name, policy_digest)
         {
             return Err(NvCounterError::InvalidSession);
         }
@@ -273,7 +285,7 @@ unsafe impl<T: TpmTransport, N: TpmNonceSource> NvPolicySessionProvider
             let _ = flush_context(&mut self.transport, handle);
             return Err(error);
         }
-        self.pending = Some((handle, operation));
+        self.pending = Some((handle, index, operation));
         Ok(unsafe { AuthorizedNvSession::from_satisfied_policy(handle) })
     }
 }
@@ -318,8 +330,11 @@ impl NvRecoveryLayout {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedNvRecoveryLayout {
+    counter: u32,
     counter_name: [u8; 34],
+    slots: [u32; 2],
     slot_names: [[u8; 34]; 2],
+    policy_digest: [u8; 32],
 }
 
 impl VerifiedNvRecoveryLayout {
@@ -329,6 +344,22 @@ impl VerifiedNvRecoveryLayout {
 
     pub const fn slot_names(self) -> [[u8; 34]; 2] {
         self.slot_names
+    }
+
+    fn admits(self, index: u32, name: [u8; 34], policy_digest: [u8; 32]) -> bool {
+        if policy_digest != self.policy_digest {
+            return false;
+        }
+        if index == self.counter {
+            return name == self.counter_name;
+        }
+        if index == self.slots[0] {
+            return name == self.slot_names[0];
+        }
+        if index == self.slots[1] {
+            return name == self.slot_names[1];
+        }
+        false
     }
 }
 
@@ -364,8 +395,11 @@ pub fn verify_recovery_layout<T: TpmTransport>(
         return Err(NvCounterError::InvalidIndex);
     }
     Ok(VerifiedNvRecoveryLayout {
+        counter: layout.counter,
         counter_name: counter.name,
+        slots: layout.slots,
         slot_names: [first.name, second.name],
+        policy_digest: layout.policy_digest,
     })
 }
 
@@ -389,12 +423,25 @@ impl<T: NvPolicySessionProvider> TpmRecoveryJournalBackend<T> {
         self.transport
     }
 
+    fn from_verified(
+        transport: T,
+        layout: NvRecoveryLayout,
+        verified: VerifiedNvRecoveryLayout,
+    ) -> Self {
+        Self {
+            transport,
+            layout,
+            verified,
+        }
+    }
+
     fn read_exact<const N: usize>(
         &mut self,
         index: u32,
         name: [u8; 34],
     ) -> Result<[u8; N], NvCounterError> {
         let session = self.transport.authorize_nv(
+            index,
             name,
             self.layout.policy_digest,
             NvPolicyOperation::Read,
@@ -407,7 +454,7 @@ impl<T: NvPolicySessionProvider> TpmRecoveryJournalBackend<T> {
 /// journal. Construction first admits all three NV public identities; no
 /// journal operation is available when layout or policy admission fails.
 pub fn open_recovery_journal<T: TpmTransport, N: TpmNonceSource>(
-    transport: T,
+    mut transport: T,
     nonce_source: N,
     layout: NvRecoveryLayout,
     policy: PcrPolicy,
@@ -418,8 +465,9 @@ pub fn open_recovery_journal<T: TpmTransport, N: TpmNonceSource>(
     if layout.policy_digest != policy.policy_digest {
         return Err(NvCounterError::InvalidIndex);
     }
-    let provider = PcrPolicySessionTransport::new(transport, nonce_source, policy);
-    let backend = TpmRecoveryJournalBackend::new(provider, layout)?;
+    let verified = verify_recovery_layout(&mut transport, layout)?;
+    let provider = PcrPolicySessionTransport::new(transport, nonce_source, policy, verified);
+    let backend = TpmRecoveryJournalBackend::from_verified(provider, layout, verified);
     Ok(AuthenticatedRecoveryJournal::new(backend))
 }
 
@@ -465,6 +513,7 @@ unsafe impl<T: NvPolicySessionProvider> RecoveryJournalBackend for TpmRecoveryJo
             .ok_or(NvCounterError::InvalidIndex)?;
         let name = self.verified.slot_names[index];
         let session = self.transport.authorize_nv(
+            handle,
             name,
             self.layout.policy_digest,
             NvPolicyOperation::Write,
@@ -481,6 +530,7 @@ unsafe impl<T: NvPolicySessionProvider> RecoveryJournalBackend for TpmRecoveryJo
             return Err(NvCounterError::Conflict);
         }
         let session = self.transport.authorize_nv(
+            self.layout.counter,
             self.verified.counter_name,
             self.layout.policy_digest,
             NvPolicyOperation::Increment,
@@ -1259,7 +1309,7 @@ mod tests {
         counter: u64,
         slots: [[u8; RECOVERY_JOURNAL_SLOT_BYTES]; 2],
         next_session: u32,
-        pending: Option<(u32, NvPolicyOperation)>,
+        pending: Option<(u32, u32, NvPolicyOperation)>,
         authorizations: usize,
         corrupt_readback: bool,
         concrete_sessions: bool,
@@ -1300,6 +1350,20 @@ mod tests {
             }
         }
 
+        fn expected_name(&self, index: u32) -> Option<[u8; 34]> {
+            let (kind, size) = Self::index_kind(index)?;
+            let mut response = [0; 128];
+            let length = public_response(
+                &mut response,
+                index,
+                TPMA_NV_POLICYWRITE | TPMA_NV_POLICYREAD | TPMA_NV_NO_DA | kind,
+                &self.policy,
+                size,
+                false,
+            );
+            response[length - 34..length].try_into().ok()
+        }
+
         fn consume_session(
             &mut self,
             command: &[u8],
@@ -1309,7 +1373,8 @@ mod tests {
                 return Ok(());
             }
             let handle = u32::from_be_bytes(command[22..26].try_into().unwrap());
-            if self.pending.take() != Some((handle, operation)) {
+            let index = u32::from_be_bytes(command[14..18].try_into().unwrap());
+            if self.pending.take() != Some((handle, index, operation)) {
                 return Err(NvCounterError::InvalidSession);
             }
             Ok(())
@@ -1402,16 +1467,20 @@ mod tests {
     unsafe impl NvPolicySessionProvider for JournalTransport {
         fn authorize_nv(
             &mut self,
-            _name: [u8; 34],
+            index: u32,
+            name: [u8; 34],
             policy_digest: [u8; 32],
             operation: NvPolicyOperation,
         ) -> Result<AuthorizedNvSession, NvCounterError> {
-            if policy_digest != self.policy || self.pending.is_some() {
+            if policy_digest != self.policy
+                || self.pending.is_some()
+                || self.expected_name(index) != Some(name)
+            {
                 return Err(NvCounterError::InvalidSession);
             }
             let handle = self.next_session;
             self.next_session += 1;
-            self.pending = Some((handle, operation));
+            self.pending = Some((handle, index, operation));
             self.authorizations += 1;
             Ok(unsafe { AuthorizedNvSession::from_satisfied_policy(handle) })
         }
@@ -1606,6 +1675,21 @@ mod tests {
         name
     }
 
+    fn verified_policy_layout() -> VerifiedNvRecoveryLayout {
+        let counter_name = policy_name();
+        let mut first_name = counter_name;
+        first_name[2] ^= 1;
+        let mut second_name = counter_name;
+        second_name[2] ^= 2;
+        VerifiedNvRecoveryLayout {
+            counter: 0x0180_0010,
+            counter_name,
+            slots: [0x0180_0011, 0x0180_0012],
+            slot_names: [first_name, second_name],
+            policy_digest: [0x33; 32],
+        }
+    }
+
     #[test]
     fn pcr_provider_issues_one_fresh_session_for_exact_next_operation() {
         let tpm = PolicyTpm {
@@ -1615,14 +1699,18 @@ mod tests {
             flushes: 0,
             policy_calls: 0,
         };
-        let mut provider =
-            PcrPolicySessionTransport::new(tpm, Nonce { value: [0x22; 32] }, pcr_policy());
+        let mut provider = PcrPolicySessionTransport::new(
+            tpm,
+            Nonce { value: [0x22; 32] },
+            pcr_policy(),
+            verified_policy_layout(),
+        );
         let name = policy_name();
         let session = provider
-            .authorize_nv(name, [0x33; 32], NvPolicyOperation::Increment)
+            .authorize_nv(0x0180_0010, name, [0x33; 32], NvPolicyOperation::Increment)
             .unwrap();
         assert!(matches!(
-            provider.authorize_nv(name, [0x33; 32], NvPolicyOperation::Increment),
+            provider.authorize_nv(0x0180_0010, name, [0x33; 32], NvPolicyOperation::Increment,),
             Err(NvCounterError::InvalidSession)
         ));
         assert_eq!(
@@ -1635,6 +1723,74 @@ mod tests {
     }
 
     #[test]
+    fn pcr_provider_rejects_index_substitution_in_either_command_handle() {
+        let tpm = PolicyTpm {
+            policy_error: false,
+            malformed_start: false,
+            nv_error: false,
+            flushes: 0,
+            policy_calls: 0,
+        };
+        let verified = verified_policy_layout();
+        let mut provider = PcrPolicySessionTransport::new(
+            tpm,
+            Nonce { value: [0x55; 32] },
+            pcr_policy(),
+            verified,
+        );
+
+        assert!(matches!(
+            provider.authorize_nv(
+                0x0180_0010,
+                verified.slot_names[0],
+                [0x33; 32],
+                NvPolicyOperation::Read,
+            ),
+            Err(NvCounterError::InvalidSession)
+        ));
+        assert!(matches!(
+            provider.authorize_nv(
+                0x0180_0013,
+                verified.counter_name,
+                [0x33; 32],
+                NvPolicyOperation::Read,
+            ),
+            Err(NvCounterError::InvalidSession)
+        ));
+        assert_eq!(provider.transport.policy_calls, 0);
+
+        for (authorization_index, nv_index) in [
+            (0x0180_0011u32, 0x0180_0010u32),
+            (0x0180_0010u32, 0x0180_0011u32),
+        ] {
+            let session = provider
+                .authorize_nv(
+                    0x0180_0010,
+                    policy_name(),
+                    [0x33; 32],
+                    NvPolicyOperation::Read,
+                )
+                .unwrap();
+            let mut command = [0; 35];
+            sessions_header(&mut command, TPM_CC_NV_READ);
+            command[10..14].copy_from_slice(&authorization_index.to_be_bytes());
+            command[14..18].copy_from_slice(&nv_index.to_be_bytes());
+            encode_policy_authorization(&mut command[18..31], session).unwrap();
+            command[31..33].copy_from_slice(&8u16.to_be_bytes());
+            let mut response = [0; 32];
+
+            assert_eq!(
+                provider.submit(&command, &mut response),
+                Err(NvCounterError::InvalidSession)
+            );
+            provider.nonce_source.value[0] = provider.nonce_source.value[0].wrapping_add(1);
+        }
+
+        assert_eq!(provider.transport.flushes, 2);
+        assert!(provider.pending.is_none());
+    }
+
+    #[test]
     fn pcr_provider_flushes_session_after_ambiguous_nv_transport_failure() {
         let tpm = PolicyTpm {
             policy_error: false,
@@ -1643,10 +1799,19 @@ mod tests {
             flushes: 0,
             policy_calls: 0,
         };
-        let mut provider =
-            PcrPolicySessionTransport::new(tpm, Nonce { value: [0x44; 32] }, pcr_policy());
+        let mut provider = PcrPolicySessionTransport::new(
+            tpm,
+            Nonce { value: [0x44; 32] },
+            pcr_policy(),
+            verified_policy_layout(),
+        );
         let session = provider
-            .authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Increment)
+            .authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Increment,
+            )
             .unwrap();
 
         assert_eq!(
@@ -1666,16 +1831,30 @@ mod tests {
             flushes: 0,
             policy_calls: 0,
         };
-        let mut provider =
-            PcrPolicySessionTransport::new(tpm, Nonce { value: [0; 32] }, pcr_policy());
+        let mut provider = PcrPolicySessionTransport::new(
+            tpm,
+            Nonce { value: [0; 32] },
+            pcr_policy(),
+            verified_policy_layout(),
+        );
         assert!(matches!(
-            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
+            provider.authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Read,
+            ),
             Err(NvCounterError::InvalidSession)
         ));
 
         provider.nonce_source.value = [1; 32];
         let session = provider
-            .authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read)
+            .authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Read,
+            )
             .unwrap();
         assert_eq!(
             policy_increment(&mut provider, 0x0180_0010, session),
@@ -1686,7 +1865,12 @@ mod tests {
         provider.transport.policy_error = true;
         provider.nonce_source.value = [2; 32];
         assert!(matches!(
-            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
+            provider.authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Read,
+            ),
             Err(NvCounterError::Transport)
         ));
         assert_eq!(provider.transport.flushes, 2);
@@ -1701,14 +1885,28 @@ mod tests {
             flushes: 0,
             policy_calls: 0,
         };
-        let mut provider =
-            PcrPolicySessionTransport::new(tpm, Nonce { value: [7; 32] }, pcr_policy());
+        let mut provider = PcrPolicySessionTransport::new(
+            tpm,
+            Nonce { value: [7; 32] },
+            pcr_policy(),
+            verified_policy_layout(),
+        );
         let session = provider
-            .authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Increment)
+            .authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Increment,
+            )
             .unwrap();
         policy_increment(&mut provider, 0x0180_0010, session).unwrap();
         assert!(matches!(
-            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Increment),
+            provider.authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Increment,
+            ),
             Err(NvCounterError::InvalidSession)
         ));
     }
@@ -1726,10 +1924,19 @@ mod tests {
             flushes: 0,
             policy_calls: 0,
         };
-        let mut provider =
-            PcrPolicySessionTransport::new(tpm, Nonce { value: [1; 32] }, pcr_policy());
+        let mut provider = PcrPolicySessionTransport::new(
+            tpm,
+            Nonce { value: [1; 32] },
+            pcr_policy(),
+            verified_policy_layout(),
+        );
         assert!(matches!(
-            provider.authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Read),
+            provider.authorize_nv(
+                0x0180_0010,
+                policy_name(),
+                [0x33; 32],
+                NvPolicyOperation::Read,
+            ),
             Err(NvCounterError::MalformedResponse)
         ));
         assert_eq!(provider.transport.flushes, 1);

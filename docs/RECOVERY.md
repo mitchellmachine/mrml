@@ -330,8 +330,12 @@ explicitly and downgrade the status rather than guessing.
   and stale expected counters. A concrete provider now creates a fresh SHA-256
   policy session from explicit nonzero caller entropy, executes the exact
   configured `PolicyPCR` selection/digest, binds it to one requested next NV
-  operation, rejects immediate nonce reuse, and best-effort flushes mismatched
-  or failed sessions. An ambiguous NV-command transport failure now clears the
+  operation, and is constructed only after the exact three-object layout is
+  admitted. It rejects Name/index substitution before session creation and
+  verifies both NV command handle fields, the operation, and the session handle
+  at one-use consumption. It rejects immediate nonce reuse and best-effort
+  flushes mismatched or failed sessions. An ambiguous NV-command transport
+  failure now clears the
   local pending authorization and best-effort flushes the TPM handle while
   preserving the original error; focused Windows gnullvm and Arch Linux/WSL2
   tests exercise this fail-closed boundary. A safe constructor composes this
