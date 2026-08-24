@@ -2157,6 +2157,17 @@ enum RuntimeBasicBlockSource {
         first_operation: usize,
         operation_count: usize,
     },
+    LoopConditionalCondition {
+        statement_index: usize,
+        operation_index: usize,
+        arm_index: usize,
+    },
+    LoopConditionalActions {
+        statement_index: usize,
+        operation_index: usize,
+        arm_index: usize,
+        action_count: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5354,6 +5365,51 @@ fn conditional_actions_have_supported_control_flow(
     Ok(terminates)
 }
 
+fn conditional_loop_terminal_is_break(
+    terminal: Option<crate::ConditionalLoopTerminal<'_>>,
+) -> bool {
+    matches!(terminal, Some(crate::ConditionalLoopTerminal::Break))
+}
+
+fn conditional_loop_block_arms<'source>(
+    loop_statement: &'source crate::WhileLoop<'source>,
+    block: &crate::ConditionalLoopBlock<'source>,
+) -> Result<&'source [Option<crate::ConditionalLoopArm<'source>>], CodegenErrorKind> {
+    let Some(else_index) = block.else_arm else {
+        return Ok(&[]);
+    };
+    let end = else_index
+        .checked_add(block.else_arm_count)
+        .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+    loop_statement
+        .conditional_else_arms()
+        .get(else_index..end)
+        .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)
+}
+
+fn conditional_loop_block_all_paths_terminate(
+    loop_statement: &crate::WhileLoop<'_>,
+    block: &crate::ConditionalLoopBlock<'_>,
+) -> Result<bool, CodegenErrorKind> {
+    if block.terminal.is_none() {
+        return Ok(false);
+    }
+    let arms = conditional_loop_block_arms(loop_statement, block)?;
+    let Some(last) = arms.last().copied().flatten() else {
+        return Ok(false);
+    };
+    if last.condition.is_some() {
+        return Ok(false);
+    }
+    for arm in arms {
+        let arm = arm.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        if arm.terminal.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn loop_has_supported_initial_control_flow(
     loop_statement: &crate::WhileLoop<'_>,
 ) -> Result<bool, CodegenErrorKind> {
@@ -5361,11 +5417,37 @@ fn loop_has_supported_initial_control_flow(
         let operation = operation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
         if matches!(
             operation,
-            crate::LoopOperation::ConditionalBlock(_)
-                | crate::LoopOperation::NestedUnitLoop
-                | crate::LoopOperation::NestedBlock(_)
+            crate::LoopOperation::NestedUnitLoop | crate::LoopOperation::NestedBlock(_)
         ) {
             return Ok(false);
+        }
+        if let crate::LoopOperation::ConditionalBlock(index) = operation {
+            let block = loop_statement
+                .conditional_blocks()
+                .get(index)
+                .and_then(|block| *block)
+                .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            for action in block.actions() {
+                action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            let arms = conditional_loop_block_arms(loop_statement, &block)?;
+            if block.else_arm.is_some() && arms.is_empty() {
+                return Err(CodegenErrorKind::InvalidRuntimeControlFlowFacts);
+            }
+            for (arm_index, arm) in arms.iter().enumerate() {
+                let arm = arm.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                if arm.condition.is_none() && arm_index + 1 != arms.len() {
+                    return Err(CodegenErrorKind::InvalidRuntimeControlFlowFacts);
+                }
+                for action in arm.actions() {
+                    action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                }
+            }
+            if conditional_loop_block_all_paths_terminate(loop_statement, &block)?
+                && operation_index + 1 != loop_statement.operation_count()
+            {
+                return Ok(false);
+            }
         }
         if matches!(
             operation,
@@ -5380,18 +5462,170 @@ fn loop_has_supported_initial_control_flow(
     Ok(true)
 }
 
-fn loop_has_exit_path(loop_statement: &crate::WhileLoop<'_>) -> bool {
-    loop_statement.condition.is_some()
-        || loop_statement
-            .operations()
-            .iter()
-            .flatten()
-            .any(|operation| {
-                matches!(
-                    operation,
-                    crate::LoopOperation::Break | crate::LoopOperation::ConditionalBreak(_)
-                )
-            })
+fn loop_has_exit_path(loop_statement: &crate::WhileLoop<'_>) -> Result<bool, CodegenErrorKind> {
+    if loop_statement.condition.is_some() {
+        return Ok(true);
+    }
+    for operation in loop_statement.operations().iter().flatten() {
+        if matches!(
+            operation,
+            crate::LoopOperation::Break | crate::LoopOperation::ConditionalBreak(_)
+        ) {
+            return Ok(true);
+        }
+        if let crate::LoopOperation::ConditionalBlock(index) = operation {
+            let block = loop_statement
+                .conditional_blocks()
+                .get(*index)
+                .and_then(|block| *block)
+                .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            if conditional_loop_terminal_is_break(block.terminal) {
+                return Ok(true);
+            }
+            for arm in conditional_loop_block_arms(loop_statement, &block)? {
+                let arm = arm.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                if conditional_loop_terminal_is_break(arm.terminal) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn conditional_loop_terminal_target(
+    terminal: Option<crate::ConditionalLoopTerminal<'_>>,
+    header: RuntimeBasicBlockId,
+    continuation: Option<RuntimeBasicBlockId>,
+) -> Result<Option<RuntimeControlFlowTarget>, CodegenErrorKind> {
+    match terminal {
+        None => Ok(None),
+        Some(crate::ConditionalLoopTerminal::Break) => Ok(Some(RuntimeControlFlowTarget::Block(
+            continuation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?,
+        ))),
+        Some(crate::ConditionalLoopTerminal::Continue) => {
+            Ok(Some(RuntimeControlFlowTarget::Block(header)))
+        }
+        Some(crate::ConditionalLoopTerminal::Return(_)) => {
+            Ok(Some(RuntimeControlFlowTarget::Return))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_conditional_loop_block_control_flow(
+    loop_statement: &crate::WhileLoop<'_>,
+    block: &crate::ConditionalLoopBlock<'_>,
+    statement_index: usize,
+    operation_index: usize,
+    primary_condition: RuntimeBasicBlockId,
+    header: RuntimeBasicBlockId,
+    continuation: Option<RuntimeBasicBlockId>,
+    reachable: bool,
+    facts: &mut RuntimeBodyFacts<'_>,
+) -> Result<Option<RuntimeBasicBlockId>, CodegenErrorKind> {
+    let all_paths_terminate = conditional_loop_block_all_paths_terminate(loop_statement, block)?;
+    let next = if all_paths_terminate {
+        None
+    } else {
+        Some(facts.push_loop_body_block(statement_index, operation_index + 1, reachable)?)
+    };
+    let primary_actions = facts.push_sourced_basic_block(
+        statement_index,
+        reachable,
+        RuntimeBasicBlockSource::LoopConditionalActions {
+            statement_index,
+            operation_index,
+            arm_index: 0,
+            action_count: block.action_count(),
+        },
+    )?;
+    facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+        from: primary_condition,
+        target: RuntimeControlFlowTarget::Block(primary_actions),
+        kind: RuntimeControlFlowEdgeKind::True,
+    })?;
+    let primary_target = conditional_loop_terminal_target(block.terminal, header, continuation)?
+        .or(next.map(RuntimeControlFlowTarget::Block))
+        .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+    facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+        from: primary_actions,
+        target: primary_target,
+        kind: RuntimeControlFlowEdgeKind::Unconditional,
+    })?;
+
+    let arms = conditional_loop_block_arms(loop_statement, block)?;
+    let mut false_source = primary_condition;
+    let mut has_unconditional_arm = false;
+    for (else_index, arm) in arms.iter().enumerate() {
+        let arm = arm.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        let arm_index = else_index + 1;
+        let condition = if arm.condition.is_some() {
+            let condition = facts.push_sourced_basic_block(
+                statement_index,
+                reachable,
+                RuntimeBasicBlockSource::LoopConditionalCondition {
+                    statement_index,
+                    operation_index,
+                    arm_index,
+                },
+            )?;
+            facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                from: false_source,
+                target: RuntimeControlFlowTarget::Block(condition),
+                kind: RuntimeControlFlowEdgeKind::False,
+            })?;
+            Some(condition)
+        } else {
+            has_unconditional_arm = true;
+            None
+        };
+        let actions = facts.push_sourced_basic_block(
+            statement_index,
+            reachable,
+            RuntimeBasicBlockSource::LoopConditionalActions {
+                statement_index,
+                operation_index,
+                arm_index,
+                action_count: arm.action_count(),
+            },
+        )?;
+        if let Some(condition) = condition {
+            facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                from: condition,
+                target: RuntimeControlFlowTarget::Block(actions),
+                kind: RuntimeControlFlowEdgeKind::True,
+            })?;
+            false_source = condition;
+        } else {
+            facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                from: false_source,
+                target: RuntimeControlFlowTarget::Block(actions),
+                kind: RuntimeControlFlowEdgeKind::False,
+            })?;
+        }
+        let target = conditional_loop_terminal_target(arm.terminal, header, continuation)?
+            .or(next.map(RuntimeControlFlowTarget::Block))
+            .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+            from: actions,
+            target,
+            kind: RuntimeControlFlowEdgeKind::Unconditional,
+        })?;
+        if has_unconditional_arm {
+            break;
+        }
+    }
+    if !has_unconditional_arm {
+        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+            from: false_source,
+            target: RuntimeControlFlowTarget::Block(
+                next.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?,
+            ),
+            kind: RuntimeControlFlowEdgeKind::False,
+        })?;
+    }
+    Ok(next)
 }
 
 fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
@@ -5631,7 +5865,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                     .and_then(|loop_statement| *loop_statement)
                     .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
                 let header = current;
-                let continuation = if loop_has_exit_path(&loop_statement) {
+                let continuation = if loop_has_exit_path(&loop_statement)? {
                     Some(facts.push_basic_block(statement_index + 1, current_reachable)?)
                 } else {
                     None
@@ -5663,6 +5897,29 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                     let operation =
                         operation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
                     facts.extend_loop_body_block(body_block)?;
+                    if let crate::LoopOperation::ConditionalBlock(index) = operation {
+                        let block = loop_statement
+                            .conditional_blocks()
+                            .get(index)
+                            .and_then(|block| *block)
+                            .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                        if let Some(next) = push_conditional_loop_block_control_flow(
+                            &loop_statement,
+                            &block,
+                            statement_index,
+                            operation_index,
+                            body_block,
+                            header,
+                            continuation,
+                            current_reachable,
+                            facts,
+                        )? {
+                            body_block = next;
+                        } else {
+                            body_terminated = true;
+                        }
+                        continue;
+                    }
                     let conditional_target = match operation {
                         crate::LoopOperation::ConditionalBreak(_) => {
                             Some(RuntimeControlFlowTarget::Block(
@@ -21507,6 +21764,192 @@ mod tests {
         assert!(!facts.control_flow_complete);
         assert_eq!(facts.basic_block_count, 0);
         assert_eq!(facts.control_flow_edge_count, 0);
+    }
+
+    #[test]
+    fn runtime_body_facts_build_exhaustive_conditional_loop_block_cfg() {
+        let source = "fn value(mode: u8) -> u8 { let mut value: u8 = 0; loop { if mode == 0 { value += 1; continue; } else if mode == 1 { value += 2; break; } else { return value; } } value }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 7);
+        assert_eq!(
+            facts.basic_blocks[2].unwrap().source,
+            RuntimeBasicBlockSource::LoopBody {
+                statement_index: 1,
+                first_operation: 0,
+                operation_count: 1,
+            }
+        );
+        assert_eq!(
+            facts.basic_blocks[3].unwrap().source,
+            RuntimeBasicBlockSource::LoopConditionalActions {
+                statement_index: 1,
+                operation_index: 0,
+                arm_index: 0,
+                action_count: 1,
+            }
+        );
+        assert_eq!(
+            facts.basic_blocks[4].unwrap().source,
+            RuntimeBasicBlockSource::LoopConditionalCondition {
+                statement_index: 1,
+                operation_index: 0,
+                arm_index: 1,
+            }
+        );
+        assert_eq!(
+            facts.basic_blocks[6].unwrap().source,
+            RuntimeBasicBlockSource::LoopConditionalActions {
+                statement_index: 1,
+                operation_index: 0,
+                arm_index: 2,
+                action_count: 0,
+            }
+        );
+        assert_eq!(facts.control_flow_edge_count, 9);
+        assert_eq!(
+            facts.control_flow_edges[..9],
+            [
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(0),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(2)),
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(2),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(3)),
+                    kind: RuntimeControlFlowEdgeKind::True,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(3),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(0)),
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(2),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(4)),
+                    kind: RuntimeControlFlowEdgeKind::False,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(4),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(5)),
+                    kind: RuntimeControlFlowEdgeKind::True,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(5),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(1)),
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(4),
+                    target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(6)),
+                    kind: RuntimeControlFlowEdgeKind::False,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(6),
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                }),
+                Some(RuntimeControlFlowEdgeFact {
+                    from: RuntimeBasicBlockId(1),
+                    target: RuntimeControlFlowTarget::Return,
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                }),
+            ]
+        );
+
+        let unreachable_suffix = "fn value(mode: bool) -> u8 { loop { if mode { return 1; } else { return 2; } let unreachable: u8 = 3; unreachable; } }";
+        let module = Parser::new(unreachable_suffix)
+            .parse_module::<1, 4>()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        assert!(!facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 0);
+        assert_eq!(facts.control_flow_edge_count, 0);
+    }
+
+    #[test]
+    fn runtime_body_facts_join_fallthrough_conditional_loop_arms() {
+        let source = "fn value(limit: u8, mode: bool) -> u8 { let mut index: u8 = 0; let mut value: u8 = 0; while index < limit { if mode { value += 1; } else { value += 2; } index += 1; } value }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 6);
+        assert_eq!(facts.control_flow_edge_count, 8);
+        assert_eq!(
+            facts.basic_blocks[3].unwrap().source,
+            RuntimeBasicBlockSource::LoopBody {
+                statement_index: 2,
+                first_operation: 1,
+                operation_count: 1,
+            }
+        );
+        assert_eq!(
+            facts.control_flow_edges[3],
+            Some(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(4),
+                target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(3)),
+                kind: RuntimeControlFlowEdgeKind::Unconditional,
+            })
+        );
+        assert_eq!(
+            facts.control_flow_edges[5],
+            Some(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(5),
+                target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(3)),
+                kind: RuntimeControlFlowEdgeKind::Unconditional,
+            })
+        );
+        assert_eq!(
+            facts.control_flow_edges[6],
+            Some(RuntimeControlFlowEdgeFact {
+                from: RuntimeBasicBlockId(3),
+                target: RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(0)),
+                kind: RuntimeControlFlowEdgeKind::Unconditional,
+            })
+        );
     }
 
     #[test]

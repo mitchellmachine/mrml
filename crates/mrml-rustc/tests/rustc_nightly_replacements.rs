@@ -3903,6 +3903,13 @@ fn rustc_initial_loop_cfg_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_conditional_loop_block_cfg_reaches_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(mode: u8) -> u8 { let mut value: u8 = 0; loop { if mode == 0 { value += 1; continue; } else if mode == 1 { value += 2; break; } else { return value; } } value }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
