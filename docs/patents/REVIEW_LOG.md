@@ -1837,3 +1837,13 @@ introduces no native exit transport, assigned PCI identity, MMIO mapping,
 interrupt, DMA, block-device attachment, compatibility claim, authority model,
 or patent-candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Bounded PCI Configuration Mechanism #1 transport
+
+**Result: NOT_TRIGGERED.** The change implements conventional `0xCF8` selector
+and `0xCFC` data-port decoding, exact scalar-I/O allowlisting, reserved-bit and
+access-geometry validation, and standard width-bounded absent-function results
+over the existing router. It introduces no assigned PCI identity, native exit
+integration, BAR mapping, interrupt, DMA, device attachment, new authority
+model, or patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.

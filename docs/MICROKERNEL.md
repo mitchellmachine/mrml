@@ -4509,6 +4509,70 @@ Patent review: `NOT_TRIGGERED` — conventional fixed-capacity exact-key routing
 and generational slot invalidation over the existing PCI state; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+`VirtualPciConfigurationMechanismOne` now supplies the canonical conventional
+scalar-I/O transport above that router. Its address register accepts only an
+exact 32-bit access at `0xCF8`; selector bits 30--24 and 1--0 must be zero. An
+enabled selector decodes segment zero plus the exact bus, device, function, and
+dword-aligned register. Data accesses are restricted to the seven valid aligned
+byte/word/dword tuples within `0xCFC..=0xCFF`; no access can cross the selected
+dword. The transport constructs all eight address/data rules transactionally in
+an otherwise deny-all `IoPortPolicy`.
+
+Reads and writes to a present selection use the router and therefore retain the
+function's bounded header and transactional write checks. When selection is
+disabled or the exact BDF is absent, reads return only `0xff`, `0xffff`, or
+`0xffff_ffff` according to width and writes have no effect. The address register
+is readable. Invalid selectors or port geometry preserve both selector and
+function state. Registers beyond the implemented 64-byte Type-0 header still
+fail explicitly rather than creating an undocumented extended configuration
+space. No native exit dispatcher, guest-register read completion, block
+function, assigned identity, BAR mapping, interrupt, DMA, or PCI advertisement
+uses this contract yet.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: YES
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each passed all 409 release kernel tests, including 19 focused PCI tests. The
+Windows kernel/WHP/WHP-run test-target check and strict scoped Clippy passed.
+Strict scoped Linux Clippy passed for the kernel and KVM runner, and strict
+nightly UEFI Clippy passed for the block-probe image. The successful commands
+were the same scoped commands recorded above, with Linux using isolated
+`CARGO_TARGET_DIR=target/virtual-pci-cf8`. This is unit and compile/lint evidence
+only. No native I/O-exit integration, signed runtime, PCI enumeration, QEMU
+differential, nested-virtualization, native-boot, bare-metal, or physical-
+hardware evidence is claimed.
+
+The transport `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, attestation, DRM, vendor/publisher preference, first-
+party bypass, accessibility restriction, AI authority, persistent owner state,
+or lock-in. Conventional port and selector compatibility grants no host/device
+authority. The `HOSTILE SECURITY REVIEW` treats port, width, direction, value,
+enable and reserved bits, BDF fields, register and port-offset arithmetic,
+disabled/absent functions, read width, router errors, repeated selectors, and
+partial writes as hostile. Exact allowlist construction is transactional;
+selector validation precedes mutation; data geometry is aligned and contained;
+absent state returns bounded public constants; and present mutations retain the
+router/function transaction boundary. Native exit decoding and guest-register
+writeback remain unimplemented and therefore unclaimed. Existing capability,
+revocation, rollback-resistance, accessibility, evidence, owner-sovereignty,
+data-minimization, anti-DRM, owner-controlled-attestation, third-party-
+accessibility, AI-containment, and anti-persistence requirements remain
+unchanged. This agent review does not replace independent human implementer,
+reviewer, adversary, accessibility, or hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional PCI Configuration Mechanism #1
+field decoding and bounded scalar-I/O dispatch; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

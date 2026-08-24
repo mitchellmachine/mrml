@@ -828,6 +828,14 @@ state on capacity or generation exhaustion. This does not decode KVM/WHP exits,
 define an ECAM or legacy
 configuration transport, assign MRML identity, attach block, map a BAR, or
 authorize interrupts/DMA. Those integrations remain the next gates.
+The canonical shared Configuration Mechanism #1 transport contract is now also
+implemented. It owns the `0xCF8` selector, derives the complete eight-rule
+`0xCF8`/`0xCFC` scalar-I/O policy, validates reserved bits and exact byte/word/
+dword data-port geometry, decodes segment-zero BDF/register state, and composes
+present accesses with the router. Disabled or absent reads return only the
+appropriate all-ones width and writes are ignored. KVM/WHP runner integration,
+guest register completion for reads, an attached block function, assigned IDs,
+BAR mapping, interrupts, and QEMU comparison remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

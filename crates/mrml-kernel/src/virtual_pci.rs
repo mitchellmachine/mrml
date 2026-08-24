@@ -7,6 +7,9 @@
 
 pub const PCI_TYPE0_CONFIGURATION_BYTES: usize = 64;
 pub const MAX_VIRTUAL_PCI_FUNCTIONS: usize = 8;
+pub const PCI_CONFIGURATION_ADDRESS_PORT: u16 = 0x0cf8;
+pub const PCI_CONFIGURATION_DATA_PORT: u16 = 0x0cfc;
+pub const PCI_CONFIGURATION_IO_RULES: usize = 8;
 pub const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 pub const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
 const PCI_COMMAND_SUPPORTED: u16 = PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_INTERRUPT_DISABLE;
@@ -27,6 +30,7 @@ pub enum VirtualPciError {
     CapacityExhausted,
     FunctionNotPresent,
     StaleAttachment,
+    InvalidTransport,
 }
 
 /// Exact segment/bus/device/function location. This identifies a routed
@@ -222,6 +226,15 @@ pub enum VirtualPciWriteOutcome {
     BarAddress(u32),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualPciIoOutcome {
+    AddressRegister(u32),
+    Read(u32),
+    Write(VirtualPciWriteOutcome),
+    AbsentRead(u32),
+    AbsentWrite,
+}
+
 /// Minimal conventional Type-0 header state. It intentionally has no
 /// capability list, MSI/MSI-X, bus mastering, expansion ROM, legacy interrupt
 /// pin, or additional BARs.
@@ -243,6 +256,130 @@ struct VirtualPciAttachment {
 pub struct VirtualPciConfigurationRouter {
     slots: [Option<VirtualPciAttachment>; MAX_VIRTUAL_PCI_FUNCTIONS],
     generations: [u32; MAX_VIRTUAL_PCI_FUNCTIONS],
+}
+
+/// Conventional PCI Configuration Mechanism #1 selector/data-port state. This
+/// decodes guest scalar I/O only; it neither authorizes the I/O exit nor grants
+/// authority to any function selected by the address register.
+pub struct VirtualPciConfigurationMechanismOne {
+    address: u32,
+}
+
+impl Default for VirtualPciConfigurationMechanismOne {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VirtualPciConfigurationMechanismOne {
+    pub const fn new() -> Self {
+        Self { address: 0 }
+    }
+
+    pub const fn address(&self) -> u32 {
+        self.address
+    }
+
+    pub fn io_policy() -> Result<crate::IoPortPolicy<PCI_CONFIGURATION_IO_RULES>, crate::VmError> {
+        let mut policy = crate::IoPortPolicy::deny_all();
+        policy.allow(crate::IoPortRule::new(
+            PCI_CONFIGURATION_ADDRESS_PORT,
+            4,
+            crate::IoDirection::Both,
+        )?)?;
+        for (port, size) in [
+            (PCI_CONFIGURATION_DATA_PORT, 1),
+            (PCI_CONFIGURATION_DATA_PORT, 2),
+            (PCI_CONFIGURATION_DATA_PORT, 4),
+            (PCI_CONFIGURATION_DATA_PORT + 1, 1),
+            (PCI_CONFIGURATION_DATA_PORT + 2, 1),
+            (PCI_CONFIGURATION_DATA_PORT + 2, 2),
+            (PCI_CONFIGURATION_DATA_PORT + 3, 1),
+        ] {
+            policy.allow(crate::IoPortRule::new(
+                port,
+                size,
+                crate::IoDirection::Both,
+            )?)?;
+        }
+        Ok(policy)
+    }
+
+    pub fn access(
+        &mut self,
+        router: &mut VirtualPciConfigurationRouter,
+        port: u16,
+        size: u8,
+        write: bool,
+        value: u32,
+    ) -> Result<VirtualPciIoOutcome, VirtualPciError> {
+        if port == PCI_CONFIGURATION_ADDRESS_PORT {
+            if size != 4 {
+                return Err(VirtualPciError::InvalidTransport);
+            }
+            if write {
+                if value & 0x7f00_0003 != 0 {
+                    return Err(VirtualPciError::InvalidTransport);
+                }
+                self.address = value;
+            }
+            return Ok(VirtualPciIoOutcome::AddressRegister(self.address));
+        }
+
+        let port_offset = port
+            .checked_sub(PCI_CONFIGURATION_DATA_PORT)
+            .filter(|offset| *offset < 4)
+            .ok_or(VirtualPciError::InvalidTransport)?;
+        if !matches!(size, 1 | 2 | 4)
+            || !port_offset.is_multiple_of(u16::from(size))
+            || usize::from(port_offset) + usize::from(size) > 4
+        {
+            return Err(VirtualPciError::InvalidTransport);
+        }
+        let Some((location, register)) = self.selection(port_offset) else {
+            return Ok(if write {
+                VirtualPciIoOutcome::AbsentWrite
+            } else {
+                VirtualPciIoOutcome::AbsentRead(width_mask(size))
+            });
+        };
+        if write {
+            match router.write(location, register, size, value) {
+                Ok(outcome) => Ok(VirtualPciIoOutcome::Write(outcome)),
+                Err(VirtualPciError::FunctionNotPresent) => Ok(VirtualPciIoOutcome::AbsentWrite),
+                Err(error) => Err(error),
+            }
+        } else {
+            match router.read(location, register, size) {
+                Ok(value) => Ok(VirtualPciIoOutcome::Read(value)),
+                Err(VirtualPciError::FunctionNotPresent) => {
+                    Ok(VirtualPciIoOutcome::AbsentRead(width_mask(size)))
+                }
+                Err(error) => Err(error),
+            }
+        }
+    }
+
+    fn selection(&self, port_offset: u16) -> Option<(VirtualPciLocation, u16)> {
+        if self.address & (1 << 31) == 0 {
+            return None;
+        }
+        let bus = ((self.address >> 16) & 0xff) as u8;
+        let device = ((self.address >> 11) & 0x1f) as u8;
+        let function = ((self.address >> 8) & 0x07) as u8;
+        let register = ((self.address & 0xfc) as u16).checked_add(port_offset)?;
+        let location = VirtualPciLocation::new(0, bus, device, function).ok()?;
+        Some((location, register))
+    }
+}
+
+const fn width_mask(size: u8) -> u32 {
+    match size {
+        1 => u8::MAX as u32,
+        2 => u16::MAX as u32,
+        4 => u32::MAX,
+        _ => 0,
+    }
 }
 
 impl Default for VirtualPciConfigurationRouter {
@@ -805,5 +942,183 @@ mod tests {
         ));
         assert_eq!(router.read(routed, 2, 2), Ok(1));
         assert_eq!(router.reset(exhausted), Ok(2));
+    }
+
+    const fn selector(bus: u8, device: u8, function: u8, register: u8) -> u32 {
+        (1 << 31)
+            | ((bus as u32) << 16)
+            | ((device as u32) << 11)
+            | ((function as u32) << 8)
+            | ((register as u32) & 0xfc)
+    }
+
+    #[test]
+    fn mechanism_one_policy_is_exact_and_deny_by_default() {
+        let policy = VirtualPciConfigurationMechanismOne::io_policy().unwrap();
+        assert!(policy.permits(PCI_CONFIGURATION_ADDRESS_PORT, 4, true));
+        assert!(policy.permits(PCI_CONFIGURATION_ADDRESS_PORT, 4, false));
+        for (port, size) in [
+            (PCI_CONFIGURATION_DATA_PORT, 1),
+            (PCI_CONFIGURATION_DATA_PORT, 2),
+            (PCI_CONFIGURATION_DATA_PORT, 4),
+            (PCI_CONFIGURATION_DATA_PORT + 1, 1),
+            (PCI_CONFIGURATION_DATA_PORT + 2, 1),
+            (PCI_CONFIGURATION_DATA_PORT + 2, 2),
+            (PCI_CONFIGURATION_DATA_PORT + 3, 1),
+        ] {
+            assert!(policy.permits(port, size, true));
+            assert!(policy.permits(port, size, false));
+        }
+        assert!(!policy.permits(PCI_CONFIGURATION_ADDRESS_PORT, 2, true));
+        assert!(!policy.permits(PCI_CONFIGURATION_DATA_PORT + 1, 2, false));
+        assert!(!policy.permits(PCI_CONFIGURATION_DATA_PORT + 4, 1, false));
+    }
+
+    #[test]
+    fn mechanism_one_selects_and_routes_exact_function_fields() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = VirtualPciLocation::new(0, 3, 5, 2).unwrap();
+        router.attach(routed, function(0x5678)).unwrap();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        let selected = selector(3, 5, 2, 0);
+        assert_eq!(
+            transport.access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selected
+            ),
+            Ok(VirtualPciIoOutcome::AddressRegister(selected))
+        );
+        assert_eq!(
+            transport.access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                false,
+                u32::MAX
+            ),
+            Ok(VirtualPciIoOutcome::AddressRegister(selected))
+        );
+        assert_eq!(
+            transport.access(&mut router, PCI_CONFIGURATION_DATA_PORT, 2, false, 0),
+            Ok(VirtualPciIoOutcome::Read(0x1234))
+        );
+        assert_eq!(
+            transport.access(&mut router, PCI_CONFIGURATION_DATA_PORT + 2, 2, false, 0),
+            Ok(VirtualPciIoOutcome::Read(0x5678))
+        );
+    }
+
+    #[test]
+    fn mechanism_one_routes_transactional_command_and_bar_writes() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = VirtualPciLocation::new(0, 0, 1, 0).unwrap();
+        router.attach(routed, function(1)).unwrap();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        transport
+            .access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 1, 0, 16),
+            )
+            .unwrap();
+        assert_eq!(
+            transport.access(
+                &mut router,
+                PCI_CONFIGURATION_DATA_PORT,
+                4,
+                true,
+                0x2000_0fff
+            ),
+            Ok(VirtualPciIoOutcome::Write(
+                VirtualPciWriteOutcome::BarAddress(0x2000_0000)
+            ))
+        );
+        transport
+            .access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 1, 0, 4),
+            )
+            .unwrap();
+        assert_eq!(
+            transport.access(
+                &mut router,
+                PCI_CONFIGURATION_DATA_PORT,
+                2,
+                true,
+                u32::from(PCI_COMMAND_MEMORY_SPACE)
+            ),
+            Ok(VirtualPciIoOutcome::Write(VirtualPciWriteOutcome::Command(
+                PCI_COMMAND_MEMORY_SPACE
+            )))
+        );
+        assert_eq!(
+            router.read(routed, 4, 2),
+            Ok(u32::from(PCI_COMMAND_MEMORY_SPACE))
+        );
+    }
+
+    #[test]
+    fn mechanism_one_absent_and_disabled_accesses_are_conventional_and_bounded() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        for (port, size, mask) in [
+            (PCI_CONFIGURATION_DATA_PORT, 1, u8::MAX as u32),
+            (PCI_CONFIGURATION_DATA_PORT, 2, u16::MAX as u32),
+            (PCI_CONFIGURATION_DATA_PORT, 4, u32::MAX),
+        ] {
+            assert_eq!(
+                transport.access(&mut router, port, size, false, 0),
+                Ok(VirtualPciIoOutcome::AbsentRead(mask))
+            );
+            assert_eq!(
+                transport.access(&mut router, port, size, true, 0xa5),
+                Ok(VirtualPciIoOutcome::AbsentWrite)
+            );
+        }
+        transport
+            .access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 31, 7, 0),
+            )
+            .unwrap();
+        assert_eq!(
+            transport.access(&mut router, PCI_CONFIGURATION_DATA_PORT + 3, 1, false, 0),
+            Ok(VirtualPciIoOutcome::AbsentRead(u8::MAX as u32))
+        );
+    }
+
+    #[test]
+    fn mechanism_one_rejects_noncanonical_selectors_and_crossing_accesses() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        for value in [1, 1 << 24, 1 << 30] {
+            assert_eq!(
+                transport.access(&mut router, PCI_CONFIGURATION_ADDRESS_PORT, 4, true, value),
+                Err(VirtualPciError::InvalidTransport)
+            );
+            assert_eq!(transport.address(), 0);
+        }
+        for (port, size) in [
+            (PCI_CONFIGURATION_ADDRESS_PORT, 2),
+            (PCI_CONFIGURATION_DATA_PORT + 1, 2),
+            (PCI_CONFIGURATION_DATA_PORT + 2, 4),
+            (PCI_CONFIGURATION_DATA_PORT + 4, 1),
+        ] {
+            assert_eq!(
+                transport.access(&mut router, port, size, false, 0),
+                Err(VirtualPciError::InvalidTransport)
+            );
+        }
     }
 }

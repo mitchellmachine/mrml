@@ -694,6 +694,12 @@ accesses, capacity exhaustion, active-decode detachment, stale attachment IDs,
 and attachment-generation exhaustion fail without ambiguous routing or partial
 removal. BDF and attachment identity remain data; mutable access to trusted VMM
 policy, not knowledge of either value, supplies authority.
+A separate conventional Configuration Mechanism #1 state machine now decodes
+canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
+derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector
+reserved bits and crossing/misaligned data accesses, and returns width-bounded
+all-ones reads or ignored writes for disabled/absent selections. It does not yet
+participate in a KVM/WHP run loop or advertise a concrete PCI function.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

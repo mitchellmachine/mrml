@@ -306,6 +306,12 @@ registrations, absent functions, table exhaustion, stale attachment generations,
 and removal while memory decode is enabled fail before mutation.
 A BDF or attachment ID identifies state but is never a capability; only the
 trusted VMM policy boundary may attach, reset, route writes, or detach functions.
+Legacy PCI configuration transport admits only the exact allowlisted address and
+data-port width/direction tuples. Selector reserved bits, data-port alignment,
+dword crossing, BDF, and register arithmetic are validated before router access.
+Disabled or absent selections disclose only a width-sized all-ones value and
+cannot mutate a function. Transport selection remains routing data, not device
+or backend authority.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
