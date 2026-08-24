@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `fbb7c27`
-  (`compiler: project tuple move paths`)
+- Compiler checkpoint commit: `147e15a`
+  (`compiler: classify direct move and write effects`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -70,6 +70,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   valid spans, and complete coverage. Missing pairs, corrupt roots or children,
   cross-root parents, and capacity exhaustion fail closed before native output
   is accepted; and
+- a fixed 512-entry place-effect ledger tied to validated move-path IDs. Direct
+  identifier initialization of a mutable-reference binding records a `Move` on
+  the source root. Direct root and precise tuple-field assignments record
+  `Write` or `ReadModifyWrite` after their RHS read planning. Moves of `Copy`
+  types, projected moves in this direct-only slice, read-modify-write on
+  non-`Copy` paths, invalid IDs, holes, malformed spans, corrupt counts, and
+  capacity exhaustion fail closed; and
 - pre-emission typing and stable identity assignment for every declaration form
   represented by the supported runtime body and loop parsers, mirroring pre-loop,
   loop, nested-loop, conditional-arm, and post-loop emission order with exact
@@ -209,8 +216,9 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Array-element move paths, copy-versus-move access classification, flow-sensitive
-initializedness, unsupported parser/control-flow forms, borrows, loans, regions,
+Array-element move paths, general copy/move/reborrow classification,
+flow-sensitive initializedness and use-after-move enforcement, unsupported
+parser/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -220,9 +228,11 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. classify explicit copy/move/write/reborrow effects without treating ambiguous
-   mutable-reference or pointee reads as moves;
-2. compute bounded flow-sensitive initializedness over the existing CFG and
+1. extend contextual effects through proven copies, calls, returns, and
+   reborrows without treating ambiguous mutable-reference or pointee reads as
+   moves;
+2. compute bounded flow-sensitive initializedness and use-after-move rejection
+   over the existing CFG and
    precise tuple paths;
 3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
@@ -250,8 +260,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 673 tests on each host: 370
-library tests, 10 conformance tests, 291 replacement tests, and 2 driver tests.
+The checkpoint source passed 675 tests on each host: 371
+library tests, 10 conformance tests, 292 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

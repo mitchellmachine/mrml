@@ -202,9 +202,16 @@ projections, and exact child ordering, parent, base, field projection, and type.
 Corruption, missing paired facts, or capacity exhaustion fails closed. These
 root sites are structural
 prerequisites: arrays remain root-only because the current summary `Index`
-projection does not identify a disjoint element. The facts do not yet distinguish
-copies, moves, or reborrows, compute flow-sensitive initializedness, or claim
-that unreachable or divergent declarations execute.
+projection does not identify a disjoint element. A separate fixed 512-entry
+effect ledger now records only contextually proven effects: direct identifier
+initialization of a mutable-reference binding is a `Move` on the source root,
+and direct root or precise tuple-field assignments become `Write` or
+`ReadModifyWrite` after RHS planning. Validation rejects incompatible types,
+projected moves in this direct-only slice, invalid paths, holes, corrupt counts,
+malformed spans, and capacity overflow. Calls, returns, dereferences, indexes,
+copies, and reborrows remain unclassified rather than guessed. The facts do not
+yet compute flow-sensitive initializedness, reject use after move, or claim that
+unreachable or divergent declarations execute.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root
@@ -319,8 +326,8 @@ unsupported
 aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
-yet a complete typed body table, array-element move paths or move-state analysis,
-borrow, or loan model. An initial
+yet a complete typed body table, array-element paths, complete effect coverage,
+move-state enforcement, borrow, or loan model. An initial
 fixed-capacity CFG fact table records stable basic-block IDs, exact top-level
 statement ranges, reachability, and true/false/unconditional edges to blocks or
 function return for straight-line, conditional-return, explicit-return, and tail
