@@ -712,9 +712,11 @@ exhaustion fail closed. Reset rediscovery now records the exact terminal cause,
 accepts only a canonical exact-successor generation with four zero queue
 counters, and leaves all state unchanged on rejection. Removal and request-ID
 exhaustion cannot be rediscovered. One-time-signed compiled KVM and WHP images
-now discover and execute this common driver for one bounded write/read cycle
-against a volatile one-page backend. Unbounded progress, nonzero-queue restart,
-and PCI transport remain pending.
+now discover and execute this common driver with a two-entry in-flight window:
+two disjoint writes publish before either completion retires, both drain in
+order, and both slots are then reused for the corresponding reads against a
+volatile two-page backend. Unbounded progress, nonzero-queue restart, and PCI
+transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
@@ -732,7 +734,7 @@ copies, aligned volatile counters, release/acquire fences, exact 32-bit port
 output, and fail-stop acknowledgement observation. Its controlled port model is
 unit/simulation evidence. Live signed compiled KVM and WHP probes now execute the
 privileged native `OUT` path, shared host runner, exact capability-authorized
-interrupt, protected acknowledgement, and complete 4 KiB write/read comparison.
+interrupt, protected acknowledgement, and complete two-page write/read comparison.
 This does not verify native boot, durability, PCI, or physical hardware.
 
 Networking proceeds from capability-bound network objects and a basic native

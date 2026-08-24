@@ -696,10 +696,12 @@ request-ID exhaustion record an explicit terminal cause. Only reset may recover:
 rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal
 state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
-queue resume, mapped signed-guest consumption of this state, unbounded progress,
-and PCI discovery remain pending. Freshly one-time-signed compiled KVM and WHP
-images now discover this common state from the mapped configuration page and use
-it for one exact write/read cycle over a volatile one-page backend.
+queue resume, unbounded progress, and PCI discovery remain pending. Freshly one-
+time-signed compiled KVM and WHP images now discover this common state from the
+mapped configuration page. A two-slot queue publishes writes to two disjoint
+blocks and payload pages before draining either completion in order, then reuses
+both retired slots for the corresponding reads against a volatile two-page
+backend.
 A backend-neutral unsafe guest queue-transport contract now composes those
 transactions with canonical queue addresses and exact configured I/O tuples.
 Request publication copies the exact slot, release-publishes its producer, and

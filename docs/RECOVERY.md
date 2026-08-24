@@ -357,30 +357,29 @@ explicitly and downgrade the status rather than guessing.
   pending delivery precedes another vCPU entry and any stage error fails the VM.
   No production hosted/physical backend or durability evidence exists yet. A
   freshly one-time-signed compiled KVM and WHP images now exercise the common
-  guest driver against volatile one-page backends; this is controlled hosted
+  guest driver against volatile two-page backends; this is controlled hosted
   evidence, not recovery or persistence evidence.
   Prepared KVM and WHP guests attach the same validated request and guest-read-
   only completion ranges transactionally; ordinary completion writes fail while
   the device-memory path can publish. Dedicated initial-launch builders also
   identity-map request pages RW/NX and completion pages R/NX in guest page
   tables, rejecting aliases and KVM native-slot undercapacity before launch.
-  Controlled signed probes write one fixed payload, canonical request, and
-  producer counter, emit the exact native doorbell, and complete the write
-  through the common runner on each backend. This is hosted controlled-probe
-  evidence, not a reusable guest block driver, concrete device backend,
-  durability result, or physical-device result. A
+  Earlier controlled signed probes wrote one fixed payload and completed one
+  request through the common runner on each backend. This is hosted controlled-
+  probe evidence, not a production device backend, durability result, or
+  physical-device result. A
   protected completion acknowledgement now lets the bridge retire exactly one
   published completion through the device-only write path after confirmed
   notification delivery; the guest-read-only mapping is preserved. The signed
-  probes now reuse one retired slot for a bounded write/read pair, validating
-  and acknowledging both protected records; KVM has live execution evidence
-  for this path while the WHP implementation is currently type-checked only. A
+  probes first reused one retired slot for a bounded write/read pair, validating
+  and acknowledging both protected records on KVM and WHP. A
   canonical pointer-free active-device configuration record now captures exact
   virtual-block mechanics and must be revalidated against the live generation;
   it is not authority. Typed queue-bound page presentation is now implemented
   by both hosted launch builders: the page is disjoint, completely zero-padded,
   and guest-read-only/NX. Both KVM and WHP have live controlled-probe evidence.
-  Signed-guest discovery and PCI presentation remain pending. A
+  Signed-guest discovery now has live KVM and WHP evidence; PCI presentation
+  remains pending. A
   backend-neutral allocation-free initial guest-driver state now discovers only
   a canonical configuration with a completely fresh idle queue, uses two-phase
   exact publication tickets, fills only the configured-capacity in-flight
@@ -392,9 +391,11 @@ explicitly and downgrade the status rather than guessing.
   outstanding descendants only on commit. An accepted
   reset records its terminal cause and can rediscover only the exact canonical
   successor generation with four zero counters; rejection changes nothing,
-  while removal and sequence exhaustion remain permanent. Nonzero restart
-  history, signed-image integration, unbounded progress, and PCI transport
-  remain pending. A common unsafe guest queue-transport boundary now derives
+  while removal and sequence exhaustion remain permanent. Fresh signed KVM and
+  WHP images now fill a two-entry window with disjoint writes, drain it in
+  order, and reuse both slots for reads. Nonzero restart history, unbounded
+  progress, and PCI transport remain pending. A common unsafe guest queue-
+  transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer
   slot, and uses the exact protected acknowledgement tuple before local
@@ -404,8 +405,8 @@ explicitly and downgrade the status rather than guessing.
   access/order/tuple/error guarantees are part of the unsafe contract. The
   common path has a concrete x86_64 identity-mapped implementation with
   volatile exact copies, ordered counters, exact port output, and fail-stop
-  acknowledgement observation. Only controlled-port unit/simulation evidence
-  exists; signed native execution remains pending. The canonical fixed-capacity
+  acknowledgement observation. Controlled-port unit/simulation and signed
+  native KVM/WHP execution evidence now exist. The canonical fixed-capacity
   allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

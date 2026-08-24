@@ -1648,3 +1648,12 @@ scalar I/O dispatcher, capability-authorized interrupt path, and volatile test
 backend already exercised under KVM. No new protocol, authority mechanism, or
 patent-candidate mechanism was identified. This agent review does not replace
 the required independent human dual review.
+
+# 2026-08-24 — Two-slot signed block guest window
+
+**Result: NOT_TRIGGERED.** The change conventionally fills two entries of the
+existing bounded shared ring before draining completions in order, then reuses
+the retired slots. Two checked payload mappings and an independently bounded
+volatile backend are standard controlled-integration techniques. No new
+protocol, authority model, or patent-candidate mechanism was identified. This
+agent review does not replace the required independent human dual review.

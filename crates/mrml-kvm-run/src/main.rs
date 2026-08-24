@@ -138,7 +138,7 @@ impl LaunchMode {
 }
 
 #[cfg(target_os = "linux")]
-struct DriverProbeBlock([u8; 4096]);
+struct DriverProbeBlock([u8; 8192]);
 
 #[cfg(target_os = "linux")]
 unsafe impl VirtualBlockBackend for DriverProbeBlock {
@@ -149,10 +149,16 @@ unsafe impl VirtualBlockBackend for DriverProbeBlock {
         block: u64,
         output: &mut [u8],
     ) -> core::result::Result<(), Self::Error> {
-        if block != 0 || output.len() != self.0.len() {
+        let start = usize::try_from(block)
+            .ok()
+            .and_then(|block| block.checked_mul(4096))
+            .ok_or(())?;
+        let end = start.checked_add(output.len()).ok_or(())?;
+        let source = self.0.get(start..end).ok_or(())?;
+        if output.len() != 4096 {
             return Err(());
         }
-        output.copy_from_slice(&self.0);
+        output.copy_from_slice(source);
         Ok(())
     }
 
@@ -161,10 +167,21 @@ unsafe impl VirtualBlockBackend for DriverProbeBlock {
         block: u64,
         input: &[u8],
     ) -> core::result::Result<(), VirtualBlockMutationError<Self::Error>> {
-        if block != 0 || input.len() != self.0.len() {
+        let start = usize::try_from(block)
+            .ok()
+            .and_then(|block| block.checked_mul(4096))
+            .ok_or(VirtualBlockMutationError::Rejected(()))?;
+        let end = start
+            .checked_add(input.len())
+            .ok_or(VirtualBlockMutationError::Rejected(()))?;
+        if input.len() != 4096 {
             return Err(VirtualBlockMutationError::Rejected(()));
         }
-        self.0.copy_from_slice(input);
+        let destination = self
+            .0
+            .get_mut(start..end)
+            .ok_or(VirtualBlockMutationError::Rejected(()))?;
+        destination.copy_from_slice(input);
         Ok(())
     }
 
@@ -177,7 +194,7 @@ unsafe impl VirtualBlockBackend for DriverProbeBlock {
 fn block_configuration(
     layout: VirtualBlockQueueLayout,
 ) -> Result<mrml_kernel::VirtualBlockConfiguration> {
-    let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0)
+    let mut device = VirtualBlockDevice::<2>::new(4096, 2, 0)
         .map_err(|_| anyhow!("invalid block probe geometry"))?;
     device
         .negotiate(0)
@@ -223,99 +240,105 @@ fn run_block_guest_driver_probe(
     let mut router = HypercallRouter::new(ObjectId(0x302), ObjectId(0x303), ObjectId(0x304));
     let guest_memory = GuestMemory::<0>::new();
     let mut device =
-        VirtualBlockDevice::<1>::new(4096, 1, 0).map_err(|_| anyhow!("invalid block device"))?;
+        VirtualBlockDevice::<2>::new(4096, 2, 0).map_err(|_| anyhow!("invalid block device"))?;
     device
         .negotiate(0)
         .and_then(|_| device.activate(layout, 48))
         .map_err(|_| anyhow!("failed to activate block device"))?;
-    let mut bridge = VirtualBlockQueueBridge::<1>::new(layout)
+    let mut bridge = VirtualBlockQueueBridge::<2>::new(layout)
         .map_err(|_| anyhow!("failed to bind block queue bridge"))?;
-    let mut storage = DriverProbeBlock([0; 4096]);
+    let mut storage = DriverProbeBlock([0; 8192]);
     let mut scratch = [0; 4096];
 
-    for operation in 0..2 {
-        let outcome = match run_virtual_block_doorbell_once(
-            guest,
-            &mut storage,
-            0,
-            &mut vms,
-            vm,
-            &mut router,
-            &capabilities,
-            &guest_memory,
-            &io_policy,
-            &interrupt_policy,
-            interrupt_capability,
-            interrupt_object,
-            &mut device,
-            &mut bridge,
-            &mut scratch,
-        ) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                let state = guest.snapshot().map_err(|snapshot| {
-                    anyhow!(
-                        "block doorbell {} failed: {:?}; snapshot failed: {:?}",
+    for window in 0..2 {
+        for offset in 0..2 {
+            let operation = window * 2 + offset;
+            let outcome = match run_virtual_block_doorbell_once(
+                guest,
+                &mut storage,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io_policy,
+                &interrupt_policy,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let state = guest.snapshot().map_err(|snapshot| {
+                        anyhow!(
+                            "block doorbell {} failed: {:?}; snapshot failed: {:?}",
+                            operation + 1,
+                            error,
+                            snapshot
+                        )
+                    })?;
+                    return Err(anyhow!(
+                        "block doorbell {} failed: {:?}; rip={:#x} rsp={:#x} cr2={:#x} cr3={:#x}",
                         operation + 1,
                         error,
-                        snapshot
-                    )
-                })?;
+                        state.instruction_pointer(),
+                        state.stack_pointer(),
+                        state.fault_address(),
+                        state.page_table_root()
+                    ));
+                }
+            };
+            if !matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
                 return Err(anyhow!(
-                    "block doorbell {} failed: {:?}; rip={:#x} rsp={:#x} cr2={:#x} cr3={:#x}",
-                    operation + 1,
-                    error,
-                    state.instruction_pointer(),
-                    state.stack_pointer(),
-                    state.fault_address(),
-                    state.page_table_root()
+                    "block operation {} was not completed",
+                    operation + 1
                 ));
             }
-        };
-        if !matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
-            return Err(anyhow!(
-                "block operation {} was not completed",
-                operation + 1
-            ));
         }
-        let acknowledgement = match run_virtual_block_completion_ack_once(
-            guest,
-            0,
-            &mut vms,
-            vm,
-            &mut router,
-            &capabilities,
-            &guest_memory,
-            &io_policy,
-            &mut device,
-            &mut bridge,
-        ) {
-            Ok(acknowledgement) => acknowledgement,
-            Err(error) => {
-                let state = guest.snapshot().map_err(|snapshot| {
-                    anyhow!(
-                        "block acknowledgement {} failed: {:?}; snapshot failed: {:?}",
+        for offset in 0..2 {
+            let operation = window * 2 + offset;
+            let acknowledgement = match run_virtual_block_completion_ack_once(
+                guest,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io_policy,
+                &mut device,
+                &mut bridge,
+            ) {
+                Ok(acknowledgement) => acknowledgement,
+                Err(error) => {
+                    let state = guest.snapshot().map_err(|snapshot| {
+                        anyhow!(
+                            "block acknowledgement {} failed: {:?}; snapshot failed: {:?}",
+                            operation + 1,
+                            error,
+                            snapshot
+                        )
+                    })?;
+                    return Err(anyhow!(
+                        "block acknowledgement {} failed: {:?}; rip={:#x} rsp={:#x} cr2={:#x} cr3={:#x}",
                         operation + 1,
                         error,
-                        snapshot
-                    )
-                })?;
-                return Err(anyhow!(
-                    "block acknowledgement {} failed: {:?}; rip={:#x} rsp={:#x} cr2={:#x} cr3={:#x}",
-                    operation + 1,
-                    error,
-                    state.instruction_pointer(),
-                    state.stack_pointer(),
-                    state.fault_address(),
-                    state.page_table_root()
-                ));
+                        state.instruction_pointer(),
+                        state.stack_pointer(),
+                        state.fault_address(),
+                        state.page_table_root()
+                    ));
+                }
+            };
+            if acknowledgement != (operation + 1) as u64 {
+                return Err(anyhow!("block acknowledgement position mismatch"));
             }
-        };
-        if acknowledgement != (operation + 1) as u64 {
-            return Err(anyhow!("block acknowledgement position mismatch"));
         }
     }
-    if storage.0 != [0x6d; 4096] {
+    if storage.0[..4096] != [0x6d; 4096] || storage.0[4096..] != [0xa7; 4096] {
         return Err(anyhow!("block backend payload mismatch"));
     }
     let proof = VmBackend::run(guest, 0)
@@ -325,7 +348,7 @@ fn run_block_guest_driver_probe(
             port: BLOCK_PROOF_PORT,
             size: 4,
             write: true,
-            value: 2,
+            value: 4,
         })
     {
         return Err(anyhow!("block common-driver proof mismatch: {:?}", proof));
@@ -463,6 +486,7 @@ fn application_main() -> Result<()> {
             executable.artifact().version(),
             entropy,
             *executable.artifact().digest(),
+            u64::from(mode == LaunchMode::BlockGuestDriverProbe) + 1,
         )?
     };
     let user_probe = matches!(mode, LaunchMode::UserProbe | LaunchMode::PreemptionProbe);
@@ -505,7 +529,7 @@ fn application_main() -> Result<()> {
     let preparation_started = Instant::now();
     let queue_layout = GpuSharedQueueLayout::new(0x00b0_0000, 0x00b0_1000, 1)
         .map_err(|_| anyhow!("invalid fixed GPU queue layout"))?;
-    let block_layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 1)
+    let block_layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 2)
         .map_err(|_| anyhow!("invalid fixed block queue layout"))?;
     let block_configuration = block_configuration(block_layout)?;
     let mut guest = match mode {
@@ -668,7 +692,7 @@ fn application_main() -> Result<()> {
     if mode == LaunchMode::BlockGuestDriverProbe {
         run_block_guest_driver_probe(&mut guest, block_layout)?;
         println!(
-            "verified signed compiled common block guest driver under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed compiled two-slot common block guest driver under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),
@@ -1702,10 +1726,19 @@ impl EncodedHandoff {
 }
 
 #[cfg(any(test, target_os = "linux"))]
-fn boot_handoff(version: u64, entropy: [u8; 32], measurement: [u8; 64]) -> Result<EncodedHandoff> {
+fn boot_handoff(
+    version: u64,
+    entropy: [u8; 32],
+    measurement: [u8; 64],
+    framebuffer_pages: u64,
+) -> Result<EncodedHandoff> {
+    let framebuffer_bytes = framebuffer_pages
+        .checked_mul(4096)
+        .filter(|bytes| matches!(*bytes, 4096 | 8192))
+        .ok_or_else(|| anyhow!("invalid framebuffer page count"))?;
     let framebuffer = FramebufferInfo::new(
         FRAMEBUFFER,
-        0x1000,
+        framebuffer_bytes,
         16,
         16,
         16,
@@ -1719,7 +1752,7 @@ fn boot_handoff(version: u64, entropy: [u8; 32], measurement: [u8; 64]) -> Resul
     let regions = [
         region(0x1000, 2, MemoryKind::Free)?,
         region(0x3000, 1, MemoryKind::Kernel)?,
-        region(FRAMEBUFFER, 1, MemoryKind::Mmio)?,
+        region(FRAMEBUFFER, framebuffer_pages, MemoryKind::Mmio)?,
     ];
     let mut encoded = [0u8; 316];
     let length = encode_handoff(
@@ -1814,7 +1847,7 @@ mod tests {
     fn handoff_binds_verified_version_entropy_and_measurement() {
         let entropy = [0x35; 32];
         let measurement = [0xa7; 64];
-        let encoded = boot_handoff(19, entropy, measurement).unwrap();
+        let encoded = boot_handoff(19, entropy, measurement, 1).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.evidence().image_version(), 19);
         assert_eq!(decoded.evidence().entropy(), &entropy);
@@ -1822,6 +1855,28 @@ mod tests {
         assert!(decoded.evidence().secure_boot());
         assert!(!decoded.evidence().measured_boot());
         assert!(!decoded.evidence().rollback_protected());
+    }
+
+    #[test]
+    fn block_handoff_binds_two_disjoint_payload_pages() {
+        let encoded = boot_handoff(20, [0x36; 32], [0xa8; 64], 2).unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        assert_eq!(decoded.framebuffer().base().get(), FRAMEBUFFER);
+        assert_eq!(decoded.framebuffer().byte_length(), 8192);
+        assert!(boot_handoff(20, [0x36; 32], [0xa8; 64], 3).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn block_probe_backend_rejects_every_out_of_range_access() {
+        let mut backend = DriverProbeBlock([0; 8192]);
+        let mut block = [0; 4096];
+        assert!(backend.read_blocks(2, &mut block).is_err());
+        assert!(backend.read_blocks(u64::MAX, &mut block).is_err());
+        assert!(backend.read_blocks(0, &mut block[..4095]).is_err());
+        assert!(backend.write_blocks(2, &block).is_err());
+        assert!(backend.write_blocks(u64::MAX, &block).is_err());
+        assert!(backend.write_blocks(0, &block[..4095]).is_err());
     }
 
     #[test]
@@ -1846,6 +1901,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("block-service-probe").unwrap(),
             LaunchMode::BlockServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("block-guest-driver-probe").unwrap(),
+            LaunchMode::BlockGuestDriverProbe
         );
         assert_eq!(
             LaunchMode::parse("service-restart-request-probe").unwrap(),

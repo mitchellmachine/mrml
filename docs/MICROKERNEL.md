@@ -3598,23 +3598,26 @@ arithmetic, feature denial, exact reset rediscovery, unchanged-state rejection,
 and permanently terminal removal/exhaustion. This is
 unit/simulation evidence for the broad adversarial matrix. A freshly generated
 one-time Lamport key additionally signed the exact compiled
-`block-guest-driver-probe` image. On Arch Linux/WSL2 KVM that image decoded the
-read-only configuration page, discovered the common driver from four zero
-counters, executed the concrete native `OUT` transport, completed one exact 4
-KiB write and read through the shared fail-closed host runners, received vector
-48 only through the exact `SIGNAL` capability and allowlist, published both
-protected acknowledgements, and proved the complete read-back page. The
-one-page backend was volatile and launcher-local. Verification reported
-`verify=16896us prepare=2391us execute=347us total=41039us`; timings are this
-controlled run only, not a performance claim. A separate freshly generated
-one-time Lamport key signed the same exact compiled image for Windows WHP. That
-image crossed the same mapped configuration, common driver, native `OUT`, shared
-doorbell/acknowledgement runners, exact `SIGNAL` capability and vector-48
-allowlist, and complete 4 KiB comparison, reporting
-`verify=17518us prepare=4264us execute=217us total=25877us`. These timings are
-also one controlled run, not a performance claim. Hosted KVM/WHP remain subject
-to their hosts. Nonzero resume, unbounded progress, persistence/durability, PCI,
-native boot, and physical hardware remain unverified.
+`block-guest-driver-probe` image. The current probe uses a two-slot queue, two
+disjoint 4 KiB payload mappings, and a volatile two-block launcher backend. It
+publishes both writes before preparing either completion, validates and
+acknowledges both in protected consumer order, clears both payload pages,
+publishes both reads before retirement, drains them in order, and compares both
+complete pages against distinct fixed patterns. Thus producer and completion
+watermarks advance through a full two-entry in-flight window before both slots
+are reused; this is not a longer sequence of single-entry round trips.
+
+One freshly generated one-time Lamport key signed the exact compiled image used
+on both hosted backends. Arch Linux/WSL2 KVM reported
+`verify=17226us prepare=2163us execute=326us total=49285us`; Windows WHP reported
+`verify=17309us prepare=3627us execute=243us total=24921us`. Each image decoded
+the read-only configuration, discovered four zero counters, executed native
+`OUT`, crossed the shared fail-closed doorbell and acknowledgement runners, and
+received vector 48 only through the exact `SIGNAL` capability and allowlist.
+Timings are single controlled runs, not performance claims. Hosted KVM/WHP
+remain subject to their hosts. Nonzero resume, unbounded progress,
+persistence/durability, PCI, native boot, and physical hardware remain
+unverified.
 
 This live probe also exposed a descriptor-transition defect before the first
 returning interrupt: loading the private GDT replaced the launcher's selectors
@@ -3641,7 +3644,12 @@ are unchanged. This agent review does not replace the required independent
 human dual review. The WHP parity integration adds no new data collection,
 identity, persistence, attestation, accessibility surface, authority model, or
 parser; it uses the same hostile-input set and fail-closed common policy as the
-KVM path.
+KVM path. The two-slot extension additionally treats framebuffer extent, both
+block indices, payload ranges and patterns, capacity, producer/completion
+watermarks, slot reuse, and acknowledgement order as hostile. The launch
+handoff admits exactly one or two framebuffer pages and rejects every other
+count; no payload aliases queue memory, and the volatile backend independently
+checks block multiplication, range addition, exact length, and slice bounds.
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,

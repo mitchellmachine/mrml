@@ -2294,58 +2294,76 @@ unsafe fn run_block_guest_driver_probe() -> ! {
     let mut transport =
         unsafe { X86VirtualBlockGuestQueueTransport::new(NativeX86VirtualBlockPortIo) };
 
-    for offset in 0..4096usize {
-        unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0x6d) };
+    for (base, value) in [
+        (BLOCK_PAYLOAD_BASE, 0x6du8),
+        (BLOCK_PAYLOAD_BASE + 4096, 0xa7),
+    ] {
+        for offset in 0..4096usize {
+            unsafe { ((base as *mut u8).add(offset)).write_volatile(value) };
+        }
     }
     unsafe { asm!("sti", options(nomem, nostack)) };
-    let write = driver
-        .prepare_write(0, 1, BLOCK_PAYLOAD_BASE, 4096)
-        .unwrap_or_else(|_| halt());
-    driver
-        .publish_submission(&mut transport, write)
-        .unwrap_or_else(|_| halt());
-    let write_completion = driver
-        .prepare_completion_from_transport(&mut transport)
-        .unwrap_or_else(|_| halt());
-    if write_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
-        || write_completion.transferred() != 4096
-    {
-        halt();
+    for block in 0..2u64 {
+        let write = driver
+            .prepare_write(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
+            .unwrap_or_else(|_| halt());
+        driver
+            .publish_submission(&mut transport, write)
+            .unwrap_or_else(|_| halt());
     }
-    driver
-        .acknowledge_completion_with_transport(&mut transport, write_completion)
-        .unwrap_or_else(|_| halt());
+    for _ in 0..2 {
+        let write_completion = driver
+            .prepare_completion_from_transport(&mut transport)
+            .unwrap_or_else(|_| halt());
+        if write_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+            || write_completion.transferred() != 4096
+        {
+            halt();
+        }
+        driver
+            .acknowledge_completion_with_transport(&mut transport, write_completion)
+            .unwrap_or_else(|_| halt());
+    }
 
-    for offset in 0..4096usize {
+    for offset in 0..8192usize {
         unsafe { ((BLOCK_PAYLOAD_BASE as *mut u8).add(offset)).write_volatile(0) };
     }
-    let read = driver
-        .prepare_read(0, 1, BLOCK_PAYLOAD_BASE, 4096)
-        .unwrap_or_else(|_| halt());
-    driver
-        .publish_submission(&mut transport, read)
-        .unwrap_or_else(|_| halt());
-    let read_completion = driver
-        .prepare_completion_from_transport(&mut transport)
-        .unwrap_or_else(|_| halt());
-    if read_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
-        || read_completion.transferred() != 4096
-    {
-        halt();
+    for block in 0..2u64 {
+        let read = driver
+            .prepare_read(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
+            .unwrap_or_else(|_| halt());
+        driver
+            .publish_submission(&mut transport, read)
+            .unwrap_or_else(|_| halt());
     }
-    driver
-        .acknowledge_completion_with_transport(&mut transport, read_completion)
-        .unwrap_or_else(|_| halt());
-    for offset in 0..4096usize {
-        if unsafe { ((BLOCK_PAYLOAD_BASE as *const u8).add(offset)).read_volatile() } != 0x6d {
+    for _ in 0..2 {
+        let read_completion = driver
+            .prepare_completion_from_transport(&mut transport)
+            .unwrap_or_else(|_| halt());
+        if read_completion.status() != mrml_kernel::VirtualBlockCompletionStatus::Ok
+            || read_completion.transferred() != 4096
+        {
             halt();
+        }
+        driver
+            .acknowledge_completion_with_transport(&mut transport, read_completion)
+            .unwrap_or_else(|_| halt());
+    }
+    for (base, value) in [
+        (BLOCK_PAYLOAD_BASE, 0x6du8),
+        (BLOCK_PAYLOAD_BASE + 4096, 0xa7),
+    ] {
+        for offset in 0..4096usize {
+            if unsafe { ((base as *const u8).add(offset)).read_volatile() } != value {
+                halt();
+            }
         }
     }
     unsafe {
         asm!(
             "out dx, eax",
             in("dx") BLOCK_PROOF_PORT,
-            in("eax") 2u32,
+            in("eax") 4u32,
             options(nomem, nostack)
         )
     };
