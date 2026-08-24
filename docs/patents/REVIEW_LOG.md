@@ -2507,6 +2507,19 @@ interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
 
+# 2026-08-24 — Signed hosted recovery-syscall invocation
+
+**Result: NOT_TRIGGERED.** The change conventionally passes an existing exact
+capability token through the service launch ABI, invokes the existing fixed
+recovery syscall, checks one canonical fixed-size record, and erases temporary
+bytes. Backend-neutral KVM/WHP handoff construction carries identical typed
+test metadata and grants no host, storage, persistence, or recovery authority.
+It adds no attestation, compatibility transport, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
+Existing planned scopes remain `TRIGGERED`; this agent review does not replace
+independent human dual review.
+
 # 2026-08-24 — Capability-scoped recovery metadata delivery
 
 **Result: NOT_TRIGGERED.** The change conventionally authorizes one fixed boot

@@ -518,8 +518,13 @@ operation before generic syscall decoding, revalidates the complete return
 frame and active CR3, and creates the exact metadata-only capability and
 delivery only for the initial service generation when recovery metadata is
 present. The capability token is supplied in launch state; metadata presence
-does not grant storage or recovery authority. A signed service invocation and
-native UEFI execution remain pending.
+does not grant storage or recovery authority. The signed block-service probe
+now passes that token as a seventh SysV launch argument, invokes operation 13
+from CPL3, decodes the exact fixed record, and erases its copy. Fresh WHP and
+KVM controlled probes reached the existing complete service-cleanup gate. This
+is hosted invocation evidence only; native UEFI execution, authenticated TPM
+state, persistence, reboot, rollback resistance, and physical evidence remain
+pending.
 The full deterministic configuration recovery path exercises delivery,
 canonical service-side decoding, authenticated-store binding, owner proof,
 capability-selected I/O, monotonic commit, and service registration in order.

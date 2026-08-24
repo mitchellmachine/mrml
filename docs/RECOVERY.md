@@ -369,10 +369,17 @@ explicitly and downgrade the status rather than guessing.
   generic decoder, revalidates the complete user return frame and active CR3,
   and initializes the exact metadata-only capability/delivery for the initial
   service task generation only when handoff metadata exists. The token is
-  launch state, not storage authority. UEFI-target compile/lint evidence exists;
-  no signed service invocation or native UEFI execution evidence exists.
-  recovery test now traverses this delivery mechanism before the authenticated-
-  store wrapper. Signed invocation by a booted service remains pending.
+  launch state, not storage authority. The block-service launch ABI supplies
+  that token as a seventh SysV argument. The signed CPL3 service invokes
+  operation 13, verifies the exact fixed metadata record, and erases its copy.
+  Windows gnullvm passed 451 kernel, 5 KVM-runner, and 7 WHP-runner release
+  tests; strict scoped Clippy and both focused UEFI-target image checks passed.
+  Fresh independently signed WHP and KVM controlled probes reached the exact
+  lifecycle-cleanup gate. This is hosted invocation evidence, not native UEFI,
+  authenticated TPM, persistence, reboot, rollback-resistance, Secure Boot, or
+  physical evidence. The deterministic recovery test also traverses delivery
+  before the authenticated-store wrapper; live composition with that store in
+  a booted service remains pending.
   Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator

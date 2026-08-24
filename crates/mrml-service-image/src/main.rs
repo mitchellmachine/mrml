@@ -22,7 +22,8 @@ use mrml_config::{
 use mrml_crypto::Sha3_256;
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{
-    Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
+    Capability, CapabilityError, ObjectId, RecoveryStateMetadata, RestartPolicy, Rights,
+    ServiceId, ServiceState, HANDOFF_RECOVERY_STATE_BYTES,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
@@ -48,6 +49,8 @@ global_asm!(
             .section .text$a,"xr"
             .global efi_main
         efi_main:
+            sub rsp, 16
+            mov [rsp], r11
             mov rdi, r13
             mov rsi, r14
             mov rdx, r12
@@ -229,6 +232,7 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     _shared_write: u64,
     _shared_read: u64,
     restart_manager: u64,
+    _recovery_capability: u64,
 ) -> ! {
     unsafe { verify_shared_buffer_syscalls(shared_write, shared_read, generation) };
     let setting = SettingId::new(1).unwrap_or_else(|_| halt());
@@ -382,7 +386,11 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     _shared_write: u64,
     _shared_read: u64,
     _restart_manager: u64,
+    recovery_capability: u64,
 ) -> ! {
+    if recovery_capability != 0 {
+        unsafe { verify_recovery_metadata(recovery_capability) };
+    }
     let device = BlockDeviceId::new(1).unwrap_or_else(|| halt());
     let principal = StoragePrincipal::new(1).unwrap_or_else(|_| halt());
     let mut service = BlockService::<1, 1>::new();
@@ -425,6 +433,32 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     scratch.0.fill(0);
     unsafe { yield_now() };
     unsafe { terminate(3) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+unsafe fn verify_recovery_metadata(capability: u64) {
+    let mut encoded = [0xa5; HANDOFF_RECOVERY_STATE_BYTES];
+    let mut status = 13u64;
+    unsafe {
+        asm!(
+            "int 0x80",
+            inlateout("rax") status,
+            in("rdi") capability,
+            in("rsi") encoded.as_mut_ptr() as u64,
+            inlateout("rdx") 0u64 => _,
+            inlateout("r10") 0u64 => _,
+            inlateout("r8") 0u64 => _,
+            inlateout("r9") 0u64 => _,
+            options(nostack)
+        )
+    };
+    let expected = RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17)
+        .unwrap_or_else(|_| halt());
+    if status != 0 || RecoveryStateMetadata::decode(&encoded) != Ok(expected) {
+        encoded.fill(0);
+        halt();
+    }
+    encoded.fill(0);
 }
 
 #[cfg(not(feature = "preemption-probe"))]

@@ -231,8 +231,14 @@ decoding, rechecks the complete user return state and active address-space root,
 and constructs the metadata-only capability/delivery for one exact initial task
 generation only when the handoff contains recovery metadata. This launch-policy
 capability authorizes only the one-use metadata copy; the metadata itself still
-cannot authorize storage recovery. The image compiles for the UEFI target, but
-no signed service invocation or native UEFI execution evidence exists yet.
+cannot authorize storage recovery. The image and service compile for the UEFI
+target. Fresh independently signed WHP and KVM controlled probes passed a fixed
+recovery record through the handoff, initial-generation capability, launch ABI,
+operation-13 dispatcher, active user-copy adapter, and service-side decoder
+before exact lifecycle cleanup completed. The public test record grants no new
+storage authority. Hosted WHP/KVM remain controlled by their hosts; this is not
+native UEFI, TPM, persistence, reboot, rollback-resistance, Secure Boot, or
+physical evidence.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

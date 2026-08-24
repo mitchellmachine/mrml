@@ -533,6 +533,38 @@ pub fn encode_handoff(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_recovery(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    recovery_state: RecoveryStateMetadata,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    encode_handoff_inner(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        acpi_root,
+        framebuffer,
+        regions,
+        None,
+        None,
+        None,
+        Some(recovery_state),
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_madt(
     image_version: u64,
     entropy: [u8; 32],

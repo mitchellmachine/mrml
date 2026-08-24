@@ -31,8 +31,8 @@ use mrml_kernel::{
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
-    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, encode_handoff,
-    encode_handoff_with_smp,
+    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
+    encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp,
 };
 #[cfg(all(target_os = "windows", feature = "cuda"))]
 use mrml_runtime::Vector;
@@ -1116,6 +1116,10 @@ fn application_main() -> Result<()> {
             entropy,
             *executable.artifact().digest(),
             u64::from(block_guest_driver_mode || pci_configuration_mode) + 1,
+            block_service_mode.then(|| {
+                RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17)
+                    .expect("fixed recovery metadata")
+            }),
         )?
     };
     let (image_virtual, handoff_virtual, stack_virtual) = if hosted_smp {
@@ -2325,6 +2329,7 @@ fn boot_handoff(
     entropy: [u8; 32],
     measurement: [u8; 64],
     framebuffer_pages: u64,
+    recovery_state: Option<RecoveryStateMetadata>,
 ) -> Result<EncodedHandoff> {
     let framebuffer_bytes = framebuffer_pages
         .checked_mul(4096)
@@ -2349,20 +2354,35 @@ fn boot_handoff(
         region(FRAMEBUFFER, framebuffer_pages, MemoryKind::Mmio)?,
     ];
     let mut encoded = [0u8; 316];
-    let length = encode_handoff(
-        version,
-        entropy,
-        measurement,
-        true,
-        false,
-        false,
-        0x9000,
-        framebuffer,
-        &regions,
-        &mut encoded,
-    )
+    let length = match recovery_state {
+        Some(recovery_state) => encode_handoff_with_recovery(
+            version,
+            entropy,
+            measurement,
+            true,
+            false,
+            false,
+            0x9000,
+            framebuffer,
+            &regions,
+            recovery_state,
+            &mut encoded,
+        ),
+        None => encode_handoff(
+            version,
+            entropy,
+            measurement,
+            true,
+            false,
+            false,
+            0x9000,
+            framebuffer,
+            &regions,
+            &mut encoded,
+        ),
+    }
     .map_err(|_| anyhow!("handoff construction failed"))?;
-    if length != 240 {
+    if length != 240 + usize::from(recovery_state.is_some()) * 40 {
         return Err(anyhow!("unexpected handoff length"));
     }
     Ok(EncodedHandoff {
@@ -2439,7 +2459,7 @@ mod tests {
 
     #[test]
     fn handoff_binds_entropy_and_measurement() {
-        let encoded = boot_handoff(9, [0x35; 32], [0xa7; 64], 1).unwrap();
+        let encoded = boot_handoff(9, [0x35; 32], [0xa7; 64], 1, None).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.evidence().image_version(), 9);
         assert_eq!(decoded.evidence().entropy(), &[0x35; 32]);
@@ -2448,11 +2468,19 @@ mod tests {
 
     #[test]
     fn block_handoff_binds_two_disjoint_payload_pages() {
-        let encoded = boot_handoff(11, [0x37; 32], [0xa9; 64], 2).unwrap();
+        let encoded = boot_handoff(11, [0x37; 32], [0xa9; 64], 2, None).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.framebuffer().base().get(), FRAMEBUFFER);
         assert_eq!(decoded.framebuffer().byte_length(), 8192);
-        assert!(boot_handoff(11, [0x37; 32], [0xa9; 64], 0).is_err());
+        assert!(boot_handoff(11, [0x37; 32], [0xa9; 64], 0, None).is_err());
+    }
+
+    #[test]
+    fn recovery_handoff_binds_fixed_probe_metadata() {
+        let recovery = RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17).unwrap();
+        let encoded = boot_handoff(12, [0x38; 32], [0xaa; 64], 1, Some(recovery)).unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        assert_eq!(decoded.recovery_state(), Some(recovery));
     }
 
     #[cfg(target_os = "windows")]

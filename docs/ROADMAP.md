@@ -688,6 +688,14 @@ authority; unrelated domains continue.
    success. Wrong-service, wrong-object, overbroad/stale capability, replay, and
    replacement-task tests expose no data. The full configuration simulation
    traverses this delivery object before authenticated-store binding.
+   The signed block-service launch ABI now supplies the exact token as its
+   seventh SysV argument; CPL3 operation 13 returns one canonical fixed record,
+   which the service verifies and erases. Windows gnullvm passed 451 kernel, 5
+   KVM-runner, and 7 WHP-runner release tests; scoped strict Clippy and both
+   focused UEFI image checks passed. Fresh independently signed controlled WHP
+   and KVM probes reached exact service cleanup after this invocation. These
+   are unit, ABI-compilation, and hosted controlled-probe evidence, not native
+   UEFI, TPM, persistence, reboot, rollback-resistance, or physical evidence.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
    each pass all 447 kernel tests, all 16 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict

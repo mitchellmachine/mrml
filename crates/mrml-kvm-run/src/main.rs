@@ -28,8 +28,8 @@ use mrml_kernel::{
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
-    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, encode_handoff,
-    encode_handoff_with_smp,
+    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
+    encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp,
 };
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
@@ -1173,6 +1173,10 @@ fn application_main() -> Result<()> {
                 mode,
                 LaunchMode::BlockGuestDriverProbe | LaunchMode::PciConfigurationProbe
             )) + 1,
+            (mode == LaunchMode::BlockServiceProbe).then(|| {
+                RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17)
+                    .expect("fixed recovery metadata")
+            }),
         )?
     };
     let user_probe = matches!(mode, LaunchMode::UserProbe | LaunchMode::PreemptionProbe);
@@ -2462,6 +2466,7 @@ fn boot_handoff(
     entropy: [u8; 32],
     measurement: [u8; 64],
     framebuffer_pages: u64,
+    recovery_state: Option<RecoveryStateMetadata>,
 ) -> Result<EncodedHandoff> {
     let framebuffer_bytes = framebuffer_pages
         .checked_mul(4096)
@@ -2486,20 +2491,35 @@ fn boot_handoff(
         region(FRAMEBUFFER, framebuffer_pages, MemoryKind::Mmio)?,
     ];
     let mut encoded = [0u8; 316];
-    let length = encode_handoff(
-        version,
-        entropy,
-        measurement,
-        true,
-        false,
-        false,
-        0x9000,
-        framebuffer,
-        &regions,
-        &mut encoded,
-    )
+    let length = match recovery_state {
+        Some(recovery_state) => encode_handoff_with_recovery(
+            version,
+            entropy,
+            measurement,
+            true,
+            false,
+            false,
+            0x9000,
+            framebuffer,
+            &regions,
+            recovery_state,
+            &mut encoded,
+        ),
+        None => encode_handoff(
+            version,
+            entropy,
+            measurement,
+            true,
+            false,
+            false,
+            0x9000,
+            framebuffer,
+            &regions,
+            &mut encoded,
+        ),
+    }
     .map_err(|_| anyhow!("canonical boot handoff construction failed"))?;
-    if length != 240 {
+    if length != 240 + usize::from(recovery_state.is_some()) * 40 {
         return Err(anyhow!("unexpected canonical boot handoff length"));
     }
     Ok(EncodedHandoff {
@@ -2578,7 +2598,7 @@ mod tests {
     fn handoff_binds_verified_version_entropy_and_measurement() {
         let entropy = [0x35; 32];
         let measurement = [0xa7; 64];
-        let encoded = boot_handoff(19, entropy, measurement, 1).unwrap();
+        let encoded = boot_handoff(19, entropy, measurement, 1, None).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.evidence().image_version(), 19);
         assert_eq!(decoded.evidence().entropy(), &entropy);
@@ -2590,11 +2610,19 @@ mod tests {
 
     #[test]
     fn block_handoff_binds_two_disjoint_payload_pages() {
-        let encoded = boot_handoff(20, [0x36; 32], [0xa8; 64], 2).unwrap();
+        let encoded = boot_handoff(20, [0x36; 32], [0xa8; 64], 2, None).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.framebuffer().base().get(), FRAMEBUFFER);
         assert_eq!(decoded.framebuffer().byte_length(), 8192);
-        assert!(boot_handoff(20, [0x36; 32], [0xa8; 64], 3).is_err());
+        assert!(boot_handoff(20, [0x36; 32], [0xa8; 64], 3, None).is_err());
+    }
+
+    #[test]
+    fn recovery_handoff_binds_fixed_probe_metadata() {
+        let recovery = RecoveryStateMetadata::new(8, 2, Some([0x44; 16]), 17).unwrap();
+        let encoded = boot_handoff(21, [0x38; 32], [0xaa; 64], 1, Some(recovery)).unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        assert_eq!(decoded.recovery_state(), Some(recovery));
     }
 
     #[cfg(target_os = "linux")]
