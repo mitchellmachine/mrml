@@ -10511,7 +10511,8 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     conflict.path,
                     matches!(
                         conflict.kind,
-                        RuntimePlaceEffectKind::MutableBorrow
+                        RuntimePlaceEffectKind::SharedBorrow
+                            | RuntimePlaceEffectKind::MutableBorrow
                             | RuntimePlaceEffectKind::LoanMutation
                     ),
                     0,
@@ -26451,6 +26452,10 @@ mod tests {
                 target: crate::PointerPointee::Integer(crate::IntegerType::U16),
                 mutable: true,
             };
+            let shared_reference = ScalarType::Reference {
+                target: crate::PointerPointee::Integer(crate::IntegerType::U16),
+                mutable: false,
+            };
             let mut parameters = [None; MAX_PARAMETERS];
             match (name, argument_count) {
                 ("identity", 1) => {
@@ -26493,6 +26498,20 @@ mod tests {
                         return_type: ScalarType::Unit,
                         return_type_name: "()",
                         body_expression: "*value += 1",
+                    })
+                }
+                ("read", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: shared_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "read",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: ScalarType::Integer(crate::IntegerType::U16),
+                        return_type_name: "u16",
+                        body_expression: "*value",
                     })
                 }
                 ("choose", 2) if MAX_PARAMETERS >= 2 => {
@@ -28084,6 +28103,35 @@ mod tests {
         );
 
         let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; touch(parent); copied + *parent }";
+        analyze(accepted).unwrap();
+    }
+
+    #[test]
+    fn runtime_shared_call_reborrows_suspend_live_mutable_children_of_local_ancestors() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let observed = read(parent); observed + *child }";
+        assert_eq!(
+            analyze(rejected).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let copied = *child; let observed = read(parent); copied + observed }";
         analyze(accepted).unwrap();
     }
 
