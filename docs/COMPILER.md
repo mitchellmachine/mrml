@@ -232,18 +232,20 @@ bounded to 64 levels. Call-derived fat-reference initializers also use the same
 visitor when every argument is a one-slot scalar, another supported fat
 reference, a direct identifier-backed array or tuple, an array literal or
 single-evaluation repeat, a direct conditional array with literal branches, a
-sequence-wrapped identifier-backed/default array/literal/repeat/direct
-conditional with literal branches, or a supported literal/conditional/wrapped
-tuple.
+an array accepted by the bounded recursive element planner, or a supported
+literal/conditional/wrapped tuple. The array planner covers identifiers,
+contextual defaults, literals, repeats, conditionals, transparent return/break/
+inline-const wrappers, and nested sequences in the emitter's per-index order.
 Prefix expressions and call arguments are reserved left-to-right before
 inlined-helper emission; identifier-backed arrays reserve one `Index` read per
 element and tuples reserve numbered `TupleField` reads. Direct conditional
 arrays repeat condition/then-element/else-element for every index. Supported
 sequence-wrapped arrays additionally repeat the prefix before every materialized
 element; identifier tails then retain one exact `Index` read per element, while
-default tails correctly add no element-place read. This matches the emitter
-rather than treating the prefix as a one-time wrapper. Other
-wrapped or non-literal aggregate call arguments remain
+default tails correctly add no element-place read. Conditions and nested branch
+prefixes are likewise repeated for each index. Direct root repeats preserve
+their distinct single-evaluation rule. Array-producing calls, integer-byte
+materializers, and other unsupported aggregate call arguments remain
 emission-time work because their specialized materializers need separate
 traversal facts.
 Supported direct identifier, range-derived, and recursively conditional fat-

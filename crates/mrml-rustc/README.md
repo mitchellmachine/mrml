@@ -2942,18 +2942,20 @@ array base. Recursion is capped at 64 levels. Call-derived fat-reference
 initializers additionally plan left-to-right call-argument reads when every
 argument is a one-slot scalar, another supported fat reference, a direct
 identifier-backed array or tuple, an array literal or single-evaluation repeat,
-a direct conditional array with literal branches, a sequence-wrapped identifier-
-backed/default array/literal/repeat/direct conditional with literal branches, or
-a supported literal/conditional/wrapped tuple. Sequence prefixes remain
+an array accepted by the bounded recursive element planner, or a supported
+literal/conditional/wrapped tuple. The array planner covers identifiers,
+contextual defaults, literals, repeats, conditionals, transparent return/break/
+inline-const wrappers, and nested sequences. Sequence prefixes remain
 ahead of those arguments. Identifier-backed arrays plan one `Index` read per
 element and tuples plan numbered `TupleField` reads. Direct conditional arrays
 plan condition, then element, and else element separately for every index.
 Supported sequence-wrapped arrays plan their prefix before every materialized
-element, including every identifier `Index` read, default element, repeat, or
-direct conditional branch element; default elements add no false place read.
-Other
-wrapped or non-literal aggregate call arguments remain later work because their
-specialized materializers require separate facts.
+element, including nested branch prefixes and conditions; identifier elements
+retain exact `Index` reads and defaults add no false place read. Direct root
+repeats retain their separate single-evaluation rule. Array-producing calls,
+integer-byte materializers, and other unsupported aggregate call arguments
+remain later work because their specialized materializers require separate
+facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
 reads in exact emission order. Call-derived and unsupported wrapped return
@@ -3149,6 +3151,15 @@ unit test proves the prefix is repeated for all three contextual default-array
 elements without inventing element-place reads, before the tuple and trailing
 scalar arguments. Its original replacement emits both COFF and ELF64 objects
 through the same inlined helper call.
+
+The recursive array call-argument milestone passed all 618 compiler and driver
+tests on Windows gnullvm and all 618 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves 24
+facts across a local-array initializer, three repetitions of an outer prefix,
+condition, nested branch prefixes, exact local `Index` reads and reversed
+literal-branch operands, then the tuple and scalar arguments. Its original
+replacement emits both COFF and ELF64 objects through the same nested inlined
+helper call.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
