@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `c30ae58`
-  (`Recursively preanalyze array call arguments`)
+- Compiler checkpoint commit: `c312005`
+  (`Preanalyze integer byte array call arguments`)
 - Remote state when recorded: the named compiler checkpoint is committed
   locally on `main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -96,14 +96,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   references, direct identifier-backed arrays and tuples, array literals or
   single-evaluation repeats, direct conditional arrays with literal branches,
   arrays accepted by a 64-level-bounded recursive per-element planner, including
-  identifiers, contextual defaults, literals, repeats, conditionals, transparent
-  return/break/inline-const wrappers, and nested sequences, or supported literal/
-  conditional/wrapped tuples,
+  identifiers, contextual defaults, literals, repeats, integer-to-byte arrays,
+  conditionals, transparent return/break/inline-const wrappers, and nested
+  sequences, or supported literal/conditional/wrapped tuples,
   with one `Index` read per identifier-array element and numbered `TupleField`
   reads for identifier tuples, and with a sequence-array prefix repeated before
   every materialized element and nested branch prefix, exact `Index` reads
   retained for identifier tails, no invented element-place reads for contextual
-  defaults, and direct root repeats kept on their single-evaluation path;
+  defaults, direct root repeats kept on their single-evaluation path, and scalar
+  integer bases repeated once per emitted byte;
   and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
@@ -118,8 +119,8 @@ allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
 This is an initial typed body-fact slice, not a complete typed body IR and not a
-borrow checker. Array-producing calls, integer-byte materializers, otherwise
-unsupported aggregate-argument
+borrow checker. Array-producing calls and otherwise unsupported aggregate-
+argument
 call-derived fat-reference initializers, call-derived or otherwise unsupported
 wrapped fat-reference returns,
 compound array bases, method/call families, aggregate
@@ -163,8 +164,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 618 tests on each host: 339
-library tests, 10 conformance tests, 267 replacement tests, and 2 driver tests.
+The checkpoint source passed 620 tests on each host: 340
+library tests, 10 conformance tests, 268 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

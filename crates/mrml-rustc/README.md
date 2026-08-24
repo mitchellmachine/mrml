@@ -2944,18 +2944,19 @@ argument is a one-slot scalar, another supported fat reference, a direct
 identifier-backed array or tuple, an array literal or single-evaluation repeat,
 an array accepted by the bounded recursive element planner, or a supported
 literal/conditional/wrapped tuple. The array planner covers identifiers,
-contextual defaults, literals, repeats, conditionals, transparent return/break/
-inline-const wrappers, and nested sequences. Sequence prefixes remain
+contextual defaults, literals, repeats, integer-to-byte arrays, conditionals,
+transparent return/break/inline-const wrappers, and nested sequences. Sequence
+prefixes remain
 ahead of those arguments. Identifier-backed arrays plan one `Index` read per
 element and tuples plan numbered `TupleField` reads. Direct conditional arrays
 plan condition, then element, and else element separately for every index.
 Supported sequence-wrapped arrays plan their prefix before every materialized
 element, including nested branch prefixes and conditions; identifier elements
 retain exact `Index` reads and defaults add no false place read. Direct root
-repeats retain their separate single-evaluation rule. Array-producing calls,
-integer-byte materializers, and other unsupported aggregate call arguments
-remain later work because their specialized materializers require separate
-facts.
+repeats retain their separate single-evaluation rule. Integer-to-byte arrays
+repeat their scalar base reads once for each emitted byte. Array-producing calls
+and other unsupported aggregate call arguments remain later work because their
+specialized materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
 reads in exact emission order. Call-derived and unsupported wrapped return
@@ -3160,6 +3161,14 @@ condition, nested branch prefixes, exact local `Index` reads and reversed
 literal-branch operands, then the tuple and scalar arguments. Its original
 replacement emits both COFF and ELF64 objects through the same nested inlined
 helper call.
+
+The integer-byte array call-argument milestone passed all 620 compiler and
+driver tests on Windows gnullvm and all 620 in release mode on native Arch Linux
+WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
+17 facts: a sequence prefix and integer base repeated for all eight little-
+endian output bytes, followed by the scalar bias argument. Its original
+replacement emits both COFF and ELF64 objects through the same inlined byte-
+slice helper call.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
