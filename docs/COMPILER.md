@@ -211,8 +211,13 @@ root or tuple-field path of a proven `Copy` type transactionally add a `Copy`
 effect; an exhausted effect table cannot leave a read without its paired effect.
 Validation rejects incompatible types, projected moves in this direct-only
 slice, invalid paths, holes, corrupt counts, malformed spans, and capacity
-overflow. Calls, returns, dereferences, summary indexes, non-`Copy` reads, and
-indirect borrow shapes remain unclassified rather than guessed. Direct shared
+overflow. Exact non-`Copy` roots passed to resolved non-`Copy` parameters or
+returned from supported source expressions now record `Move`; transparent
+wrappers, sequence tails, and conditional branches preserve that context while
+prefixes and conditions retain ordinary value evaluation. Unsupported or
+implicit-coercion call/return shapes, dereferences, summary indexes, other
+non-`Copy` reads, and indirect borrow shapes remain unclassified rather than
+guessed. Direct shared
 and mutable borrows of exact roots, including reborrows through a direct
 reference root, now record distinct `SharedBorrow` or `MutableBorrow` effects;
 they do not yet claim loan lifetime or conflict enforcement. The facts do not
