@@ -18,6 +18,7 @@ const MAX_RUNTIME_PLACE_EFFECT_FACTS: usize =
 const MAX_RUNTIME_OWNERSHIP_EVENT_FACTS: usize =
     MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS;
 const MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS: usize = MAX_RUNTIME_OWNERSHIP_EVENT_FACTS * 5;
+const MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS: usize = MAX_RUNTIME_OWNERSHIP_EVENT_FACTS * 5;
 const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
 const RUNTIME_INITIALIZED_STATE_WORDS: usize = MAX_RUNTIME_MOVE_PATH_FACTS.div_ceil(64);
 const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
@@ -2228,6 +2229,12 @@ struct RuntimeExpressionProgramPointFact {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeExpressionControlFlowEdgeFact {
+    from: RuntimeExpressionProgramPointId,
+    to: RuntimeExpressionProgramPointId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeConditionalExpressionFact {
     id: RuntimeConditionalExpressionId,
     location: RuntimeOwnershipEventLocation,
@@ -2566,6 +2573,9 @@ struct RuntimeBodyFacts<'source> {
         [Option<RuntimeExpressionProgramPointFact>; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS],
     expression_program_point_count: usize,
     current_expression_program_point: Option<RuntimeExpressionProgramPointId>,
+    expression_control_flow_edges: [Option<RuntimeExpressionControlFlowEdgeFact>;
+        MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS],
+    expression_control_flow_edge_count: usize,
     ownership_statement_count: usize,
     ownership_has_tail: bool,
     ownership_statement_shapes:
@@ -2603,6 +2613,8 @@ impl<'source> RuntimeBodyFacts<'source> {
         expression_program_points: [None; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS],
         expression_program_point_count: 0,
         current_expression_program_point: None,
+        expression_control_flow_edges: [None; MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS],
+        expression_control_flow_edge_count: 0,
         ownership_statement_count: 0,
         ownership_has_tail: false,
         ownership_statement_shapes: [None; crate::parser::MAX_BODY_STATEMENTS],
@@ -2755,6 +2767,67 @@ impl<'source> RuntimeBodyFacts<'source> {
             return Err(CodegenErrorKind::InvalidRuntimePlaceFacts);
         }
         *slot = Some(exit);
+        Ok(())
+    }
+
+    fn push_expression_control_flow_edge(
+        &mut self,
+        edge: RuntimeExpressionControlFlowEdgeFact,
+    ) -> Result<(), CodegenErrorKind> {
+        let slot = self
+            .expression_control_flow_edges
+            .get_mut(self.expression_control_flow_edge_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts)?;
+        *slot = Some(edge);
+        self.expression_control_flow_edge_count += 1;
+        Ok(())
+    }
+
+    fn build_expression_control_flow(&mut self) -> Result<(), CodegenErrorKind> {
+        if self.expression_control_flow_edge_count != 0 {
+            return Err(CodegenErrorKind::InvalidRuntimeControlFlowFacts);
+        }
+        let required_edges = self
+            .conditional_expression_count
+            .checked_mul(5)
+            .ok_or(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts)?;
+        if required_edges > self.expression_control_flow_edges.len() {
+            return Err(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts);
+        }
+        for index in 0..self.conditional_expression_count {
+            let conditional = self.conditional_expressions[index]
+                .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            let then_exit = conditional
+                .then_exit
+                .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            let else_exit = conditional
+                .else_exit
+                .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            for edge in [
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional.entry,
+                    to: conditional.condition,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional.condition,
+                    to: conditional.then_branch,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional.condition,
+                    to: conditional.else_branch,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: then_exit,
+                    to: conditional.join,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: else_exit,
+                    to: conditional.join,
+                },
+            ] {
+                self.push_expression_control_flow_edge(edge)?;
+            }
+        }
         Ok(())
     }
 
@@ -8832,6 +8905,12 @@ fn preanalyze_runtime_body_declarations<
         kind,
         span: body.tail_span,
     })?;
+    facts
+        .build_expression_control_flow()
+        .map_err(|kind| CodegenError {
+            kind,
+            span: body.tail_span,
+        })?;
     validate_runtime_initializedness(facts, body.tail_span)?;
     Ok(facts.local_count)
 }
@@ -14652,6 +14731,11 @@ impl<
             };
             if point.id != RuntimeExpressionProgramPointId(index)
                 || !self.body_facts.ownership_location_is_valid(point.location)
+                || self.body_facts.control_flow_complete
+                    && self
+                        .body_facts
+                        .ownership_control_point(point.location)
+                        .is_none()
                 || conditional.is_some_and(|conditional| {
                     conditional.0 >= self.body_facts.conditional_expression_count
                 })
@@ -14714,6 +14798,61 @@ impl<
                 .is_none_or(|point| point.location != fact.location)
             {
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+        }
+        let expected_expression_edge_count = self
+            .body_facts
+            .conditional_expression_count
+            .checked_mul(5)
+            .ok_or(self.error(CodegenErrorKind::InvalidRuntimeControlFlowFacts))?;
+        if self.body_facts.expression_control_flow_edge_count != expected_expression_edge_count
+            || self.body_facts.expression_control_flow_edge_count
+                > self.body_facts.expression_control_flow_edges.len()
+            || self.body_facts.expression_control_flow_edges
+                [..self.body_facts.expression_control_flow_edge_count]
+                .iter()
+                .any(Option::is_none)
+            || self.body_facts.expression_control_flow_edges
+                [self.body_facts.expression_control_flow_edge_count..]
+                .iter()
+                .any(Option::is_some)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimeControlFlowFacts));
+        }
+        for index in 0..self.body_facts.conditional_expression_count {
+            let conditional = self.body_facts.conditional_expressions[index]
+                .ok_or(self.error(CodegenErrorKind::InvalidRuntimeControlFlowFacts))?;
+            let expected = [
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional.entry,
+                    to: conditional.condition,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional.condition,
+                    to: conditional.then_branch,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional.condition,
+                    to: conditional.else_branch,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional
+                        .then_exit
+                        .ok_or(self.error(CodegenErrorKind::InvalidRuntimeControlFlowFacts))?,
+                    to: conditional.join,
+                },
+                RuntimeExpressionControlFlowEdgeFact {
+                    from: conditional
+                        .else_exit
+                        .ok_or(self.error(CodegenErrorKind::InvalidRuntimeControlFlowFacts))?,
+                    to: conditional.join,
+                },
+            ];
+            let first = index * 5;
+            for (offset, edge) in expected.iter().enumerate() {
+                if self.body_facts.expression_control_flow_edges[first + offset] != Some(*edge) {
+                    return Err(self.error(CodegenErrorKind::InvalidRuntimeControlFlowFacts));
+                }
             }
         }
         if self.preanalyzed_local_cursor != self.preanalyzed_local_count
@@ -25491,6 +25630,52 @@ mod tests {
         ] {
             assert_eq!(facts.expression_program_points[point.0].unwrap().kind, kind);
         }
+        assert_eq!(facts.expression_control_flow_edge_count, 10);
+        assert_eq!(
+            &facts.expression_control_flow_edges[..10],
+            &[
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: outer.entry,
+                    to: outer.condition,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: outer.condition,
+                    to: outer.then_branch,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: outer.condition,
+                    to: outer.else_branch,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: inner.join,
+                    to: outer.join,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: outer.else_branch,
+                    to: outer.join,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: inner.entry,
+                    to: inner.condition,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: inner.condition,
+                    to: inner.then_branch,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: inner.condition,
+                    to: inner.else_branch,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: inner.then_branch,
+                    to: inner.join,
+                }),
+                Some(RuntimeExpressionControlFlowEdgeFact {
+                    from: inner.else_branch,
+                    to: inner.join,
+                }),
+            ]
+        );
         for (kind, expression_path) in [
             (
                 RuntimePlaceEffectKind::Move,
@@ -25571,6 +25756,16 @@ mod tests {
             MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS - 4
         );
         assert_eq!(point_capacity.conditional_expression_count, 0);
+        let mut edge_capacity = RuntimeBodyFacts::EMPTY;
+        edge_capacity.expression_control_flow_edge_count =
+            MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS;
+        assert_eq!(
+            edge_capacity.push_expression_control_flow_edge(RuntimeExpressionControlFlowEdgeFact {
+                from: RuntimeExpressionProgramPointId(0),
+                to: RuntimeExpressionProgramPointId(1),
+            }),
+            Err(CodegenErrorKind::TooManyRuntimeControlFlowEdgeFacts)
+        );
 
         let sequential = "fn value(input: &mut u16, first: bool, second: bool) -> &mut u16 { { if first { *input } else { *input }; if second { input } else { &mut *input } } }";
         let module = Parser::new(sequential).parse_module::<1, 4>().unwrap();
@@ -25656,6 +25851,19 @@ mod tests {
         assert_eq!(
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[effect_with_point] = Some(valid_effect);
+        let valid_edge = emitter.body_facts.expression_control_flow_edges[0].unwrap();
+        emitter.body_facts.expression_control_flow_edges[0] =
+            Some(RuntimeExpressionControlFlowEdgeFact {
+                to: RuntimeExpressionProgramPointId(
+                    emitter.body_facts.expression_program_point_count,
+                ),
+                ..valid_edge
+            });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimeControlFlowFacts
         );
     }
 
