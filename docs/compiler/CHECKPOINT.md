@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `3a0e6ae`
-  (`compiler: reborrow reference return places`)
+- Compiler checkpoint commit: `e740ee2`
+  (`compiler: reject shared loan owner moves`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -413,7 +413,7 @@ emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
 Array-element move paths and remaining indirect move/borrow classification,
 unsupported expression/control-flow forms, complete loans, indirect alias
-invalidation, broader coercion-site reborrows, regions,
+invalidation, unsupported coercion sites, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
 execute.
@@ -423,12 +423,13 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. exact constant owned-array element identity is now retained. Add array move
-   paths only for a modern Rust operation that can legally move an element
-   (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
-   summary runtime indexes into exact paths;
-2. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
-   and flow-sensitive outlives reasoning with independent accepted/rejected
+1. supported owned arrays currently contain only `Copy` scalar elements, and
+   modern Rust rejects indexed moves from non-`Copy` arrays. Do not add array
+   move paths until a supported legal operation such as bounded destructuring
+   requires them, and never turn summary runtime indexes into exact paths;
+2. extend indirect alias invalidation and full reborrow semantics beyond the
+   now-complete direct shared-loan conflict set, then stage flow-sensitive
+   outlives reasoning with independent accepted/rejected
    probes.
 
 Return coercion sites now apply the declared shared or mutable reference context
@@ -459,8 +460,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 738 tests on each host: 404
-library tests, 10 conformance tests, 322 replacement tests, and 2 driver tests.
+The checkpoint source passed 742 tests on each host: 406
+library tests, 10 conformance tests, 324 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

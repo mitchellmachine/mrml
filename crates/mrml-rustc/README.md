@@ -3592,3 +3592,15 @@ oracle accepted the explicit reborrow case and rejected the inferred move with
 E0382. Indirect unsupported shapes retain conservative move classification;
 general regions remain unimplemented. The `no_std`/allocation/unsafe hygiene
 scan remained empty.
+
+The direct shared-loan owner-conflict milestones passed all 742 compiler and
+driver tests on Windows gnullvm and all 742 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
+rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. A live shared loan
+now conflicts with a direct owner `Write`, `ReadModifyWrite`, or non-`Copy`
+`Move`, in addition to the previously handled mutable borrow. Existing bounded
+CFG reachability still permits mutation or movement after the shared borrower's
+last use. The pinned future-edition oracle rejected the live mutation with
+E0506 and the live owner move with E0505, and accepted both post-last-use
+controls. This does not claim indirect alias invalidation or general regions.
+The `no_std`/allocation/unsafe hygiene scan remained empty.
