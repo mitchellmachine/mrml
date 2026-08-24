@@ -2167,10 +2167,20 @@ struct RuntimeInitializationFact {
     origin: RuntimeInitializationOrigin,
     span: Option<Span>,
     event: RuntimeOwnershipEventId,
+    location: RuntimeOwnershipEventLocation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeOwnershipEventId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeOwnershipEventLocation {
+    Unassigned,
+    ParameterEntry,
+    TopLevelStatement(usize),
+    Tail,
+    EmissionExpansion,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimePlaceEffectKind {
@@ -2197,6 +2207,7 @@ struct RuntimePlaceEffectFact {
     kind: RuntimePlaceEffectKind,
     span: Span,
     event: RuntimeOwnershipEventId,
+    location: RuntimeOwnershipEventLocation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2305,6 +2316,9 @@ struct RuntimeBodyFacts<'source> {
     effect_count: usize,
     ownership_event_count: usize,
     ownership_events_single_path: bool,
+    current_ownership_event_location: RuntimeOwnershipEventLocation,
+    ownership_statement_count: usize,
+    ownership_has_tail: bool,
     basic_blocks: [Option<RuntimeBasicBlockFact>; MAX_RUNTIME_BASIC_BLOCK_FACTS],
     basic_block_count: usize,
     control_flow_edges: [Option<RuntimeControlFlowEdgeFact>; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2330,6 +2344,9 @@ impl<'source> RuntimeBodyFacts<'source> {
         effect_count: 0,
         ownership_event_count: 0,
         ownership_events_single_path: true,
+        current_ownership_event_location: RuntimeOwnershipEventLocation::Unassigned,
+        ownership_statement_count: 0,
+        ownership_has_tail: false,
         basic_blocks: [None; MAX_RUNTIME_BASIC_BLOCK_FACTS],
         basic_block_count: 0,
         control_flow_edges: [None; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2447,6 +2464,14 @@ impl<'source> RuntimeBodyFacts<'source> {
             origin,
             span,
             event: RuntimeOwnershipEventId(self.ownership_event_count),
+            location: match origin {
+                RuntimeInitializationOrigin::Parameter => {
+                    RuntimeOwnershipEventLocation::ParameterEntry
+                }
+                RuntimeInitializationOrigin::LocalDeclaration => {
+                    self.current_ownership_event_location
+                }
+            },
         });
         self.initialization_count += 1;
         self.ownership_event_count += 1;
@@ -2499,6 +2524,7 @@ impl<'source> RuntimeBodyFacts<'source> {
             kind,
             span,
             event: RuntimeOwnershipEventId(self.ownership_event_count),
+            location: self.current_ownership_event_location,
         });
         self.effect_count += 1;
         self.ownership_event_count += 1;
@@ -2564,6 +2590,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                     kind,
                     span: fact.span,
                     event: RuntimeOwnershipEventId(self.ownership_event_count),
+                    location: self.current_ownership_event_location,
                 })
             });
         if effect.is_some() && self.effect_count >= self.effects.len() {
@@ -7140,6 +7167,8 @@ fn preanalyze_runtime_body_declarations<
     body_start: usize,
     facts: &mut RuntimeBodyFacts<'source>,
 ) -> Result<usize, CodegenError> {
+    facts.ownership_statement_count = body.statement_count();
+    facts.ownership_has_tail = !body.tail_diverges && !body.tail_expression.is_empty();
     for (index, parameter) in function.parameters().iter().enumerate() {
         let Some(parameter) = parameter else {
             continue;
@@ -7158,11 +7187,13 @@ fn preanalyze_runtime_body_declarations<
     let mut locals: [Option<RuntimeLocal<'source>>; MAX_PARAMETERS] = [None; MAX_PARAMETERS];
     let mut local_count = 0usize;
     let mut saw_loop = false;
-    for statement in body.statements().iter().flatten() {
+    for (statement_index, statement) in body.statements().iter().flatten().enumerate() {
         if matches!(statement, crate::BodyStatement::Loop(_)) {
             saw_loop = true;
             break;
         }
+        facts.current_ownership_event_location =
+            RuntimeOwnershipEventLocation::TopLevelStatement(statement_index);
         preanalyze_runtime_top_level_statement::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             function,
             resolver,
@@ -7175,26 +7206,40 @@ fn preanalyze_runtime_body_declarations<
             &mut local_count,
         )?;
     }
-    for loop_statement in body.while_loops().iter().flatten() {
-        preanalyze_runtime_loop_declarations::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-            function,
-            resolver,
-            loop_statement,
-            operand_type,
-            body_start,
-            facts,
-            &locals,
-            local_count,
-        )?;
+    for (statement_index, statement) in body.statements().iter().flatten().enumerate() {
+        if let crate::BodyStatement::Loop(index) = statement {
+            let loop_statement = body
+                .while_loops()
+                .get(*index)
+                .and_then(|value| *value)
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: body.tail_span,
+                })?;
+            facts.current_ownership_event_location =
+                RuntimeOwnershipEventLocation::TopLevelStatement(statement_index);
+            preanalyze_runtime_loop_declarations::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                function,
+                resolver,
+                &loop_statement,
+                operand_type,
+                body_start,
+                facts,
+                &locals,
+                local_count,
+            )?;
+        }
     }
     if saw_loop {
         let mut after_first_loop = false;
-        for statement in body.statements().iter().flatten() {
+        for (statement_index, statement) in body.statements().iter().flatten().enumerate() {
             if matches!(statement, crate::BodyStatement::Loop(_)) {
                 after_first_loop = true;
                 continue;
             }
             if after_first_loop {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::TopLevelStatement(statement_index);
                 preanalyze_runtime_top_level_statement::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                     function,
                     resolver,
@@ -7210,6 +7255,7 @@ fn preanalyze_runtime_body_declarations<
         }
     }
     if !body.tail_diverges && !body.tail_expression.is_empty() {
+        facts.current_ownership_event_location = RuntimeOwnershipEventLocation::Tail;
         preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             facts,
             &locals[..local_count],
@@ -7220,6 +7266,7 @@ fn preanalyze_runtime_body_declarations<
             body_start,
         )?;
     }
+    facts.current_ownership_event_location = RuntimeOwnershipEventLocation::EmissionExpansion;
     preanalyze_runtime_body_control_flow(body, facts).map_err(|kind| CodegenError {
         kind,
         span: body.tail_span,
@@ -12990,6 +13037,9 @@ impl<
     }
 
     fn validate_runtime_place_facts(&self) -> Result<(), CodegenError> {
+        if self.body_facts.ownership_statement_count > crate::parser::MAX_BODY_STATEMENTS {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
         if self.preanalyzed_local_cursor != self.preanalyzed_local_count
             || self.preanalyzed_local_count > self.body_facts.local_count
             || self.preanalyzed_assignment_access_cursor != self.body_facts.assignment_access_count
@@ -13070,6 +13120,19 @@ impl<
                 || initialization.path != root.id
                 || initialization.origin != expected_origin
                 || initialization.span != expected_span
+                || match initialization.origin {
+                    RuntimeInitializationOrigin::Parameter => {
+                        initialization.location != RuntimeOwnershipEventLocation::ParameterEntry
+                    }
+                    RuntimeInitializationOrigin::LocalDeclaration => {
+                        !matches!(
+                            initialization.location,
+                            RuntimeOwnershipEventLocation::TopLevelStatement(index)
+                                if index < self.body_facts.ownership_statement_count
+                        ) && initialization.location
+                            != RuntimeOwnershipEventLocation::EmissionExpansion
+                    }
+                }
                 || initialization
                     .span
                     .is_some_and(|span| span.end < span.start)
@@ -13193,6 +13256,18 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
             if path.id != effect.path
                 || effect.span.end < effect.span.start
+                || matches!(
+                    effect.location,
+                    RuntimeOwnershipEventLocation::Unassigned
+                        | RuntimeOwnershipEventLocation::ParameterEntry
+                )
+                || matches!(
+                    effect.location,
+                    RuntimeOwnershipEventLocation::TopLevelStatement(index)
+                        if index >= self.body_facts.ownership_statement_count
+                )
+                || (effect.location == RuntimeOwnershipEventLocation::Tail
+                    && !self.body_facts.ownership_has_tail)
                 || match effect.kind {
                     RuntimePlaceEffectKind::Copy => !runtime_type_is_copy(path.ty),
                     RuntimePlaceEffectKind::Move => {
@@ -22515,6 +22590,8 @@ mod tests {
                 Some(function.parameters()[0].unwrap().span),
             )
             .unwrap();
+        body_facts.current_ownership_event_location =
+            RuntimeOwnershipEventLocation::EmissionExpansion;
         let mut emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
@@ -22873,6 +22950,7 @@ mod tests {
                 origin: RuntimeInitializationOrigin::Parameter,
                 span: Some(function.parameters()[0].unwrap().span),
                 event: RuntimeOwnershipEventId(0),
+                location: RuntimeOwnershipEventLocation::ParameterEntry,
             })
         );
 
@@ -23364,16 +23442,34 @@ mod tests {
         assert_eq!(facts.effect_count, 2);
         assert_eq!(facts.initialization_count, 2);
         assert_eq!(facts.ownership_event_count, 4);
+        assert_eq!(facts.ownership_statement_count, 1);
+        assert!(facts.ownership_has_tail);
         assert_eq!(
             facts.initializations[0].unwrap().event,
             RuntimeOwnershipEventId(0)
         );
+        assert_eq!(
+            facts.initializations[0].unwrap().location,
+            RuntimeOwnershipEventLocation::ParameterEntry
+        );
         assert_eq!(facts.effects[0].unwrap().event, RuntimeOwnershipEventId(1));
+        assert_eq!(
+            facts.effects[0].unwrap().location,
+            RuntimeOwnershipEventLocation::TopLevelStatement(0)
+        );
         assert_eq!(
             facts.initializations[1].unwrap().event,
             RuntimeOwnershipEventId(2)
         );
+        assert_eq!(
+            facts.initializations[1].unwrap().location,
+            RuntimeOwnershipEventLocation::TopLevelStatement(0)
+        );
         assert_eq!(facts.effects[1].unwrap().event, RuntimeOwnershipEventId(3));
+        assert_eq!(
+            facts.effects[1].unwrap().location,
+            RuntimeOwnershipEventLocation::Tail
+        );
         assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Move);
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
         assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Move);
@@ -23419,6 +23515,22 @@ mod tests {
         );
         emitter.body_facts.effects[1] = Some(RuntimePlaceEffectFact {
             event: RuntimeOwnershipEventId(2),
+            ..valid_move
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[1] = Some(RuntimePlaceEffectFact {
+            location: RuntimeOwnershipEventLocation::Unassigned,
+            ..valid_move
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[1] = Some(RuntimePlaceEffectFact {
+            location: RuntimeOwnershipEventLocation::TopLevelStatement(1),
             ..valid_move
         });
         assert_eq!(
