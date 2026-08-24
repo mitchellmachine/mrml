@@ -729,9 +729,10 @@ generation to one active MRML-native block generation, its queue, interrupt
 vector, and capability-selected backend region. Its block-specific mapper tracks
 only confirmed mapping of the exact assigned window, and its reset/removal
 adapter performs external resource cleanup before changing either lifecycle.
-This is focused unit/simulation policy, not an MMIO block transport, native
-KVM/WHP BAR adapter, assigned production identity, or guest-visible PCI discovery
-result.
+The signed test-only guest now discovers that exact attached function's vendor/
+device and block-class configuration dwords through native KVM and WHP. This is
+hosted discovery evidence, not an MMIO block transport, native KVM/WHP BAR
+adapter, assigned production identity, interrupt/DMA path, or block operation.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector
@@ -745,10 +746,13 @@ completion uncertainty or any non-PCI exit fails the VM. Native KVM revalidates
 and writes the exact pending run-page input; native WHP binds the pending tuple
 to one vCPU and installs the width-correct RAX result plus checked next RIP in
 one register operation. Both refuse vCPU re-entry while completion remains
-pending. The signed controlled KVM/WHP probe now composes the common runner with
-both native backends for an intentionally absent BDF, including selector output,
-all-ones scalar-input completion, and guest proof continuation. No function is
-attached or advertised, so there is still no live PCI discovery evidence.
+pending. The signed controlled KVM/WHP probe first established absent-BDF
+selector, all-ones scalar-input completion, and proof continuation. It now
+attaches the exact test-only block binding above at BDF `00:04.0`; the guest
+reads its fixed test vendor/device and mass-storage/other class dwords through
+the same common runner on both native backends. BAR assignment/mapping,
+MSI/MSI-X, DMA, MMIO requests, production identity, and QEMU comparison remain
+unimplemented.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

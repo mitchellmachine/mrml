@@ -362,19 +362,21 @@ for byte and word inputs, applies x86 zero-extension for a dword input, checks
 the next RIP for overflow and canonicality, and submits RAX and RIP together.
 The tuple remains pending after any register-read, validation, or register-set
 failure, so re-entry and stale or duplicate completion fail closed.
-The native configuration probe selects only a deliberately unattached BDF and
-requires the architectural all-ones absent-function result before continuing.
-Its separate proof exit demonstrates completion without assigning an identity,
-advertising a device, mapping a BAR, or granting interrupt, DMA, or device
-authority.
+The native configuration probe originally selected only a deliberately
+unattached BDF and required the architectural all-ones result. It now uses the
+same bounded path to read two dwords from one deliberately test-only attached
+block-class function. The fixed identity and BDF remain non-authorizing data;
+the separate proof demonstrates discovery without assigning a production
+identity, mapping a BAR, routing an interrupt, enabling DMA, or issuing a block
+operation.
 The common block/PCI attachment now exact-matches PCI and block generations,
 queue layout, interrupt vector, backend object/range, and confirmed BAR-mapping
 state. Its unsafe cleanup contract covers every mapping, interrupt, DMA binding,
 queue, backend-capability descendant, cached decision, device state, and handle
 before block and PCI reset/removal commit. Clean rejection preserves state;
-uncertain native mutation requires VM quarantine. This contract has focused
-unit/simulation tests only and no native adapter or guest-visible attached-device
-evidence.
+uncertain native mutation requires VM quarantine. The cleanup contract remains
+unit/simulation tested; the new KVM/WHP evidence covers read-only guest discovery
+only and does not exercise a native resource adapter.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

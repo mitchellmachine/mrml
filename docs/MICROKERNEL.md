@@ -5830,10 +5830,12 @@ wsl.exe -d archlinux -- bash -lc 'cd /mnt/c/Users/Mitch/Documents/mrml && CARGO_
   PASS: 430 passed
 ```
 
-This is `UNIT`/`SIMULATION` evidence only. It does not establish guest-visible
-attached PCI discovery, MMIO block transport, native KVM/WHP BAR or interrupt
-adapters, MSI/MSI-X, DMA, assigned production PCI identity, QEMU compatibility,
-physical-device behavior, or host-resistant isolation.
+That lifecycle increment's evidence is `UNIT`/`SIMULATION` only; it did not by
+itself establish guest-visible discovery. The following increment adds only the
+narrow hosted discovery evidence and still does not establish MMIO block
+transport, native KVM/WHP BAR or interrupt adapters, MSI/MSI-X, DMA, assigned
+production PCI identity, QEMU compatibility, physical-device behavior, or host-
+resistant isolation.
 
 DIGITAL-RIGHTS REVIEW: no publisher/vendor/verifier authority, DRM, persistence,
 telemetry, content inspection, AI privilege, accessibility restriction, or host
@@ -5851,6 +5853,74 @@ lifecycle composition and map-before-enable/revoke-before-reset ordering. The
 planned VirtIO, host-share, accessibility-device, browser, script/Wasm, and media
 scopes remain `TRIGGERED`. Agent review does not replace independent human dual
 review.
+
+### Signed test-only attached block-class PCI discovery
+
+The existing `pci-configuration-probe` now creates one exact test-only Type-0
+function at BDF `00:04.0`, one active MRML-native block generation, one queue
+layout and interrupt vector, and one capability-selected backend region. The
+host constructs `VirtualBlockPciAttachment` from the router's exact function
+generation before vCPU entry. The arbitrary test identity is vendor `0x1234`,
+device `0x5678`, revision `1`, programming interface `0`, subclass `0x80`, and
+class `0x01`; it is not an assigned or production MRML identity.
+
+The signed guest issues four Configuration Mechanism #1 transactions through
+the common runner: select/read offset 0 and select/read offset 8. Exact native
+KVM and WHP scalar-input completion returns `0x5678_1234` and `0x0180_0001`.
+Only after checking both values does the guest emit the vendor/device dword on
+proof port `0x4d66`. The common VM budget is exactly four exits. No BAR is
+assigned or mapped, memory decode remains disabled, no interrupt is routed, no
+DMA authority exists, and no block request is issued.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel --lib --no-default-features pci_
+  PASS: 8 passed
+
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kvm-run -p mrml-whp-run --no-default-features
+  PASS: KVM-run 4; WHP-run 5
+
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kvm-run -p mrml-whp-run --all-targets --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+cargo +nightly-x86_64-pc-windows-msvc clippy -q -p mrml-kernel-image --target x86_64-unknown-uefi --no-default-features --features pci-configuration-probe -- -D warnings -A clippy::result_unit_err
+  PASS; the explicit allowance is for the pre-existing mrml-crypto unit-error API
+
+wsl.exe -d archlinux -- bash -lc 'cd /mnt/c/Users/Mitch/Documents/mrml && CARGO_TARGET_DIR=target/pci-attached-discovery-linux cargo test -q -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --no-default-features && CARGO_TARGET_DIR=target/pci-attached-discovery-linux cargo clippy -q -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --all-targets --no-default-features --no-deps -- -D warnings'
+  PASS: kernel 430; KVM 18 passed/1 ignored; KVM-run 6; strict Clippy passed
+
+target/pci-attached-discovery-linux/release/mrml-kvm-run target/pci-attached-discovery-evidence/kernel.signed target/pci-attached-discovery-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=17581us prepare=2649us execute=48598us total=98132us
+
+target/pci-attached-discovery-evidence/release/mrml-whp-run.exe target/pci-attached-discovery-evidence/kernel.signed target/pci-attached-discovery-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=17814us prepare=3943us execute=2614us total=28355us
+```
+
+The live runs use one freshly built UEFI image and one fresh one-time Lamport
+signature. They are hosted controlled-probe evidence for attached read-only PCI
+identity/class discovery and continuation only. They are not evidence for BAR
+mapping, MMIO block operations, interrupts, DMA, VirtIO, QEMU compatibility,
+production identity allocation, native boot, bare metal, physical hardware, or
+host-resistant isolation.
+
+DIGITAL-RIGHTS REVIEW: the probe introduces no collection, retention,
+correlation, disclosure, attestation, DRM, publisher/vendor preference,
+first-party bypass, accessibility restriction, AI authority, persistent state,
+or host path. The test identity and BDF identify only ephemeral probe state and
+never authorize the exact backend object.
+
+HOSTILE SECURITY REVIEW: signed image admission, exact four-exit budget, BDF,
+selectors, register offsets, port/direction/width, vendor/device/class values,
+function/block generations, queue/vector/backend binding, pending native input,
+typed outcomes, and proof tuple are hostile. Construction and exact attachment
+preflight precede vCPU entry; every transaction uses the deny-by-default common
+runner; a mismatch or backend uncertainty fails the VM before proof acceptance;
+and no mapping, interrupt, DMA, or block operation can be inferred from
+discovery.
+
+Patent review: `NOT_TRIGGERED` — conventional test-only PCI configuration
+discovery over the existing common/native runner. The planned VirtIO,
+host-share, accessibility-device, browser, JavaScript/Wasm, and media scopes
+remain `TRIGGERED`. Agent review does not replace independent human dual review.
 
 ## Milestones
 

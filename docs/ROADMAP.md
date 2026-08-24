@@ -870,12 +870,13 @@ vCPU/port/width/count/data-offset identity, and writes only the selected bytes.
 WHP retains the exact per-vCPU port/width/instruction-length tuple and installs
 the architectural-width RAX result with a checked next RIP in one register-set
 operation. Both deny duplicate or mismatched completion and block vCPU re-entry
-while a read remains pending. A freshly signed controlled kernel now composes
-the common runner with both native backends: it selects an intentionally absent
-BDF, receives the exact all-ones dword through scalar-input completion, and
-proves continuation. This closes native runner composition without assigning a
-PCI identity or attaching a function. Live function discovery, BAR mapping,
-interrupts, DMA, device attachment, and QEMU comparison remain pending.
+while a read remains pending. A freshly signed controlled kernel first composed
+the common runner with both native backends for an absent BDF and exact all-ones
+completion. It now discovers one exact test-only block attachment at BDF
+`00:04.0`, reading fixed vendor/device and mass-storage-class dwords before proof
+continuation on KVM and WHP. This closes read-only live function discovery
+without a production identity. BAR mapping, interrupts, DMA, MMIO block
+operation, and QEMU comparison remain pending.
 Attached reset/removal ordering is now enforced at the router boundary.
 `VirtualPciFunctionRevoker` is an unsafe exact-generation contract whose success
 must retire every native mapping, interrupt, DMA binding, queue, cached decision,
@@ -906,9 +907,10 @@ confirmed exact BAR window; reset/removal composes external resource cleanup
 before both block and PCI lifecycle mutation. Focused hostile tests cover stale
 generations, class/geometry substitution, poisoned queues, mapping rejection and
 uncertainty, cleanup failure, reset, and detach. This is host-side unit/
-simulation policy. Guest-visible discovery, MMIO request transport, native
-KVM/WHP BAR/interrupt adapters, MSI/MSI-X, DMA, and a production PCI identity
-remain pending, so the PCI attachment gate is still partial.
+simulation policy. Signed guest-visible identity/class discovery now passes on
+KVM and WHP. MMIO request transport, native KVM/WHP BAR/interrupt adapters,
+MSI/MSI-X, DMA, and a production PCI identity remain pending, so the broader PCI
+attachment/transport gate is still partial.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

@@ -172,7 +172,13 @@ const BLOCK_VECTOR: u8 = 48;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_PROOF_PORT: u16 = 0x4d66;
 #[cfg(feature = "pci-configuration-probe")]
-const PCI_ABSENT_SELECTOR: u32 = 0x80ff_f800;
+const PCI_TEST_SELECTOR: u32 = 0x8000_2000;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_TEST_CLASS_SELECTOR: u32 = PCI_TEST_SELECTOR + 8;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_TEST_VENDOR_DEVICE: u32 = 0x5678_1234;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_TEST_CLASS: u32 = 0x0180_0001;
 #[cfg(feature = "fault-probe")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
 #[cfg(any(
@@ -2436,27 +2442,47 @@ unsafe fn run_pci_configuration_probe() -> ! {
         asm!(
             "out dx, eax",
             in("dx") 0xcf8u16,
-            in("eax") PCI_ABSENT_SELECTOR,
+            in("eax") PCI_TEST_SELECTOR,
             options(nomem, nostack)
         )
     };
-    let value: u32;
+    let vendor_device: u32;
     unsafe {
         asm!(
             "in eax, dx",
             in("dx") 0xcfcu16,
-            lateout("eax") value,
+            lateout("eax") vendor_device,
             options(nomem, nostack)
         )
     };
-    if value != u32::MAX {
+    if vendor_device != PCI_TEST_VENDOR_DEVICE {
+        halt();
+    }
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") 0xcf8u16,
+            in("eax") PCI_TEST_CLASS_SELECTOR,
+            options(nomem, nostack)
+        )
+    };
+    let class: u32;
+    unsafe {
+        asm!(
+            "in eax, dx",
+            in("dx") 0xcfcu16,
+            lateout("eax") class,
+            options(nomem, nostack)
+        )
+    };
+    if class != PCI_TEST_CLASS {
         halt();
     }
     unsafe {
         asm!(
             "out dx, eax",
             in("dx") PCI_PROOF_PORT,
-            in("eax") value,
+            in("eax") vendor_device,
             options(nomem, nostack)
         )
     };

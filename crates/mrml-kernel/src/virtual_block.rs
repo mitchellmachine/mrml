@@ -5952,14 +5952,15 @@ mod tests {
             fail: false,
             last: None,
         };
-        let mut revoker = VirtualBlockPciFunctionRevoker::new(
-            &mut attachment,
-            &mut device,
-            &mut resource_revoker,
-            VirtualBlockPciCleanupMode::Reset,
-        );
-        assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
-        drop(revoker);
+        {
+            let mut revoker = VirtualBlockPciFunctionRevoker::new(
+                &mut attachment,
+                &mut device,
+                &mut resource_revoker,
+                VirtualBlockPciCleanupMode::Reset,
+            );
+            assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
+        }
 
         assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Reset);
         assert_eq!(attachment.invalidated_requests(), 1);
@@ -6008,15 +6009,16 @@ mod tests {
             fail: false,
             last: None,
         };
-        let mut revoker = VirtualBlockPciFunctionRevoker::new(
-            &mut attachment,
-            &mut device,
-            &mut resource_revoker,
-            VirtualBlockPciCleanupMode::Remove,
-        );
-        let detached = router.detach_with_revoker(pci_id, &mut revoker).unwrap();
-        assert_eq!(detached.identity().class(), 1);
-        drop(revoker);
+        {
+            let mut revoker = VirtualBlockPciFunctionRevoker::new(
+                &mut attachment,
+                &mut device,
+                &mut resource_revoker,
+                VirtualBlockPciCleanupMode::Remove,
+            );
+            let detached = router.detach_with_revoker(pci_id, &mut revoker).unwrap();
+            assert_eq!(detached.identity().class(), 1);
+        }
         assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Removed);
         assert_eq!(device.state(), VirtualBlockDeviceState::Removed);
         assert_eq!(device.generation(), 2);
@@ -6047,19 +6049,20 @@ mod tests {
             fail: true,
             last: None,
         };
-        let mut revoker = VirtualBlockPciFunctionRevoker::new(
-            &mut attachment,
-            &mut device,
-            &mut resource_revoker,
-            VirtualBlockPciCleanupMode::Reset,
-        );
-        assert_eq!(
-            router.reset_with_revoker(pci_id, &mut revoker),
-            Err(crate::VirtualPciResetError::Revocation(
-                VirtualBlockPciCleanupError::Resource(MockError::Injected)
-            ))
-        );
-        drop(revoker);
+        {
+            let mut revoker = VirtualBlockPciFunctionRevoker::new(
+                &mut attachment,
+                &mut device,
+                &mut resource_revoker,
+                VirtualBlockPciCleanupMode::Reset,
+            );
+            assert_eq!(
+                router.reset_with_revoker(pci_id, &mut revoker),
+                Err(crate::VirtualPciResetError::Revocation(
+                    VirtualBlockPciCleanupError::Resource(MockError::Injected)
+                ))
+            );
+        }
         assert_eq!(attachment.state(), VirtualBlockPciAttachmentState::Attached);
         assert_eq!(device.state(), VirtualBlockDeviceState::Active);
         assert_eq!(device.generation(), 1);
@@ -6224,14 +6227,15 @@ mod tests {
             fail: false,
             last: None,
         };
-        let mut revoker = VirtualBlockPciFunctionRevoker::new(
-            &mut attachment,
-            &mut device,
-            &mut resources,
-            VirtualBlockPciCleanupMode::Reset,
-        );
-        assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
-        drop(revoker);
+        {
+            let mut revoker = VirtualBlockPciFunctionRevoker::new(
+                &mut attachment,
+                &mut device,
+                &mut resources,
+                VirtualBlockPciCleanupMode::Reset,
+            );
+            assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
+        }
         assert_eq!(
             resources.last.unwrap().mapped_window(),
             Some(expected_window)

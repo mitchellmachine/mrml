@@ -15,12 +15,14 @@ use mrml_kernel::{
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
-    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VirtualBlockTransport,
-    VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter, VirtualPciIoOutcome,
-    VmBackend, VmExit, VmTable, run_pci_configuration_once, run_virtual_block_transaction_once,
+    VirtualBlockPciAttachment, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockTransactionOutcome,
+    VirtualBlockTransport, VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter,
+    VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation, VirtualPciMemoryBar,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
+    run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -107,7 +109,13 @@ const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
 #[cfg(target_os = "windows")]
 const PCI_PROOF_PORT: u16 = 0x4d66;
 #[cfg(target_os = "windows")]
-const PCI_ABSENT_SELECTOR: u32 = 0x80ff_f800;
+const PCI_TEST_SELECTOR: u32 = 0x8000_2000;
+#[cfg(target_os = "windows")]
+const PCI_TEST_CLASS_SELECTOR: u32 = PCI_TEST_SELECTOR + 8;
+#[cfg(target_os = "windows")]
+const PCI_TEST_VENDOR_DEVICE: u32 = 0x5678_1234;
+#[cfg(target_os = "windows")]
+const PCI_TEST_CLASS: u32 = 0x0180_0001;
 
 #[cfg(target_os = "windows")]
 struct DriverProbeBlock([u8; 8192]);
@@ -408,16 +416,56 @@ fn run_block_guest_driver_probe<'system>(
 fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
     let mut vms = VmTable::<1>::new();
     let vm = vms
-        .create(2)
+        .create(4)
         .map_err(|_| anyhow!("failed to create PCI probe VM state"))?;
     vms.mark_loaded(vm)
         .and_then(|()| vms.start(vm))
         .map_err(|_| anyhow!("failed to start PCI probe VM state"))?;
     let mut hypercalls = HypercallRouter::new(ObjectId(0x311), ObjectId(0x312), ObjectId(0x313));
-    let capabilities = CapabilitySpace::<0>::new();
+    let mut capabilities = CapabilitySpace::<1>::new();
     let memory = GuestMemory::<0>::new();
     let mut transport = VirtualPciConfigurationMechanismOne::new();
     let mut router = VirtualPciConfigurationRouter::new();
+    let location = VirtualPciLocation::new(0, 0, 4, 0)
+        .map_err(|_| anyhow!("invalid test-only PCI location"))?;
+    let identity = VirtualPciIdentity::new(0x1234, 0x5678, 1, 0, 0x80, 1, 0x1234, 0x5678)
+        .map_err(|_| anyhow!("invalid test-only PCI identity"))?;
+    let pci = router
+        .attach(
+            location,
+            VirtualPciType0Function::new(
+                identity,
+                VirtualPciMemoryBar::new(4096).map_err(|_| anyhow!("invalid test-only PCI BAR"))?,
+            ),
+        )
+        .map_err(|_| anyhow!("failed to attach test-only PCI function"))?;
+    let layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 1)
+        .map_err(|_| anyhow!("invalid PCI block queue layout"))?;
+    let mut device = VirtualBlockDevice::<1>::new(4096, 64, 0)
+        .map_err(|_| anyhow!("invalid PCI block device"))?;
+    device
+        .negotiate(0)
+        .and_then(|_| device.activate(layout, 48))
+        .map_err(|_| anyhow!("failed to activate PCI block device"))?;
+    let bridge = VirtualBlockQueueBridge::<1>::new(layout)
+        .map_err(|_| anyhow!("failed to bind PCI block queue"))?;
+    let block_object = ObjectId(0x314);
+    let block_capability = capabilities
+        .insert(
+            block_object,
+            Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
+        )
+        .map_err(|_| anyhow!("failed to create PCI block backend capability"))?;
+    let _attachment = VirtualBlockPciAttachment::new(
+        router
+            .describe_attachment(pci)
+            .map_err(|_| anyhow!("failed to describe test-only PCI function"))?,
+        &device,
+        &bridge,
+        VirtualBlockBackendAuthority::new(block_capability, block_object, 8, 64)
+            .map_err(|_| anyhow!("invalid PCI block backend authority"))?,
+    )
+    .map_err(|_| anyhow!("failed to bind test-only PCI block function"))?;
 
     let selector = run_pci_configuration_once(
         &mut guest,
@@ -431,7 +479,7 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
         &mut router,
     )
     .map_err(|error| anyhow!("WHP PCI selector transaction failed: {:?}", error))?;
-    if selector != VirtualPciIoOutcome::AddressRegister(PCI_ABSENT_SELECTOR) {
+    if selector != VirtualPciIoOutcome::AddressRegister(PCI_TEST_SELECTOR) {
         return Err(anyhow!("WHP PCI selector outcome mismatch: {:?}", selector));
     }
     let read = run_pci_configuration_once(
@@ -445,9 +493,45 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
         &mut transport,
         &mut router,
     )
-    .map_err(|error| anyhow!("WHP PCI absent-read transaction failed: {:?}", error))?;
-    if read != VirtualPciIoOutcome::AbsentRead(u32::MAX) {
-        return Err(anyhow!("WHP PCI absent-read outcome mismatch: {:?}", read));
+    .map_err(|error| anyhow!("WHP PCI identity-read transaction failed: {:?}", error))?;
+    if read != VirtualPciIoOutcome::Read(PCI_TEST_VENDOR_DEVICE) {
+        return Err(anyhow!(
+            "WHP PCI identity-read outcome mismatch: {:?}",
+            read
+        ));
+    }
+    let class_selector = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("WHP PCI class selector transaction failed: {:?}", error))?;
+    if class_selector != VirtualPciIoOutcome::AddressRegister(PCI_TEST_CLASS_SELECTOR) {
+        return Err(anyhow!(
+            "WHP PCI class selector mismatch: {:?}",
+            class_selector
+        ));
+    }
+    let class = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("WHP PCI class-read transaction failed: {:?}", error))?;
+    if class != VirtualPciIoOutcome::Read(PCI_TEST_CLASS) {
+        return Err(anyhow!("WHP PCI class-read outcome mismatch: {:?}", class));
     }
     let proof = VmBackend::run(&mut guest, 0)
         .map_err(|error| anyhow!("WHP PCI proof execution failed: {:?}", error))?;
@@ -456,7 +540,7 @@ fn run_pci_configuration_probe(mut guest: PreparedWhpGuest<'_>) -> Result<()> {
             port: PCI_PROOF_PORT,
             size: 4,
             write: true,
-            value: u32::MAX,
+            value: PCI_TEST_VENDOR_DEVICE,
         })
     {
         return Err(anyhow!("WHP PCI proof mismatch: {:?}", proof));
@@ -802,7 +886,7 @@ fn application_main() -> Result<()> {
     if pci_configuration_mode {
         run_pci_configuration_probe(guest)?;
         println!(
-            "verified signed absent-function PCI configuration transport under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached block-class PCI discovery under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

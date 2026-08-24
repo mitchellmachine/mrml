@@ -1985,3 +1985,16 @@ interface, JavaScript/WebAssembly runtime, media mechanism, compatibility claim,
 or new patent-candidate mechanism. The previously recorded planned mechanisms
 remain `TRIGGERED`; this agent review does not replace the required independent
 human dual review.
+
+# 2026-08-24 — Signed test-only attached PCI discovery
+
+**Result: NOT_TRIGGERED.** The change conventionally places an existing
+test-only Type-0 identity in the bounded PCI router and reads its vendor/device
+and class dwords through the already implemented Configuration Mechanism #1 and
+native scalar-input completion paths. The host separately constructs the
+existing exact MRML-native block lifecycle binding; identity remains data and no
+BAR, interrupt, DMA, MMIO request, VirtIO compatibility, or production identity
+is introduced. This is standard interoperability/integration testing, not a new
+patent-candidate mechanism. The planned compatibility, host-share,
+accessibility-device, browser, JavaScript/Wasm, and media scopes remain
+`TRIGGERED`; this agent review does not replace independent human dual review.
