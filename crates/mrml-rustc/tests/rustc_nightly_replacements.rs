@@ -4075,6 +4075,33 @@ fn rustc_mutable_reborrow_suspension_matches_the_oracle() {
 }
 
 #[test]
+fn rustc_nested_reborrow_ancestor_suspension_matches_the_oracle() {
+    let rejected = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &mut u16 = &mut *second; *first += 1; *third }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &u16 = &*second; *first += 1; *third }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &mut u16 = &mut *second; let copied = *third; *first += 1; copied + *first }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &u16 = &*second; let copied = *third; *first += 1; copied + *first }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_implicit_mutable_reborrow_matches_the_oracle() {
     let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
