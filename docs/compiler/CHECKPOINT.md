@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `f0b234c`
-  (`compiler: trace nested loop return loans`)
+- Compiler checkpoint commit: `3a0e6ae`
+  (`compiler: reborrow reference return places`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -423,21 +423,20 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. add return coercion-site reborrows before region reasoning; bounded,
-   shadow-aware straight-line local aliases, direct/conditional top-level loop
-   returns, action-free conditional loop-block terminals, and action-free nested
-   loop returns are implemented, while branch/loop-local mutation and
-   unsupported loop shapes still fail closed;
-   preserve the
-   distinction between an expected-reference reborrow, an explicit
-   reassignment borrow, and an indirect consuming move;
-2. exact constant owned-array element identity is now retained. Add array move
+1. exact constant owned-array element identity is now retained. Add array move
    paths only for a modern Rust operation that can legally move an element
    (indexed moves from non-`Copy` arrays remain rejected by rustc); do not turn
    summary runtime indexes into exact paths;
-3. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
+2. then stage shared loans, mutable loans/invalidation, full reborrow semantics,
    and flow-sensitive outlives reasoning with independent accepted/rejected
    probes.
+
+Return coercion sites now apply the declared shared or mutable reference context
+to direct, projected, and conditional reference places in explicit returns,
+conditional returns, supported loop returns, conditional action returns, and the
+tail. Explicitly typed reference locals therefore reborrow at the function
+boundary; inferred non-`Copy` bindings remain consuming moves. Unsupported
+indirect shapes retain conservative move classification.
 
 Modern trait solving, naked functions/`naked_asm!`, inline assembly, security
 profiles, and compiler-derived executable metadata remain important later
@@ -460,8 +459,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 737 tests on each host: 404
-library tests, 10 conformance tests, 321 replacement tests, and 2 driver tests.
+The checkpoint source passed 738 tests on each host: 404
+library tests, 10 conformance tests, 322 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

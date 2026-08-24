@@ -3578,3 +3578,17 @@ is live and restore the owner after its last use. Any nested action, unsupported
 nested-unit shape, mutation, differing origin, malformed input, or capacity
 failure rejects the proof. This does not claim nested local dataflow, regions,
 or return coercions. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The return coercion-site reborrow milestone passed all 738 compiler and driver
+tests on Windows gnullvm and all 738 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Explicit returns, conditional
+returns, supported loop and conditional-action returns, and the final tail now
+apply the declared shared or mutable reference type to direct, projected, and
+conditional reference places. Explicitly typed mutable-reference locals record
+reborrows at those coercion sites, while inferred bindings remain moves and a
+fallthrough use is rejected as `RuntimeUseAfterMove`. The pinned future-edition
+oracle accepted the explicit reborrow case and rejected the inferred move with
+E0382. Indirect unsupported shapes retain conservative move classification;
+general regions remain unimplemented. The `no_std`/allocation/unsafe hygiene
+scan remained empty.
