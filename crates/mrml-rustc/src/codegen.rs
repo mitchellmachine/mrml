@@ -22,6 +22,8 @@ const MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS: usize = MAX_RUNTIME_OWNERS
 const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
 const RUNTIME_INITIALIZED_STATE_WORDS: usize = MAX_RUNTIME_MOVE_PATH_FACTS.div_ceil(64);
 const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
+const MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS: usize =
+    1 + MAX_RUNTIME_BASIC_BLOCK_FACTS + MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS;
 const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3811,9 +3813,12 @@ impl<'source> RuntimeBodyFacts<'source> {
                                 && path.projections.count == 0
                                 && effect.kind == RuntimePlaceEffectKind::Write
                                 && (!matches!(
-                                    effect.location,
-                                    RuntimeOwnershipEventLocation::TopLevelStatement(_)
-                                ) || effect.expression_conditional.is_some())
+                                effect.location,
+                                RuntimeOwnershipEventLocation::TopLevelStatement(_)
+                                    | RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                                        ..
+                                    }
+                            ) || effect.expression_conditional.is_some())
                         })
                 })
         {
@@ -3857,6 +3862,7 @@ impl<'source> RuntimeBodyFacts<'source> {
         if !matches!(
             generation.location,
             RuntimeOwnershipEventLocation::TopLevelStatement(_)
+                | RuntimeOwnershipEventLocation::ConditionalAssignmentAction { .. }
         ) || generation.expression_conditional.is_some()
         {
             return None;
@@ -3915,6 +3921,24 @@ impl<'source> RuntimeBodyFacts<'source> {
             .chain((0..self.effect_count).filter_map(|index| self.direct_assigned_loan_fact(index)))
             .filter(|loan| loan.borrower == borrower && loan.generation_event.0 < before.0)
             .max_by_key(|loan| loan.generation_event.0)
+    }
+
+    fn direct_loan_generation_position(
+        &self,
+        loan: RuntimeLoanFact,
+    ) -> Option<(RuntimeOwnershipEventId, RuntimeOwnershipEventLocation)> {
+        if loan.id.0 < MAX_RUNTIME_INITIALIZATION_FACTS {
+            let initialization = self
+                .initializations
+                .get(loan.id.0)
+                .and_then(|initialization| *initialization)?;
+            (initialization.event == loan.generation_event)
+                .then_some((initialization.event, initialization.location))
+        } else {
+            let effect_index = loan.id.0.checked_sub(MAX_RUNTIME_INITIALIZATION_FACTS)?;
+            let effect = self.effects.get(effect_index).and_then(|effect| *effect)?;
+            (effect.event == loan.generation_event).then_some((effect.event, effect.location))
+        }
     }
 
     fn direct_parent_loan(&self, loan: RuntimeLoanFact) -> Option<RuntimeLoanFact> {
@@ -9650,32 +9674,30 @@ fn validate_runtime_initializedness(
     Ok(())
 }
 
-fn runtime_ownership_point_reaches(
+fn runtime_ownership_point_index(
+    facts: &RuntimeBodyFacts<'_>,
+    point: RuntimeOwnershipControlPoint,
+) -> Option<usize> {
+    match point {
+        RuntimeOwnershipControlPoint::Entry => Some(0),
+        RuntimeOwnershipControlPoint::Block(block) if block.0 < facts.basic_block_count => {
+            Some(1 + block.0)
+        }
+        RuntimeOwnershipControlPoint::Edge(edge) if edge < facts.control_flow_edge_count => {
+            Some(1 + facts.basic_block_count + edge)
+        }
+        RuntimeOwnershipControlPoint::Block(_)
+        | RuntimeOwnershipControlPoint::Edge(_)
+        | RuntimeOwnershipControlPoint::Unreachable => None,
+    }
+}
+
+fn runtime_ownership_point_reaches_avoiding(
     facts: &RuntimeBodyFacts<'_>,
     from: RuntimeOwnershipControlPoint,
     to: RuntimeOwnershipControlPoint,
+    blocked: &[bool; MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS],
 ) -> bool {
-    const POINT_CAPACITY: usize =
-        1 + MAX_RUNTIME_BASIC_BLOCK_FACTS + MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS;
-
-    fn point_index(
-        facts: &RuntimeBodyFacts<'_>,
-        point: RuntimeOwnershipControlPoint,
-    ) -> Option<usize> {
-        match point {
-            RuntimeOwnershipControlPoint::Entry => Some(0),
-            RuntimeOwnershipControlPoint::Block(block) if block.0 < facts.basic_block_count => {
-                Some(1 + block.0)
-            }
-            RuntimeOwnershipControlPoint::Edge(edge) if edge < facts.control_flow_edge_count => {
-                Some(1 + facts.basic_block_count + edge)
-            }
-            RuntimeOwnershipControlPoint::Block(_)
-            | RuntimeOwnershipControlPoint::Edge(_)
-            | RuntimeOwnershipControlPoint::Unreachable => None,
-        }
-    }
-
     fn push_point<const N: usize>(
         index: usize,
         visited: &mut [bool; N],
@@ -9689,11 +9711,14 @@ fn runtime_ownership_point_reaches(
         }
     }
 
-    let Some(target) = point_index(facts, to) else {
+    let Some(target) = runtime_ownership_point_index(facts, to) else {
         return false;
     };
-    let mut visited = [false; POINT_CAPACITY];
-    let mut pending = [0usize; POINT_CAPACITY];
+    if blocked[target] {
+        return false;
+    }
+    let mut visited = *blocked;
+    let mut pending = [0usize; MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS];
     let mut pending_count = 0usize;
     match from {
         RuntimeOwnershipControlPoint::Entry if facts.basic_block_count != 0 => {
@@ -9771,6 +9796,19 @@ fn runtime_ownership_point_reaches(
     false
 }
 
+fn runtime_ownership_point_reaches(
+    facts: &RuntimeBodyFacts<'_>,
+    from: RuntimeOwnershipControlPoint,
+    to: RuntimeOwnershipControlPoint,
+) -> bool {
+    runtime_ownership_point_reaches_avoiding(
+        facts,
+        from,
+        to,
+        &[false; MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS],
+    )
+}
+
 fn runtime_ownership_event_precedes(
     facts: &RuntimeBodyFacts<'_>,
     earlier: RuntimePlaceEffectFact,
@@ -9788,11 +9826,95 @@ fn runtime_ownership_event_precedes(
     runtime_ownership_point_reaches(facts, earlier_point, later_point)
 }
 
+fn runtime_ownership_position_precedes(
+    facts: &RuntimeBodyFacts<'_>,
+    earlier_event: RuntimeOwnershipEventId,
+    earlier_location: RuntimeOwnershipEventLocation,
+    later_event: RuntimeOwnershipEventId,
+    later_location: RuntimeOwnershipEventLocation,
+) -> bool {
+    let (Some(earlier_point), Some(later_point)) = (
+        facts.ownership_control_point(earlier_location),
+        facts.ownership_control_point(later_location),
+    ) else {
+        return false;
+    };
+    if earlier_point == later_point {
+        return earlier_event.0 < later_event.0;
+    }
+    runtime_ownership_point_reaches(facts, earlier_point, later_point)
+}
+
 fn runtime_effect_uses_loan(kind: RuntimePlaceEffectKind) -> bool {
     matches!(
         kind,
         RuntimePlaceEffectKind::LoanUse | RuntimePlaceEffectKind::LoanMutation
     )
+}
+
+fn runtime_specific_loan_is_active_at_effect(
+    facts: &RuntimeBodyFacts<'_>,
+    loan: RuntimeLoanFact,
+    effect: RuntimePlaceEffectFact,
+) -> bool {
+    let Some((generation_event, generation_location)) = facts.direct_loan_generation_position(loan)
+    else {
+        return false;
+    };
+    if !runtime_ownership_position_precedes(
+        facts,
+        generation_event,
+        generation_location,
+        effect.event,
+        effect.location,
+    ) {
+        return false;
+    }
+    let (Some(generation_point), Some(effect_point)) = (
+        facts.ownership_control_point(generation_location),
+        facts.ownership_control_point(effect.location),
+    ) else {
+        return false;
+    };
+    let mut blocked = [false; MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS];
+    for replacement in (0..facts.initialization_count)
+        .filter_map(|index| facts.direct_loan_fact(index))
+        .chain((0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)))
+        .filter(|replacement| replacement.borrower == loan.borrower && replacement.id != loan.id)
+    {
+        let Some((replacement_event, replacement_location)) =
+            facts.direct_loan_generation_position(replacement)
+        else {
+            return false;
+        };
+        if !runtime_ownership_position_precedes(
+            facts,
+            generation_event,
+            generation_location,
+            replacement_event,
+            replacement_location,
+        ) || !runtime_ownership_position_precedes(
+            facts,
+            replacement_event,
+            replacement_location,
+            effect.event,
+            effect.location,
+        ) {
+            continue;
+        }
+        let Some(replacement_point) = facts.ownership_control_point(replacement_location) else {
+            return false;
+        };
+        if replacement_point == generation_point || replacement_point == effect_point {
+            return false;
+        }
+        let Some(index) = runtime_ownership_point_index(facts, replacement_point) else {
+            return false;
+        };
+        blocked[index] = true;
+    }
+    generation_point == effect_point
+        || runtime_ownership_point_reaches_avoiding(facts, generation_point, effect_point, &blocked)
 }
 
 fn runtime_effect_uses_specific_loan(
@@ -9801,9 +9923,65 @@ fn runtime_effect_uses_specific_loan(
     effect: RuntimePlaceEffectFact,
 ) -> bool {
     runtime_effect_uses_loan(effect.kind)
-        && facts
-            .direct_loan_for_borrower_before(loan.borrower, effect.event)
-            .is_some_and(|active| active.id == loan.id)
+        && runtime_specific_loan_is_active_at_effect(facts, loan, effect)
+}
+
+fn runtime_effect_reaches_specific_loan_use(
+    facts: &RuntimeBodyFacts<'_>,
+    loan: RuntimeLoanFact,
+    earlier: RuntimePlaceEffectFact,
+    later: RuntimePlaceEffectFact,
+) -> bool {
+    if !runtime_effect_uses_specific_loan(facts, loan, later)
+        || !runtime_ownership_event_precedes(facts, earlier, later)
+    {
+        return false;
+    }
+    let (Some(earlier_point), Some(later_point)) = (
+        facts.ownership_control_point(earlier.location),
+        facts.ownership_control_point(later.location),
+    ) else {
+        return false;
+    };
+    let mut blocked = [false; MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS];
+    for replacement in (0..facts.initialization_count)
+        .filter_map(|index| facts.direct_loan_fact(index))
+        .chain((0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)))
+        .filter(|replacement| replacement.borrower == loan.borrower && replacement.id != loan.id)
+    {
+        let Some((replacement_event, replacement_location)) =
+            facts.direct_loan_generation_position(replacement)
+        else {
+            return false;
+        };
+        if !runtime_ownership_position_precedes(
+            facts,
+            earlier.event,
+            earlier.location,
+            replacement_event,
+            replacement_location,
+        ) || !runtime_ownership_position_precedes(
+            facts,
+            replacement_event,
+            replacement_location,
+            later.event,
+            later.location,
+        ) {
+            continue;
+        }
+        let Some(replacement_point) = facts.ownership_control_point(replacement_location) else {
+            return false;
+        };
+        if replacement_point == earlier_point || replacement_point == later_point {
+            return false;
+        }
+        let Some(index) = runtime_ownership_point_index(facts, replacement_point) else {
+            return false;
+        };
+        blocked[index] = true;
+    }
+    earlier_point == later_point
+        || runtime_ownership_point_reaches_avoiding(facts, earlier_point, later_point, &blocked)
 }
 
 fn validate_runtime_bounded_direct_loan_liveness(
@@ -9846,6 +10024,31 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: fallback_span,
             })?;
+        if let Some(path) = facts
+            .move_paths
+            .get(loan.borrowed_path.0)
+            .and_then(|path| *path)
+            .filter(|path| path.projections.count == 0)
+            && let RuntimePlaceIdentity::Local(parent_borrower) = path.base
+        {
+            let active_parent_count = (0..facts.initialization_count)
+                .filter_map(|index| facts.direct_loan_fact(index))
+                .chain(
+                    (0..facts.effect_count)
+                        .filter_map(|index| facts.direct_assigned_loan_fact(index)),
+                )
+                .filter(|parent| {
+                    parent.borrower == parent_borrower
+                        && runtime_specific_loan_is_active_at_effect(facts, *parent, issue)
+                })
+                .count();
+            if active_parent_count > 1 {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                    span: issue.span,
+                });
+            }
+        }
         let borrowed_path = facts
             .direct_loan_root_borrowed_path(loan)
             .ok_or(CodegenError {
@@ -9896,8 +10099,12 @@ fn validate_runtime_bounded_direct_loan_liveness(
                         .flatten()
                         .any(|effect| {
                             effect.path == borrower_path
-                                && runtime_effect_uses_specific_loan(facts, loan, *effect)
-                                && runtime_ownership_event_precedes(facts, *parent_use, *effect)
+                                && runtime_effect_reaches_specific_loan_use(
+                                    facts,
+                                    loan,
+                                    *parent_use,
+                                    *effect,
+                                )
                         });
                 if child_used_later {
                     return Err(CodegenError {
@@ -9942,8 +10149,9 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     .flatten()
                     .any(|effect| {
                         effect.path == borrower_path
-                            && runtime_effect_uses_specific_loan(facts, loan, *effect)
-                            && runtime_ownership_event_precedes(facts, *conflict, *effect)
+                            && runtime_effect_reaches_specific_loan_use(
+                                facts, loan, *conflict, *effect,
+                            )
                     });
             if used_after_conflict {
                 return Err(CodegenError {
@@ -27091,6 +27299,68 @@ mod tests {
             .unwrap_err()
             .kind,
             CodegenErrorKind::RuntimeBorrowConflict
+        );
+    }
+
+    #[test]
+    fn runtime_conditional_reference_generations_join_by_reaching_definition() {
+        let rejected = "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; if choose { parent = &mut *second; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; if choose { parent = &mut *second; } else { parent = &mut *third; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
+        let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let ambiguous_child = "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; if choose { parent = &mut *second; } let child: &u16 = &*parent; *child }";
+        let module = Parser::new(ambiguous_child).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeExpressionUnsupported
         );
     }
 
