@@ -419,18 +419,22 @@ explicitly and downgrade the status rather than guessing.
   `Suspended` state; suspension rejects device in-flight slots and pending
   interrupts, while resume occurs only after exact publication and validation.
   Signed KVM execution covers this bounded live reinitialization. WHP source
-  parity is present, but the current increment has no new WHP build or execution
-  evidence because the available Windows shell lacked its linker. This is not
-  crash recovery. A controlled KVM path now leaves the device, bridge, volatile
+  parity and current compile/lint evidence are present, but no linked or live
+  WHP replacement evidence exists. This is not crash recovery. A controlled
+  KVM path now leaves the device, bridge, volatile
   backend, and common policy VM identity live while destroying the stopped
   native VM. It prepares a fresh VM from the same verified executable and
   canonical handoff, restores only the request, completion, resume, and two
   payload pages while the device stays suspended, and enters the kernel from
   its beginning. That entry accepts only all-zero launch state or the exact
   `14/14/14/12` recovery watermarks plus matching ID anchors. This is orderly
-  hosted execution replacement. WHP replacement, unplanned crash orchestration,
-  backend-in-flight recovery, unbounded progress, and PCI transport remain
-  pending. A common
+  hosted execution replacement. The WHP runner now implements the same
+  consuming partition replacement and restores the same five pages through
+  their ordinary versus protected device-write paths. Native Windows
+  `check --tests` and strict Clippy pass with CUDA excluded, but no linked or
+  live WHP replacement evidence exists because `link.exe` is unavailable.
+  Unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
+  and PCI transport remain pending. A common
   unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer

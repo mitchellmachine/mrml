@@ -719,17 +719,21 @@ device's explicit `Suspended` lifecycle state; stopping the vCPU alone is not
 sufficient. Suspension succeeds only with no device in-flight slot or pending
 interrupt, and the runners resume the device only after exact publication and
 state validation succeed. Fresh signed KVM execution covers this pending-
-ownership checkpoint; the WHP path has matching source but was not rebuilt or
-executed for this increment because the available Windows shell lacked its
-linker. The KVM controlled probe now also destroys the stopped native VM,
+ownership checkpoint; the WHP path has matching source and current compile/lint
+evidence but no linked or live replacement evidence. The KVM controlled probe
+now also destroys the stopped native VM,
 prepares a fresh VM from the same verified executable and canonical handoff,
 restores only the exact request, completion, resume, and two payload pages while
 the device remains suspended, and resumes through the fresh kernel entry. That
 entry accepts only canonical all-zero launch or exact `14/14/14/12` recovery
 watermarks and matching history anchors. The device, bridge, volatile backend,
-and common VM policy identity remain live across replacement. WHP VM
-replacement, unplanned crash orchestration, backend-in-flight recovery,
-unbounded progress, and PCI discovery remain pending. One freshly
+and common VM policy identity remain live across replacement. The WHP runner
+now implements the same consuming partition replacement and exact five-page
+restoration through ordinary versus device-write boundaries; native Windows
+`check --tests` and strict Clippy pass with CUDA excluded. No linked or live WHP
+replacement evidence exists because `link.exe` remains unavailable. Unplanned
+crash orchestration, backend-in-flight recovery, unbounded progress, and PCI
+discovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

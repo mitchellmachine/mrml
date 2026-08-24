@@ -1598,6 +1598,14 @@ state. It adds no new authority model, persistent format, device protocol, or
 patent-candidate mechanism. This agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Controlled virtual-block WHP replacement parity
+
+**Result: NOT_TRIGGERED.** The change directly applies the existing bounded
+stopped-VM replacement sequence to the WHP backend with the same five pages and
+write-direction boundaries. It adds no new authority model, persistent format,
+device protocol, or patent-candidate mechanism. This agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Virtual-block queue transaction processor
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights producer/

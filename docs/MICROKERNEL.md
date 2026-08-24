@@ -3928,6 +3928,47 @@ Patent review: `NOT_TRIGGERED` — conventional bounded device-page transfer int
 a freshly prepared VM and exact fresh-versus-resume state selection; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The WHP block runner now mirrors the controlled replacement ordering. Its
+stopped partition is read only for the exact request, completion, resume, and
+two payload pages while the retained device stays suspended. A fresh partition
+is prepared from the same verified executable, canonical handoff, launch
+layout, configuration, and page protections. Request and payload state use the
+ordinary host boundary; completion and resume state use only the virtual-block
+device-write boundary. Consuming assignment destroys the old partition before
+the device returns to `Active`, and every preparation or restoration error
+returns without resuming either uncertain execution context.
+
+Native Windows verification passed:
+
+```text
+cargo check -p mrml-kernel -p mrml-whp -p mrml-whp-run --tests --no-default-features
+cargo clippy -p mrml-kernel -p mrml-whp -p mrml-whp-run --all-targets --no-default-features --no-deps -- -D warnings
+```
+
+CUDA was excluded because it is unrelated to the block-only path. These gates
+prove compilation, test-target compilation, lifetime ownership, and strict
+scoped lint only. The environment still lacks `link.exe`, so no new Windows
+test binary, runner executable, or live WHP replacement was produced. Earlier
+WHP idle-checkpoint execution is not promoted into replacement evidence.
+
+The WHP-parity `DIGITAL-RIGHTS REVIEW` found no new identity, collection,
+retention, correlation, disclosure, attestation mandate, DRM, vendor/publisher
+control, first-party bypass, accessibility restriction, AI authority, or
+durable owner-state change. The same five-page minimum-retention boundary is
+used and carries no authority. The `HOSTILE SECURITY REVIEW` treats the old
+partition stop, retained-system lifetime, device suspension, all copied bytes,
+mapping directionality, replacement preparation, consuming assignment, and
+resume result as hostile. Protected pages cannot use ordinary writes, the old
+partition is never resumed, and any error leaves the device suspended. Existing
+capability, revocation, rollback-resistance, accessibility, evidence, owner-
+sovereignty, data-minimization, anti-DRM, owner-controlled-attestation, AI-
+containment, and anti-persistence gates remain unchanged. This agent review
+does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — direct backend-parity implementation of the
+same conventional stopped-partition replacement and bounded page restoration;
+see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

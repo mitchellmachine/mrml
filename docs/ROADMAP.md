@@ -748,9 +748,12 @@ resumes the retained device only after complete restoration. The fresh kernel
 entry accepts only all-zero launch state or the exact `14/14/14/12` checkpoint
 and matching ID anchors before reconstructing. The device, bridge, volatile
 backend, and common policy VM identity are retained, so this is orderly
-execution replacement, not crash recovery. Equivalent WHP replacement,
-unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
-and PCI transport remain pending.
+execution replacement, not crash recovery. The WHP runner now has the same
+consuming partition replacement and exact five-page restoration source path;
+native Windows `check --tests` and strict Clippy pass with CUDA excluded. A
+linked/live WHP replacement run remains pending because the available shell
+lacks `link.exe`. Unplanned crash orchestration, backend-in-flight recovery,
+unbounded progress, and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
