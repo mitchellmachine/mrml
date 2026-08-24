@@ -18,6 +18,7 @@ const MAX_RUNTIME_PLACE_EFFECT_FACTS: usize =
 const MAX_RUNTIME_OWNERSHIP_EVENT_FACTS: usize =
     MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS;
 const MAX_RUNTIME_BASIC_BLOCK_FACTS: usize = 64;
+const RUNTIME_INITIALIZED_STATE_WORDS: usize = MAX_RUNTIME_MOVE_PATH_FACTS.div_ceil(64);
 const MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS: usize = 128;
 const MAX_RUNTIME_PLACE_PROJECTIONS: usize = 4;
 
@@ -7900,49 +7901,49 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
     Ok(())
 }
 
-fn validate_runtime_single_block_initializedness(
+fn validate_runtime_initializedness(
     facts: &RuntimeBodyFacts<'_>,
     fallback_span: Span,
 ) -> Result<(), CodegenError> {
-    let single_block = facts.control_flow_complete
-        && facts.ownership_events_single_path
-        && facts.basic_block_count == 1
-        && facts.basic_blocks[0].is_some_and(|block| {
-            block.id == RuntimeBasicBlockId(0)
-                && block.source == RuntimeBasicBlockSource::TopLevel
-                && block.reachable
-        })
-        && facts.control_flow_edges[..facts.control_flow_edge_count]
-            .iter()
-            .flatten()
-            .all(|edge| {
-                edge.from == RuntimeBasicBlockId(0)
-                    && edge.target == RuntimeControlFlowTarget::Return
-                    && edge.kind == RuntimeControlFlowEdgeKind::Unconditional
-            });
-    if !single_block {
+    if !facts.control_flow_complete
+        || !facts.ownership_events_single_path
+        || facts.basic_block_count == 0
+    {
         return Ok(());
     }
 
     fn set_path_state(
         facts: &RuntimeBodyFacts<'_>,
-        initialized: &mut [bool; MAX_RUNTIME_MOVE_PATH_FACTS],
+        initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS],
         path: RuntimeMovePathId,
         state: bool,
     ) -> Result<(), CodegenErrorKind> {
+        fn set(initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS], path: usize, state: bool) {
+            let mask = 1u64 << (path % 64);
+            if state {
+                initialized[path / 64] |= mask;
+            } else {
+                initialized[path / 64] &= !mask;
+            }
+        }
+
+        fn get(initialized: &[u64; RUNTIME_INITIALIZED_STATE_WORDS], path: usize) -> bool {
+            initialized[path / 64] & (1u64 << (path % 64)) != 0
+        }
+
         let path_fact = facts
             .move_paths
             .get(path.0)
             .and_then(|path| *path)
             .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
-        initialized[path.0] = state;
+        set(initialized, path.0, state);
         if path_fact.parent.is_none() {
             for child in facts.move_paths[..facts.move_path_count]
                 .iter()
                 .flatten()
                 .filter(|candidate| candidate.parent == Some(path))
             {
-                initialized[child.id.0] = state;
+                set(initialized, child.id.0, state);
             }
         } else if let Some(parent) = path_fact.parent {
             let mut has_child = false;
@@ -7953,92 +7954,269 @@ fn validate_runtime_single_block_initializedness(
                 .filter(|candidate| candidate.parent == Some(parent))
             {
                 has_child = true;
-                all_children_initialized &= initialized[child.id.0];
+                all_children_initialized &= get(initialized, child.id.0);
             }
             if !has_child {
                 return Err(CodegenErrorKind::InvalidRuntimePlaceFacts);
             }
-            initialized[parent.0] = all_children_initialized;
+            set(initialized, parent.0, all_children_initialized);
         }
         Ok(())
     }
 
-    let mut initialized = [false; MAX_RUNTIME_MOVE_PATH_FACTS];
-    let mut initialization_index = 0usize;
-    let mut effect_index = 0usize;
-    for expected_event in 0..facts.ownership_event_count {
-        let initialization = facts
-            .initializations
-            .get(initialization_index)
-            .and_then(|fact| *fact)
-            .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event));
-        if let Some(initialization) = initialization {
-            set_path_state(facts, &mut initialized, initialization.path, true).map_err(|kind| {
-                CodegenError {
-                    kind,
-                    span: initialization.span.unwrap_or(fallback_span),
+    fn apply_events(
+        facts: &RuntimeBodyFacts<'_>,
+        point: RuntimeOwnershipControlPoint,
+        initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS],
+        check_reads: bool,
+        fallback_span: Span,
+    ) -> Result<(), CodegenError> {
+        let mut initialization_index = 0usize;
+        let mut effect_index = 0usize;
+        for expected_event in 0..facts.ownership_event_count {
+            let initialization = facts
+                .initializations
+                .get(initialization_index)
+                .and_then(|fact| *fact)
+                .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event));
+            if let Some(initialization) = initialization {
+                if facts.ownership_control_point(initialization.location) == Some(point) {
+                    set_path_state(facts, initialized, initialization.path, true).map_err(
+                        |kind| CodegenError {
+                            kind,
+                            span: initialization.span.unwrap_or(fallback_span),
+                        },
+                    )?;
                 }
-            })?;
-            initialization_index += 1;
-            continue;
+                initialization_index += 1;
+                continue;
+            }
+            let effect = facts
+                .effects
+                .get(effect_index)
+                .and_then(|fact| *fact)
+                .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event))
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: fallback_span,
+                })?;
+            if facts.ownership_control_point(effect.location) == Some(point) {
+                if effect.path.0 >= facts.move_path_count {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                        span: effect.span,
+                    });
+                }
+                let is_initialized =
+                    initialized[effect.path.0 / 64] & (1u64 << (effect.path.0 % 64)) != 0;
+                if check_reads
+                    && matches!(
+                        effect.kind,
+                        RuntimePlaceEffectKind::Copy
+                            | RuntimePlaceEffectKind::Move
+                            | RuntimePlaceEffectKind::SharedBorrow
+                            | RuntimePlaceEffectKind::MutableBorrow
+                            | RuntimePlaceEffectKind::ReadModifyWrite
+                    )
+                    && !is_initialized
+                {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeUseAfterMove,
+                        span: effect.span,
+                    });
+                }
+                match effect.kind {
+                    RuntimePlaceEffectKind::Move => {
+                        set_path_state(facts, initialized, effect.path, false).map_err(|kind| {
+                            CodegenError {
+                                kind,
+                                span: effect.span,
+                            }
+                        })?;
+                    }
+                    RuntimePlaceEffectKind::Write => {
+                        set_path_state(facts, initialized, effect.path, true).map_err(|kind| {
+                            CodegenError {
+                                kind,
+                                span: effect.span,
+                            }
+                        })?;
+                    }
+                    RuntimePlaceEffectKind::Copy
+                    | RuntimePlaceEffectKind::SharedBorrow
+                    | RuntimePlaceEffectKind::MutableBorrow
+                    | RuntimePlaceEffectKind::ReadModifyWrite => {}
+                }
+            }
+            effect_index += 1;
         }
-        let effect = facts
-            .effects
-            .get(effect_index)
-            .and_then(|fact| *fact)
-            .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event))
-            .ok_or(CodegenError {
+        if initialization_index != facts.initialization_count || effect_index != facts.effect_count
+        {
+            return Err(CodegenError {
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: fallback_span,
+            });
+        }
+        Ok(())
+    }
+
+    let mut entry_state = [0; RUNTIME_INITIALIZED_STATE_WORDS];
+    apply_events(
+        facts,
+        RuntimeOwnershipControlPoint::Entry,
+        &mut entry_state,
+        false,
+        fallback_span,
+    )?;
+    let mut block_inputs =
+        [[u64::MAX; RUNTIME_INITIALIZED_STATE_WORDS]; MAX_RUNTIME_BASIC_BLOCK_FACTS];
+    let mut block_outputs =
+        [[u64::MAX; RUNTIME_INITIALIZED_STATE_WORDS]; MAX_RUNTIME_BASIC_BLOCK_FACTS];
+    let convergence_limit = facts
+        .basic_block_count
+        .checked_mul(facts.move_path_count.max(1))
+        .and_then(|value| value.checked_add(1))
+        .ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+            span: fallback_span,
+        })?;
+    let mut converged = false;
+    for _ in 0..convergence_limit {
+        let mut changed = false;
+        for block_index in 0..facts.basic_block_count {
+            let block = facts.basic_blocks[block_index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                span: fallback_span,
             })?;
-        let is_initialized = initialized
-            .get(effect.path.0)
-            .copied()
-            .ok_or(CodegenError {
-                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                span: effect.span,
-            })?;
-        match effect.kind {
-            RuntimePlaceEffectKind::Copy
-            | RuntimePlaceEffectKind::Move
-            | RuntimePlaceEffectKind::SharedBorrow
-            | RuntimePlaceEffectKind::MutableBorrow
-            | RuntimePlaceEffectKind::ReadModifyWrite
-                if !is_initialized =>
-            {
+            if block.id.0 != block_index {
                 return Err(CodegenError {
-                    kind: CodegenErrorKind::RuntimeUseAfterMove,
-                    span: effect.span,
+                    kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                    span: fallback_span,
                 });
             }
-            RuntimePlaceEffectKind::Move => {
-                set_path_state(facts, &mut initialized, effect.path, false).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: effect.span,
-                    }
-                })?;
+            if !block.reachable {
+                continue;
             }
-            RuntimePlaceEffectKind::Write => {
-                set_path_state(facts, &mut initialized, effect.path, true).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: effect.span,
-                    }
-                })?;
+            let mut incoming = [u64::MAX; RUNTIME_INITIALIZED_STATE_WORDS];
+            let mut has_predecessor = false;
+            if block.id == RuntimeBasicBlockId(0) {
+                incoming = entry_state;
+                has_predecessor = true;
             }
-            RuntimePlaceEffectKind::Copy
-            | RuntimePlaceEffectKind::SharedBorrow
-            | RuntimePlaceEffectKind::MutableBorrow
-            | RuntimePlaceEffectKind::ReadModifyWrite => {}
+            for (edge_index, edge) in facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .enumerate()
+            {
+                let edge = edge.ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                    span: fallback_span,
+                })?;
+                if edge.target != RuntimeControlFlowTarget::Block(block.id) {
+                    continue;
+                }
+                let predecessor = facts
+                    .basic_blocks
+                    .get(edge.from.0)
+                    .and_then(|fact| *fact)
+                    .ok_or(CodegenError {
+                        kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                        span: fallback_span,
+                    })?;
+                if !predecessor.reachable {
+                    continue;
+                }
+                let mut edge_state = block_outputs[edge.from.0];
+                apply_events(
+                    facts,
+                    RuntimeOwnershipControlPoint::Edge(edge_index),
+                    &mut edge_state,
+                    false,
+                    fallback_span,
+                )?;
+                if has_predecessor {
+                    for word_index in 0..RUNTIME_INITIALIZED_STATE_WORDS {
+                        incoming[word_index] &= edge_state[word_index];
+                    }
+                } else {
+                    incoming = edge_state;
+                    has_predecessor = true;
+                }
+            }
+            if !has_predecessor {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                    span: fallback_span,
+                });
+            }
+            let mut outgoing = incoming;
+            apply_events(
+                facts,
+                RuntimeOwnershipControlPoint::Block(block.id),
+                &mut outgoing,
+                false,
+                fallback_span,
+            )?;
+            if block_inputs[block_index] != incoming || block_outputs[block_index] != outgoing {
+                block_inputs[block_index] = incoming;
+                block_outputs[block_index] = outgoing;
+                changed = true;
+            }
         }
-        effect_index += 1;
+        if !changed {
+            converged = true;
+            break;
+        }
     }
-    if initialization_index != facts.initialization_count || effect_index != facts.effect_count {
+    if !converged {
         return Err(CodegenError {
-            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
             span: fallback_span,
         });
+    }
+
+    for (block_index, input) in block_inputs[..facts.basic_block_count].iter().enumerate() {
+        let block = facts.basic_blocks[block_index].ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+            span: fallback_span,
+        })?;
+        if !block.reachable {
+            continue;
+        }
+        let mut state = *input;
+        apply_events(
+            facts,
+            RuntimeOwnershipControlPoint::Block(block.id),
+            &mut state,
+            true,
+            fallback_span,
+        )?;
+    }
+    for (edge_index, edge) in facts.control_flow_edges[..facts.control_flow_edge_count]
+        .iter()
+        .enumerate()
+    {
+        let edge = edge.ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+            span: fallback_span,
+        })?;
+        let predecessor = facts
+            .basic_blocks
+            .get(edge.from.0)
+            .and_then(|fact| *fact)
+            .ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                span: fallback_span,
+            })?;
+        if predecessor.reachable {
+            let mut state = block_outputs[edge.from.0];
+            apply_events(
+                facts,
+                RuntimeOwnershipControlPoint::Edge(edge_index),
+                &mut state,
+                true,
+                fallback_span,
+            )?;
+        }
     }
     Ok(())
 }
@@ -8169,7 +8347,7 @@ fn preanalyze_runtime_body_declarations<
         kind,
         span: body.tail_span,
     })?;
-    validate_runtime_single_block_initializedness(facts, body.tail_span)?;
+    validate_runtime_initializedness(facts, body.tail_span)?;
     Ok(facts.local_count)
 }
 
@@ -24506,7 +24684,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_multiblock_initializedness_waits_for_block_provenance() {
+    fn runtime_multiblock_initializedness_preserves_early_return_paths() {
         let source = "fn value(input: &mut u16, choose: bool) -> &mut u16 { if choose { return identity(input); } input }";
         let module = Parser::new(source).parse_module::<2, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -24595,6 +24773,53 @@ mod tests {
         .unwrap();
         assert_eq!(facts.basic_block_count, 1);
         assert!(!facts.ownership_events_single_path);
+    }
+
+    #[test]
+    fn runtime_cfg_initializedness_rejects_moves_on_only_one_join_path() {
+        let source = "fn value(second: &mut u16, choose: bool) -> &mut u16 { if choose { identity(second); } second }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let result = preanalyze_runtime_body_declarations::<_, 4, 16>(
+            &function,
+            &MutableReferenceCallResolver,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        );
+        assert_eq!(
+            result.unwrap_err().kind,
+            CodegenErrorKind::RuntimeUseAfterMove
+        );
+    }
+
+    #[test]
+    fn runtime_cfg_initializedness_rejects_moves_reaching_a_loop_exit() {
+        let source = "fn identity(value: &mut u16) -> &mut u16 { value } fn value(input: &mut u16) -> &mut u16 { loop { let moved: &mut u16 = identity(input); break; } input }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[1] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 16>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeUseAfterMove
+        );
     }
 
     #[test]

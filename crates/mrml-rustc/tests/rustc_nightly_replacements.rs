@@ -3997,6 +3997,24 @@ fn rustc_single_block_initializedness_rejects_second_moves_and_accepts_writes() 
 }
 
 #[test]
+fn rustc_cfg_initializedness_rejects_branch_and_loop_exit_use_after_move() {
+    let rejected = [
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(second: &mut u16, choose: bool) -> &mut u16 { if choose { identity(second); } second }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { loop { let moved: &mut u16 = identity(input); break; } input }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeUseAfterMove
+                ))
+            );
+        }
+    }
+}
+
+#[test]
 fn rustc_conditional_ownership_program_points_preserve_native_objects() {
     let source = "fn choose(input: &mut u16, first: bool) -> &mut u16 { if first { return input; } input } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, first: bool, increment: bool) -> u16 { let selected: &mut u16 = choose(input, first); if increment { *selected += 2; } else { *selected = 7; } *selected }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
