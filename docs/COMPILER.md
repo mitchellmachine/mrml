@@ -237,9 +237,13 @@ has one block. Each event now also retains insertion-time origin: parameter
 entry, an exact bounded top-level statement index, a verified final tail, or an
 explicit emission-expansion marker for dynamically appended inline-helper
 facts. Validation rejects unassigned, out-of-body, or otherwise incompatible
-origins. Conditional branch/edge, nested-action, and loop-operation provenance
-is not yet refined beyond its containing statement. Events still lack final
-CFG-block membership, so multi-block and
+origins. Conditional returns now distinguish indexed condition evaluation,
+true-return values, and the final else value. Conditional assignments distinguish
+indexed conditions and every indexed branch/else action. A fixed parser-shaped
+statement table validates exact branch counts, else presence, and action counts;
+forged or mismatched program points fail closed. Nested-action and loop-operation
+provenance is not yet refined beyond its containing statement. Events still lack
+final CFG-block membership, so multi-block and
 multi-path functions remain unenforced rather than being analyzed linearly.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
