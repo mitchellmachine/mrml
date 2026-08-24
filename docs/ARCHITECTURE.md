@@ -666,6 +666,11 @@ mechanics from the exact `MrmlSpecificScalarIo` binding. The binding is data,
 not port or device authority, and reset validation still rejects stale
 configuration generations. No PCI, VirtIO, MMIO, or compatibility transport is
 implemented by this separation.
+The same binding now transactionally constructs the complete two-rule
+deny-by-default VM I/O policy, and both hosted launchers use that policy with a
+device constructed from the identical transport value. Reads, wrong widths,
+and unrelated ports remain denied before device dispatch; transport data still
+does not authorize either admitted write.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

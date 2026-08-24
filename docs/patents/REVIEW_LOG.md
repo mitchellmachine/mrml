@@ -1794,3 +1794,13 @@ standard defensive virtual-device techniques. No PCI/VirtIO implementation,
 new protocol, authority model, storage format, or patent-candidate mechanism
 was introduced. This agent review does not replace the required independent
 human dual review.
+
+# 2026-08-24 — Transport-derived block I/O admission policy
+
+**Result: NOT_TRIGGERED.** The change conventionally constructs the existing
+two-rule deny-by-default VM I/O allowlist from the typed scalar transport and
+uses the same value for device construction. Transactional policy creation,
+exact write-only rules, and denial of wrong widths/directions/unrelated ports
+are standard defensive virtual-device techniques. No new protocol, authority
+model, compatibility claim, or patent-candidate mechanism was introduced. This
+agent review does not replace the required independent human dual review.

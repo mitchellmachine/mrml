@@ -4316,6 +4316,48 @@ Patent review: `NOT_TRIGGERED` — conventional typed selection of fixed virtual
 device transport mechanics; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The transport binding now supplies admission policy as well as runtime
+mechanics. `VirtualBlockTransport::io_policy` transactionally creates a fresh
+deny-by-default `IoPortPolicy<2>` containing only the exact 32-bit write rules
+for its doorbell and protected acknowledgement. No partially installed policy
+escapes on construction failure. Both KVM and WHP block launchers obtain this
+policy from the same transport value passed to `new_with_transport`; neither
+launcher repeats the global port constants. Tests admit both exact writes and
+deny reads, wrong widths, and a distinct unrelated port. The adjacent port is
+deliberately the protected acknowledgement and is therefore independently
+admitted, not treated as an arbitrary neighbor.
+
+Recorded verification on 2026-08-24: after correcting that adversarial test's
+initial mistaken assumption that the adjacent acknowledgement port should be
+denied, Arch Linux under WSL2 passed all 390 release kernel tests and all 6
+release KVM-run tests. Strict scoped Linux Clippy, strict nightly UEFI
+block-probe Clippy, native Windows test-target `check`, and strict scoped
+Windows Clippy passed for the same kernel/KVM or kernel/WHP scopes described
+above. A fresh one-time Lamport-signed version-1 KVM probe completed with
+`verify=16828us prepare=2304us execute=70778us total=91208us`; all exact
+temporary and accidental signing-artifact paths were verified absent. No live
+WHP, PCI, VirtIO, QEMU, native-boot, bare-metal, or physical-hardware evidence
+is claimed.
+
+The transport-policy `DIGITAL-RIGHTS REVIEW` found no new collection, identity,
+correlation, disclosure, attestation mandate, DRM, vendor/publisher control,
+accessibility restriction, AI authority, persistence, or durable owner-state
+change. A local deny-by-default allowlist creates no authority or observation
+surface. The `HOSTILE SECURITY REVIEW` treats transport selection, policy
+construction, partial failure, rule aliasing, port, width, direction, value,
+launcher/device substitution, and translated exits as hostile. Policy
+construction returns no partial object, both launchers pass one exact binding
+to policy and device, only the two exact writes cross common dispatch, and
+capability-authorized notification remains separate. Existing capability,
+revocation, rollback-resistance, accessibility, evidence, owner-sovereignty,
+data-minimization, anti-DRM, owner-controlled-attestation, third-party-
+accessibility, AI-containment, and anti-persistence gates remain unchanged.
+This agent review does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional transactional construction of a
+fixed deny-by-default I/O allowlist from typed transport mechanics; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

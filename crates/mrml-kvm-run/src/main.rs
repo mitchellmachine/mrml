@@ -11,13 +11,12 @@ use mrml_kernel::{
     ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IoDirection, IoPortPolicy, IoPortRule, ObjectId, ResourceCommand, Rights,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
-    VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
     VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VmBackend, VmExit, VmTable,
-    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
+    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VirtualBlockTransport, VmBackend,
+    VmExit, VmTable, run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -239,16 +238,9 @@ fn run_block_guest_driver_probe(
     interrupt_policy
         .allow(48)
         .map_err(|_| anyhow!("failed to allow block interrupt vector"))?;
-    let mut io_policy = IoPortPolicy::<2>::deny_all();
-    io_policy
-        .allow(
-            IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write)
-                .map_err(|_| anyhow!("invalid block doorbell policy"))?,
-        )
-        .and_then(|()| {
-            IoPortRule::new(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, IoDirection::Write)
-                .and_then(|rule| io_policy.allow(rule))
-        })
+    let transport = VirtualBlockTransport::MrmlSpecificScalarIo;
+    let io_policy = transport
+        .io_policy()
         .map_err(|_| anyhow!("failed to install block I/O policy"))?;
     let mut vms = VmTable::<1>::new();
     let vm = vms
@@ -259,8 +251,8 @@ fn run_block_guest_driver_probe(
         .map_err(|_| anyhow!("failed to start block VM policy state"))?;
     let mut router = HypercallRouter::new(ObjectId(0x302), ObjectId(0x303), ObjectId(0x304));
     let guest_memory = GuestMemory::<0>::new();
-    let mut device =
-        VirtualBlockDevice::<2>::new(4096, 2, 0).map_err(|_| anyhow!("invalid block device"))?;
+    let mut device = VirtualBlockDevice::<2>::new_with_transport(4096, 2, 0, transport)
+        .map_err(|_| anyhow!("invalid block device"))?;
     device
         .negotiate(0)
         .and_then(|_| device.activate(layout, 48))

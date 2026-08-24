@@ -1,7 +1,7 @@
 use crate::{
     Capability, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter, InterruptPolicy,
-    IoPortPolicy, ObjectId, PAGE_SIZE, VirtualBlockInterruptError, VmBackend, VmId, VmRunError,
-    VmTable, inject_virtual_block_interrupt, run_vm_once,
+    IoDirection, IoPortPolicy, IoPortRule, ObjectId, PAGE_SIZE, VirtualBlockInterruptError,
+    VmBackend, VmError, VmId, VmRunError, VmTable, inject_virtual_block_interrupt, run_vm_once,
 };
 
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
@@ -284,6 +284,24 @@ pub enum VirtualBlockTransport {
 }
 
 impl VirtualBlockTransport {
+    /// Builds the complete deny-by-default VM I/O policy for this transport.
+    /// Construction is transactional: no partially populated policy escapes if
+    /// either rule is invalid or aliases the other.
+    pub fn io_policy(self) -> Result<IoPortPolicy<2>, VmError> {
+        let mut policy = IoPortPolicy::deny_all();
+        policy.allow(IoPortRule::new(
+            self.doorbell_port(),
+            4,
+            IoDirection::Write,
+        )?)?;
+        policy.allow(IoPortRule::new(
+            self.completion_acknowledgement_port(),
+            4,
+            IoDirection::Write,
+        )?)?;
+        Ok(policy)
+    }
+
     pub const fn doorbell_port(self) -> u16 {
         match self {
             Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_DOORBELL_PORT,
@@ -3563,6 +3581,12 @@ mod tests {
             configuration.transport().completion_acknowledgement_port(),
             VIRTUAL_BLOCK_COMPLETION_ACK_PORT
         );
+        let transport_policy = configuration.transport().io_policy().unwrap();
+        assert!(transport_policy.permits(VIRTUAL_BLOCK_DOORBELL_PORT, 4, true));
+        assert!(transport_policy.permits(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, true));
+        assert!(!transport_policy.permits(VIRTUAL_BLOCK_DOORBELL_PORT, 4, false));
+        assert!(!transport_policy.permits(VIRTUAL_BLOCK_DOORBELL_PORT, 2, true));
+        assert!(!transport_policy.permits(VIRTUAL_BLOCK_DOORBELL_PORT + 2, 4, true));
 
         let mut encoded = [0xa5; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
         configuration.encode(&mut encoded);

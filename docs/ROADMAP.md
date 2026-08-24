@@ -797,6 +797,12 @@ encoding remains canonical and carries no authority. This does not implement a
 PCI function, PCI configuration space, BAR, MSI/MSI-X, MMIO notification,
 VirtIO compatibility, or a QEMU differential harness. Those gates remain
 before broader virtual-device coverage.
+The KVM and WHP launchers now also derive their complete two-rule VM I/O
+allowlist transactionally from that exact transport binding and construct the
+device with the same value. Admission no longer repeats independent global
+port constants. Exact scalar writes are admitted; reads, wrong widths, and
+unrelated ports remain denied. This closes scalar admission-policy separation,
+not the pending PCI or QEMU gates.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
