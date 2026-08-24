@@ -307,16 +307,18 @@ yet a complete typed body table, move path, borrow, or loan model. An initial
 fixed-capacity CFG fact table records stable basic-block IDs, exact top-level
 statement ranges, reachability, and true/false/unconditional edges to blocks or
 function return for straight-line, conditional-return, explicit-return, and tail
-flow. Chained conditional
-returns carry explicit synthetic-branch
-provenance: exhaustive chains terminate on the final false edge, while
+flow. Chained conditional returns carry explicit synthetic-branch provenance:
+exhaustive chains terminate on the final false edge, while
 non-exhaustive chains route it to a top-level continuation block. Conditional
 action blocks now carry distinct condition, branch-action, else-action, and join
 blocks, including final-return termination and unreachable top-level successors.
-Action lists containing statements after a return and all loop forms remain
-explicitly incomplete. This runtime place/CFG
-foundation is therefore an incremental
-prerequisite, not a claim of ownership checking.
+Top-level `while` and unconditional loops now add explicit header, operation-
+range, exit, return, and backedge facts for ordered simple and conditional
+break/continue/return controls. Action lists containing statements after a
+return, nested or conditional loop blocks, labeled cross-loop targets, and
+post-terminal loop-operation suffixes remain explicitly incomplete. This
+runtime place/CFG foundation is therefore an incremental prerequisite, not a
+claim of ownership checking.
 
 Complexity assessment for the bounded runtime fact tables:
 

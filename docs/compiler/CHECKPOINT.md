@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `cb8be1e`
-  (`compiler: model conditional action CFG`)
+- Compiler checkpoint commit: `2740bc9`
+  (`compiler: add initial loop CFG facts`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -160,9 +160,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   explicit top-level continuation block. Conditional action branches similarly
   route through explicit action and join blocks, and all-path final returns mark
   later top-level blocks unreachable. The tables are capped at 64 blocks and
-  128 edges with explicit capacity errors. Bodies containing loops, or nested
-  action lists with statements after a return, leave the CFG tables empty and
-  `control_flow_complete` false rather than inventing edges.
+  128 edges with explicit capacity errors. Nested action lists with statements
+  after a return leave the CFG tables empty and `control_flow_complete` false
+  rather than inventing edges.
+  Initial top-level loop facts additionally represent `while` true/false
+  headers, unconditional-loop entries, exact contiguous operation ranges,
+  backedges, and ordered simple or conditional break/continue/return targets.
+  Nested loop blocks, conditional loop-arm blocks, labeled cross-loop targets,
+  and operation suffixes after an unconditional terminal remain explicitly
+  incomplete.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -187,8 +193,9 @@ compatibility gaps:
 
 1. complete bounded read-place preanalysis for supported
    aggregate/materialization families in exact emission order;
-2. extend explicit basic blocks and control-flow edges through loops and the
-   remaining unreachable nested-action suffixes;
+2. extend explicit basic blocks and control-flow edges through nested and
+   conditional loop blocks, labeled cross-loop targets, and remaining
+   unreachable terminal suffixes;
 3. add initialization and move-path facts;
 4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
@@ -214,8 +221,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 654 tests on each host: 360
-library tests, 10 conformance tests, 282 replacement tests, and 2 driver tests.
+The checkpoint source passed 657 tests on each host: 362
+library tests, 10 conformance tests, 283 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
