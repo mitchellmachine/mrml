@@ -685,8 +685,15 @@ complete live configuration. This local reset does not revoke a native mapping;
 a future attachment must revoke or quarantine mapping and interrupt state before
 committing it. This core is unattached: MRML has no assigned PCI
 identity here, block does not use it, and PCI capabilities, MSI/MSI-X, multiple
-BARs, VMM configuration exits, QEMU comparison, and a PCI-compatible device
-remain unimplemented.
+BARs, native VMM configuration exits, QEMU comparison, and a PCI-compatible
+device remain unimplemented. A fixed-capacity backend-neutral configuration
+router now attaches at most eight of these generic functions to exact validated
+segment/bus/device/function locations. Attachment requires reset, unassigned,
+non-probing configuration state. Duplicate or absent locations, malformed
+accesses, capacity exhaustion, active-decode detachment, stale attachment IDs,
+and attachment-generation exhaustion fail without ambiguous routing or partial
+removal. BDF and attachment identity remain data; mutable access to trusted VMM
+policy, not knowledge of either value, supplies authority.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

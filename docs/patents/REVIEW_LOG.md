@@ -1827,3 +1827,13 @@ assigned identity, wire protocol, compatibility claim, authority model, or
 patent-candidate mechanism. A future attached reset still requires separate
 native resource revocation. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Bounded virtual PCI configuration router
+
+**Result: NOT_TRIGGERED.** The change adds conventional fixed-capacity exact-
+BDF lookup, duplicate/capacity rejection, generational slot reuse, and checked
+detach sequencing above the existing unattached PCI configuration state. It
+introduces no native exit transport, assigned PCI identity, MMIO mapping,
+interrupt, DMA, block-device attachment, compatibility claim, authority model,
+or patent-candidate mechanism. This agent review does not replace the required
+independent human dual review.

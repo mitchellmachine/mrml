@@ -300,6 +300,12 @@ an assigned BAR, and configuration reset invalidates exact generational routing
 views. For an attached device, native mapping and interrupt cleanup must complete
 before configuration reset commits; uncertainty quarantines or fails closed
 rather than treating cleared configuration bytes as completed revocation.
+Configuration routing additionally requires one exact bounded BDF match.
+Attachment requires reset, unassigned, non-probing state. Duplicate
+registrations, absent functions, table exhaustion, stale attachment generations,
+and removal while memory decode is enabled fail before mutation.
+A BDF or attachment ID identifies state but is never a capability; only the
+trusted VMM policy boundary may attach, reset, route writes, or detach functions.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

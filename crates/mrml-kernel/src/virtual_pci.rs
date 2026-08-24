@@ -6,6 +6,7 @@
 //! native mappings, interrupts, DMA, and device authority remain separate.
 
 pub const PCI_TYPE0_CONFIGURATION_BYTES: usize = 64;
+pub const MAX_VIRTUAL_PCI_FUNCTIONS: usize = 8;
 pub const PCI_COMMAND_MEMORY_SPACE: u16 = 1 << 1;
 pub const PCI_COMMAND_INTERRUPT_DISABLE: u16 = 1 << 10;
 const PCI_COMMAND_SUPPORTED: u16 = PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_INTERRUPT_DISABLE;
@@ -21,6 +22,66 @@ pub enum VirtualPciError {
     InvalidState,
     StaleGeneration,
     GenerationExhausted,
+    InvalidLocation,
+    DuplicateLocation,
+    CapacityExhausted,
+    FunctionNotPresent,
+    StaleAttachment,
+}
+
+/// Exact segment/bus/device/function location. This identifies a routed
+/// function but grants no configuration, mapping, interrupt, or device
+/// authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualPciLocation {
+    segment: u16,
+    bus: u8,
+    device: u8,
+    function: u8,
+}
+
+impl VirtualPciLocation {
+    pub fn new(segment: u16, bus: u8, device: u8, function: u8) -> Result<Self, VirtualPciError> {
+        if device > 31 || function > 7 {
+            return Err(VirtualPciError::InvalidLocation);
+        }
+        Ok(Self {
+            segment,
+            bus,
+            device,
+            function,
+        })
+    }
+
+    pub const fn segment(self) -> u16 {
+        self.segment
+    }
+
+    pub const fn bus(self) -> u8 {
+        self.bus
+    }
+
+    pub const fn device(self) -> u8 {
+        self.device
+    }
+
+    pub const fn function(self) -> u8 {
+        self.function
+    }
+}
+
+/// Host-side lifetime identity for one exact router slot. Possession is not a
+/// capability; callers must already hold mutable access to the trusted router.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualPciAttachmentId {
+    slot: u8,
+    generation: u32,
+}
+
+impl VirtualPciAttachmentId {
+    pub const fn generation(self) -> u32 {
+        self.generation
+    }
 }
 
 /// Externally assigned PCI identity and class data. Construction validates
@@ -169,6 +230,155 @@ pub struct VirtualPciType0Function {
     generation: u32,
     command: u16,
     bar0: VirtualPciMemoryBar,
+}
+
+struct VirtualPciAttachment {
+    location: VirtualPciLocation,
+    function: VirtualPciType0Function,
+}
+
+/// Fixed-capacity backend-neutral configuration router. Native KVM/WHP exit
+/// decoding remains outside this type; callers present an already decoded
+/// exact location, offset, width, and value.
+pub struct VirtualPciConfigurationRouter {
+    slots: [Option<VirtualPciAttachment>; MAX_VIRTUAL_PCI_FUNCTIONS],
+    generations: [u32; MAX_VIRTUAL_PCI_FUNCTIONS],
+}
+
+impl Default for VirtualPciConfigurationRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VirtualPciConfigurationRouter {
+    pub const fn new() -> Self {
+        Self {
+            slots: [const { None }; MAX_VIRTUAL_PCI_FUNCTIONS],
+            generations: [1; MAX_VIRTUAL_PCI_FUNCTIONS],
+        }
+    }
+
+    pub fn attach(
+        &mut self,
+        location: VirtualPciLocation,
+        function: VirtualPciType0Function,
+    ) -> Result<VirtualPciAttachmentId, VirtualPciError> {
+        if function.command() != 0 || function.bar0().address() != 0 || function.read(16, 4)? != 0 {
+            return Err(VirtualPciError::InvalidState);
+        }
+        if self
+            .slots
+            .iter()
+            .flatten()
+            .any(|entry| entry.location == location)
+        {
+            return Err(VirtualPciError::DuplicateLocation);
+        }
+        let slot = self
+            .slots
+            .iter()
+            .position(Option::is_none)
+            .ok_or(VirtualPciError::CapacityExhausted)?;
+        let generation = self.generations[slot];
+        self.slots[slot] = Some(VirtualPciAttachment { location, function });
+        Ok(VirtualPciAttachmentId {
+            slot: slot as u8,
+            generation,
+        })
+    }
+
+    pub fn read(
+        &self,
+        location: VirtualPciLocation,
+        offset: u16,
+        size: u8,
+    ) -> Result<u32, VirtualPciError> {
+        self.function_at(location)?.read(offset, size)
+    }
+
+    pub fn write(
+        &mut self,
+        location: VirtualPciLocation,
+        offset: u16,
+        size: u8,
+        value: u32,
+    ) -> Result<VirtualPciWriteOutcome, VirtualPciError> {
+        self.function_at_mut(location)?.write(offset, size, value)
+    }
+
+    pub fn reset(&mut self, id: VirtualPciAttachmentId) -> Result<u32, VirtualPciError> {
+        self.attachment_mut(id)?.function.reset()
+    }
+
+    pub fn detach(
+        &mut self,
+        id: VirtualPciAttachmentId,
+    ) -> Result<VirtualPciType0Function, VirtualPciError> {
+        let slot = usize::from(id.slot);
+        let entry = self.attachment(id)?;
+        if entry.function.command() & PCI_COMMAND_MEMORY_SPACE != 0 {
+            return Err(VirtualPciError::InvalidState);
+        }
+        let generation = self.generations[slot]
+            .checked_add(1)
+            .ok_or(VirtualPciError::GenerationExhausted)?;
+        let entry = self.slots[slot]
+            .take()
+            .ok_or(VirtualPciError::StaleAttachment)?;
+        self.generations[slot] = generation;
+        Ok(entry.function)
+    }
+
+    fn function_at(
+        &self,
+        location: VirtualPciLocation,
+    ) -> Result<&VirtualPciType0Function, VirtualPciError> {
+        self.slots
+            .iter()
+            .flatten()
+            .find(|entry| entry.location == location)
+            .map(|entry| &entry.function)
+            .ok_or(VirtualPciError::FunctionNotPresent)
+    }
+
+    fn function_at_mut(
+        &mut self,
+        location: VirtualPciLocation,
+    ) -> Result<&mut VirtualPciType0Function, VirtualPciError> {
+        self.slots
+            .iter_mut()
+            .flatten()
+            .find(|entry| entry.location == location)
+            .map(|entry| &mut entry.function)
+            .ok_or(VirtualPciError::FunctionNotPresent)
+    }
+
+    fn attachment(
+        &self,
+        id: VirtualPciAttachmentId,
+    ) -> Result<&VirtualPciAttachment, VirtualPciError> {
+        let slot = usize::from(id.slot);
+        if slot >= MAX_VIRTUAL_PCI_FUNCTIONS || self.generations[slot] != id.generation {
+            return Err(VirtualPciError::StaleAttachment);
+        }
+        self.slots[slot]
+            .as_ref()
+            .ok_or(VirtualPciError::StaleAttachment)
+    }
+
+    fn attachment_mut(
+        &mut self,
+        id: VirtualPciAttachmentId,
+    ) -> Result<&mut VirtualPciAttachment, VirtualPciError> {
+        let slot = usize::from(id.slot);
+        if slot >= MAX_VIRTUAL_PCI_FUNCTIONS || self.generations[slot] != id.generation {
+            return Err(VirtualPciError::StaleAttachment);
+        }
+        self.slots[slot]
+            .as_mut()
+            .ok_or(VirtualPciError::StaleAttachment)
+    }
 }
 
 impl VirtualPciType0Function {
@@ -461,5 +671,139 @@ mod tests {
         }
         assert_eq!(VirtualPciMemoryBar::new(16).unwrap().size(), 16);
         assert_eq!(VirtualPciMemoryBar::new(1 << 31).unwrap().size(), 1 << 31);
+    }
+
+    fn location(device: u8) -> VirtualPciLocation {
+        VirtualPciLocation::new(0, 0, device, 0).unwrap()
+    }
+
+    fn function(device: u16) -> VirtualPciType0Function {
+        VirtualPciType0Function::new(
+            VirtualPciIdentity::new(0x1234, device, 1, 2, 0x80, 1, 0x1234, device).unwrap(),
+            VirtualPciMemoryBar::new(4096).unwrap(),
+        )
+    }
+
+    #[test]
+    fn locations_bound_device_and_function_numbers() {
+        assert!(VirtualPciLocation::new(u16::MAX, u8::MAX, 31, 7).is_ok());
+        assert_eq!(
+            VirtualPciLocation::new(0, 0, 32, 0),
+            Err(VirtualPciError::InvalidLocation)
+        );
+        assert_eq!(
+            VirtualPciLocation::new(0, 0, 0, 8),
+            Err(VirtualPciError::InvalidLocation)
+        );
+    }
+
+    #[test]
+    fn router_routes_only_one_exact_location_transactionally() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let first = location(1);
+        let second = location(2);
+        router.attach(first, function(1)).unwrap();
+        router.attach(second, function(2)).unwrap();
+        assert_eq!(router.read(first, 2, 2), Ok(1));
+        assert_eq!(router.read(second, 2, 2), Ok(2));
+        assert_eq!(
+            router.read(location(3), 0, 2),
+            Err(VirtualPciError::FunctionNotPresent)
+        );
+        assert_eq!(
+            router.write(first, 17, 4, 0),
+            Err(VirtualPciError::InvalidAccess)
+        );
+        assert_eq!(router.read(first, 16, 4), Ok(0));
+        assert_eq!(router.read(second, 16, 4), Ok(0));
+    }
+
+    #[test]
+    fn router_rejects_duplicates_and_capacity_without_mutation() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let first = router.attach(location(0), function(1)).unwrap();
+        assert_eq!(
+            router.attach(location(0), function(2)),
+            Err(VirtualPciError::DuplicateLocation)
+        );
+        for device in 1..MAX_VIRTUAL_PCI_FUNCTIONS as u8 {
+            router
+                .attach(location(device), function(u16::from(device) + 1))
+                .unwrap();
+        }
+        assert_eq!(
+            router.attach(location(MAX_VIRTUAL_PCI_FUNCTIONS as u8), function(9)),
+            Err(VirtualPciError::CapacityExhausted)
+        );
+        assert_eq!(router.read(location(0), 2, 2), Ok(1));
+        assert_eq!(first.generation(), 1);
+    }
+
+    #[test]
+    fn router_attach_requires_reset_configuration_state() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let mut assigned = function(1);
+        assigned.write(16, 4, 0x2000_0000).unwrap();
+        assert!(matches!(
+            router.attach(location(0), assigned),
+            Err(VirtualPciError::InvalidState)
+        ));
+
+        let mut probing = function(2);
+        probing.write(16, 4, u32::MAX).unwrap();
+        assert!(matches!(
+            router.attach(location(0), probing),
+            Err(VirtualPciError::InvalidState)
+        ));
+        assert_eq!(
+            router.read(location(0), 0, 2),
+            Err(VirtualPciError::FunctionNotPresent)
+        );
+    }
+
+    #[test]
+    fn detach_requires_disabled_decode_and_stales_attachment_identity() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = location(1);
+        let old = router.attach(routed, function(1)).unwrap();
+        router.write(routed, 16, 4, 0x2000_0000).unwrap();
+        router
+            .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .unwrap();
+        assert!(matches!(
+            router.detach(old),
+            Err(VirtualPciError::InvalidState)
+        ));
+        assert_eq!(router.reset(old), Ok(2));
+        let detached = router.detach(old).unwrap();
+        assert_eq!(detached.generation(), 2);
+        assert_eq!(router.reset(old), Err(VirtualPciError::StaleAttachment));
+        assert_eq!(
+            router.read(routed, 0, 2),
+            Err(VirtualPciError::FunctionNotPresent)
+        );
+
+        let fresh = router.attach(routed, function(2)).unwrap();
+        assert_eq!(fresh.generation(), 2);
+        assert_eq!(router.read(routed, 2, 2), Ok(2));
+        assert_eq!(router.reset(old), Err(VirtualPciError::StaleAttachment));
+    }
+
+    #[test]
+    fn detach_generation_exhaustion_preserves_attachment() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = location(1);
+        let id = router.attach(routed, function(1)).unwrap();
+        router.generations[usize::from(id.slot)] = u32::MAX;
+        let exhausted = VirtualPciAttachmentId {
+            slot: id.slot,
+            generation: u32::MAX,
+        };
+        assert!(matches!(
+            router.detach(exhausted),
+            Err(VirtualPciError::GenerationExhausted)
+        ));
+        assert_eq!(router.read(routed, 2, 2), Ok(1));
+        assert_eq!(router.reset(exhausted), Ok(2));
     }
 }

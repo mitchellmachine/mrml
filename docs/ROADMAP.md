@@ -819,6 +819,15 @@ This is not yet a PCI-presented block device or a compatibility claim. Assigned
 MRML vendor/device IDs, capabilities, MSI/MSI-X, additional BARs, VMM
 configuration-space routing, attached revoke-before-reset composition, guest-
 driver discovery, and QEMU differential testing remain dependency gates.
+A backend-neutral fixed-capacity router now covers the policy half of
+configuration-space routing. It validates exact segment/BDF locations, rejects
+non-reset attachment state, duplicates, and absent functions, routes bounded
+reads/writes to one function, uses generational host-side attachment IDs for
+reset/removal, forbids detach while memory decode is active, and preserves live
+state on capacity or generation exhaustion. This does not decode KVM/WHP exits,
+define an ECAM or legacy
+configuration transport, assign MRML identity, attach block, map a BAR, or
+authorize interrupts/DMA. Those integrations remain the next gates.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

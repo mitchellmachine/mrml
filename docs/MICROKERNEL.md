@@ -4444,6 +4444,71 @@ BAR probing/masking, generational reset invalidation, and transactional
 configuration writes; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The next shared-policy increment adds `VirtualPciConfigurationRouter`, a fixed
+eight-slot table above the unattached Type-0 core. `VirtualPciLocation` validates
+the architectural 5-bit device and 3-bit function bounds while retaining exact
+segment and bus identity. Attach preflights duplicate BDF and capacity before
+insertion. Reads and writes route to exactly one present location and retain the
+function's existing access validation and transactional mutation. An absent BDF
+is an explicit policy error; a future concrete PCI transport, not this shared
+router, must define any guest-visible absent-function read encoding. Attachment
+also requires command zero, an unassigned BAR, and no active size probe, so a
+previously configured function must pass explicit reset before reuse.
+
+Each host attachment has a slot generation distinct from the function's reset
+generation. Reset and detach require the exact live attachment ID. Detach first
+requires memory decode to be disabled and preflights successor generation, then
+removes the complete function and advances the slot lifetime. Reuse therefore
+rejects an old host ID, while attachment-generation exhaustion leaves the
+function present. The ID is not a capability: callers require mutable access to
+the trusted router. No KVM/WHP exit decoder, PCI configuration transport, BAR
+mapping, interrupt, DMA, assigned identity, or block attachment uses this table.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each passed all 404 release kernel tests, including 14 focused PCI tests. The
+Windows kernel/WHP/WHP-run test-target check and strict scoped Clippy passed.
+Strict scoped Linux Clippy passed for the kernel and KVM runner, and strict
+nightly UEFI Clippy passed for the block-probe image. The successful commands
+were the same scoped commands recorded above, with Linux using isolated
+`CARGO_TARGET_DIR=target/virtual-pci-router`. This is unit and compile/lint
+evidence only. No signed runtime, native configuration exit, ECAM/legacy
+transport, PCI enumeration, QEMU differential, nested-virtualization,
+native-boot, bare-metal, or physical-hardware evidence is claimed.
+
+The router `DIGITAL-RIGHTS REVIEW` found no collection, retention, correlation,
+remote disclosure, attestation, DRM, publisher/vendor preference, first-party
+bypass, accessibility restriction, AI authority, owner-state persistence, or
+interoperability lock-in. Segment/BDF and attachment IDs are local routing and
+lifetime data and grant no authority. The `HOSTILE SECURITY REVIEW` treats every
+location component, non-reset attachment, duplicate, absent lookup, slot,
+capacity boundary, offset, width, value, attachment ID, generation, active-
+decode removal, reset, reuse, and exhaustion path as hostile. Reset-state
+admission, bounds, and uniqueness precede insertion; exact
+lookup precedes access; function rejection remains transactional; detach checks
+decode and successor generation before removal; and stale IDs cannot reset or
+detach a reused slot. Native mapping, interrupt, DMA, and device cleanup remain
+outside this unattached core and therefore remain explicit future gates.
+Existing capability, revocation, rollback-resistance, accessibility, evidence,
+owner-sovereignty, data-minimization, anti-DRM, owner-controlled-attestation,
+third-party-accessibility, AI-containment, and anti-persistence requirements are
+unchanged. This agent review does not replace independent human implementer,
+reviewer, adversary, accessibility, or hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional fixed-capacity exact-key routing
+and generational slot invalidation over the existing PCI state; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

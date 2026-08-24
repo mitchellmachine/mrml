@@ -172,9 +172,10 @@ pub use virtual_gpu::{
     submit_gpu_control_batch, verify_gpu_kernel_bundle,
 };
 pub use virtual_pci::{
-    PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE, PCI_TYPE0_CONFIGURATION_BYTES,
-    VirtualPciError, VirtualPciIdentity, VirtualPciMemoryBar, VirtualPciMmioWindow,
-    VirtualPciType0Function, VirtualPciWriteOutcome,
+    MAX_VIRTUAL_PCI_FUNCTIONS, PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE,
+    PCI_TYPE0_CONFIGURATION_BYTES, VirtualPciAttachmentId, VirtualPciConfigurationRouter,
+    VirtualPciError, VirtualPciIdentity, VirtualPciLocation, VirtualPciMemoryBar,
+    VirtualPciMmioWindow, VirtualPciType0Function, VirtualPciWriteOutcome,
 };
 pub use vm::{
     GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,
