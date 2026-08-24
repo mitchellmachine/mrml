@@ -4679,14 +4679,20 @@ fn preanalyze_runtime_local_binding<
                 .map(|expression| expression.kind),
             Some(ExprKind::Identifier(_))
         );
-        let context = match (direct_identifier, local.ty, ty) {
+        let coercion_root = direct_identifier
+            || matches!(
+                tree.expression(tree.root())
+                    .map(|expression| expression.kind),
+                Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+            );
+        let context = match (coercion_root, local.ty, ty) {
             (true, Some(_), RuntimeExpressionType::Reference { mutable: true, .. }) => {
                 RuntimeReadEffectContext::MutableBorrow
             }
             (true, Some(_), RuntimeExpressionType::Reference { mutable: false, .. }) => {
                 RuntimeReadEffectContext::SharedBorrow
             }
-            (true, _, _) => RuntimeReadEffectContext::Value,
+            (true, _, _) if direct_identifier => RuntimeReadEffectContext::Value,
             _ if runtime_type_is_copy(ty) => RuntimeReadEffectContext::Value,
             _ => RuntimeReadEffectContext::Move,
         };
@@ -6227,11 +6233,12 @@ fn preanalyze_runtime_assignment_reads<
             span: assignment.value_span,
         })?;
     let assignment_reborrow = if assignment.projection.is_none()
+        && assignment.binding_name() != "_"
         && assignment.operator == crate::AssignmentOperator::Assign
         && matches!(
             tree.expression(tree.root())
                 .map(|expression| expression.kind),
-            Some(ExprKind::Identifier(_))
+            Some(ExprKind::Identifier(_) | ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
         ) {
         let target =
             resolve_runtime_assignment_place(function, locals, assignment).map_err(|kind| {
@@ -27685,6 +27692,43 @@ mod tests {
     }
 
     #[test]
+    fn runtime_conditional_reference_identifiers_use_expected_reborrow_context() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let first_parent: &mut u16 = &mut *first; let second_parent: &mut u16 = &mut *second; let child: &mut u16 = if choose { first_parent } else { second_parent }; let changed: &mut u16 = &mut *first; *changed += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let first_parent: &mut u16 = &mut *first; let second_parent: &mut u16 = &mut *second; let mut child: &mut u16 = &mut *third; child = if choose { first_parent } else { second_parent }; let changed: &mut u16 = &mut *first; *changed += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = &mut *first; let child: &mut u16 = if choose { parent } else { &mut *second }; *child += 1; *parent }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = &mut *first; let mut child: &mut u16 = &mut *second; child = if choose { parent } else { &mut *second }; *child += 1; *parent }",
+        ] {
+            analyze(source).unwrap();
+        }
+    }
+
+    #[test]
     fn runtime_place_effects_move_non_copy_call_arguments_and_returns() {
         let source = "fn value(input: &mut u16) -> &mut u16 { let returned: &mut u16 = identity(input); returned }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
@@ -28423,9 +28467,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_expression_initializedness_intersects_conditional_arms() {
-        let rejected = "fn value(input: &mut u16, choose: bool) -> &mut u16 { let moved: &mut u16 = if choose { input } else { &mut *input }; input }";
-        let module = Parser::new(rejected).parse_module::<2, 4>().unwrap();
+    fn runtime_expression_initializedness_preserves_conditional_reborrows() {
+        let reborrowed = "fn value(input: &mut u16, choose: bool) -> &mut u16 { let moved: &mut u16 = if choose { input } else { &mut *input }; input }";
+        let module = Parser::new(reborrowed).parse_module::<2, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
@@ -28440,10 +28484,7 @@ mod tests {
             &mut facts,
         );
         assert!(runtime_expression_initializedness_is_supported(&facts));
-        assert_eq!(
-            result.unwrap_err().kind,
-            CodegenErrorKind::RuntimeUseAfterMove
-        );
+        result.unwrap();
         let edge = facts.expression_control_flow_edges[0].unwrap();
         let target = facts.expression_program_points[edge.to.0].unwrap();
         facts.expression_program_points[edge.to.0] = Some(RuntimeExpressionProgramPointFact {
