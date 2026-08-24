@@ -2178,8 +2178,74 @@ enum RuntimeOwnershipEventLocation {
     Unassigned,
     ParameterEntry,
     TopLevelStatement(usize),
+    ConditionalReturnCondition {
+        statement_index: usize,
+        branch_index: usize,
+    },
+    ConditionalReturnValue {
+        statement_index: usize,
+        branch_index: usize,
+    },
+    ConditionalReturnElseValue {
+        statement_index: usize,
+    },
+    ConditionalAssignmentCondition {
+        statement_index: usize,
+        branch_index: usize,
+    },
+    ConditionalAssignmentAction {
+        statement_index: usize,
+        branch_index: Option<usize>,
+        action_index: usize,
+    },
+    ReturnValue {
+        statement_index: usize,
+    },
     Tail,
     EmissionExpansion,
+}
+
+const fn runtime_ownership_location_statement_index(
+    location: RuntimeOwnershipEventLocation,
+) -> Option<usize> {
+    match location {
+        RuntimeOwnershipEventLocation::TopLevelStatement(statement_index)
+        | RuntimeOwnershipEventLocation::ConditionalReturnCondition {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::ConditionalReturnValue {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::ConditionalReturnElseValue { statement_index }
+        | RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::ReturnValue { statement_index } => Some(statement_index),
+        RuntimeOwnershipEventLocation::Unassigned
+        | RuntimeOwnershipEventLocation::ParameterEntry
+        | RuntimeOwnershipEventLocation::Tail
+        | RuntimeOwnershipEventLocation::EmissionExpansion => None,
+    }
+}
+
+const MAX_RUNTIME_CONDITIONAL_ACTION_ORIGINS: usize =
+    crate::parser::MAX_CONDITIONAL_ASSIGNMENT_BRANCHES + 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeOwnershipStatementShape {
+    Plain,
+    ConditionalReturn {
+        branch_count: usize,
+        has_else: bool,
+    },
+    ConditionalAssignment {
+        branch_count: usize,
+        action_counts: [usize; MAX_RUNTIME_CONDITIONAL_ACTION_ORIGINS],
+    },
+    Return,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2319,6 +2385,8 @@ struct RuntimeBodyFacts<'source> {
     current_ownership_event_location: RuntimeOwnershipEventLocation,
     ownership_statement_count: usize,
     ownership_has_tail: bool,
+    ownership_statement_shapes:
+        [Option<RuntimeOwnershipStatementShape>; crate::parser::MAX_BODY_STATEMENTS],
     basic_blocks: [Option<RuntimeBasicBlockFact>; MAX_RUNTIME_BASIC_BLOCK_FACTS],
     basic_block_count: usize,
     control_flow_edges: [Option<RuntimeControlFlowEdgeFact>; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2347,6 +2415,7 @@ impl<'source> RuntimeBodyFacts<'source> {
         current_ownership_event_location: RuntimeOwnershipEventLocation::Unassigned,
         ownership_statement_count: 0,
         ownership_has_tail: false,
+        ownership_statement_shapes: [None; crate::parser::MAX_BODY_STATEMENTS],
         basic_blocks: [None; MAX_RUNTIME_BASIC_BLOCK_FACTS],
         basic_block_count: 0,
         control_flow_edges: [None; MAX_RUNTIME_CONTROL_FLOW_EDGE_FACTS],
@@ -2365,6 +2434,130 @@ impl<'source> RuntimeBodyFacts<'source> {
             )
         }) {
             self.ownership_events_single_path = false;
+        }
+    }
+
+    fn record_ownership_statement_shapes<const MAX_PARAMETERS: usize>(
+        &mut self,
+        body: &crate::FunctionBody<'_, MAX_PARAMETERS>,
+    ) -> Result<(), CodegenErrorKind> {
+        for (statement_index, statement) in body.statements().iter().flatten().enumerate() {
+            let shape = match statement {
+                crate::BodyStatement::ConditionalReturn(index) => {
+                    body.conditional_returns()
+                        .get(*index)
+                        .and_then(|value| *value)
+                        .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
+                    RuntimeOwnershipStatementShape::ConditionalReturn {
+                        branch_count: 1,
+                        has_else: false,
+                    }
+                }
+                crate::BodyStatement::ConditionalReturnElse(index) => {
+                    let conditional = body
+                        .conditional_return_elses()
+                        .get(*index)
+                        .and_then(|value| *value)
+                        .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
+                    RuntimeOwnershipStatementShape::ConditionalReturn {
+                        branch_count: conditional.branches().iter().flatten().count(),
+                        has_else: conditional.else_value.is_some(),
+                    }
+                }
+                crate::BodyStatement::ConditionalAssignment(index) => {
+                    let conditional = body
+                        .conditional_assignments()
+                        .get(*index)
+                        .and_then(|value| *value)
+                        .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
+                    let branch_count = conditional.branches().iter().flatten().count();
+                    let mut action_counts = [0; MAX_RUNTIME_CONDITIONAL_ACTION_ORIGINS];
+                    for (branch_index, branch) in
+                        conditional.branches().iter().flatten().enumerate()
+                    {
+                        action_counts[branch_index] = branch.actions().iter().flatten().count();
+                    }
+                    action_counts[crate::parser::MAX_CONDITIONAL_ASSIGNMENT_BRANCHES] =
+                        conditional.else_actions().iter().flatten().count();
+                    RuntimeOwnershipStatementShape::ConditionalAssignment {
+                        branch_count,
+                        action_counts,
+                    }
+                }
+                crate::BodyStatement::Return(index) => {
+                    body.returns()
+                        .get(*index)
+                        .and_then(|value| *value)
+                        .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
+                    RuntimeOwnershipStatementShape::Return
+                }
+                crate::BodyStatement::Local(_)
+                | crate::BodyStatement::Assignment(_)
+                | crate::BodyStatement::Loop(_)
+                | crate::BodyStatement::Expression(_) => RuntimeOwnershipStatementShape::Plain,
+            };
+            self.ownership_statement_shapes[statement_index] = Some(shape);
+        }
+        Ok(())
+    }
+
+    fn ownership_location_is_valid(&self, location: RuntimeOwnershipEventLocation) -> bool {
+        let shape = runtime_ownership_location_statement_index(location)
+            .and_then(|index| self.ownership_statement_shapes.get(index))
+            .and_then(|shape| *shape);
+        match (location, shape) {
+            (RuntimeOwnershipEventLocation::ParameterEntry, _)
+            | (RuntimeOwnershipEventLocation::EmissionExpansion, _) => true,
+            (RuntimeOwnershipEventLocation::Tail, _) => self.ownership_has_tail,
+            (RuntimeOwnershipEventLocation::TopLevelStatement(_), Some(shape)) => {
+                shape == RuntimeOwnershipStatementShape::Plain
+            }
+            (
+                RuntimeOwnershipEventLocation::ConditionalReturnCondition { branch_index, .. }
+                | RuntimeOwnershipEventLocation::ConditionalReturnValue { branch_index, .. },
+                Some(RuntimeOwnershipStatementShape::ConditionalReturn { branch_count, .. }),
+            ) => branch_index < branch_count,
+            (
+                RuntimeOwnershipEventLocation::ConditionalReturnElseValue { .. },
+                Some(RuntimeOwnershipStatementShape::ConditionalReturn { has_else, .. }),
+            ) => has_else,
+            (
+                RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
+                    branch_index, ..
+                },
+                Some(RuntimeOwnershipStatementShape::ConditionalAssignment {
+                    branch_count, ..
+                }),
+            ) => branch_index < branch_count,
+            (
+                RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                    branch_index,
+                    action_index,
+                    ..
+                },
+                Some(RuntimeOwnershipStatementShape::ConditionalAssignment {
+                    branch_count,
+                    action_counts,
+                }),
+            ) => {
+                let slot =
+                    branch_index.unwrap_or(crate::parser::MAX_CONDITIONAL_ASSIGNMENT_BRANCHES);
+                slot < action_counts.len()
+                    && branch_index.is_none_or(|index| index < branch_count)
+                    && action_index < action_counts[slot]
+            }
+            (
+                RuntimeOwnershipEventLocation::ReturnValue { .. },
+                Some(RuntimeOwnershipStatementShape::Return),
+            ) => true,
+            (RuntimeOwnershipEventLocation::Unassigned, _)
+            | (RuntimeOwnershipEventLocation::TopLevelStatement(_), _)
+            | (RuntimeOwnershipEventLocation::ConditionalReturnCondition { .. }, _)
+            | (RuntimeOwnershipEventLocation::ConditionalReturnValue { .. }, _)
+            | (RuntimeOwnershipEventLocation::ConditionalReturnElseValue { .. }, _)
+            | (RuntimeOwnershipEventLocation::ConditionalAssignmentCondition { .. }, _)
+            | (RuntimeOwnershipEventLocation::ConditionalAssignmentAction { .. }, _)
+            | (RuntimeOwnershipEventLocation::ReturnValue { .. }, _) => false,
         }
     }
 
@@ -5129,6 +5322,8 @@ fn preanalyze_runtime_conditional_actions<
     function: &Function<'source, MAX_PARAMETERS>,
     resolver: &R,
     actions: &[Option<crate::ConditionalAssignmentAction<'source>>],
+    statement_index: usize,
+    branch_index: Option<usize>,
     operand_type: &str,
     body_start: usize,
     facts: &mut RuntimeBodyFacts<'source>,
@@ -5137,7 +5332,13 @@ fn preanalyze_runtime_conditional_actions<
 ) -> Result<(), CodegenError> {
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
-    for action in actions.iter().flatten() {
+    for (action_index, action) in actions.iter().flatten().enumerate() {
+        facts.current_ownership_event_location =
+            RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                statement_index,
+                branch_index,
+                action_index,
+            };
         match *action {
             crate::ConditionalAssignmentAction::Local(local) => {
                 preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
@@ -5710,6 +5911,7 @@ fn preanalyze_runtime_top_level_statement<
     resolver: &R,
     body: &crate::FunctionBody<'source, MAX_PARAMETERS>,
     statement: crate::BodyStatement,
+    statement_index: usize,
     operand_type: &str,
     body_start: usize,
     facts: &mut RuntimeBodyFacts<'source>,
@@ -5738,7 +5940,12 @@ fn preanalyze_runtime_top_level_statement<
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: function.name_span,
             })?;
-            for branch in conditional.branches().iter().flatten() {
+            for (branch_index, branch) in conditional.branches().iter().flatten().enumerate() {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
+                        statement_index,
+                        branch_index,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -5756,6 +5963,8 @@ fn preanalyze_runtime_top_level_statement<
                     function,
                     resolver,
                     branch.actions(),
+                    statement_index,
+                    Some(branch_index),
                     operand_type,
                     body_start,
                     facts,
@@ -5767,6 +5976,8 @@ fn preanalyze_runtime_top_level_statement<
                 function,
                 resolver,
                 conditional.else_actions(),
+                statement_index,
+                None,
                 operand_type,
                 body_start,
                 facts,
@@ -5806,10 +6017,46 @@ fn preanalyze_runtime_top_level_statement<
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: function.name_span,
             })?;
-            for (expression, span) in [
-                (conditional.condition, conditional.condition_span),
-                (conditional.value, conditional.value_span),
-            ] {
+            facts.current_ownership_event_location =
+                RuntimeOwnershipEventLocation::ConditionalReturnCondition {
+                    statement_index,
+                    branch_index: 0,
+                };
+            preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                facts,
+                &locals[..*local_count],
+                function,
+                resolver,
+                conditional.condition,
+                conditional.condition_span,
+                body_start,
+            )?;
+            facts.current_ownership_event_location =
+                RuntimeOwnershipEventLocation::ConditionalReturnValue {
+                    statement_index,
+                    branch_index: 0,
+                };
+            preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                facts,
+                &locals[..*local_count],
+                function,
+                resolver,
+                conditional.value,
+                conditional.value_span,
+                body_start,
+            )?;
+        }
+        crate::BodyStatement::ConditionalReturnElse(index) => {
+            let conditional = body.conditional_return_elses()[index].ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: function.name_span,
+            })?;
+            for (branch_index, branch) in conditional.branches().iter().flatten().enumerate() {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::ConditionalReturnCondition {
+                        statement_index,
+                        branch_index,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -5819,38 +6066,32 @@ fn preanalyze_runtime_top_level_statement<
                     &locals[..*local_count],
                     function,
                     resolver,
-                    expression,
-                    span,
+                    branch.condition,
+                    branch.condition_span,
+                    body_start,
+                )?;
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::ConditionalReturnValue {
+                        statement_index,
+                        branch_index,
+                    };
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..*local_count],
+                    function,
+                    resolver,
+                    branch.value,
+                    branch.value_span,
                     body_start,
                 )?;
             }
-        }
-        crate::BodyStatement::ConditionalReturnElse(index) => {
-            let conditional = body.conditional_return_elses()[index].ok_or(CodegenError {
-                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                span: function.name_span,
-            })?;
-            for branch in conditional.branches().iter().flatten() {
-                for (expression, span) in [
-                    (branch.condition, branch.condition_span),
-                    (branch.value, branch.value_span),
-                ] {
-                    preanalyze_runtime_source_expression_reads::<
-                        R,
-                        MAX_PARAMETERS,
-                        MAX_EXPRESSION_NODES,
-                    >(
-                        facts,
-                        &locals[..*local_count],
-                        function,
-                        resolver,
-                        expression,
-                        span,
-                        body_start,
-                    )?;
-                }
-            }
             if let Some(value) = conditional.else_value {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::ConditionalReturnElseValue { statement_index };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -5871,6 +6112,8 @@ fn preanalyze_runtime_top_level_statement<
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                 span: function.name_span,
             })?;
+            facts.current_ownership_event_location =
+                RuntimeOwnershipEventLocation::ReturnValue { statement_index };
             preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                 facts,
                 &locals[..*local_count],
@@ -7169,6 +7412,12 @@ fn preanalyze_runtime_body_declarations<
 ) -> Result<usize, CodegenError> {
     facts.ownership_statement_count = body.statement_count();
     facts.ownership_has_tail = !body.tail_diverges && !body.tail_expression.is_empty();
+    facts
+        .record_ownership_statement_shapes(body)
+        .map_err(|kind| CodegenError {
+            kind,
+            span: body.tail_span,
+        })?;
     for (index, parameter) in function.parameters().iter().enumerate() {
         let Some(parameter) = parameter else {
             continue;
@@ -7199,6 +7448,7 @@ fn preanalyze_runtime_body_declarations<
             resolver,
             body,
             *statement,
+            statement_index,
             operand_type,
             body_start,
             facts,
@@ -7245,6 +7495,7 @@ fn preanalyze_runtime_body_declarations<
                     resolver,
                     body,
                     *statement,
+                    statement_index,
                     operand_type,
                     body_start,
                     facts,
@@ -13040,6 +13291,16 @@ impl<
         if self.body_facts.ownership_statement_count > crate::parser::MAX_BODY_STATEMENTS {
             return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
         }
+        if self.body_facts.ownership_statement_shapes[..self.body_facts.ownership_statement_count]
+            .iter()
+            .any(Option::is_none)
+            || self.body_facts.ownership_statement_shapes
+                [self.body_facts.ownership_statement_count..]
+                .iter()
+                .any(Option::is_some)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
         if self.preanalyzed_local_cursor != self.preanalyzed_local_count
             || self.preanalyzed_local_count > self.body_facts.local_count
             || self.preanalyzed_assignment_access_cursor != self.body_facts.assignment_access_count
@@ -13125,12 +13386,15 @@ impl<
                         initialization.location != RuntimeOwnershipEventLocation::ParameterEntry
                     }
                     RuntimeInitializationOrigin::LocalDeclaration => {
-                        !matches!(
-                            initialization.location,
-                            RuntimeOwnershipEventLocation::TopLevelStatement(index)
-                                if index < self.body_facts.ownership_statement_count
-                        ) && initialization.location
-                            != RuntimeOwnershipEventLocation::EmissionExpansion
+                        !self
+                            .body_facts
+                            .ownership_location_is_valid(initialization.location)
+                            || matches!(
+                                initialization.location,
+                                RuntimeOwnershipEventLocation::ParameterEntry
+                                    | RuntimeOwnershipEventLocation::Tail
+                                    | RuntimeOwnershipEventLocation::Unassigned
+                            )
                     }
                 }
                 || initialization
@@ -13256,18 +13520,8 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
             if path.id != effect.path
                 || effect.span.end < effect.span.start
-                || matches!(
-                    effect.location,
-                    RuntimeOwnershipEventLocation::Unassigned
-                        | RuntimeOwnershipEventLocation::ParameterEntry
-                )
-                || matches!(
-                    effect.location,
-                    RuntimeOwnershipEventLocation::TopLevelStatement(index)
-                        if index >= self.body_facts.ownership_statement_count
-                )
-                || (effect.location == RuntimeOwnershipEventLocation::Tail
-                    && !self.body_facts.ownership_has_tail)
+                || !self.body_facts.ownership_location_is_valid(effect.location)
+                || effect.location == RuntimeOwnershipEventLocation::ParameterEntry
                 || match effect.kind {
                     RuntimePlaceEffectKind::Copy => !runtime_type_is_copy(path.ty),
                     RuntimePlaceEffectKind::Move => {
@@ -23619,6 +23873,32 @@ mod tests {
                 .count(),
             2
         );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.kind == RuntimePlaceEffectKind::Copy
+                        && effect.location
+                            == (RuntimeOwnershipEventLocation::ConditionalReturnCondition {
+                                statement_index: 0,
+                                branch_index: 0,
+                            })
+                })
+        );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.kind == RuntimePlaceEffectKind::Move
+                        && effect.location
+                            == (RuntimeOwnershipEventLocation::ConditionalReturnValue {
+                                statement_index: 0,
+                                branch_index: 0,
+                            })
+                })
+        );
 
         let conditional_tail = "fn value(input: &mut u16, choose: bool) -> &mut u16 { if choose { input } else { &mut *input } }";
         let module = Parser::new(conditional_tail)
@@ -23640,6 +23920,120 @@ mod tests {
         .unwrap();
         assert_eq!(facts.basic_block_count, 1);
         assert!(!facts.ownership_events_single_path);
+    }
+
+    #[test]
+    fn runtime_ownership_origins_distinguish_conditional_assignment_program_points() {
+        let source = "fn value(input: u16, choose: bool) -> u16 { let mut output: u16 = input; if choose { output += input; } else { output = input; } output }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 16>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let condition = RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
+            statement_index: 1,
+            branch_index: 0,
+        };
+        let branch_action = RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+            statement_index: 1,
+            branch_index: Some(0),
+            action_index: 0,
+        };
+        let else_action = RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+            statement_index: 1,
+            branch_index: None,
+            action_index: 0,
+        };
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| effect.location == condition)
+        );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.location == branch_action
+                        && effect.kind == RuntimePlaceEffectKind::ReadModifyWrite
+                })
+        );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.location == else_action && effect.kind == RuntimePlaceEffectKind::Write
+                })
+        );
+        let condition_effect = facts.effects[..facts.effect_count]
+            .iter()
+            .position(|effect| effect.is_some_and(|effect| effect.location == condition))
+            .unwrap();
+        let assignment_access_count = facts.assignment_access_count;
+        let assignment_read_count = facts.assignment_read_count;
+        let local_count = facts.local_count;
+        let emitter = RuntimeEmitter::<_, 64, 4> {
+            bytes: [0; 64],
+            length: 0,
+            trap_patches: [0; 64],
+            trap_count: 0,
+            function: &function,
+            resolver: &NoConstants,
+            abi: X86_64Abi::SystemV,
+            width: runtime_width("u16").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 2,
+            locals: [None; 4],
+            saved_locals: 0,
+            body_facts: &mut facts,
+            preanalyzed_local_count: local_count,
+            preanalyzed_local_cursor: local_count,
+            preanalyzed_assignment_access_cursor: assignment_access_count,
+            preanalyzed_assignment_read_cursor: assignment_read_count,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        emitter.validate_runtime_place_facts().unwrap();
+        let valid_condition = emitter.body_facts.effects[condition_effect].unwrap();
+        emitter.body_facts.effects[condition_effect] = Some(RuntimePlaceEffectFact {
+            location: RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
+                statement_index: 1,
+                branch_index: 1,
+            },
+            ..valid_condition
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[condition_effect] = Some(RuntimePlaceEffectFact {
+            location: RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                statement_index: 1,
+                branch_index: Some(0),
+                action_index: 1,
+            },
+            ..valid_condition
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
     }
 
     #[test]

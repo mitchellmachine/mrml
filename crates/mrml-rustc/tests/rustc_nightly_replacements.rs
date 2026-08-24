@@ -3997,6 +3997,13 @@ fn rustc_single_block_initializedness_rejects_second_moves_and_accepts_writes() 
 }
 
 #[test]
+fn rustc_conditional_ownership_program_points_preserve_native_objects() {
+    let source = "fn choose(input: &mut u16, first: bool) -> &mut u16 { if first { return input; } input } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, first: bool, increment: bool) -> u16 { let selected: &mut u16 = choose(input, first); if increment { *selected += 2; } else { *selected = 7; } *selected }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
