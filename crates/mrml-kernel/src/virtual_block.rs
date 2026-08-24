@@ -456,6 +456,62 @@ impl VirtualBlockConfiguration {
     }
 }
 
+/// One page-aligned guest presentation of canonical configuration data. The
+/// page carries no authority and must be mapped read-only by a concrete VMM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockConfigurationPage {
+    base: u64,
+    configuration: VirtualBlockConfiguration,
+}
+
+impl VirtualBlockConfigurationPage {
+    pub fn new(
+        base: u64,
+        configuration: VirtualBlockConfiguration,
+    ) -> Result<Self, VirtualBlockError> {
+        let end = base
+            .checked_add(PAGE_SIZE)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        if base == 0 || !base.is_multiple_of(PAGE_SIZE) {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        let queue = configuration.queue();
+        let queue_bytes = queue
+            .pages_per_queue()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        for queue_base in [queue.request_base(), queue.completion_base()] {
+            let queue_end = queue_base
+                .checked_add(queue_bytes)
+                .ok_or(VirtualBlockError::InvalidConfiguration)?;
+            if base < queue_end && queue_base < end {
+                return Err(VirtualBlockError::InvalidConfiguration);
+            }
+        }
+        Ok(Self {
+            base,
+            configuration,
+        })
+    }
+
+    pub const fn base(self) -> u64 {
+        self.base
+    }
+
+    pub const fn configuration(self) -> VirtualBlockConfiguration {
+        self.configuration
+    }
+
+    pub fn encode_page(self, output: &mut [u8; PAGE_SIZE as usize]) {
+        output.fill(0);
+        let record = <&mut [u8; VIRTUAL_BLOCK_CONFIGURATION_BYTES]>::try_from(
+            &mut output[..VIRTUAL_BLOCK_CONFIGURATION_BYTES],
+        )
+        .unwrap();
+        self.configuration.encode(record);
+    }
+}
+
 fn queue_bytes(slots: usize, slot_bytes: usize) -> Result<u64, VirtualBlockError> {
     (slots as u64)
         .checked_mul(slot_bytes as u64)
@@ -1907,6 +1963,37 @@ mod tests {
             device.validate_configuration(configuration),
             Err(VirtualBlockError::StaleGeneration)
         );
+    }
+
+    #[test]
+    fn configuration_page_is_exact_zero_padded_and_queue_disjoint() {
+        let configuration = active::<1>().configuration().unwrap();
+        let page = VirtualBlockConfigurationPage::new(0x30_0000, configuration).unwrap();
+        assert_eq!(page.base(), 0x30_0000);
+        assert_eq!(page.configuration(), configuration);
+        let mut encoded = [0xa5; PAGE_SIZE as usize];
+        page.encode_page(&mut encoded);
+        assert_eq!(
+            VirtualBlockConfiguration::decode(&encoded[..VIRTUAL_BLOCK_CONFIGURATION_BYTES]),
+            Ok(configuration)
+        );
+        assert!(
+            encoded[VIRTUAL_BLOCK_CONFIGURATION_BYTES..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        for invalid in [
+            0,
+            0x30_0001,
+            configuration.queue().request_base(),
+            configuration.queue().completion_base(),
+            u64::MAX & !(PAGE_SIZE - 1),
+        ] {
+            assert_eq!(
+                VirtualBlockConfigurationPage::new(invalid, configuration),
+                Err(VirtualBlockError::InvalidConfiguration)
+            );
+        }
     }
 
     #[test]

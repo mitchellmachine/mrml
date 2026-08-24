@@ -688,7 +688,12 @@ geometry, supported/negotiated features, exact queue layout, vector, ports,
 transfer bound, and wire sizes with zero reserved bytes. Only a fully active
 device can produce it. A decoded copy must reconstruct the queue exactly and
 match the current live device; reset makes the old generation stale. The record
-carries no authority and is not yet guest-mapped or exposed by a PCI transport.
+carries no authority. A typed page binding now additionally requires one
+page-aligned, queue-disjoint GPA and the exact configuration/queue pair. The KVM
+and WHP block launch builders publish the fully zeroed page through their
+host/device-only paths and identity-map it read-only/NX. Both KVM and WHP have
+live controlled-probe evidence. Reusable guest discovery state and PCI or
+another transport remain pending.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

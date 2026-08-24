@@ -674,9 +674,13 @@ queue ranges and page count, slot count, interrupt vector, fixed scalar ports,
 maximum transfer, and request/completion wire sizes. It is pointer-free,
 reserved-zero, and data only. Construction requires a fully active device;
 decode reconstructs and rechecks the queue arithmetic, and use requires exact
-revalidation against the live device. Reset makes an old record stale. The
-record is not yet mapped to a guest or presented through PCI or another
-transport.
+revalidation against the live device. Reset makes an old record stale.
+Dedicated KVM and WHP block launch builders now require a typed page binding,
+reject queue substitution and all configuration-page overlap, publish the
+complete zero-padded page through the host/device path, and identity-map it
+read-only/NX to the guest. Both KVM and WHP paths have live controlled-probe
+evidence. There is still no reusable guest discovery/driver state, PCI
+presentation, or other transport.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

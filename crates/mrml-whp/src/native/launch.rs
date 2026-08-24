@@ -7,7 +7,8 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE,
     PeImage, PhysAddr, RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
-    VirtualBlockQueueLayout, VirtualBlockVmmMemory, VmBackend, VmExit,
+    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockVmmMemory, VmBackend,
+    VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -23,6 +24,7 @@ struct KernelDevices {
     local_apic: bool,
     gpu_queue: Option<GpuSharedQueueLayout>,
     block_queue: Option<VirtualBlockQueueLayout>,
+    block_configuration: Option<VirtualBlockConfigurationPage>,
     intercept_breakpoint: bool,
     cpus: u8,
 }
@@ -986,6 +988,7 @@ impl WhpSystem {
                 local_apic: false,
                 gpu_queue: None,
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1009,6 +1012,7 @@ impl WhpSystem {
                 local_apic: false,
                 gpu_queue: None,
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: false,
                 cpus: 1,
             },
@@ -1031,6 +1035,7 @@ impl WhpSystem {
                 local_apic: true,
                 gpu_queue: None,
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1053,6 +1058,7 @@ impl WhpSystem {
                 local_apic: true,
                 gpu_queue: None,
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: false,
                 cpus: 1,
             },
@@ -1078,6 +1084,7 @@ impl WhpSystem {
                 local_apic: false,
                 gpu_queue: Some(queue),
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1102,6 +1109,7 @@ impl WhpSystem {
                 local_apic: false,
                 gpu_queue: Some(queue),
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1117,6 +1125,7 @@ impl WhpSystem {
         handoff: &[u8],
         layout: WhpLaunchLayout,
         queue: VirtualBlockQueueLayout,
+        configuration: VirtualBlockConfigurationPage,
     ) -> Result<PreparedWhpGuest<'system>, WhpError> {
         self.prepare_guest_inner(
             executable,
@@ -1127,6 +1136,7 @@ impl WhpSystem {
                 local_apic: false,
                 gpu_queue: None,
                 block_queue: Some(queue),
+                block_configuration: Some(configuration),
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1151,6 +1161,7 @@ impl WhpSystem {
                 local_apic: true,
                 gpu_queue: None,
                 block_queue: None,
+                block_configuration: None,
                 intercept_breakpoint: true,
                 cpus: 2,
             },
@@ -1167,9 +1178,15 @@ impl WhpSystem {
         let map_framebuffer = devices.framebuffer;
         let queue = devices.gpu_queue;
         let block_queue = devices.block_queue;
+        let block_configuration = devices.block_configuration;
         let smp = devices.cpus == 2;
         if !matches!(devices.cpus, 1 | 2) {
             return Err(WhpError::InvalidVcpu);
+        }
+        if block_configuration
+            .is_some_and(|configuration| block_queue != Some(configuration.configuration().queue()))
+        {
+            return Err(WhpError::InvalidMapping);
         }
         let decoded = BootHandoff::decode(handoff, |_| {}).map_err(WhpError::Handoff)?;
         let trampoline = match (
@@ -1232,7 +1249,7 @@ impl WhpSystem {
         let (block_request_base, block_completion_base) = block_queue
             .map(|value| (value.request_base(), value.completion_base()))
             .unwrap_or((0, 0));
-        let mut physical_ranges = [(0, 0); 10];
+        let mut physical_ranges = [(0, 0); 11];
         physical_ranges[..4].copy_from_slice(&[
             (layout.table_physical, table_bytes),
             (layout.image_physical, image_bytes),
@@ -1253,6 +1270,10 @@ impl WhpSystem {
             physical_ranges[physical_count] = (block_request_base, block_queue_bytes);
             physical_ranges[physical_count + 1] = (block_completion_base, block_queue_bytes);
             physical_count += 2;
+        }
+        if let Some(configuration) = block_configuration {
+            physical_ranges[physical_count] = (configuration.base(), PAGE_SIZE);
+            physical_count += 1;
         }
         if let Some(trampoline) = trampoline {
             physical_ranges[physical_count] = (trampoline, PAGE_SIZE);
@@ -1280,6 +1301,10 @@ impl WhpSystem {
             virtual_ranges[virtual_count] = (block_request_base, block_queue_bytes);
             virtual_ranges[virtual_count + 1] = (block_completion_base, block_queue_bytes);
             virtual_count += 2;
+        }
+        if let Some(configuration) = block_configuration {
+            virtual_ranges[virtual_count] = (configuration.base(), PAGE_SIZE);
+            virtual_count += 1;
         }
         if let Some(trampoline) = trampoline {
             virtual_ranges[virtual_count] = (trampoline, PAGE_SIZE);
@@ -1327,6 +1352,16 @@ impl WhpSystem {
                 block_queue_bytes,
                 MapPermissions::read_only(),
             )?)?;
+        }
+        if let Some(configuration) = block_configuration {
+            partition.map_zeroed_service_readonly(range(
+                configuration.base(),
+                PAGE_SIZE,
+                MapPermissions::read_only(),
+            )?)?;
+            let mut encoded = [0; PAGE_SIZE as usize];
+            configuration.encode_page(&mut encoded);
+            partition.write_service(configuration.base(), &encoded)?;
         }
         let image_mapping = partition.map_zeroed(range(
             layout.image_physical,
@@ -1379,6 +1414,7 @@ impl WhpSystem {
                 local_apic: devices.local_apic,
                 queue,
                 block_queue,
+                block_configuration,
                 cpus: devices.cpus,
                 trampoline,
                 service_shared: !devices.intercept_breakpoint && !devices.framebuffer,
@@ -1422,6 +1458,7 @@ struct PageTableLaunchContext {
     local_apic: bool,
     queue: Option<GpuSharedQueueLayout>,
     block_queue: Option<VirtualBlockQueueLayout>,
+    block_configuration: Option<VirtualBlockConfigurationPage>,
     cpus: u8,
     trampoline: Option<u64>,
     service_shared: bool,
@@ -1439,6 +1476,7 @@ fn build_page_tables(
         local_apic,
         queue,
         block_queue,
+        block_configuration,
         cpus,
         trampoline,
         service_shared,
@@ -1640,6 +1678,15 @@ fn build_page_tables(
                     PagePermissions::KERNEL_SHARED_READ,
                 )
                 .map_err(|_| WhpError::InvalidMapping)?,
+            )
+            .map_err(|_| WhpError::PageTable)?;
+    }
+    if let Some(configuration) = block_configuration {
+        tables
+            .map_page(
+                VirtAddr::new(configuration.base()).map_err(|_| WhpError::InvalidMapping)?,
+                PhysAddr::new(configuration.base()).map_err(|_| WhpError::InvalidMapping)?,
+                PagePermissions::KERNEL_SHARED_READ,
             )
             .map_err(|_| WhpError::PageTable)?;
     }
@@ -1863,11 +1910,19 @@ mod tests {
         IoPortPolicy, IoPortRule, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
         SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
-        VIRTUAL_BLOCK_DOORBELL_PORT, VirtualBlockBackend, VirtualBlockCompletion,
-        VirtualBlockCompletionStatus, VirtualBlockDevice, VirtualBlockMutationError,
-        VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockRequest, VmTable,
-        artifact_statement, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
+        VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT, VirtualBlockBackend,
+        VirtualBlockCompletion, VirtualBlockCompletionStatus, VirtualBlockConfiguration,
+        VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
+        VirtualBlockQueueBridge, VirtualBlockRequest, VmTable, artifact_statement,
+        run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
     };
+
+    fn block_configuration(layout: VirtualBlockQueueLayout) -> VirtualBlockConfiguration {
+        let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0).unwrap();
+        device.negotiate(0).unwrap();
+        device.activate(layout, 48).unwrap();
+        device.configuration().unwrap()
+    }
 
     fn valid_pe() -> [u8; 1024] {
         let mut pe = [0u8; 1024];
@@ -2443,12 +2498,41 @@ mod tests {
         .unwrap();
         let layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 1).unwrap();
         let overlapping = VirtualBlockQueueLayout::new(0x20_0000, 0x60_2000, 1).unwrap();
+        let configuration = block_configuration(layout);
+        assert_eq!(
+            VirtualBlockConfigurationPage::new(layout.request_base(), configuration),
+            Err(mrml_kernel::VirtualBlockError::InvalidConfiguration)
+        );
         assert!(matches!(
-            system.prepare_kernel_block_guest(&executable, &valid_handoff(), launch, overlapping,),
+            system.prepare_kernel_block_guest(
+                &executable,
+                &valid_handoff(),
+                launch,
+                layout,
+                VirtualBlockConfigurationPage::new(0x60_4000, block_configuration(overlapping),)
+                    .unwrap(),
+            ),
+            Err(WhpError::InvalidMapping)
+        ));
+        assert!(matches!(
+            system.prepare_kernel_block_guest(
+                &executable,
+                &valid_handoff(),
+                launch,
+                overlapping,
+                VirtualBlockConfigurationPage::new(0x60_4000, block_configuration(overlapping),)
+                    .unwrap(),
+            ),
             Err(WhpError::MemoryOverlap)
         ));
         let mut guest = system
-            .prepare_kernel_block_guest(&executable, &valid_handoff(), launch, layout)
+            .prepare_kernel_block_guest(
+                &executable,
+                &valid_handoff(),
+                launch,
+                layout,
+                VirtualBlockConfigurationPage::new(0x60_4000, configuration).unwrap(),
+            )
             .unwrap();
 
         let request_walk = guest.page_walk(layout.request_base()).unwrap();
@@ -2465,6 +2549,23 @@ mod tests {
         );
         assert_eq!(completion_walk.entries()[3] & (1 << 1), 0);
         assert_ne!(completion_walk.entries()[3] & (1 << 63), 0);
+        let configuration_walk = guest.page_walk(0x60_4000).unwrap();
+        assert_eq!(
+            configuration_walk.physical_address(0x60_4000),
+            Some(0x60_4000)
+        );
+        assert_eq!(configuration_walk.entries()[3] & (1 << 1), 0);
+        assert_ne!(configuration_walk.entries()[3] & (1 << 63), 0);
+        let mut encoded_configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        VmBackend::read_guest(&guest, 0x60_4000, &mut encoded_configuration).unwrap();
+        assert_eq!(
+            VirtualBlockConfiguration::decode(&encoded_configuration),
+            Ok(configuration)
+        );
+        assert_eq!(
+            VmBackend::write_guest(&mut guest, 0x60_4000, &[1]),
+            Err(WhpError::ReadOnlyMemory)
+        );
 
         let interrupt_object = ObjectId(0x211);
         let mut capabilities = CapabilitySpace::<1>::new();

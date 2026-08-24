@@ -3536,9 +3536,41 @@ vector binding can construct a record.
 A parsed configuration remains data, not authority. Before use it must compare
 exactly with a fresh configuration from the live device. A generation mismatch
 is stale; reset advances the generation and invalidates the old snapshot, while
-suspend or another non-active state rejects validation. The record is not yet
-guest-mapped and does not create block-backend, mapping, interrupt, PCI, or
-capability authority.
+suspend or another non-active state rejects validation. The record does not
+create block-backend, mapping, interrupt, PCI, or capability authority.
+
+The canonical record now has one backend-neutral guest-page binding. Its
+constructor requires a nonzero page-aligned GPA, checked page-end arithmetic,
+and complete disjointness from both exact queue extents. The KVM and WHP block
+launch builders require the binding to contain the same queue they attach,
+include the page in their complete physical/virtual overlap validation, reserve
+the extra native range, publish a fully zeroed 4 KiB page through the
+host/device-only write path, and identity-map it read-only/NX. Native guest
+writes are rejected. Consuming launch construction remains transactional, so a
+partial mapping or publication failure cannot return a runnable guest.
+
+Arch Linux/WSL2 verification passed all 376 release kernel tests and 17 of 18
+KVM tests; the one ignored KVM case is the existing manual mapping-performance
+gate. The signed KVM block probe executed live and decoded the exact mapped
+record, checked its read-only/NX leaf, rejected a guest write, and completed the
+existing bounded write/read flow. Scoped strict Clippy passed for both crates.
+Windows gnullvm passed all 376 release kernel tests and 20 of 21 WHP tests; the
+one ignored WHP case is the existing manual mapping-performance gate. The
+signed WHP block probe likewise executed live, decoded the mapped record,
+checked the read-only/NX leaf, rejected a guest write, and completed the bounded
+write/read flow. Scoped strict Clippy passed for both Windows crates. This is
+hosted controlled-probe and unit/simulation evidence, not reusable guest-driver,
+PCI, native-boot, or physical-hardware evidence.
+
+The page-binding `DIGITAL-RIGHTS REVIEW` found no identity, collection,
+retention, correlation, attestation, DRM, disclosure, vendor preference,
+accessibility restriction, or persistent owner-state change. The `HOSTILE
+SECURITY REVIEW` treats the GPA, extent arithmetic, queue binding, native range
+capacity, page bytes, permissions, publication, rollback, and stale generation
+as hostile. Configuration remains data rather than authority and still requires
+live-device revalidation before use. Existing capability, revocation,
+rollback-resistance, accessibility, and evidence gates are unchanged. This
+agent review does not replace the required independent human dual review.
 
 Verification on Arch Linux under WSL2 ran all 375 release kernel unit tests and
 scoped strict Clippy successfully; the three focused configuration tests cover
@@ -3546,8 +3578,9 @@ canonical round-trip and zero padding, 21 corrupt boundary classes including
 queue aliasing, exact live binding, non-active rejection, and reset staleness.
 Windows release `cargo check`, scoped strict Clippy, and the formatting check
 also passed. Windows tests were not executed because the required MSVC linker is
-not installed. This is unit/simulation evidence only, not guest mapping, PCI,
-native boot, nested-virtualization, or physical-hardware evidence.
+not installed. At that milestone this was unit/simulation evidence only and did
+not include guest mapping, PCI, native boot, nested virtualization, or physical
+hardware.
 
 The configuration `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,

@@ -375,7 +375,10 @@ explicitly and downgrade the status rather than guessing.
   for this path while the WHP implementation is currently type-checked only. A
   canonical pointer-free active-device configuration record now captures exact
   virtual-block mechanics and must be revalidated against the live generation;
-  it is not authority and has no guest mapping or PCI presentation yet. A
+  it is not authority. Typed queue-bound page presentation is now implemented
+  by both hosted launch builders: the page is disjoint, completely zero-padded,
+  and guest-read-only/NX. Both KVM and WHP have live controlled-probe evidence.
+  Reusable guest discovery and PCI presentation remain pending. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

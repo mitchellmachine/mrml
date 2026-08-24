@@ -1385,6 +1385,15 @@ device state. Exact parsing and reserved-zero fields are standard defensive
 configuration techniques. No new patent-candidate mechanism was identified.
 This agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Read-only virtual-block configuration page
+
+**Result: NOT_TRIGGERED.** The change conventionally validates a page-aligned
+range, copies a fixed configuration record into zero-padded memory, and maps it
+read-only/non-executable to a guest through existing KVM/WHP mechanisms. Exact
+queue binding and overlap rejection are standard defensive launch validation.
+No new patent-candidate mechanism was identified. This agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Bounded virtual-block single-slot reuse
 
 **Result: NOT_TRIGGERED.** The change conventionally performs one write and one
