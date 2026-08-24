@@ -7,8 +7,8 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE, PhysAddr,
     RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
-    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockVmmMemory, VmBackend,
-    VmExit,
+    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
+    VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use super::{
@@ -26,6 +26,7 @@ struct KernelDevices {
     gpu_queue: Option<GpuSharedQueueLayout>,
     block_queue: Option<VirtualBlockQueueLayout>,
     block_configuration: Option<VirtualBlockConfigurationPage>,
+    block_resume: Option<VirtualBlockResumePage>,
     cpus: u8,
     service_shared: bool,
 }
@@ -851,6 +852,7 @@ impl KvmSystem {
                 gpu_queue: None,
                 block_queue: None,
                 block_configuration: None,
+                block_resume: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -877,6 +879,7 @@ impl KvmSystem {
                 gpu_queue: None,
                 block_queue: None,
                 block_configuration: None,
+                block_resume: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -903,6 +906,7 @@ impl KvmSystem {
                 gpu_queue: None,
                 block_queue: None,
                 block_configuration: None,
+                block_resume: None,
                 cpus: 1,
                 service_shared: true,
             },
@@ -928,6 +932,7 @@ impl KvmSystem {
                 gpu_queue: None,
                 block_queue: None,
                 block_configuration: None,
+                block_resume: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -953,6 +958,7 @@ impl KvmSystem {
                 gpu_queue: None,
                 block_queue: None,
                 block_configuration: None,
+                block_resume: None,
                 cpus: 2,
                 service_shared: false,
             },
@@ -981,6 +987,7 @@ impl KvmSystem {
                 gpu_queue: Some(queue),
                 block_queue: None,
                 block_configuration: None,
+                block_resume: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -990,6 +997,7 @@ impl KvmSystem {
     /// Prepares a kernel guest with one MRML-specific virtual-block queue in
     /// its initial address space. Request pages are writable/NX and completion
     /// pages are read-only/NX to the guest while retaining device-path writes.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_kernel_block_guest<const N: usize>(
         &self,
         vcpu_id: u32,
@@ -998,6 +1006,7 @@ impl KvmSystem {
         layout: KvmLaunchLayout,
         queue: VirtualBlockQueueLayout,
         configuration: VirtualBlockConfigurationPage,
+        resume: VirtualBlockResumePage,
     ) -> Result<PreparedKvmGuest<N>, KvmError> {
         self.prepare_guest_inner(
             vcpu_id,
@@ -1010,6 +1019,7 @@ impl KvmSystem {
                 gpu_queue: None,
                 block_queue: Some(queue),
                 block_configuration: Some(configuration),
+                block_resume: Some(resume),
                 cpus: 1,
                 service_shared: false,
             },
@@ -1029,6 +1039,7 @@ impl KvmSystem {
         let queue = devices.gpu_queue;
         let block_queue = devices.block_queue;
         let block_configuration = devices.block_configuration;
+        let block_resume = devices.block_resume;
         let smp = devices.cpus == 2;
         if !matches!(devices.cpus, 1 | 2)
             || N < 4
@@ -1036,12 +1047,20 @@ impl KvmSystem {
                 + usize::from(queue.is_some()) * 2
                 + usize::from(block_queue.is_some()) * 2
                 + usize::from(block_configuration.is_some())
+                + usize::from(block_resume.is_some())
                 + usize::from(smp)
         {
             return Err(KvmError::MemoryTableFull);
         }
         if block_configuration
             .is_some_and(|configuration| block_queue != Some(configuration.configuration().queue()))
+            || block_resume.is_some_and(|resume| {
+                block_configuration.is_none_or(|configuration| {
+                    resume.state().configuration() != configuration.configuration()
+                        || resume.configuration_base() != configuration.base()
+                })
+            })
+            || block_configuration.is_some() != block_resume.is_some()
         {
             return Err(KvmError::InvalidMapping);
         }
@@ -1122,7 +1141,7 @@ impl KvmSystem {
                 (trampoline, PAGE_SIZE),
             ])?;
         } else {
-            let mut physical_ranges = [(0, 0); 10];
+            let mut physical_ranges = [(0, 0); 11];
             physical_ranges[..4].copy_from_slice(&[
                 (layout.table_physical, table_bytes),
                 (layout.image_physical, image_bytes),
@@ -1148,8 +1167,12 @@ impl KvmSystem {
                 physical_ranges[physical_count] = (configuration.base(), PAGE_SIZE);
                 physical_count += 1;
             }
+            if let Some(resume) = block_resume {
+                physical_ranges[physical_count] = (resume.base(), PAGE_SIZE);
+                physical_count += 1;
+            }
             validate_ranges(&physical_ranges[..physical_count])?;
-            let mut virtual_ranges = [(0, 0); 8];
+            let mut virtual_ranges = [(0, 0); 9];
             virtual_ranges[..3].copy_from_slice(&[
                 (layout.image_virtual, image_bytes),
                 (layout.handoff_virtual, handoff_bytes),
@@ -1168,6 +1191,10 @@ impl KvmSystem {
             }
             if let Some(configuration) = block_configuration {
                 virtual_ranges[virtual_count] = (configuration.base(), PAGE_SIZE);
+                virtual_count += 1;
+            }
+            if let Some(resume) = block_resume {
+                virtual_ranges[virtual_count] = (resume.base(), PAGE_SIZE);
                 virtual_count += 1;
             }
             validate_ranges(&virtual_ranges[..virtual_count])?;
@@ -1207,6 +1234,12 @@ impl KvmSystem {
             backend
                 .memory
                 .write_service(configuration.base(), &encoded)?;
+        }
+        if let Some(resume) = block_resume {
+            backend.map_memory(resume.base(), PAGE_SIZE as usize, true)?;
+            let mut encoded = [0; PAGE_SIZE as usize];
+            resume.encode_page(&mut encoded);
+            backend.memory.write_service(resume.base(), &encoded)?;
         }
         let loaded_image = backend.memory.load_verified_executable(
             executable,
@@ -1411,6 +1444,15 @@ impl KvmSystem {
                 )
                 .map_err(|_| KvmError::PageTable)?;
         }
+        if let Some(resume) = block_resume {
+            tables
+                .map_page(
+                    VirtAddr::new(resume.base()).map_err(|_| KvmError::InvalidMapping)?,
+                    PhysAddr::new(resume.base()).map_err(|_| KvmError::InvalidMapping)?,
+                    PagePermissions::KERNEL_SHARED_READ,
+                )
+                .map_err(|_| KvmError::PageTable)?;
+        }
         if smp {
             let mut frame_index = 0;
             while frame_index < tables.store().allocated_pages() {
@@ -1512,11 +1554,12 @@ mod tests {
         IoPortPolicy, IoPortRule, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
         SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
-        VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT, VirtualBlockBackend,
-        VirtualBlockCompletion, VirtualBlockCompletionStatus, VirtualBlockConfiguration,
-        VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
-        VirtualBlockQueueBridge, VirtualBlockRequest, VmTable, artifact_statement,
-        run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
+        VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
+        VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
+        VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
+        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+        VirtualBlockRequest, VmTable, artifact_statement, run_virtual_block_completion_ack_once,
+        run_virtual_block_doorbell_once,
     };
 
     fn block_configuration(layout: VirtualBlockQueueLayout) -> VirtualBlockConfiguration {
@@ -2036,6 +2079,15 @@ mod tests {
                 overlapping,
                 VirtualBlockConfigurationPage::new(0x60_4000, block_configuration(overlapping),)
                     .unwrap(),
+                VirtualBlockResumePage::fresh(
+                    0x60_5000,
+                    VirtualBlockConfigurationPage::new(
+                        0x60_4000,
+                        block_configuration(overlapping),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
             ),
             Err(KvmError::MemoryOverlap)
         ));
@@ -2044,7 +2096,7 @@ mod tests {
             Err(mrml_kernel::VirtualBlockError::InvalidConfiguration)
         );
         assert!(matches!(
-            system.prepare_kernel_block_guest::<10>(
+            system.prepare_kernel_block_guest::<11>(
                 0,
                 &executable,
                 &valid_handoff(),
@@ -2052,6 +2104,15 @@ mod tests {
                 layout,
                 VirtualBlockConfigurationPage::new(0x60_4000, block_configuration(overlapping),)
                     .unwrap(),
+                VirtualBlockResumePage::fresh(
+                    0x60_5000,
+                    VirtualBlockConfigurationPage::new(
+                        0x60_4000,
+                        block_configuration(overlapping),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
             ),
             Err(KvmError::InvalidMapping)
         ));
@@ -2063,17 +2124,27 @@ mod tests {
                 launch,
                 layout,
                 VirtualBlockConfigurationPage::new(0x60_4000, configuration).unwrap(),
+                VirtualBlockResumePage::fresh(
+                    0x60_5000,
+                    VirtualBlockConfigurationPage::new(0x60_4000, configuration).unwrap(),
+                )
+                .unwrap(),
             ),
             Err(KvmError::MemoryTableFull)
         ));
         let mut guest = system
-            .prepare_kernel_block_guest::<10>(
+            .prepare_kernel_block_guest::<11>(
                 0,
                 &executable,
                 &valid_handoff(),
                 launch,
                 layout,
                 VirtualBlockConfigurationPage::new(0x60_4000, configuration).unwrap(),
+                VirtualBlockResumePage::fresh(
+                    0x60_5000,
+                    VirtualBlockConfigurationPage::new(0x60_4000, configuration).unwrap(),
+                )
+                .unwrap(),
             )
             .unwrap();
 
@@ -2108,6 +2179,26 @@ mod tests {
             VmBackend::write_guest(&mut guest, 0x60_4000, &[1]),
             Err(KvmError::ReadOnlyMemory)
         );
+        let resume_walk = guest.page_walk(0x60_5000).unwrap();
+        assert_eq!(resume_walk.physical_address(0x60_5000), Some(0x60_5000));
+        assert_eq!(resume_walk.entries()[3] & (1 << 1), 0);
+        assert_ne!(resume_walk.entries()[3] & (1 << 63), 0);
+        let mut encoded_resume = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        VmBackend::read_guest(&guest, 0x60_5000, &mut encoded_resume).unwrap();
+        assert_eq!(
+            mrml_kernel::VirtualBlockResumeState::decode(&encoded_resume)
+                .unwrap()
+                .configuration(),
+            configuration
+        );
+        assert_eq!(
+            VmBackend::write_guest(&mut guest, 0x60_5000, &[1]),
+            Err(KvmError::ReadOnlyMemory)
+        );
+        VirtualBlockVmmMemory::write_virtual_block(&mut guest, 0x60_5000, &[0x4d]).unwrap();
+        let mut marker = [0];
+        VmBackend::read_guest(&guest, 0x60_5000, &mut marker).unwrap();
+        assert_eq!(marker, [0x4d]);
 
         let interrupt_object = ObjectId(0x201);
         let mut capabilities = CapabilitySpace::<1>::new();

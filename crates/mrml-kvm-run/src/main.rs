@@ -15,9 +15,9 @@ use mrml_kernel::{
     SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
     VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
-    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout, VmBackend,
-    VmExit, VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
-    verify_gpu_kernel_bundle,
+    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
+    run_virtual_block_doorbell_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -557,6 +557,12 @@ fn application_main() -> Result<()> {
             block_layout,
             VirtualBlockConfigurationPage::new(0x0060_4000, block_configuration)
                 .map_err(|_| anyhow!("invalid block configuration page"))?,
+            VirtualBlockResumePage::fresh(
+                0x0060_5000,
+                VirtualBlockConfigurationPage::new(0x0060_4000, block_configuration)
+                    .map_err(|_| anyhow!("invalid block configuration page"))?,
+            )
+            .map_err(|_| anyhow!("invalid block resume page"))?,
         ),
         LaunchMode::TimerProbe
         | LaunchMode::PreemptionProbe

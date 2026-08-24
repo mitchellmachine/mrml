@@ -18,8 +18,9 @@ use mrml_kernel::{
     SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
     VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
-    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout, VmBackend,
-    VmExit, VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
+    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
+    run_virtual_block_doorbell_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -482,6 +483,12 @@ fn application_main() -> Result<()> {
             block_layout,
             VirtualBlockConfigurationPage::new(0x0060_4000, block_configuration)
                 .map_err(|_| anyhow!("invalid block configuration page"))?,
+            VirtualBlockResumePage::fresh(
+                0x0060_5000,
+                VirtualBlockConfigurationPage::new(0x0060_4000, block_configuration)
+                    .map_err(|_| anyhow!("invalid block configuration page"))?,
+            )
+            .map_err(|_| anyhow!("invalid block resume page"))?,
         )
     } else if service_mode || block_service_mode || service_restart_request_mode {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)

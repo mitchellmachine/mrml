@@ -702,9 +702,13 @@ The record carries no authority. Guest reconstruction requires its exact slot-
 count request snapshot, stable counter ordering, bounded outstanding distance,
 canonical generation/geometry, strictly increasing IDs, exact admitted and
 published history anchors, and correct physical slot positions. Nonzero idle
-history advances from the last published ID instead of reusing it. Live mapped
-resume publication, quiescence/crash orchestration, unbounded progress, and PCI
-discovery remain pending. One freshly
+history advances from the last published ID instead of reusing it. Live resume
+presentation is now implemented as a distinct queue- and configuration-
+disjoint page. KVM and WHP initialize it from the canonical fresh state, map it
+read-only/NX to the guest, and retain device-path writes; the common bridge can
+recapture and publish the complete zero-padded page and poisons on uncertain
+publication. Quiescence/crash orchestration, guest reconstruction from the
+mapped page, unbounded progress, and PCI discovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

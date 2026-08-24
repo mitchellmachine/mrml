@@ -528,6 +528,99 @@ pub struct VirtualBlockResumeState {
     last_published_request_id: u64,
 }
 
+/// One page-aligned, guest-read-only presentation of canonical resume state.
+/// The page is device-writable only through the virtual-block VMM boundary and
+/// carries no authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockResumePage {
+    base: u64,
+    configuration_base: u64,
+    state: VirtualBlockResumeState,
+}
+
+impl VirtualBlockResumePage {
+    pub fn fresh(
+        base: u64,
+        configuration_page: VirtualBlockConfigurationPage,
+    ) -> Result<Self, VirtualBlockError> {
+        Self::new(
+            base,
+            configuration_page,
+            VirtualBlockResumeState {
+                configuration: configuration_page.configuration(),
+                request_producer: 0,
+                request_consumed: 0,
+                completion_published: 0,
+                completion_consumer: 0,
+                last_admitted_request_id: 0,
+                last_published_request_id: 0,
+            },
+        )
+    }
+
+    pub fn new(
+        base: u64,
+        configuration_page: VirtualBlockConfigurationPage,
+        state: VirtualBlockResumeState,
+    ) -> Result<Self, VirtualBlockError> {
+        let end = base
+            .checked_add(PAGE_SIZE)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        let configuration_end = configuration_page
+            .base()
+            .checked_add(PAGE_SIZE)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        let queue = state.configuration().queue();
+        let queue_bytes = queue
+            .pages_per_queue()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        let request_end = queue
+            .request_base()
+            .checked_add(queue_bytes)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        let completion_end = queue
+            .completion_base()
+            .checked_add(queue_bytes)
+            .ok_or(VirtualBlockError::InvalidConfiguration)?;
+        if base == 0
+            || !base.is_multiple_of(PAGE_SIZE)
+            || state.configuration() != configuration_page.configuration()
+            || ranges_overlap(base, end, configuration_page.base(), configuration_end)
+            || ranges_overlap(base, end, queue.request_base(), request_end)
+            || ranges_overlap(base, end, queue.completion_base(), completion_end)
+        {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        Ok(Self {
+            base,
+            configuration_base: configuration_page.base(),
+            state,
+        })
+    }
+
+    pub const fn base(self) -> u64 {
+        self.base
+    }
+
+    pub const fn state(self) -> VirtualBlockResumeState {
+        self.state
+    }
+
+    pub const fn configuration_base(self) -> u64 {
+        self.configuration_base
+    }
+
+    pub fn encode_page(self, output: &mut [u8; PAGE_SIZE as usize]) {
+        output.fill(0);
+        self.state.encode(
+            (&mut output[..VIRTUAL_BLOCK_RESUME_STATE_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+    }
+}
+
 impl VirtualBlockResumeState {
     pub const fn configuration(self) -> VirtualBlockConfiguration {
         self.configuration
@@ -1412,6 +1505,15 @@ fn queue_bytes(slots: usize, slot_bytes: usize) -> Result<u64, VirtualBlockError
         .ok_or(VirtualBlockError::RangeOverflow)
 }
 
+const fn ranges_overlap(
+    first_start: u64,
+    first_end: u64,
+    second_start: u64,
+    second_end: u64,
+) -> bool {
+    first_start < second_end && second_start < first_end
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VirtualBlockDeviceState {
     Created,
@@ -2122,6 +2224,29 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         };
         state.validate().map_err(VirtualBlockQueueError::Protocol)?;
         Ok(state)
+    }
+
+    /// Captures and publishes one exact canonical page through the isolated
+    /// device-write path. Capture or publication uncertainty poisons the
+    /// bridge; the page remains data and grants no resume authority.
+    pub fn publish_resume_page<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &mut B,
+        device: &VirtualBlockDevice<N>,
+        page: VirtualBlockResumePage,
+    ) -> Result<VirtualBlockResumePage, VirtualBlockQueueError<B::Error>> {
+        let state = self.resume_state(backend, device)?;
+        let page = VirtualBlockResumePage::new(
+            page.base(),
+            VirtualBlockConfigurationPage::new(page.configuration_base(), state.configuration())
+                .map_err(VirtualBlockQueueError::Protocol)?,
+            state,
+        )
+        .map_err(VirtualBlockQueueError::Protocol)?;
+        let mut encoded = [0; PAGE_SIZE as usize];
+        page.encode_page(&mut encoded);
+        self.write(backend, page.base(), &encoded)?;
+        Ok(page)
     }
 
     pub fn read_payload<B: VirtualBlockVmmMemory>(
@@ -2927,10 +3052,46 @@ mod tests {
             0x30_0001,
             configuration.queue().request_base(),
             configuration.queue().completion_base(),
-            u64::MAX & !(PAGE_SIZE - 1),
+            !(PAGE_SIZE - 1),
         ] {
             assert_eq!(
                 VirtualBlockConfigurationPage::new(invalid, configuration),
+                Err(VirtualBlockError::InvalidConfiguration)
+            );
+        }
+    }
+
+    #[test]
+    fn resume_page_is_exact_zero_padded_and_disjoint_from_configuration_and_queues() {
+        let configuration = active::<1>().configuration().unwrap();
+        let configuration_page =
+            VirtualBlockConfigurationPage::new(0x30_0000, configuration).unwrap();
+        let page = VirtualBlockResumePage::fresh(0x31_0000, configuration_page).unwrap();
+        assert_eq!(page.base(), 0x31_0000);
+        assert_eq!(page.configuration_base(), configuration_page.base());
+        assert_eq!(page.state().configuration(), configuration);
+        let mut encoded = [0xa5; PAGE_SIZE as usize];
+        page.encode_page(&mut encoded);
+        assert_eq!(
+            VirtualBlockResumeState::decode(&encoded[..VIRTUAL_BLOCK_RESUME_STATE_BYTES]),
+            Ok(page.state())
+        );
+        assert!(
+            encoded[VIRTUAL_BLOCK_RESUME_STATE_BYTES..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+
+        for invalid in [
+            0,
+            0x31_0001,
+            configuration_page.base(),
+            configuration.queue().request_base(),
+            configuration.queue().completion_base(),
+            !(PAGE_SIZE - 1),
+        ] {
+            assert_eq!(
+                VirtualBlockResumePage::fresh(invalid, configuration_page),
                 Err(VirtualBlockError::InvalidConfiguration)
             );
         }
@@ -3887,6 +4048,31 @@ mod tests {
         let driver = VirtualBlockGuestDriver::reconstruct(&encoded_state, &requests).unwrap();
         assert_eq!(driver.pending_count(), 1);
         assert_eq!(driver.completion_consumer(), 1);
+
+        let configuration_page =
+            VirtualBlockConfigurationPage::new(0x5000, device.configuration().unwrap()).unwrap();
+        let resume_page = VirtualBlockResumePage::fresh(0x4000, configuration_page).unwrap();
+        let published = bridge
+            .publish_resume_page(&mut vmm, &device, resume_page)
+            .unwrap();
+        assert_eq!(published.state(), state);
+        assert_eq!(
+            VirtualBlockResumeState::decode(
+                &vmm.bytes[0x4000..0x4000 + VIRTUAL_BLOCK_RESUME_STATE_BYTES]
+            ),
+            Ok(state)
+        );
+        assert!(
+            vmm.bytes[0x4000 + VIRTUAL_BLOCK_RESUME_STATE_BYTES..0x5000]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        vmm.fail_write_address = Some(resume_page.base());
+        assert_eq!(
+            bridge.publish_resume_page(&mut vmm, &device, resume_page),
+            Err(VirtualBlockQueueError::Backend(MockError::Injected))
+        );
+        assert!(bridge.is_poisoned());
 
         let mut uncertain_bridge = VirtualBlockQueueBridge::<2>::new(queue).unwrap();
         let mut uncertain_vmm = MockVmm::new();

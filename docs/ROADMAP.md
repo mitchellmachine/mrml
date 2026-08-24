@@ -723,9 +723,13 @@ cycle publishes two disjoint writes before either completion retires, drains
 both in order, and reuses both slots for corresponding reads against a volatile
 two-page backend. The exact probe budget covers 32 requests and their 32
 protected acknowledgements; counters advance beyond queue capacity while the
-two physical slots repeatedly wrap. Live mapping of the resume record, exact
-quiescence/crash orchestration, hosted restart execution, unbounded progress,
-and PCI transport remain pending.
+two physical slots repeatedly wrap. Live presentation of the resume record is
+now implemented with KVM/WHP parity: one typed page must bind the exact
+configuration page and queue, remain disjoint from every launch range, is
+initialized and republished as a complete zero-padded canonical image through
+the device path, and is guest-read-only/NX. Exact quiescence/crash orchestration,
+guest reconstruction from that mapped page, hosted restart execution, unbounded
+progress, and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

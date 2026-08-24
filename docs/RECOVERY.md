@@ -403,8 +403,12 @@ explicitly and downgrade the status rather than guessing.
   request encodings and geometry, counter bounds, generation, strict ID order,
   and both history anchors before rebuilding pending ownership. Idle nonzero
   state advances beyond the last published ID. This is unit/simulation policy,
-  not crash or recovery evidence. Resume-page mapping, quiescence/restart
-  orchestration, unbounded progress, and PCI transport remain pending. A common
+  not crash or recovery evidence. A distinct canonical resume page is now
+  configuration- and queue-bound, completely zero-padded, mapped read-only/NX
+  to KVM and WHP guests, and writable only through the device path. The common
+  bridge recaptures live state before publication and poisons on uncertain
+  writes. Quiescence/restart orchestration, guest reconstruction from the
+  mapped page, unbounded progress, and PCI transport remain pending. A common
   unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer

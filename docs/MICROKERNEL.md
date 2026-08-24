@@ -3682,8 +3682,9 @@ pass all 386 `mrml-kernel` release tests and scoped strict Clippy. Four new
 focused tests cover pending and idle nonzero reconstruction, counter/slot/
 history substitution, canonical encoding, exact successor IDs, live device-
 bridge capture, and poison on uncertain reads. This is unit/simulation evidence
-only. No mapped resume page, quiescence/crash protocol, hosted restart run,
-durability, PCI transport, native boot, or physical hardware was exercised.
+only. At that milestone no mapped resume page, quiescence/crash protocol,
+hosted restart run, durability, PCI transport, native boot, or physical hardware
+was exercised.
 
 The reconstruction `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation mandate, DRM, disclosure, vendor control,
@@ -3697,6 +3698,50 @@ all validation precedes reconstruction; and no request is retried or published
 by reconstruction. Existing capability, revocation, rollback-resistance,
 accessibility, evidence, and owner-sovereignty gates remain unchanged. This
 agent review does not replace the required independent human dual review.
+
+The canonical resume state now has a distinct backend-neutral page binding.
+Construction requires a nonzero aligned GPA, checked page-end arithmetic, the
+exact configuration-page/configuration pair, and disjointness from that page
+and both queue extents. Encoding clears the complete 4 KiB page before writing
+the 192-byte record. The common bridge recaptures the live state immediately
+before publication and uses only the virtual-block device-write boundary;
+uncertain capture or publication poisons the bridge. KVM and WHP launch
+construction include the page in complete physical/virtual overlap validation,
+initialize it from canonical fresh state, map it identity read-only/NX to the
+guest, and retain device-path writes. Construction remains consuming and
+transactional, so a partial native mapping, page-table installation, or initial
+publication cannot return a runnable guest.
+
+Recorded verification on 2026-08-24: Windows gnullvm passed 387 kernel tests,
+20 of 21 WHP tests, and all 5 WHP-run tests; Arch Linux/WSL2 passed the same 387
+kernel tests, 17 of 18 KVM tests, and all 6 KVM-run tests. The ignored native
+case on each backend is the existing manual mapping-performance gate. Scoped
+strict `--no-deps` Clippy passed for the kernel and corresponding backend and
+runner stacks. Focused tests cover exact binding, alignment/overflow and overlap
+rejection, zero tail, live recapture, publication uncertainty poisoning,
+read-only/NX page walks, guest-write denial, and device-path writes. These are
+unit/simulation and hosted controlled-launch tests. No signed guest consumed a
+nonzero resume page; no crash, restart, persistence, durability, PCI, native
+boot, bare-metal, or physical-hardware behavior was exercised.
+
+The resume-page `DIGITAL-RIGHTS REVIEW` found no identity, content collection,
+retention, correlation, disclosure, attestation requirement, DRM, publisher or
+vendor control, first-party bypass, accessibility restriction, AI authority,
+or persistent owner-state change. The page carries only bounded volatile queue
+mechanics and grants no authority. The `HOSTILE SECURITY REVIEW` treats the
+page and configuration GPAs, arithmetic, every overlap, canonical bytes and
+zero tail, live configuration/generation, queue snapshot, native range capacity,
+page-table permissions, guest and device writes, backend results, and partial
+construction as hostile. Exact validation precedes mapping or publication;
+guest writes are denied; uncertain state poisons; and no recovery authority or
+request retry is inferred from page data. Existing capability, revocation,
+rollback-resistance, accessibility, evidence, owner-sovereignty, and anti-
+persistence gates are unchanged. This agent review does not replace the
+required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional canonical state-page publication,
+read-only/NX guest mapping, exact overlap validation, and fail-stop backend
+handling; see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,

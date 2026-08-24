@@ -1453,6 +1453,16 @@ full-page comparison are standard controlled-probe techniques. No new patent-
 candidate mechanism was identified. This agent review does not replace the
 required independent human dual review.
 
+# 2026-08-24 — Virtual-block resume-page publication
+
+**Result: NOT_TRIGGERED.** The change conventionally publishes a bounded
+canonical queue-state record in a completely zero-padded page, maps it guest
+read-only and non-executable, retains a separate device-write path, validates
+all range overlap, and fails stop on uncertain backend publication. No new
+protocol, authority model, persistent format, or patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Signed native virtual-block completion consumer
 
 **Result: NOT_TRIGGERED.** The change conventionally composes a second native
