@@ -2300,3 +2300,14 @@ It adds no VirtIO compatibility, host-share protocol, accessibility device, brow
 semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
 mechanism, or other patent-candidate mechanism. Existing planned scopes remain
 `TRIGGERED`; this agent review does not replace independent human dual review.
+
+# 2026-08-24 — Reachable-root file-selection retention
+
+**Result: NOT_TRIGGERED.** The change conventionally retains already validated
+file metadata alongside each redundant-root candidate and releases only the
+snapshot belonging to the selected root. The retained metadata is explicitly
+not authority or authenticated anti-rollback evidence. It adds no compatibility
+transport, host-share protocol, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
+this agent review does not replace independent human dual review.

@@ -1,7 +1,7 @@
 use crate::{
     AllocationImage, AllocationKind, DIRECTORY_METADATA_BYTES, DirectoryImage, DirectoryMetadata,
-    ExtentImage, FILE_METADATA_BYTES, FileMetadata, MetadataPointer, ObjectIdAllocatorImage,
-    StorageObjectId, StorageObjectKind, Superblock, VolumeHeader,
+    ExtentImage, FILE_METADATA_BYTES, FileMetadata, FileState, MetadataPointer,
+    ObjectIdAllocatorImage, StorageObjectId, StorageObjectKind, Superblock, VolumeHeader,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9,6 +9,32 @@ pub struct RecoveredSuperblock {
     block: u64,
     superblock: Superblock,
     fallback: bool,
+}
+
+/// One completely reachable filesystem generation selected by redundant-root
+/// recovery. The contained file states are integrity-validated metadata, not
+/// capabilities and not proof of owner approval or rollback freshness.
+pub struct RecoveredReachableState<const E: usize, const O: usize> {
+    selected: RecoveredSuperblock,
+    files: [Option<FileState<E>>; O],
+    file_count: usize,
+}
+
+impl<const E: usize, const O: usize> RecoveredReachableState<E, O> {
+    pub const fn selected(&self) -> RecoveredSuperblock {
+        self.selected
+    }
+
+    pub fn file(&self, object: StorageObjectId) -> Option<&FileState<E>> {
+        self.files[..self.file_count]
+            .iter()
+            .flatten()
+            .find(|file| file.object() == object)
+    }
+
+    pub const fn file_count(&self) -> usize {
+        self.file_count
+    }
 }
 
 impl RecoveredSuperblock {
@@ -83,6 +109,8 @@ pub struct ReachableRecoveryValidator<
     header: VolumeHeader,
     backend: B,
     scratch: &'a mut [u8],
+    files: [Option<FileState<E>>; O],
+    file_count: usize,
 }
 
 impl<'a, B, const A: usize, const D: usize, const E: usize, const O: usize>
@@ -93,6 +121,8 @@ impl<'a, B, const A: usize, const D: usize, const E: usize, const O: usize>
             header,
             backend,
             scratch,
+            files: [const { None }; O],
+            file_count: 0,
         }
     }
 
@@ -102,6 +132,15 @@ impl<'a, B, const A: usize, const D: usize, const E: usize, const O: usize>
 
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    fn take_files(&mut self) -> ([Option<FileState<E>>; O], usize) {
+        let count = self.file_count;
+        self.file_count = 0;
+        (
+            core::mem::replace(&mut self.files, [const { None }; O]),
+            count,
+        )
     }
 }
 
@@ -120,6 +159,8 @@ unsafe impl<
         _block: u64,
         candidate: Superblock,
     ) -> Result<(), CandidateValidationError<Self::Error>> {
+        self.files = [const { None }; O];
+        self.file_count = 0;
         let header = self.header;
         if O == 0 || candidate.volume() != header.volume() {
             return Err(CandidateValidationError::Invalid);
@@ -346,6 +387,19 @@ unsafe impl<
                             claimed[record] = true;
                         }
                     }
+                    if self.file_count == O {
+                        return Err(CandidateValidationError::Invalid);
+                    }
+                    self.files[self.file_count] = Some(
+                        FileState::new(
+                            node.object,
+                            node.generation,
+                            metadata.length(),
+                            extents.into_map(),
+                        )
+                        .map_err(|_| CandidateValidationError::Invalid)?,
+                    );
+                    self.file_count += 1;
                 }
                 StorageObjectKind::Volume => return Err(CandidateValidationError::Invalid),
             }
@@ -440,6 +494,89 @@ pub fn recover_reachable_superblock<
 ) -> Result<RecoveredSuperblock, RecoveryError<B::Error>> {
     let mut validator = ReachableRecoveryValidator::<B, A, D, E, O>::new(header, backend, scratch);
     recover_superblock(header, primary, secondary, &mut validator)
+}
+
+/// Selects one redundant root and retains the exact file states discovered by
+/// validation of that selected reachable graph. Both candidate snapshots are
+/// kept separate until the ordinary generation-consistency selector chooses a
+/// root, preventing metadata from the last-validated candidate being confused
+/// with metadata from the selected candidate.
+pub fn recover_reachable_state<
+    B: RecoveryMetadataBackend,
+    const A: usize,
+    const D: usize,
+    const E: usize,
+    const O: usize,
+>(
+    header: VolumeHeader,
+    primary: &[u8],
+    secondary: &[u8],
+    backend: B,
+    scratch: &mut [u8],
+) -> Result<RecoveredReachableState<E, O>, RecoveryError<B::Error>> {
+    let mut validator = ReachableRecoveryValidator::<B, A, D, E, O>::new(header, backend, scratch);
+    let primary =
+        decode_reachable_candidate(header, header.primary_superblock(), primary, &mut validator)?;
+    let secondary = decode_reachable_candidate(
+        header,
+        header.secondary_superblock(),
+        secondary,
+        &mut validator,
+    )?;
+
+    let selected = match (&primary, &secondary) {
+        (None, None) => return Err(RecoveryError::NoValidSuperblock),
+        (Some(candidate), None) | (None, Some(candidate)) => RecoveredSuperblock {
+            block: candidate.0,
+            superblock: candidate.1,
+            fallback: true,
+        },
+        (Some(primary), Some(secondary)) => {
+            select_pair((primary.0, primary.1), (secondary.0, secondary.1))?
+        }
+    };
+    let (_, _, files, file_count) = if primary
+        .as_ref()
+        .is_some_and(|candidate| candidate.0 == selected.block)
+    {
+        primary.expect("selected primary candidate exists")
+    } else {
+        secondary.expect("selected secondary candidate exists")
+    };
+    Ok(RecoveredReachableState {
+        selected,
+        files,
+        file_count,
+    })
+}
+
+type ReachableCandidate<const E: usize, const O: usize> =
+    (u64, Superblock, [Option<FileState<E>>; O], usize);
+
+fn decode_reachable_candidate<
+    B: RecoveryMetadataBackend,
+    const A: usize,
+    const D: usize,
+    const E: usize,
+    const O: usize,
+>(
+    header: VolumeHeader,
+    block: u64,
+    encoded: &[u8],
+    validator: &mut ReachableRecoveryValidator<'_, B, A, D, E, O>,
+) -> Result<Option<ReachableCandidate<E, O>>, RecoveryError<B::Error>> {
+    let candidate = match Superblock::decode(encoded, header) {
+        Ok(candidate) => candidate,
+        Err(_) => return Ok(None),
+    };
+    match validator.validate_candidate(block, candidate) {
+        Ok(()) => {
+            let (files, file_count) = validator.take_files();
+            Ok(Some((block, candidate, files, file_count)))
+        }
+        Err(CandidateValidationError::Invalid) => Ok(None),
+        Err(CandidateValidationError::Backend(error)) => Err(RecoveryError::Backend(error)),
+    }
 }
 
 fn decode_and_validate<V: CowRecoveryValidator>(
@@ -828,6 +965,36 @@ mod tests {
         assert_eq!(
             validator.validate_candidate(1, candidate),
             Err(CandidateValidationError::Invalid)
+        );
+    }
+
+    #[test]
+    fn reachable_state_retains_only_selected_graph_file_states() {
+        let (candidate, backend) = reachable_backend(true, false);
+        let primary = encoded(candidate);
+        let secondary = [0; SUPERBLOCK_BYTES];
+        let mut scratch = [0; 4096];
+        let recovered = recover_reachable_state::<_, 8, 1, 1, 2>(
+            header(),
+            &primary,
+            &secondary,
+            backend,
+            &mut scratch,
+        )
+        .unwrap();
+
+        assert_eq!(recovered.selected().block(), header().primary_superblock());
+        assert!(recovered.selected().used_fallback());
+        assert_eq!(recovered.file_count(), 1);
+        let file = recovered
+            .file(StorageObjectId::new(volume(), 7).unwrap())
+            .unwrap();
+        assert_eq!(file.generation(), 3);
+        assert_eq!(file.length(), 4096);
+        assert!(
+            recovered
+                .file(StorageObjectId::new(volume(), 8).unwrap())
+                .is_none()
         );
     }
 

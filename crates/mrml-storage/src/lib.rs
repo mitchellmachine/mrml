@@ -100,8 +100,8 @@ pub use object_id_allocator::{
 };
 pub use recovery::{
     CandidateValidationError, CowRecoveryValidator, ReachableRecoveryValidator,
-    RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend, recover_reachable_superblock,
-    recover_superblock,
+    RecoveredReachableState, RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend,
+    recover_reachable_state, recover_reachable_superblock, recover_superblock,
 };
 pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,

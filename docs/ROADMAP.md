@@ -543,7 +543,14 @@ authority; unrelated domains continue.
    immutable image; physical block integration, interrupted-write/power-loss
    evidence, repair, and authenticated anti-rollback remain pending.
    The selector and traversal now compose into one recovery entry point. A
-   controlled interrupted-publication simulation presents a checksum-valid
+   typed variant preserves each candidate's validated file states separately
+   until root selection and exposes only the selected graph's exact file
+   objects, generations, lengths, and extent maps. Focused simulation verifies
+   selected-file lookup and absence without treating this integrity result as
+   authority or anti-rollback authentication. Authority-checkpoint and
+   configuration recovery still need to consume this typed selection before
+   the end-to-end root/file substitution gate is complete. A controlled
+   interrupted-publication simulation presents a checksum-valid
    newer superblock whose allocation image remains bound to the prior generation:
    complete validation proves the newer candidate invalid and explicitly falls
    back to the adjacent valid root. A separate injected read failure during the

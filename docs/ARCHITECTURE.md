@@ -509,7 +509,13 @@ checks parent and generation links, decodes entry and extent images, binds every
 data range to exact allocation ownership, and rejects every orphan allocation.
 Repeated object references and capacity overflow fail closed. The root selector
 and reachable validator are exposed as one bounded recovery entry
-point. Simulation rejects a checksum-valid newer superblock whose referenced
+point. A typed variant retains each candidate's exact validated file states
+separately through redundant-root selection and exposes only the object,
+generation, length, and extent map belonging to the chosen graph. These states
+are integrity evidence, not capabilities, owner approval, or authenticated
+anti-rollback evidence. Stable authority/configuration recovery does not yet
+require this typed selection, so end-to-end root/file binding remains pending.
+Simulation rejects a checksum-valid newer superblock whose referenced
 allocation generation was not published and explicitly falls back to the fully
 validated adjacent root; an indeterminate read of the newer candidate aborts
 instead of becoming rollback. Publication is also exercised with separate

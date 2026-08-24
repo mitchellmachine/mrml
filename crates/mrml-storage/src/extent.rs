@@ -490,6 +490,10 @@ impl<const N: usize> ExtentImage<N> {
         &self.map
     }
 
+    pub(crate) fn into_map(self) -> ExtentMap<N> {
+        self.map
+    }
+
     pub fn encode(&self, output: &mut [u8]) -> Result<(), ExtentError> {
         if output.len() != self.encoded_len {
             return Err(ExtentError::Truncated);

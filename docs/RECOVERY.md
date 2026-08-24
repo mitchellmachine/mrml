@@ -309,6 +309,13 @@ explicitly and downgrade the status rather than guessing.
   release both results. Validation failure leaves accepted state unchanged;
   store failure drops both results; configuration scratch is erased on every
   validator return.
+  Reachable-root recovery now also has a typed result that retains only the
+  exact file states validated under the selected candidate, keeping primary and
+  secondary snapshots separate through selection. This is checksummed
+  reachability/integrity evidence only. The stable authority and configuration
+  entry points do not yet require that result, so their documented trusted
+  caller obligation to supply the authenticated-recovery-selected generation
+  remains in force and typed end-to-end enforcement is pending.
   Service registration can now be planned against one exact vacant supervisor
   slot and generation during dependent validation without mutation. After the
   monotonic store advances, only the committed recovered-authority wrapper and
