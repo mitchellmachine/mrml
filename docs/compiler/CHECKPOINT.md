@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `1139f96`
-  (`compiler: establish initialized move path roots`)
+- Compiler checkpoint commit: `fbb7c27`
+  (`compiler: project tuple move paths`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -58,14 +58,18 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   duplicate empty base read;
 - a standalone fixed-capacity body-fact object outside the x86 machine-code
   state; and
-- fixed 512-entry move-path and initialization-site tables with one dense root
-  path for every supported parameter and named local. Parameter-entry and
-  successful-local-declaration initialization origins retain their exact type
+- a fixed 1,360-entry move-path table and 512-entry initialization-site table
+  with one dense root path for every supported parameter and named local.
+  Supported owned tuple roots immediately expand into one precisely numbered,
+  typed child path per field; the derived capacity preserves all 256 retained
+  locals and 16 supported ABI parameters at maximum tuple width. Parameter-entry
+  and successful-local-declaration initialization origins retain their exact type
   and source span. Final validation requires deterministic parameter-then-local
   ordering, exact path/initialization pairing, matching local or parameter
-  identity and type, root-only projection shape, valid spans, and complete
-  coverage. Missing pairs, corrupt roots, unexpected parents, and capacity
-  exhaustion fail closed before native output is accepted; and
+  identity and type, exact root/child ordering, parent, tuple-field projection,
+  valid spans, and complete coverage. Missing pairs, corrupt roots or children,
+  cross-root parents, and capacity exhaustion fail closed before native output
+  is accepted; and
 - pre-emission typing and stable identity assignment for every declaration form
   represented by the supported runtime body and loop parsers, mirroring pre-loop,
   loop, nested-loop, conditional-arm, and post-loop emission order with exact
@@ -205,7 +209,7 @@ Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
-Projected move paths, copy-versus-move access classification, flow-sensitive
+Array-element move paths, copy-versus-move access classification, flow-sensitive
 initializedness, unsupported parser/control-flow forms, borrows, loans, regions,
 Polonius-style analysis, and a general trait solver are unimplemented. The root
 initialization sites do not claim that unreachable or divergent declarations
@@ -216,10 +220,13 @@ execute.
 Continue the dependency chain instead of filling arbitrary historical Rust
 compatibility gaps:
 
-1. extend root move paths through supported owned projections and classify
-   explicit copy/move/write effects without treating ordinary reads as moves;
-2. compute bounded flow-sensitive initializedness over the existing CFG;
-3. then stage shared loans, mutable loans/invalidation, reborrows, and
+1. classify explicit copy/move/write/reborrow effects without treating ambiguous
+   mutable-reference or pointee reads as moves;
+2. compute bounded flow-sensitive initializedness over the existing CFG and
+   precise tuple paths;
+3. add array-element paths only after place facts retain exact constant element
+   identity rather than the current summary `Index` projection;
+4. then stage shared loans, mutable loans/invalidation, reborrows, and
    flow-sensitive outlives reasoning with independent accepted/rejected probes.
 
 Modern trait solving, naked functions/`naked_asm!`, inline assembly, security
@@ -243,8 +250,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 671 tests on each host: 369
-library tests, 10 conformance tests, 290 replacement tests, and 2 driver tests.
+The checkpoint source passed 673 tests on each host: 370
+library tests, 10 conformance tests, 291 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

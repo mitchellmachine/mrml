@@ -189,17 +189,22 @@ appending reads and writes to the existing true emission-order access ledger.
 This separation prevents precomputed writes from being reordered ahead of RHS
 reads. Missing, reordered, malformed, immutable, or identity-drifted expectations
 fail as `InvalidRuntimePlaceFacts`.
-The body facts now also contain fixed 512-entry move-path and initialization-site
-tables. Every supported parameter and named local receives one dense root path
-in deterministic parameter-then-local order. Parameter entry and successful
-local-declaration completion are recorded as distinct initialization origins
+The body facts now also contain a fixed 1,360-entry move-path table and 512-entry
+initialization-site table. Every supported parameter and named local receives
+one dense root path; supported owned tuples immediately add one precisely typed
+child path per numbered field. The derived path capacity covers all 256 retained
+locals and 16 supported ABI parameters at maximum tuple width. Parameter entry
+and successful local-declaration completion are recorded as distinct
+initialization origins
 with matching type and source span. Final validation requires exact root and
-initialization counts, one-to-one IDs, complete local/parameter coverage, empty
-root projections, and no parent at this stage. Corruption, missing paired facts,
-or capacity exhaustion fails closed. These root sites are structural
-prerequisites: they do not yet represent projected paths, distinguish copies
-from moves, compute flow-sensitive initializedness, or claim that unreachable or
-divergent declarations execute.
+initialization counts, dense IDs, complete local/parameter coverage, empty root
+projections, and exact child ordering, parent, base, field projection, and type.
+Corruption, missing paired facts, or capacity exhaustion fails closed. These
+root sites are structural
+prerequisites: arrays remain root-only because the current summary `Index`
+projection does not identify a disjoint element. The facts do not yet distinguish
+copies, moves, or reborrows, compute flow-sensitive initializedness, or claim
+that unreachable or divergent declarations execute.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
 index, tuple field, subslice, transparent wrapper, or sequence tail also reserve
 a separate fixed 256-entry read-expectation table. The pass resolves the root
@@ -314,7 +319,7 @@ unsupported
 aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
-yet a complete typed body table, projected move-path or move-state analysis,
+yet a complete typed body table, array-element move paths or move-state analysis,
 borrow, or loan model. An initial
 fixed-capacity CFG fact table records stable basic-block IDs, exact top-level
 statement ranges, reachability, and true/false/unconditional edges to blocks or
