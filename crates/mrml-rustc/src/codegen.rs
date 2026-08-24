@@ -2170,6 +2170,7 @@ struct RuntimeInitializationFact {
     event: RuntimeOwnershipEventId,
     location: RuntimeOwnershipEventLocation,
     expression_path: RuntimeOwnershipExpressionPath,
+    expression_conditional: Option<RuntimeConditionalExpressionId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2200,6 +2201,18 @@ impl RuntimeOwnershipExpressionPath {
     const fn is_valid(self) -> bool {
         self.depth <= 64 && (self.depth == 64 || self.else_bits < (1u64 << self.depth))
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeConditionalExpressionId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeConditionalExpressionFact {
+    id: RuntimeConditionalExpressionId,
+    location: RuntimeOwnershipEventLocation,
+    span: Span,
+    parent: Option<RuntimeConditionalExpressionId>,
+    parent_path: RuntimeOwnershipExpressionPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2397,6 +2410,7 @@ struct RuntimePlaceEffectFact {
     event: RuntimeOwnershipEventId,
     location: RuntimeOwnershipEventLocation,
     expression_path: RuntimeOwnershipExpressionPath,
+    expression_conditional: Option<RuntimeConditionalExpressionId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2515,6 +2529,10 @@ struct RuntimeBodyFacts<'source> {
     ownership_events_single_path: bool,
     current_ownership_event_location: RuntimeOwnershipEventLocation,
     current_ownership_expression_path: RuntimeOwnershipExpressionPath,
+    conditional_expressions:
+        [Option<RuntimeConditionalExpressionFact>; MAX_RUNTIME_OWNERSHIP_EVENT_FACTS],
+    conditional_expression_count: usize,
+    current_conditional_expression: Option<RuntimeConditionalExpressionId>,
     ownership_statement_count: usize,
     ownership_has_tail: bool,
     ownership_statement_shapes:
@@ -2546,6 +2564,9 @@ impl<'source> RuntimeBodyFacts<'source> {
         ownership_events_single_path: true,
         current_ownership_event_location: RuntimeOwnershipEventLocation::Unassigned,
         current_ownership_expression_path: RuntimeOwnershipExpressionPath::ROOT,
+        conditional_expressions: [None; MAX_RUNTIME_OWNERSHIP_EVENT_FACTS],
+        conditional_expression_count: 0,
+        current_conditional_expression: None,
         ownership_statement_count: 0,
         ownership_has_tail: false,
         ownership_statement_shapes: [None; crate::parser::MAX_BODY_STATEMENTS],
@@ -2568,6 +2589,36 @@ impl<'source> RuntimeBodyFacts<'source> {
         }) {
             self.ownership_events_single_path = false;
         }
+    }
+
+    fn push_conditional_expression(
+        &mut self,
+        span: Span,
+    ) -> Result<RuntimeConditionalExpressionId, CodegenErrorKind> {
+        if span.end < span.start
+            || matches!(
+                self.current_ownership_event_location,
+                RuntimeOwnershipEventLocation::Unassigned
+                    | RuntimeOwnershipEventLocation::ParameterEntry
+                    | RuntimeOwnershipEventLocation::EmissionExpansion
+            )
+        {
+            return Err(CodegenErrorKind::InvalidRuntimePlaceFacts);
+        }
+        let slot = self
+            .conditional_expressions
+            .get_mut(self.conditional_expression_count)
+            .ok_or(CodegenErrorKind::TooManyRuntimeOwnershipEventFacts)?;
+        let id = RuntimeConditionalExpressionId(self.conditional_expression_count);
+        *slot = Some(RuntimeConditionalExpressionFact {
+            id,
+            location: self.current_ownership_event_location,
+            span,
+            parent: self.current_conditional_expression,
+            parent_path: self.current_ownership_expression_path,
+        });
+        self.conditional_expression_count += 1;
+        Ok(id)
     }
 
     fn record_ownership_statement_shapes<const MAX_PARAMETERS: usize>(
@@ -2754,6 +2805,36 @@ impl<'source> RuntimeBodyFacts<'source> {
             | (RuntimeOwnershipEventLocation::NestedLoopAction { .. }, _)
             | (RuntimeOwnershipEventLocation::ReturnValue { .. }, _) => false,
         }
+    }
+
+    fn expression_origin_is_valid(
+        &self,
+        location: RuntimeOwnershipEventLocation,
+        path: RuntimeOwnershipExpressionPath,
+        conditional: Option<RuntimeConditionalExpressionId>,
+    ) -> bool {
+        if !path.is_valid() {
+            return false;
+        }
+        let Some(conditional) = conditional else {
+            return path == RuntimeOwnershipExpressionPath::ROOT;
+        };
+        let Some(fact) = self
+            .conditional_expressions
+            .get(conditional.0)
+            .and_then(|fact| *fact)
+        else {
+            return false;
+        };
+        if fact.id != conditional || fact.location != location {
+            return false;
+        }
+        if path == fact.parent_path {
+            return true;
+        }
+        path.depth == fact.parent_path.depth + 1
+            && (path.else_bits & ((1u64 << fact.parent_path.depth).wrapping_sub(1)))
+                == fact.parent_path.else_bits
     }
 
     fn top_level_block_for_statement(&self, statement_index: usize) -> Option<RuntimeBasicBlockId> {
@@ -3237,6 +3318,12 @@ impl<'source> RuntimeBodyFacts<'source> {
                     self.current_ownership_expression_path
                 }
             },
+            expression_conditional: match origin {
+                RuntimeInitializationOrigin::Parameter => None,
+                RuntimeInitializationOrigin::LocalDeclaration => {
+                    self.current_conditional_expression
+                }
+            },
         });
         self.initialization_count += 1;
         self.ownership_event_count += 1;
@@ -3291,6 +3378,7 @@ impl<'source> RuntimeBodyFacts<'source> {
             event: RuntimeOwnershipEventId(self.ownership_event_count),
             location: self.current_ownership_event_location,
             expression_path: self.current_ownership_expression_path,
+            expression_conditional: self.current_conditional_expression,
         });
         self.effect_count += 1;
         self.ownership_event_count += 1;
@@ -3358,6 +3446,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                     event: RuntimeOwnershipEventId(self.ownership_event_count),
                     location: self.current_ownership_event_location,
                     expression_path: self.current_ownership_expression_path,
+                    expression_conditional: self.current_conditional_expression,
                 })
             });
         if effect.is_some() && self.effect_count >= self.effects.len() {
@@ -4548,9 +4637,19 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 then_branch,
                 else_branch,
             } => {
+                let parent_conditional = facts.current_conditional_expression;
+                let conditional =
+                    facts
+                        .push_conditional_expression(expression.span)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: assignment_span,
+                        })?;
+                facts.current_conditional_expression = Some(conditional);
                 visit_value!(condition)?;
                 let parent_path = facts.current_ownership_expression_path;
                 for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                    facts.current_conditional_expression = Some(conditional);
                     facts.current_ownership_expression_path = parent_path
                         .branch(else_branch)
                         .map_err(|kind| CodegenError {
@@ -4571,6 +4670,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     facts.current_ownership_expression_path = parent_path;
                     result?;
                 }
+                facts.current_conditional_expression = parent_conditional;
             }
             ExprKind::Array {
                 elements,
@@ -4964,6 +5064,15 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 then_branch,
                 else_branch,
             } => {
+                let parent_conditional = facts.current_conditional_expression;
+                let conditional =
+                    facts
+                        .push_conditional_expression(expression.span)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: assignment_span,
+                        })?;
+                facts.current_conditional_expression = Some(conditional);
                 recurse(
                     facts,
                     locals,
@@ -4977,6 +5086,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 )?;
                 let parent_path = facts.current_ownership_expression_path;
                 for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                    facts.current_conditional_expression = Some(conditional);
                     facts.current_ownership_expression_path = parent_path
                         .branch(else_branch)
                         .map_err(|kind| CodegenError {
@@ -4997,6 +5107,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     facts.current_ownership_expression_path = parent_path;
                     result?;
                 }
+                facts.current_conditional_expression = parent_conditional;
                 Ok(())
             }
             ExprKind::Tuple {
@@ -5413,6 +5524,15 @@ fn preanalyze_runtime_return_array_element_reads<
             then_branch,
             else_branch,
         } => {
+            let parent_conditional = facts.current_conditional_expression;
+            let conditional =
+                facts
+                    .push_conditional_expression(expression.span)
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: expression_span,
+                    })?;
+            facts.current_conditional_expression = Some(conditional);
             preanalyze_runtime_expression_at_reads(
                 facts,
                 locals,
@@ -5424,6 +5544,7 @@ fn preanalyze_runtime_return_array_element_reads<
             )?;
             let parent_path = facts.current_ownership_expression_path;
             for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                facts.current_conditional_expression = Some(conditional);
                 facts.current_ownership_expression_path =
                     parent_path
                         .branch(else_branch)
@@ -5445,6 +5566,7 @@ fn preanalyze_runtime_return_array_element_reads<
                 facts.current_ownership_expression_path = parent_path;
                 result?;
             }
+            facts.current_conditional_expression = parent_conditional;
             Ok(())
         }
         ExprKind::InlineConst { operand }
@@ -5689,6 +5811,21 @@ fn preanalyze_runtime_return_array_reads<
                 else_branch,
             },
         ) => {
+            let parent_conditional = facts.current_conditional_expression;
+            let conditional_span = tree
+                .expression(id)
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                    span: expression_span,
+                })?
+                .span;
+            let conditional = facts
+                .push_conditional_expression(conditional_span)
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: expression_span,
+                })?;
+            facts.current_conditional_expression = Some(conditional);
             preanalyze_runtime_expression_at_reads(
                 facts,
                 locals,
@@ -5700,6 +5837,7 @@ fn preanalyze_runtime_return_array_reads<
             )?;
             let parent_path = facts.current_ownership_expression_path;
             for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                facts.current_conditional_expression = Some(conditional);
                 facts.current_ownership_expression_path =
                     parent_path
                         .branch(else_branch)
@@ -5721,6 +5859,7 @@ fn preanalyze_runtime_return_array_reads<
                 facts.current_ownership_expression_path = parent_path;
                 result?;
             }
+            facts.current_conditional_expression = parent_conditional;
             Ok(())
         }
         Some(_) => {
@@ -8427,7 +8566,9 @@ fn preanalyze_runtime_body_declarations<
             body_start,
         )?;
     }
-    if facts.current_ownership_expression_path != RuntimeOwnershipExpressionPath::ROOT {
+    if facts.current_ownership_expression_path != RuntimeOwnershipExpressionPath::ROOT
+        || facts.current_conditional_expression.is_some()
+    {
         return Err(CodegenError {
             kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
             span: body.tail_span,
@@ -14217,6 +14358,38 @@ impl<
         {
             return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
         }
+        if self.body_facts.conditional_expression_count
+            > self.body_facts.conditional_expressions.len()
+            || self.body_facts.conditional_expressions
+                [..self.body_facts.conditional_expression_count]
+                .iter()
+                .any(Option::is_none)
+            || self.body_facts.conditional_expressions
+                [self.body_facts.conditional_expression_count..]
+                .iter()
+                .any(Option::is_some)
+        {
+            return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+        }
+        for (index, fact) in self.body_facts.conditional_expressions
+            [..self.body_facts.conditional_expression_count]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            if fact.id != RuntimeConditionalExpressionId(index)
+                || fact.span.end < fact.span.start
+                || !self.body_facts.ownership_location_is_valid(fact.location)
+                || fact.parent.is_some_and(|parent| parent.0 >= fact.id.0)
+                || !self.body_facts.expression_origin_is_valid(
+                    fact.location,
+                    fact.parent_path,
+                    fact.parent,
+                )
+            {
+                return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+        }
         if self.preanalyzed_local_cursor != self.preanalyzed_local_count
             || self.preanalyzed_local_count > self.body_facts.local_count
             || self.preanalyzed_assignment_access_cursor != self.body_facts.assignment_access_count
@@ -14297,9 +14470,11 @@ impl<
                 || initialization.path != root.id
                 || initialization.origin != expected_origin
                 || initialization.span != expected_span
-                || !initialization.expression_path.is_valid()
-                || (initialization.origin == RuntimeInitializationOrigin::Parameter
-                    && initialization.expression_path != RuntimeOwnershipExpressionPath::ROOT)
+                || !self.body_facts.expression_origin_is_valid(
+                    initialization.location,
+                    initialization.expression_path,
+                    initialization.expression_conditional,
+                )
                 || (self.body_facts.control_flow_complete
                     && initialization.location != RuntimeOwnershipEventLocation::EmissionExpansion
                     && self
@@ -14445,7 +14620,11 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
             if path.id != effect.path
                 || effect.span.end < effect.span.start
-                || !effect.expression_path.is_valid()
+                || !self.body_facts.expression_origin_is_valid(
+                    effect.location,
+                    effect.expression_path,
+                    effect.expression_conditional,
+                )
                 || !self.body_facts.ownership_location_is_valid(effect.location)
                 || (self.body_facts.control_flow_complete
                     && effect.location != RuntimeOwnershipEventLocation::EmissionExpansion
@@ -24138,6 +24317,7 @@ mod tests {
                 event: RuntimeOwnershipEventId(0),
                 location: RuntimeOwnershipEventLocation::ParameterEntry,
                 expression_path: RuntimeOwnershipExpressionPath::ROOT,
+                expression_conditional: None,
             })
         );
 
@@ -24910,6 +25090,23 @@ mod tests {
             &mut facts,
         )
         .unwrap();
+        assert_eq!(facts.conditional_expression_count, 2);
+        let outer = facts.conditional_expressions[0].unwrap();
+        let inner = facts.conditional_expressions[1].unwrap();
+        assert_eq!(outer.id, RuntimeConditionalExpressionId(0));
+        assert_eq!(outer.location, RuntimeOwnershipEventLocation::Tail);
+        assert_eq!(outer.parent, None);
+        assert_eq!(outer.parent_path, RuntimeOwnershipExpressionPath::ROOT);
+        assert_eq!(inner.id, RuntimeConditionalExpressionId(1));
+        assert_eq!(inner.location, RuntimeOwnershipEventLocation::Tail);
+        assert_eq!(inner.parent, Some(RuntimeConditionalExpressionId(0)));
+        assert_eq!(
+            inner.parent_path,
+            RuntimeOwnershipExpressionPath {
+                else_bits: 0,
+                depth: 1,
+            }
+        );
         for (kind, expression_path) in [
             (
                 RuntimePlaceEffectKind::Move,
@@ -24940,6 +25137,69 @@ mod tests {
                     .any(|effect| effect.kind == kind && effect.expression_path == expression_path)
             );
         }
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| effect.kind == RuntimePlaceEffectKind::Move
+                    && effect.expression_conditional == Some(RuntimeConditionalExpressionId(1)))
+        );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(
+                    |effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                        && effect.expression_path
+                            == RuntimeOwnershipExpressionPath {
+                                else_bits: 1,
+                                depth: 1,
+                            }
+                        && effect.expression_conditional == Some(RuntimeConditionalExpressionId(0))
+                )
+        );
+        assert!(!facts.expression_origin_is_valid(
+            RuntimeOwnershipEventLocation::Tail,
+            RuntimeOwnershipExpressionPath {
+                else_bits: 0,
+                depth: 1,
+            },
+            Some(RuntimeConditionalExpressionId(2)),
+        ));
+
+        let mut capacity = RuntimeBodyFacts::EMPTY;
+        capacity.current_ownership_event_location = RuntimeOwnershipEventLocation::Tail;
+        capacity.conditional_expression_count = MAX_RUNTIME_OWNERSHIP_EVENT_FACTS;
+        assert_eq!(
+            capacity.push_conditional_expression(Span { start: 0, end: 1 }),
+            Err(CodegenErrorKind::TooManyRuntimeOwnershipEventFacts)
+        );
+
+        let sequential = "fn value(input: &mut u16, first: bool, second: bool) -> &mut u16 { { if first { *input } else { *input }; if second { input } else { &mut *input } } }";
+        let module = Parser::new(sequential).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        assert_eq!(facts.conditional_expression_count, 2);
+        let first = facts.conditional_expressions[0].unwrap();
+        let second = facts.conditional_expressions[1].unwrap();
+        assert_eq!(first.parent, None);
+        assert_eq!(second.parent, None);
+        assert_eq!(first.parent_path, RuntimeOwnershipExpressionPath::ROOT);
+        assert_eq!(second.parent_path, RuntimeOwnershipExpressionPath::ROOT);
+        assert_ne!(first.id, second.id);
+        assert_ne!(first.span, second.span);
     }
 
     #[test]
