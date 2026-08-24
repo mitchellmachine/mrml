@@ -532,13 +532,17 @@ x86-64 operations 4/5/7/8 adapter. A focused signed KVM/WHP probe now
 instantiates the loop in an isolated CPL3 service: a separate client can
 transfer only an attenuated shared-buffer capability, while the service retains
 the launch-bound principal, session, and one-page simulated block backend. The
-probe verifies one write and one read, including response fields and returned
-bytes. It now retires the client, consumes the exact typed peer-death event,
+probe publishes a canonical configuration checkpoint through 18 exact
+MRML-native block requests, consumes the one-use COW receipt, recovers only
+file generation 2, and reloads the exact service-bound restart policy. Local
+shared-buffer use and IPC transfer authority remain separate handles; received
+leaf capabilities are explicitly released through transitive runtime
+revocation. It then retires the client, consumes the exact typed peer-death event,
 retires the service, completes both cleanup tickets, removes the service shared
 mapping/resource, and emits success only after both supervised slots have no
 task or pending cleanup. Both launchers require the exact ordered cleanup
 markers. This is hosted controlled-probe evidence only; the in-image backend is
-volatile, and a hosted device backend, physical device,
+volatile, and this does not prove reboot restoration, a hosted device backend, physical device,
 snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

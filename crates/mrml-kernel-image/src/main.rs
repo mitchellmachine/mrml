@@ -11,27 +11,14 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 #[cfg(any(feature = "smp-scheduler-probe", feature = "smp-ipi-probe"))]
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-#[cfg(feature = "production-policy")]
-use mrml_kernel::BootPolicy;
-#[cfg(any(feature = "timer-probe", feature = "smp-scheduler-probe"))]
-use mrml_kernel::KernelScheduler;
-#[cfg(all(feature = "smp-ipi-probe", not(feature = "smp-periodic-balance-probe")))]
-use mrml_kernel::PeriodicBalancer;
+#[cfg(any(feature = "user-probe", feature = "preemption-probe"))]
+use mrml_kernel::arch::x86_64::enter_user_context;
 #[cfg(any(
-    feature = "user-probe",
     feature = "service-probe",
+    feature = "service-preemption-probe",
     feature = "smp-service-migration-probe"
 ))]
-use mrml_kernel::SyscallRequest;
-#[cfg(any(
-    feature = "user-probe",
-    feature = "service-probe",
-    feature = "preemption-probe",
-    feature = "service-preemption-probe",
-    feature = "smp-ipi-probe"
-))]
-use mrml_kernel::TaskRuntime;
-use mrml_kernel::UserCallFrame;
+use mrml_kernel::arch::x86_64::enter_user_context_on_stack;
 #[cfg(feature = "smp-ipi-probe")]
 use mrml_kernel::arch::x86_64::LocalApicController;
 #[cfg(any(
@@ -65,14 +52,6 @@ use mrml_kernel::arch::x86_64::TrapDisposition;
     feature = "smp-ipi-probe"
 ))]
 use mrml_kernel::arch::x86_64::UserContext;
-#[cfg(any(feature = "user-probe", feature = "preemption-probe"))]
-use mrml_kernel::arch::x86_64::enter_user_context;
-#[cfg(any(
-    feature = "service-probe",
-    feature = "service-preemption-probe",
-    feature = "smp-service-migration-probe"
-))]
-use mrml_kernel::arch::x86_64::enter_user_context_on_stack;
 #[cfg(not(feature = "fault-probe"))]
 use mrml_kernel::arch::x86_64::{
     ActiveApTrampolinePage, ActivePageTables, ApStartupTable, ApStartupTiming, ApTrampolineImage,
@@ -84,8 +63,8 @@ use mrml_kernel::arch::x86_64::{
     PagePermissions, UserBufferAccess, VirtAddr,
 };
 use mrml_kernel::arch::x86_64::{
-    ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
-    PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
+    ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, PrivilegeStackLayout, MAX_X86_64_CPUS,
+    PRIVILEGE_STACK_ARENA_PAGES,
 };
 #[cfg(any(
     feature = "block-guest-driver-probe",
@@ -94,20 +73,44 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::arch::x86_64::{PreallocatedPageTableStore, ServiceAddressSpace};
+#[cfg(feature = "production-policy")]
+use mrml_kernel::BootPolicy;
+#[cfg(feature = "service-probe")]
+use mrml_kernel::GuestMappingRevoker;
+#[cfg(any(feature = "timer-probe", feature = "smp-scheduler-probe"))]
+use mrml_kernel::KernelScheduler;
+#[cfg(all(feature = "smp-ipi-probe", not(feature = "smp-periodic-balance-probe")))]
+use mrml_kernel::PeriodicBalancer;
+#[cfg(any(
+    feature = "user-probe",
+    feature = "service-probe",
+    feature = "smp-service-migration-probe"
+))]
+use mrml_kernel::SyscallRequest;
+#[cfg(any(
+    feature = "user-probe",
+    feature = "service-probe",
+    feature = "preemption-probe",
+    feature = "service-preemption-probe",
+    feature = "smp-ipi-probe"
+))]
+use mrml_kernel::TaskRuntime;
+use mrml_kernel::UserCallFrame;
+#[cfg(feature = "service-probe")]
+use mrml_kernel::{
+    decode_capability_transfers, Capability, CapabilitySpace, ControlEvent,
+    DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable, PeerDeathReason,
+    RestartPolicy, ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceResourceEraser,
+    ServiceSupervisor, SharedAccess, SharedBufferSyscallExecutor, SharedEndpoint,
+    SharedEndpointRequest, SharedMemoryBindings, VmId, VmTable,
+    CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD,
+};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::{ArtifactKind, SignedArtifact, TrustRoot};
 #[cfg(not(feature = "fault-probe"))]
 use mrml_kernel::{
-    BootHandoff, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_REGIONS, MemoryKind,
-    MemoryRegion, PhysAddr,
-};
-#[cfg(feature = "service-probe")]
-use mrml_kernel::{
-    CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, Capability, CapabilitySpace, ControlEvent,
-    DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable, MAX_CAPABILITIES,
-    MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy, ServiceAddressSpaceEraser, ServiceError,
-    ServiceId, ServiceResourceEraser, ServiceSupervisor, SharedAccess, SharedBufferSyscallExecutor,
-    SharedEndpoint, SharedMemoryBindings, VmId, VmTable, decode_capability_transfers,
+    BootHandoff, MemoryKind, MemoryRegion, PhysAddr, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES,
+    MAX_HANDOFF_REGIONS,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -126,15 +129,10 @@ use mrml_kernel::{DomainBalanceOutcome, PeriodicDomainBalancer};
 use mrml_kernel::{Endpoint, ObjectId, Rights};
 #[cfg(all(not(feature = "fault-probe"), feature = "gpu-benchmark"))]
 use mrml_kernel::{
-    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuGuestCommandPublisher, GpuQueueIdentity,
-    GpuQueueSender, GpuResourceResponse, GpuResourceResponseReceiver, GpuSharedRingIndices,
-    ResourceCommand,
+    GpuGuestCommandPublisher, GpuQueueIdentity, GpuQueueSender, GpuResourceResponse,
+    GpuResourceResponseReceiver, GpuSharedRingIndices, ResourceCommand, GPU_DOORBELL_PORT,
+    GPU_QUEUE_MESSAGE_BYTES,
 };
-#[cfg(any(
-    feature = "block-guest-driver-probe",
-    feature = "pci-configuration-probe"
-))]
-use mrml_kernel::{PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGuestDriver};
 #[cfg(any(
     feature = "timer-probe",
     feature = "preemption-probe",
@@ -149,7 +147,12 @@ use mrml_kernel::{Priority, ScheduleOutcome};
     feature = "block-guest-driver-probe",
     feature = "pci-configuration-probe"
 ))]
-use mrml_kernel::{VIRTUAL_BLOCK_REQUEST_BYTES, VirtualBlockResumePage};
+use mrml_kernel::{VirtualBlockGuestDriver, PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES};
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
+use mrml_kernel::{VirtualBlockResumePage, VIRTUAL_BLOCK_REQUEST_BYTES};
 
 #[cfg(feature = "gpu-benchmark")]
 const GPU_COMMAND_BASE: usize = 0x00b0_0000;
@@ -289,9 +292,10 @@ const SERVICE_ENTRY: u64 = 0x0000_0001_4000_1000;
 #[cfg(feature = "service-probe")]
 const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
 #[cfg(feature = "service-probe")]
-const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
-#[cfg(feature = "service-probe")]
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
+#[cfg(feature = "service-probe")]
+const SERVICE_PEER_RESOURCE_VIRTUAL: u64 = 0x006f_e000;
+#[cfg(feature = "service-probe")]
 #[cfg(any(
     feature = "service-probe",
     feature = "smp-service-migration-probe",
@@ -427,14 +431,20 @@ static mut SERVICE_RESOURCE_VM_TABLE: Option<VmTable<1>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESOURCE_VM: Option<VmId> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_RESOURCE_MEMORY: Option<GuestMemory<1>> = None;
+static mut SERVICE_RESOURCE_MEMORY: Option<GuestMemory<2>> = None;
 #[cfg(feature = "service-probe")]
-static mut SERVICE_RESOURCE_BINDINGS: Option<SharedMemoryBindings<1>> = None;
+static mut SERVICE_RESOURCE_BINDINGS: Option<SharedMemoryBindings<4>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESOURCES: Option<HostResourceTable<DirectHostResourceMemory, 1>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESOURCE_SCRATCH: [u8; mrml_kernel::PAGE_SIZE as usize] =
     [0; mrml_kernel::PAGE_SIZE as usize];
+#[cfg(feature = "service-probe")]
+#[repr(C, align(4096))]
+struct HostedServiceResourcePage([u8; mrml_kernel::PAGE_SIZE as usize]);
+#[cfg(feature = "service-probe")]
+static mut SERVICE_RESOURCE_PAGE: HostedServiceResourcePage =
+    HostedServiceResourcePage([0; mrml_kernel::PAGE_SIZE as usize]);
 
 #[cfg(feature = "service-probe")]
 #[derive(Clone, Copy)]
@@ -457,6 +467,22 @@ static mut SERVICE_SYSCALL_CAPABILITIES: [u8; MAX_CAPABILITIES
 
 #[cfg(feature = "service-probe")]
 struct HostedServiceEraser;
+
+#[cfg(feature = "block-service-probe")]
+struct HostedUnmappedResourceRevoker;
+
+#[cfg(feature = "block-service-probe")]
+impl GuestMappingRevoker for HostedUnmappedResourceRevoker {
+    type Error = ();
+
+    fn revoke_guest_mapping(
+        &mut self,
+        _guest_address: u64,
+        _bytes: u64,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
 
 #[cfg(feature = "service-probe")]
 impl ServiceAddressSpaceEraser for HostedServiceEraser {
@@ -756,6 +782,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             | SyscallRequest::SendBuffer { .. }
             | SyscallRequest::ReceiveBuffer { .. }
             | SyscallRequest::AuthorizeCapability { .. }
+            | SyscallRequest::ReleaseCapability { .. }
             | SyscallRequest::ReadSharedBuffer { .. }
             | SyscallRequest::WriteSharedBuffer { .. } => halt(),
         };
@@ -962,6 +989,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     .authorize_capability(current, capability, rights, object)
                     .is_ok();
                 frame.complete_authorization(authorized);
+            }
+            SyscallRequest::ReleaseCapability { capability } => {
+                let released = runtime.revoke_capability(current, capability).is_ok();
+                frame.complete_authorization(released);
             }
             request @ (SyscallRequest::ReadSharedBuffer { .. }
             | SyscallRequest::WriteSharedBuffer { .. }) => {
@@ -2946,22 +2977,15 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
-        let resource_capabilities = provision_service_resource(runtime, receiver);
         #[cfg(feature = "block-service-probe")]
-        let sender_resource = runtime
-            .capabilities_mut(sender)
-            .and_then(|space| {
-                space
-                    .insert(
-                        ObjectId(0x94),
-                        Rights::MAP
-                            .union(Rights::READ)
-                            .union(Rights::WRITE)
-                            .union(Rights::DELEGATE),
-                    )
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
+        let (resource_capabilities, sender_resources) =
+            provision_service_resource(runtime, receiver, Some(sender));
+        #[cfg(not(feature = "block-service-probe"))]
+        let (resource_capabilities, _) = provision_service_resource(runtime, receiver, None);
+        #[cfg(feature = "block-service-probe")]
+        let [sender_write, sender_read, sender_transfer] =
+            sender_resources.unwrap_or_else(|| halt());
+        #[cfg(not(feature = "block-service-probe"))]
         let supervision_capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -2981,12 +3005,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
-        #[cfg(not(feature = "block-service-probe"))]
         let root_capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
                 space
-                    .insert(ObjectId(0x92), Rights::CONTROL.union(Rights::DELEGATE))
+                    .insert(
+                        ObjectId(0x92),
+                        Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
+                    )
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
@@ -3041,11 +3067,26 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         }
         #[cfg(feature = "block-service-probe")]
         {
-            sender_context.r15 = sender_resource.token();
+            sender_context.r15 = sender_write.token();
+            sender_context.r11 = sender_read.token();
         }
         sender_context.rbx = setting_capability.token();
-        sender_context.rbp = supervision_capability.token();
-        sender_context.r10 = service_b.token();
+        #[cfg(not(feature = "block-service-probe"))]
+        {
+            sender_context.rbp = supervision_capability.token();
+        }
+        #[cfg(feature = "block-service-probe")]
+        {
+            sender_context.rbp = sender_transfer.token();
+        }
+        #[cfg(not(feature = "block-service-probe"))]
+        {
+            sender_context.r10 = service_b.token();
+        }
+        #[cfg(feature = "block-service-probe")]
+        {
+            sender_context.r10 = root_capability.token();
+        }
         #[cfg(feature = "service-restart-request-probe")]
         {
             let manager_context = runtime.context_mut(manager).unwrap_or_else(|_| halt());
@@ -3506,14 +3547,19 @@ unsafe fn enter_service_probe_context(context: &UserContext) -> ! {
 unsafe fn provision_service_resource(
     runtime: &mut TaskRuntime<3, 9>,
     task: mrml_kernel::TaskId,
-) -> [Capability; 2] {
+    peer: Option<mrml_kernel::TaskId>,
+) -> ([Capability; 2], Option<[Capability; 3]>) {
+    let resource_address = unsafe { core::ptr::addr_of_mut!(SERVICE_RESOURCE_PAGE.0) as u64 };
     let write = runtime
         .capabilities_mut(task)
         .and_then(|space| {
             space
                 .insert(
                     ObjectId(0x94),
-                    Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+                    Rights::MAP
+                        .union(Rights::READ)
+                        .union(Rights::WRITE)
+                        .union(Rights::CONTROL),
                 )
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
@@ -3526,6 +3572,42 @@ unsafe fn provision_service_resource(
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
+    let peer_access = peer.map(|peer| {
+        let local = runtime
+            .capabilities_mut(peer)
+            .and_then(|space| {
+                space
+                    .insert(
+                        ObjectId(0x94),
+                        Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+                    )
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
+        let read = runtime
+            .capabilities_mut(peer)
+            .and_then(|space| {
+                space
+                    .insert(ObjectId(0x94), Rights::MAP.union(Rights::READ))
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
+        let transfer = runtime
+            .capabilities_mut(peer)
+            .and_then(|space| {
+                space
+                    .insert(
+                        ObjectId(0x94),
+                        Rights::MAP
+                            .union(Rights::READ)
+                            .union(Rights::WRITE)
+                            .union(Rights::DELEGATE),
+                    )
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
+        [local, read, transfer]
+    });
     let vm_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCE_VM);
     if unsafe { (*vm_pointer).is_none() } {
         let mut table = VmTable::<1>::new();
@@ -3543,7 +3625,7 @@ unsafe fn provision_service_resource(
     let memory = unsafe { (*memory_pointer).as_mut().unwrap_or_else(|| halt()) };
     let region = GuestRegion::new(
         SERVICE_RESOURCE_VIRTUAL,
-        PhysAddr::new(SERVICE_RESOURCE_PHYSICAL).unwrap_or_else(|_| halt()),
+        PhysAddr::new(resource_address).unwrap_or_else(|_| halt()),
         1,
         true,
         false,
@@ -3555,14 +3637,14 @@ unsafe fn provision_service_resource(
         unsafe { resources_pointer.write(Some(HostResourceTable::new(DirectHostResourceMemory))) };
     }
     let resources = unsafe { (*resources_pointer).as_mut().unwrap_or_else(|| halt()) };
-    let handle = unsafe { resources.register(SERVICE_RESOURCE_PHYSICAL, mrml_kernel::PAGE_SIZE) }
+    let handle = unsafe { resources.register(resource_address, mrml_kernel::PAGE_SIZE) }
         .unwrap_or_else(|_| halt());
     let bindings_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCE_BINDINGS);
     if unsafe { (*bindings_pointer).is_none() } {
         unsafe { bindings_pointer.write(Some(SharedMemoryBindings::new())) };
     }
     let bindings = unsafe { (*bindings_pointer).as_mut().unwrap_or_else(|| halt()) };
-    bindings
+    let source_binding = bindings
         .bind(
             runtime.capabilities(task).unwrap_or_else(|_| halt()),
             write,
@@ -3571,14 +3653,59 @@ unsafe fn provision_service_resource(
             handle,
         )
         .unwrap_or_else(|_| halt());
-    [write, read]
+    bindings
+        .share(
+            source_binding,
+            runtime.capabilities(task).unwrap_or_else(|_| halt()),
+            write,
+            SharedEndpointRequest::new(
+                runtime.capabilities(task).unwrap_or_else(|_| halt()),
+                read,
+                memory,
+                SharedEndpoint::for_task(vm, task, mapping, SharedAccess::ReadOnly),
+            ),
+        )
+        .unwrap_or_else(|_| halt());
+    if let (Some(peer), Some([peer_write, peer_read, _])) = (peer, peer_access) {
+        let peer_mapping = memory
+            .map_shared_alias(mapping, SERVICE_PEER_RESOURCE_VIRTUAL)
+            .unwrap_or_else(|_| halt());
+        bindings
+            .share(
+                source_binding,
+                runtime.capabilities(task).unwrap_or_else(|_| halt()),
+                write,
+                SharedEndpointRequest::new(
+                    runtime.capabilities(peer).unwrap_or_else(|_| halt()),
+                    peer_write,
+                    memory,
+                    SharedEndpoint::for_task(vm, peer, peer_mapping, SharedAccess::ReadWrite),
+                ),
+            )
+            .unwrap_or_else(|_| halt());
+        bindings
+            .share(
+                source_binding,
+                runtime.capabilities(task).unwrap_or_else(|_| halt()),
+                write,
+                SharedEndpointRequest::new(
+                    runtime.capabilities(peer).unwrap_or_else(|_| halt()),
+                    peer_read,
+                    memory,
+                    SharedEndpoint::for_task(vm, peer, peer_mapping, SharedAccess::ReadOnly),
+                ),
+            )
+            .unwrap_or_else(|_| halt());
+    }
+    ([write, read], peer_access)
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn service_resource_mapping() -> Mapping {
+unsafe fn service_resource_mapping(virtual_address: u64) -> Mapping {
+    let resource_address = unsafe { core::ptr::addr_of_mut!(SERVICE_RESOURCE_PAGE.0) as u64 };
     Mapping::new(
-        VirtAddr::new(SERVICE_RESOURCE_VIRTUAL).unwrap_or_else(|_| halt()),
-        PhysAddr::new(SERVICE_RESOURCE_PHYSICAL).unwrap_or_else(|_| halt()),
+        VirtAddr::new(virtual_address).unwrap_or_else(|_| halt()),
+        PhysAddr::new(resource_address).unwrap_or_else(|_| halt()),
         1,
         PagePermissions::USER_READ_WRITE,
     )
@@ -3590,18 +3717,60 @@ unsafe fn complete_service_cleanup(
     supervisor: &mut ServiceSupervisor<3>,
     ticket: mrml_kernel::ServiceCleanupTicket,
 ) {
-    if ticket.context().page_table().get() != SERVICE_ROOT {
+    let root = ticket.context().page_table().get();
+    #[cfg(feature = "block-service-probe")]
+    if root == SERVICE_ROOT || root == SERVICE_B_ROOT {
+        let resources = unsafe {
+            (*core::ptr::addr_of_mut!(SERVICE_RESOURCES))
+                .as_mut()
+                .unwrap_or_else(|| halt())
+        };
+        let memory = unsafe {
+            (*core::ptr::addr_of_mut!(SERVICE_RESOURCE_MEMORY))
+                .as_mut()
+                .unwrap_or_else(|| halt())
+        };
+        let bindings = unsafe {
+            (*core::ptr::addr_of_mut!(SERVICE_RESOURCE_BINDINGS))
+                .as_mut()
+                .unwrap_or_else(|| halt())
+        };
+        let mut address_space = HostedServiceEraser;
+        let mut revoker = HostedUnmappedResourceRevoker;
+        let mut eraser = ServiceResourceEraser::new(
+            &mut address_space,
+            resources,
+            &mut revoker,
+            memory,
+            bindings,
+        );
+        supervisor
+            .complete_cleanup(ticket, &mut eraser)
+            .unwrap_or_else(|_| halt());
+        return;
+    }
+    #[cfg(feature = "block-service-probe")]
+    let resource_virtual = if root == SERVICE_ROOT {
+        Some(SERVICE_RESOURCE_VIRTUAL)
+    } else if root == SERVICE_B_ROOT {
+        Some(SERVICE_PEER_RESOURCE_VIRTUAL)
+    } else {
+        None
+    };
+    #[cfg(not(feature = "block-service-probe"))]
+    let resource_virtual = (root == SERVICE_ROOT).then_some(SERVICE_RESOURCE_VIRTUAL);
+    let Some(resource_virtual) = resource_virtual else {
         supervisor
             .complete_cleanup(ticket, &mut HostedServiceEraser)
             .unwrap_or_else(|_| halt());
         return;
-    }
+    };
     let mut active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
     let mut revoker = unsafe {
         ActiveServiceMappingRevoker::new(
             &mut active,
-            PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
-            service_resource_mapping(),
+            PhysAddr::new(root).unwrap_or_else(|_| halt()),
+            service_resource_mapping(resource_virtual),
         )
     }
     .unwrap_or_else(|_| halt());
@@ -3794,7 +3963,7 @@ unsafe fn restart_service_pair(
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
         .unwrap_or_else(|_| halt());
-    let resource_capabilities = unsafe { provision_service_resource(runtime, receiver) };
+    let (resource_capabilities, _) = unsafe { provision_service_resource(runtime, receiver, None) };
     let supervision_capability = runtime
         .capabilities_mut(sender)
         .and_then(|space| {

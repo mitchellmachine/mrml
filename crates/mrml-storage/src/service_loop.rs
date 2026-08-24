@@ -1,8 +1,8 @@
 use crate::block_protocol::BlockAdmission;
 use crate::{
-    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockBufferAccess, BlockDispatchBuffer,
-    BlockProtocolDispatcher, BlockProtocolError, BlockRequest, BlockResponse, BlockService,
-    BlockServiceBackend, StoragePrincipal,
+    BlockBufferAccess, BlockDispatchBuffer, BlockProtocolDispatcher, BlockProtocolError,
+    BlockRequest, BlockResponse, BlockService, BlockServiceBackend, StoragePrincipal,
+    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES,
 };
 use mrml_kernel::Capability;
 
@@ -15,7 +15,9 @@ pub struct ReceivedBlockEnvelope {
 /// Narrow unsafe-boundary adapter implemented by the isolated userspace block
 /// service. Implementations invoke only authenticated IPC receive/reply and the
 /// capability-selected shared-buffer syscalls; they must not manufacture
-/// principal identity or turn request bytes into authority.
+/// principal identity or turn request bytes into authority. Every received
+/// leaf capability must be released through the runtime's transitive
+/// revocation path after the request has consumed it.
 /// # Safety
 ///
 /// `receive` must return only capability tokens transferred with that exact
@@ -46,6 +48,8 @@ pub unsafe trait BlockServiceSyscalls {
     ) -> Result<(), Self::Error>;
 
     fn send_response(&mut self, response: &[u8; BLOCK_RESPONSE_BYTES]) -> Result<(), Self::Error>;
+
+    fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,11 +111,16 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
             scratch,
             response_buffer,
         );
+        let release = (capability_tokens[0] != 0)
+            .then(|| syscalls.release_received(Capability::from_token(capability_tokens[0])))
+            .transpose()
+            .map(|_| ())
+            .map_err(BlockServiceLoopError::Syscall);
         request_buffer.fill(0);
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
-        result
+        result.and(release)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -370,6 +379,14 @@ mod tests {
             self.response = *response;
             self.sends += 1;
             Ok(())
+        }
+
+        fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
+            if capability.token() == BUFFER_TOKEN {
+                Ok(())
+            } else {
+                Err(3)
+            }
         }
     }
 

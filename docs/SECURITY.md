@@ -141,8 +141,13 @@ WRITE/RESIZE, block-session operation rights, exact object/generation/extents,
 complete digests, publication generation, and one-use receipt remain distinct
 checks. Device identity and checkpoint bytes authorize none of them. A derived
 read-only block session fails before backend mutation, and revoking its parent
-stales the complete session lineage. This is deterministic simulation, not a
-durability or rollback-resistance claim.
+stales the complete session lineage. Fresh identical signed artifacts now run
+this composition in isolated CPL3 tasks under hosted KVM and WHP. Operation-
+specific local shared-buffer handles remain separate from transfer authority,
+and received leaf capabilities are released after every request. The backend
+is volatile kernel-owned memory, so this is controlled hosted evidence, not
+reboot, durability, power-loss, host-resistance, or rollback-resistance
+evidence.
 
 ## Persistent state and boot
 

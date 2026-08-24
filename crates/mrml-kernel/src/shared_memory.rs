@@ -1,7 +1,7 @@
 use crate::{
-    Capability, CapabilityError, CapabilitySpace, GuestMappingId, GuestMappingRevoker, GuestMemory,
-    MappingRevocationError, ObjectId, Rights, ServiceAddressSpaceEraser, TaskId, VmId,
-    revoke_mapping_before_resume,
+    revoke_mapping_before_resume, Capability, CapabilityError, CapabilitySpace, GuestMappingId,
+    GuestMappingRevoker, GuestMemory, MappingRevocationError, ObjectId, Rights,
+    ServiceAddressSpaceEraser, TaskId, VmId,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -249,12 +249,12 @@ impl<const N: usize> SharedMemoryBindings<N> {
         {
             return Err(SharedBindingError::DuplicateHostHandle);
         }
-        if self
-            .entries
-            .iter()
-            .flatten()
-            .any(|entry| entry.vm == endpoint.vm && entry.mapping == endpoint.mapping)
-        {
+        if self.entries.iter().flatten().any(|entry| {
+            entry.vm == endpoint.vm
+                && entry.task == endpoint.task
+                && entry.mapping == endpoint.mapping
+                && entry.access == endpoint.access
+        }) {
             return Err(SharedBindingError::DuplicateMapping);
         }
         let index = self
@@ -326,12 +326,12 @@ impl<const N: usize> SharedMemoryBindings<N> {
         {
             return Err(SharedBindingError::ResourceMismatch);
         }
-        if self
-            .entries
-            .iter()
-            .flatten()
-            .any(|entry| entry.vm == destination.vm && entry.mapping == destination.mapping)
-        {
+        if self.entries.iter().flatten().any(|entry| {
+            entry.vm == destination.vm
+                && entry.task == destination.task
+                && entry.mapping == destination.mapping
+                && entry.access == destination.access
+        }) {
             return Err(SharedBindingError::DuplicateMapping);
         }
         let index = self
@@ -424,7 +424,8 @@ impl<const N: usize> SharedMemoryBindings<N> {
         access: SharedAccess,
     ) -> Result<(SharedBindingId, ResolvedSharedBinding), SharedBindingError> {
         let object = capabilities.authorize(authority, access.rights())?;
-        let mut selected = None;
+        let mut exact = None;
+        let mut attenuated = None;
         for (index, entry) in self.entries.iter().enumerate() {
             let Some(entry) = entry.filter(|entry| {
                 entry.object == object
@@ -434,15 +435,22 @@ impl<const N: usize> SharedMemoryBindings<N> {
             }) else {
                 continue;
             };
+            let selected = if entry.access == access {
+                &mut exact
+            } else {
+                &mut attenuated
+            };
             if selected.is_some() {
                 return Err(SharedBindingError::AmbiguousBinding);
             }
-            selected = Some((
+            *selected = Some((
                 SharedBindingId::new(index, entry.generation),
                 SharedEndpoint::for_task(vm, task, entry.mapping, access),
             ));
         }
-        let (id, endpoint) = selected.ok_or(SharedBindingError::MissingBinding)?;
+        let (id, endpoint) = exact
+            .or(attenuated)
+            .ok_or(SharedBindingError::MissingBinding)?;
         let resource = self.resolve_resource(id, capabilities, authority, memory, endpoint)?;
         Ok((id, resource))
     }
@@ -474,6 +482,19 @@ impl<const N: usize> SharedMemoryBindings<N> {
         self.entries.iter().enumerate().find_map(|(index, entry)| {
             let entry = entry.as_ref().filter(|entry| entry.task == Some(task))?;
             Some((SharedBindingId::new(index, entry.generation), entry.mapping))
+        })
+    }
+
+    fn next_for_task_mapping(
+        &self,
+        task: TaskId,
+        mapping: GuestMappingId,
+    ) -> Option<SharedBindingId> {
+        self.entries.iter().enumerate().find_map(|(index, entry)| {
+            let entry = entry
+                .as_ref()
+                .filter(|entry| entry.task == Some(task) && entry.mapping == mapping)?;
+            Some(SharedBindingId::new(index, entry.generation))
         })
     }
 
@@ -567,12 +588,16 @@ pub fn revoke_task_shared_bindings_before_resume<
     while let Some((binding, mapping)) = bindings.next_for_task(task) {
         revoke_mapping_before_resume(backend, memory, mapping)
             .map_err(SharedCleanupError::Mapping)?;
-        let revocation = bindings
-            .revoke_retired_task(binding, task, mapping)
-            .map_err(SharedCleanupError::Binding)?;
-        report
-            .push(revocation)
-            .map_err(|_| SharedCleanupError::ReportFull)?;
+        let mut binding = Some(binding);
+        while let Some(current) = binding {
+            let revocation = bindings
+                .revoke_retired_task(current, task, mapping)
+                .map_err(SharedCleanupError::Binding)?;
+            report
+                .push(revocation)
+                .map_err(|_| SharedCleanupError::ReportFull)?;
+            binding = bindings.next_for_task_mapping(task, mapping);
+        }
     }
     Ok(report)
 }
@@ -768,7 +793,11 @@ mod tests {
         type Error = ();
         fn retire(&mut self, _handle: HostResourceHandle) -> Result<(), Self::Error> {
             self.calls += 1;
-            if self.calls == 1 { Err(()) } else { Ok(()) }
+            if self.calls == 1 {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -780,7 +809,11 @@ mod tests {
             _context: crate::arch::x86_64::UserContext,
         ) -> Result<(), Self::Error> {
             self.calls += 1;
-            if self.calls == 1 { Err(()) } else { Ok(()) }
+            if self.calls == 1 {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -804,7 +837,11 @@ mod tests {
         fn revoke_guest_mapping(&mut self, address: u64, bytes: u64) -> Result<(), Self::Error> {
             self.calls[self.count] = (address, bytes);
             self.count += 1;
-            if self.fail { Err(()) } else { Ok(()) }
+            if self.fail {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
     }
 

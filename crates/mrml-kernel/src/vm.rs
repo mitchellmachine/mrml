@@ -1,4 +1,4 @@
-use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, PAGE_SIZE, PhysAddr, Rights};
+use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, PhysAddr, Rights, PAGE_SIZE};
 
 pub const HYPERCALL_BYTES: usize = 64;
 pub const MAX_GUEST_REGIONS: usize = 64;
@@ -318,6 +318,52 @@ impl<const N: usize> GuestMemory<N> {
                 existing.host_start.get() + existing.length(),
             ) {
                 return Err(VmError::HostAlias);
+            }
+        }
+        let at = self.mappings[..self.count].partition_point(|entry| {
+            entry.is_some_and(|value| value.region.guest_start < region.guest_start)
+        });
+        let id = GuestMappingId(self.next_id);
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(VmError::SequenceExhausted)?;
+        self.mappings.copy_within(at..self.count, at + 1);
+        self.mappings[at] = Some(GuestMapping { id, region });
+        self.count += 1;
+        Ok(id)
+    }
+
+    /// Creates a second guest mapping identity for one already-live host range.
+    /// The caller must bind the returned identity through the same explicit
+    /// shared-resource authority that justified the alias; arbitrary host
+    /// aliases remain rejected by [`Self::map`].
+    pub fn map_shared_alias(
+        &mut self,
+        source: GuestMappingId,
+        guest_start: u64,
+    ) -> Result<GuestMappingId, VmError> {
+        if N > MAX_GUEST_REGIONS || self.count == N {
+            return Err(VmError::RegionTableFull);
+        }
+        let source = self.region(source)?;
+        let region = GuestRegion::new(
+            guest_start,
+            source.host_start(),
+            source.pages(),
+            source.is_writable(),
+            source.is_executable(),
+        )?;
+        let guest_end = region.guest_start + region.length();
+        for existing in self.mappings[..self.count].iter().flatten().copied() {
+            let existing = existing.region;
+            if overlaps(
+                region.guest_start,
+                guest_end,
+                existing.guest_start,
+                existing.guest_start + existing.length(),
+            ) {
+                return Err(VmError::GuestOverlap);
             }
         }
         let at = self.mappings[..self.count].partition_point(|entry| {
@@ -880,7 +926,11 @@ mod tests {
     impl RevocableVmBackend for RevocationBackend {
         fn revoke_guest_mapping(&mut self, address: u64, bytes: u64) -> Result<(), Self::Error> {
             self.request = Some((address, bytes));
-            if self.fail { Err(()) } else { Ok(()) }
+            if self.fail {
+                Err(())
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -978,6 +1028,24 @@ mod tests {
         );
         assert_eq!(backend.request, Some((0x7000, PAGE_SIZE)));
         assert_eq!(memory.region(id).unwrap().guest_start(), 0x7000);
+    }
+
+    #[test]
+    fn shared_alias_has_independent_identity_but_exact_same_host_range() {
+        let mut memory = GuestMemory::<2>::new();
+        let source = memory
+            .map(GuestRegion::new(0x4000, PhysAddr::new(0x9000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let alias = memory.map_shared_alias(source, 0x6000).unwrap();
+        assert_ne!(source, alias);
+        assert_eq!(memory.region(alias).unwrap().host_start().get(), 0x9000);
+        assert_eq!(memory.region(alias).unwrap().guest_start(), 0x6000);
+        assert_eq!(
+            memory.map_shared_alias(source, 0x6000),
+            Err(VmError::RegionTableFull)
+        );
+        assert_eq!(memory.unmap(alias).unwrap().guest_start(), 0x6000);
+        assert_eq!(memory.region(source).unwrap().guest_start(), 0x4000);
     }
 
     #[test]

@@ -342,8 +342,11 @@ explicitly and downgrade the status rather than guessing.
   capability-selected MRML block-service device. Deterministic integration
   publishes with one exact COW receipt, recovers only the selected file
   generation, and reloads the service-bound policy. Read-only attenuation and
-  transitive block-session revocation fail before writes. This is simulation,
-  not live CPL3, reboot, power-loss, or physical-device evidence.
+  transitive block-session revocation fail before writes. Identical signed KVM
+  and WHP artifacts now execute the same publication and exact-generation
+  recovery through the isolated CPL3 block service. The backend remains
+  volatile; reboot restoration, power-loss, and physical-device evidence are
+  still absent.
   A pointer-free kernel syscall foundation now admits bounded replacement
   mechanics only after exact service CONTROL authorization. Recover its ABI as
   operation 11 with service token, capability, finite restart count, base and
@@ -358,8 +361,8 @@ explicitly and downgrade the status rather than guessing.
   rollback. The complete reachable-tree validator can now consume exact reads
   through the block-volume adapter, but tests still use simulated storage; a
   focused signed KVM/WHP probes now instantiate the isolated block-service loop
-  against a volatile one-page in-image backend and verify one write/read
-  exchange. The probes also retire the client and service in order, require the
+  against a volatile 16-block in-image backend and verify 18 canonical requests
+  through stable-policy publication and recovery. The probes also retire the client and service in order, require the
   exact peer-death event, complete both cleanup tickets, tear down the service
   shared mapping/resource, and accept success only after both service slots are
   exited with no task or pending cleanup. This is not a real hosted or physical

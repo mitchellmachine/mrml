@@ -1679,7 +1679,7 @@ fn application_main() -> Result<()> {
     } else if mode == LaunchMode::BlockServiceProbe {
         let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
         let mut cleanup_stage = 0;
-        for _ in 0..32 {
+        for _ in 0..256 {
             if let VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,
@@ -1696,7 +1696,7 @@ fn application_main() -> Result<()> {
                 cleanup_stage += 1;
                 if value == 0x30 {
                     println!(
-                        "verified independently signed CPL3 block-service loop and lifecycle cleanup under KVM: verify={}us prepare={}us execute={}us total={}us",
+                        "verified independently signed CPL3 block-service stable-policy publication/recovery and lifecycle cleanup under KVM: verify={}us prepare={}us execute={}us total={}us",
                         verification_micros,
                         preparation_micros,
                         execution_started.elapsed().as_micros(),

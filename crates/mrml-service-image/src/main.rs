@@ -7,26 +7,32 @@ use core::arch::{asm, global_asm};
 #[cfg(not(feature = "preemption-probe"))]
 #[allow(unused_imports)]
 use mrml_config::{
-    CONFIG_RESPONSE_BYTES, CapabilityAuthorizer, ConfigError, ConfigTransaction, ConfigUpdate,
-    ConfigValue, ConfigurationResponse, ConfigurationService, MAX_CONFIG_REQUEST_BYTES,
-    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, ResponseStatus,
-    SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES, ServicePolicyAuthorizer,
-    ServiceRestartAuthorizer, ServiceStateAuthorizer, SettingId, SettingSchema,
-    SupervisionOperation, SupervisionRequest, SupervisionResponse, SupervisionState,
     dispatch_configuration_envelope, dispatch_supervision_policy_envelope,
     dispatch_supervision_query_envelope, dispatch_supervision_restart_envelope,
-    encode_commit_message_request, encode_schema_message_request,
+    encode_commit_message_request, encode_schema_message_request, load_persisted_restart_policy,
+    prepare_block_stable_configuration, recover_stable_configuration, CapabilityAuthorizer,
+    ConfigError, ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationResponse,
+    ConfigurationService, PersistedRestartPolicy, ResponseStatus, ServicePolicyAuthorizer,
+    ServiceRestartAuthorizer, ServiceStateAuthorizer, SettingId, SettingSchema,
+    SupervisionOperation, SupervisionRequest, SupervisionResponse, SupervisionState,
+    CONFIG_RESPONSE_BYTES, MAX_CONFIG_REQUEST_BYTES, PERSISTED_RESTART_POLICY_BYTES,
+    SUPERVISION_REQUEST_BYTES, SUPERVISION_RESPONSE_BYTES,
 };
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+use mrml_crypto::Sha3_256;
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{
     Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
-    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockDeviceDescriptor, BlockDeviceId, BlockRequest,
-    BlockResponse, BlockRights, BlockService, BlockServiceBackend, BlockServiceLoop,
-    BlockServiceSyscalls, BlockSessionHandle, BlockStatus, ReceivedBlockEnvelope, SUPERBLOCK_BYTES,
-    StoragePrincipal,
+    BlockDeviceDescriptor, BlockDeviceId, BlockRequest, BlockResponse, BlockRights, BlockService,
+    BlockServiceBackend, BlockServiceLoop, BlockServiceSyscalls, BlockSessionHandle, BlockStatus,
+    BlockVolume, CowMetadataWrite, CowPublicationPlan, ExtentMap, ExtentRecord, FileMetadata,
+    FileState, MetadataPointer, ReceivedBlockEnvelope, StorageAuthorityTable, StorageBlockDevice,
+    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights, StorageTransaction,
+    StorageTransactionId, Superblock, VolumeHeader, VolumeId, BLOCK_REQUEST_BYTES,
+    BLOCK_RESPONSE_BYTES, SUPERBLOCK_BYTES,
 };
 
 #[panic_handler]
@@ -64,6 +70,7 @@ global_asm!(
             mov r9, rbp
             sub rsp, 16
             mov [rsp], r10
+            mov [rsp + 8], r11
             call mrml_configuration_sender
             ud2
 
@@ -219,8 +226,8 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
     sender: u64,
     generation: u64,
-    shared_write: u64,
-    shared_read: u64,
+    _shared_write: u64,
+    _shared_read: u64,
     restart_manager: u64,
 ) -> ! {
     unsafe { verify_shared_buffer_syscalls(shared_write, shared_read, generation) };
@@ -276,9 +283,31 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+const PROBE_BLOCK_BYTES: usize = mrml_kernel::PAGE_SIZE as usize;
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+const PROBE_BLOCK_COUNT: usize = 16;
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 struct ProbeBlockBackend {
-    bytes: [u8; mrml_kernel::PAGE_SIZE as usize],
+    bytes: [u8; PROBE_BLOCK_BYTES * PROBE_BLOCK_COUNT],
 }
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+#[repr(C, align(4096))]
+struct ProbeBlock([u8; PROBE_BLOCK_BYTES]);
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_RECEIVER_SCRATCH: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]);
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_SENDER_STAGING: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]);
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_VOLUME_SCRATCH: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]);
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_FILE_SCRATCH: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]);
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_BLOCK_BACKEND: ProbeBlockBackend = ProbeBlockBackend {
+    bytes: [0; PROBE_BLOCK_BYTES * PROBE_BLOCK_COUNT],
+};
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 unsafe impl BlockServiceBackend for ProbeBlockBackend {
@@ -290,13 +319,8 @@ unsafe impl BlockServiceBackend for ProbeBlockBackend {
         block: u64,
         output: &mut [u8],
     ) -> Result<(), Self::Error> {
-        if device != BlockDeviceId::new(1).unwrap()
-            || block != 0
-            || output.len() != self.bytes.len()
-        {
-            return Err(());
-        }
-        output.copy_from_slice(&self.bytes);
+        let range = probe_block_range(device, block, output.len()).ok_or(())?;
+        output.copy_from_slice(&self.bytes[range]);
         Ok(())
     }
 
@@ -306,26 +330,47 @@ unsafe impl BlockServiceBackend for ProbeBlockBackend {
         block: u64,
         input: &[u8],
     ) -> Result<(), Self::Error> {
-        if device != BlockDeviceId::new(1).unwrap() || block != 0 || input.len() != self.bytes.len()
-        {
-            return Err(());
-        }
-        self.bytes.copy_from_slice(input);
+        let range = probe_block_range(device, block, input.len()).ok_or(())?;
+        self.bytes[range].copy_from_slice(input);
         Ok(())
     }
 
-    fn flush(&mut self, _: BlockDeviceId) -> Result<(), Self::Error> {
-        Ok(())
+    fn flush(&mut self, device: BlockDeviceId) -> Result<(), Self::Error> {
+        (device == BlockDeviceId::new(1).unwrap())
+            .then_some(())
+            .ok_or(())
     }
 
     fn replace_superblock(
         &mut self,
-        _: BlockDeviceId,
-        _: u64,
-        _: &[u8; SUPERBLOCK_BYTES],
+        device: BlockDeviceId,
+        block: u64,
+        encoded: &[u8; SUPERBLOCK_BYTES],
     ) -> Result<(), Self::Error> {
-        Err(())
+        let range = probe_block_range(device, block, PROBE_BLOCK_BYTES).ok_or(())?;
+        self.bytes[range.clone()].fill(0);
+        self.bytes[range.start..range.start + encoded.len()].copy_from_slice(encoded);
+        Ok(())
     }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn probe_block_range(
+    device: BlockDeviceId,
+    block: u64,
+    length: usize,
+) -> Option<core::ops::Range<usize>> {
+    if device != BlockDeviceId::new(1).unwrap()
+        || length == 0
+        || !length.is_multiple_of(PROBE_BLOCK_BYTES)
+    {
+        return None;
+    }
+    let start = usize::try_from(block)
+        .ok()?
+        .checked_mul(PROBE_BLOCK_BYTES)?;
+    let end = start.checked_add(length)?;
+    (end <= PROBE_BLOCK_BYTES * PROBE_BLOCK_COUNT).then_some(start..end)
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
@@ -334,29 +379,24 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     endpoint: u64,
     sender: u64,
     _generation: u64,
-    shared_write: u64,
-    shared_read: u64,
+    _shared_write: u64,
+    _shared_read: u64,
     _restart_manager: u64,
 ) -> ! {
-    const BLOCK_BYTES: usize = mrml_kernel::PAGE_SIZE as usize;
     let device = BlockDeviceId::new(1).unwrap_or_else(|| halt());
     let principal = StoragePrincipal::new(1).unwrap_or_else(|_| halt());
     let mut service = BlockService::<1, 1>::new();
     service
         .register_device(
-            BlockDeviceDescriptor::new(device, BLOCK_BYTES as u32, 1).unwrap_or_else(|| halt()),
+            BlockDeviceDescriptor::new(device, PROBE_BLOCK_BYTES as u32, PROBE_BLOCK_COUNT as u64)
+                .unwrap_or_else(|| halt()),
         )
         .unwrap_or_else(|_| halt());
     let session = service
-        .grant(
-            device,
-            principal,
-            BlockRights::READ.union(BlockRights::WRITE),
-        )
+        .grant(device, principal, BlockRights::ALL)
         .unwrap_or_else(|_| halt());
-    let mut backend = ProbeBlockBackend {
-        bytes: [0; BLOCK_BYTES],
-    };
+    let backend = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_BLOCK_BACKEND) };
+    backend.bytes.fill(0);
     let mut loop_state = BlockServiceLoop::<1>::new();
     let mut syscalls = UserspaceBlockSyscalls {
         endpoint,
@@ -364,59 +404,25 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     };
     let mut request = [0u8; BLOCK_REQUEST_BYTES];
     let mut capability = [0u64; 1];
-    let mut scratch = [0u8; BLOCK_BYTES];
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_RECEIVER_SCRATCH) };
+    scratch.0.fill(0);
     let mut response = [0u8; BLOCK_RESPONSE_BYTES];
-    scratch.fill(0x5a);
-    shared_buffer_call(
-        8,
-        Capability::from_token(shared_write),
-        0,
-        scratch.as_mut_ptr(),
-        scratch.len(),
-    )
-    .unwrap_or_else(|_| halt());
-    scratch.fill(0);
     unsafe { send_buffer(endpoint, sender, &session.token().to_le_bytes(), &[]) };
-    loop_state
-        .serve_one(
-            &service,
-            &mut backend,
-            &mut syscalls,
-            principal,
-            &mut request,
-            &mut capability,
-            &mut scratch,
-            &mut response,
-        )
-        .unwrap_or_else(|_| halt());
-    if backend.bytes.iter().any(|byte| *byte != 0x5a) {
-        halt();
+    for _ in 0..18 {
+        loop_state
+            .serve_one(
+                &service,
+                backend,
+                &mut syscalls,
+                principal,
+                &mut request,
+                &mut capability,
+                &mut scratch.0,
+                &mut response,
+            )
+            .unwrap_or_else(|_| halt());
     }
-    backend.bytes.fill(0x3c);
-    loop_state
-        .serve_one(
-            &service,
-            &mut backend,
-            &mut syscalls,
-            principal,
-            &mut request,
-            &mut capability,
-            &mut scratch,
-            &mut response,
-        )
-        .unwrap_or_else(|_| halt());
-    shared_buffer_call(
-        7,
-        Capability::from_token(shared_read),
-        0,
-        scratch.as_mut_ptr(),
-        scratch.len(),
-    )
-    .unwrap_or_else(|_| halt());
-    if scratch.iter().any(|byte| *byte != 0x3c) {
-        halt();
-    }
-    scratch.fill(0);
+    scratch.0.fill(0);
     unsafe { yield_now() };
     unsafe { terminate(3) }
 }
@@ -846,17 +852,181 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+struct RemoteBlockDevice {
+    endpoint: u64,
+    receiver: u64,
+    shared_write: u64,
+    shared_read: u64,
+    shared_transfer: u64,
+    session: BlockSessionHandle,
+    next_request: u64,
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+enum RemoteBlockBuffer<'a> {
+    ServiceReads(&'a [u8]),
+    ServiceWrites(&'a mut [u8]),
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+impl RemoteBlockDevice {
+    unsafe fn call(
+        &mut self,
+        request: BlockRequest,
+        mut buffer: Option<RemoteBlockBuffer<'_>>,
+    ) -> Result<(), u8> {
+        if request.request_id() != self.next_request {
+            return Err(1);
+        }
+        let mut wire = [0; BLOCK_REQUEST_BYTES];
+        request.encode(&mut wire).map_err(|_| 2)?;
+        let descriptor = match &mut buffer {
+            Some(RemoteBlockBuffer::ServiceReads(bytes)) => {
+                shared_buffer_call(
+                    8,
+                    Capability::from_token(self.shared_write),
+                    0,
+                    bytes.as_ptr().cast_mut(),
+                    bytes.len(),
+                )
+                .map_err(|_| 3)?;
+                Some(capability_descriptor(
+                    self.shared_transfer,
+                    Rights::MAP.union(Rights::READ),
+                ))
+            }
+            Some(RemoteBlockBuffer::ServiceWrites(_)) => Some(capability_descriptor(
+                self.shared_transfer,
+                Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+            )),
+            None => None,
+        };
+        unsafe {
+            send_buffer(
+                self.endpoint,
+                self.receiver,
+                &wire,
+                descriptor.as_ref().map_or(&[], |value| value.as_slice()),
+            )
+        };
+        let mut response = [0; BLOCK_RESPONSE_BYTES];
+        let mut no_capabilities = [0u64; 0];
+        let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
+        if length != response.len() || count != 0 {
+            return Err(4);
+        }
+        let decoded = BlockResponse::decode(&response).map_err(|_| 5)?;
+        if decoded.request_id() != self.next_request
+            || decoded.status() != BlockStatus::Ok
+            || decoded.transferred() != request.byte_length() as u32
+        {
+            return Err(6);
+        }
+        if let Some(RemoteBlockBuffer::ServiceWrites(bytes)) = buffer {
+            shared_buffer_call(
+                7,
+                Capability::from_token(self.shared_read),
+                0,
+                bytes.as_mut_ptr(),
+                bytes.len(),
+            )
+            .map_err(|_| 7)?;
+        }
+        self.next_request = self.next_request.checked_add(1).ok_or(8)?;
+        Ok(())
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+unsafe impl StorageBlockDevice for RemoteBlockDevice {
+    type Error = u8;
+
+    fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+        let length = u32::try_from(output.len()).map_err(|_| 9)?;
+        let request = BlockRequest::Read {
+            request_id: self.next_request,
+            session: self.session,
+            block,
+            byte_length: length,
+        };
+        unsafe { self.call(request, Some(RemoteBlockBuffer::ServiceWrites(output))) }
+    }
+
+    fn write_blocks(&mut self, block: u64, input: &[u8]) -> Result<(), Self::Error> {
+        let length = u32::try_from(input.len()).map_err(|_| 9)?;
+        let request = BlockRequest::Write {
+            request_id: self.next_request,
+            session: self.session,
+            block,
+            byte_length: length,
+        };
+        unsafe { self.call(request, Some(RemoteBlockBuffer::ServiceReads(input))) }
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        let request = BlockRequest::Flush {
+            request_id: self.next_request,
+            session: self.session,
+        };
+        unsafe { self.call(request, None) }
+    }
+
+    fn replace_superblock(
+        &mut self,
+        block: u64,
+        encoded: &[u8; SUPERBLOCK_BYTES],
+    ) -> Result<(), Self::Error> {
+        let request = BlockRequest::ReplaceSuperblock {
+            request_id: self.next_request,
+            session: self.session,
+            block,
+            encoded: *encoded,
+        };
+        unsafe { self.call(request, None) }
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn probe_digest(bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha3_256::new();
+    digest.update(bytes);
+    digest.finalize()
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn probe_volume() -> VolumeId {
+    VolumeId::new([0x51; 16]).unwrap_or_else(|_| halt())
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn probe_header() -> VolumeHeader {
+    VolumeHeader::new(
+        probe_volume(),
+        PROBE_BLOCK_BYTES as u32,
+        PROBE_BLOCK_COUNT as u64,
+        1,
+        2,
+    )
+    .unwrap_or_else(|_| halt())
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn probe_object(local: u64) -> StorageObjectId {
+    StorageObjectId::new(probe_volume(), local).unwrap_or_else(|_| halt())
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
     endpoint: u64,
     receiver: u64,
     shared_resource: u64,
-    _unused_setting: u64,
+    setting_capability: u64,
     _generation: u64,
-    _unused_supervision: u64,
-    _unused_service: u64,
+    shared_transfer: u64,
+    root_capability: u64,
+    shared_read: u64,
 ) -> ! {
-    const BLOCK_BYTES: usize = mrml_kernel::PAGE_SIZE as usize;
     let mut ready = [0u8; 8];
     let mut no_capabilities = [0u64; 0];
     let (length, count) = unsafe { receive_buffer(&mut ready, &mut no_capabilities) };
@@ -865,50 +1035,229 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     }
     let session =
         BlockSessionHandle::from_token(u64::from_le_bytes(ready)).unwrap_or_else(|| halt());
-    let mut request = [0u8; BLOCK_REQUEST_BYTES];
-    BlockRequest::Write {
-        request_id: 1,
+    let mut device = RemoteBlockDevice {
+        endpoint,
+        receiver,
+        shared_write: shared_resource,
+        shared_read,
+        shared_transfer,
         session,
-        block: 0,
-        byte_length: BLOCK_BYTES as u32,
-    }
-    .encode(&mut request)
+        next_request: 1,
+    };
+
+    let setting = SettingId::new(1).unwrap_or_else(|_| halt());
+    let schema = SettingSchema::bytes(
+        setting,
+        CONFIG_SETTING_OBJECT,
+        PERSISTED_RESTART_POLICY_BYTES as u8,
+    )
     .unwrap_or_else(|_| halt());
-    let descriptor = capability_descriptor(shared_resource, Rights::MAP.union(Rights::READ));
-    unsafe { send_buffer(endpoint, receiver, &request, &descriptor) };
-    let mut response = [0u8; BLOCK_RESPONSE_BYTES];
-    let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
-    if length != response.len() || count != 0 {
-        halt();
-    }
-    let decoded = BlockResponse::decode(&response).unwrap_or_else(|_| halt());
-    if decoded.request_id() != 1
-        || decoded.status() != BlockStatus::Ok
-        || decoded.transferred() != BLOCK_BYTES as u32
-    {
-        halt();
-    }
-    BlockRequest::Read {
-        request_id: 2,
-        session,
-        block: 0,
-        byte_length: BLOCK_BYTES as u32,
-    }
-    .encode(&mut request)
+    let mut configuration =
+        ConfigurationService::<1, 2>::new(CONFIG_ROOT_OBJECT, &[schema]).unwrap_or_else(|_| halt());
+    let policy = PersistedRestartPolicy::new(ObjectId(0xa1), 3, 5, 20).unwrap_or_else(|_| halt());
+    let mut encoded_policy = [0; PERSISTED_RESTART_POLICY_BYTES];
+    policy.encode(&mut encoded_policy);
+    let mut update = ConfigTransaction::<1>::new(0);
+    update
+        .push(ConfigUpdate::new(
+            setting,
+            Capability::from_token(setting_capability),
+            ConfigValue::bytes(&encoded_policy).unwrap_or_else(|_| halt()),
+        ))
+        .unwrap_or_else(|_| halt());
+    configuration
+        .commit(
+            &KernelAuthorizer,
+            Capability::from_token(root_capability),
+            &update,
+        )
+        .unwrap_or_else(|_| halt());
+    let mut checkpoint = [0; 512];
+    let exported = configuration
+        .export_checkpoint(
+            &KernelAuthorizer,
+            Capability::from_token(root_capability),
+            &mut checkpoint,
+        )
+        .unwrap_or_else(|_| halt());
+
+    let header = probe_header();
+    let file_object = probe_object(9);
+    let current = FileState::new(
+        file_object,
+        1,
+        0,
+        ExtentMap::<0>::build(header, file_object, 1, 0, &[]).unwrap_or_else(|_| halt()),
+    )
     .unwrap_or_else(|_| halt());
-    let descriptor = capability_descriptor(
-        shared_resource,
-        Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+    let staging = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_SENDER_STAGING) };
+    staging.0.fill(0);
+    staging.0[..exported.length].copy_from_slice(&checkpoint[..exported.length]);
+    let extent = ExtentRecord::data(file_object, 2, 0, 1, 3, probe_digest(&staging.0))
+        .unwrap_or_else(|_| halt());
+    let next = ExtentMap::<1>::build(header, file_object, 2, exported.length as u64, &[extent])
+        .unwrap_or_else(|_| halt());
+    let metadata = FileMetadata::new(
+        header,
+        file_object,
+        2,
+        exported.length as u64,
+        1,
+        MetadataPointer::new(4, 1).unwrap_or_else(|_| halt()),
+        probe_digest(&checkpoint[..exported.length]),
+    )
+    .unwrap_or_else(|_| halt());
+    staging.0.fill(0);
+    extent.encode(
+        (&mut staging.0[..mrml_storage::EXTENT_RECORD_BYTES])
+            .try_into()
+            .unwrap_or_else(|_| halt()),
     );
-    unsafe { send_buffer(endpoint, receiver, &request, &descriptor) };
-    let (length, count) = unsafe { receive_buffer(&mut response, &mut no_capabilities) };
-    if length != response.len() || count != 0 {
+    let extents_digest = probe_digest(&staging.0);
+    device
+        .write_blocks(4, &staging.0)
+        .unwrap_or_else(|_| halt());
+    staging.0.fill(0);
+    metadata.encode(
+        (&mut staging.0[..mrml_storage::FILE_METADATA_BYTES])
+            .try_into()
+            .unwrap_or_else(|_| halt()),
+    );
+    let file_metadata_digest = probe_digest(&staging.0);
+    device
+        .write_blocks(5, &staging.0)
+        .unwrap_or_else(|_| halt());
+    staging.0.fill(0x61);
+    let root_digest = probe_digest(&staging.0);
+    device
+        .write_blocks(6, &staging.0)
+        .unwrap_or_else(|_| halt());
+    staging.0.fill(0x71);
+    let allocation_digest = probe_digest(&staging.0);
+    device
+        .write_blocks(7, &staging.0)
+        .unwrap_or_else(|_| halt());
+    device.flush().unwrap_or_else(|_| halt());
+    let active = Superblock::new(
+        header,
+        1,
+        0,
+        probe_object(1),
+        MetadataPointer::new(8, 1).unwrap_or_else(|_| halt()),
+        MetadataPointer::new(9, 1).unwrap_or_else(|_| halt()),
+    )
+    .unwrap_or_else(|_| halt());
+    let plan = CowPublicationPlan::<4>::build(
+        header,
+        1,
+        active,
+        probe_object(1),
+        MetadataPointer::new(6, 1).unwrap_or_else(|_| halt()),
+        MetadataPointer::new(7, 1).unwrap_or_else(|_| halt()),
+        &[
+            CowMetadataWrite::new(
+                MetadataPointer::new(5, 1).unwrap_or_else(|_| halt()),
+                2,
+                file_metadata_digest,
+            )
+            .unwrap_or_else(|_| halt()),
+            CowMetadataWrite::new(
+                MetadataPointer::new(4, 1).unwrap_or_else(|_| halt()),
+                2,
+                extents_digest,
+            )
+            .unwrap_or_else(|_| halt()),
+            CowMetadataWrite::new(
+                MetadataPointer::new(6, 1).unwrap_or_else(|_| halt()),
+                2,
+                root_digest,
+            )
+            .unwrap_or_else(|_| halt()),
+            CowMetadataWrite::new(
+                MetadataPointer::new(7, 1).unwrap_or_else(|_| halt()),
+                2,
+                allocation_digest,
+            )
+            .unwrap_or_else(|_| halt()),
+        ],
+        &[
+            MetadataPointer::new(8, 1).unwrap_or_else(|_| halt()),
+            MetadataPointer::new(9, 1).unwrap_or_else(|_| halt()),
+        ],
+    )
+    .unwrap_or_else(|_| halt());
+    let principal = StoragePrincipal::new(1).unwrap_or_else(|_| halt());
+    let mut authority = StorageAuthorityTable::<1>::new();
+    let file = authority
+        .insert(
+            file_object,
+            StorageObjectKind::File,
+            StorageRights::READ
+                .union(StorageRights::WRITE)
+                .union(StorageRights::RESIZE),
+            principal,
+        )
+        .unwrap_or_else(|_| halt());
+    let volume_scratch = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_VOLUME_SCRATCH) };
+    volume_scratch.0.fill(0);
+    let mut volume =
+        BlockVolume::new(header, 1, device, &mut volume_scratch.0).unwrap_or_else(|_| halt());
+    let file_scratch = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_FILE_SCRATCH) };
+    file_scratch.0.fill(0);
+    let prepared = prepare_block_stable_configuration(
+        &configuration,
+        &KernelAuthorizer,
+        Capability::from_token(root_capability),
+        &current,
+        &authority,
+        file,
+        principal,
+        next,
+        metadata,
+        MetadataPointer::new(5, 1).unwrap_or_else(|_| halt()),
+        &[],
+        &mut checkpoint,
+        &mut volume,
+        &mut file_scratch.0,
+    )
+    .unwrap_or_else(|_| halt());
+    let mut transaction = StorageTransaction::<1, 2>::new(
+        StorageTransactionId::new(72).unwrap_or_else(|_| halt()),
+        2,
+    )
+    .unwrap_or_else(|_| halt());
+    prepared.admit(&mut transaction).unwrap_or_else(|_| halt());
+    let mut receipt = transaction
+        .publish(&plan, &mut volume)
+        .unwrap_or_else(|_| halt());
+    let stable = prepared.commit(&mut receipt).unwrap_or_else(|_| halt());
+    if receipt.remaining() != 0 || stable.file().generation() != 2 {
         halt();
     }
-    let decoded = BlockResponse::decode(&response).unwrap_or_else(|_| halt());
-    if decoded.request_id() != 2
-        || decoded.status() != BlockStatus::Ok
-        || decoded.transferred() != BLOCK_BYTES as u32
+    let recovered = recover_stable_configuration::<1, 2, _, _, _, _>(
+        stable.file(),
+        &authority,
+        file,
+        principal,
+        2,
+        &KernelAuthorizer,
+        Capability::from_token(root_capability),
+        &mut checkpoint,
+        &mut volume,
+    )
+    .unwrap_or_else(|_| halt());
+    let bound = load_persisted_restart_policy(
+        &recovered,
+        &KernelAuthorizer,
+        Capability::from_token(setting_capability),
+        setting,
+        ObjectId(0xa1),
+    )
+    .unwrap_or_else(|_| halt());
+    if bound.service() != policy.service()
+        || bound.configuration_revision() != recovered.revision()
+        || bound.setting_revision() != 1
+        || volume.into_device().next_request != 19
     {
         halt();
     }
@@ -1073,7 +1422,33 @@ unsafe impl BlockServiceSyscalls for UserspaceBlockSyscalls {
                 options(nostack)
             )
         };
-        if status == 0 { Ok(()) } else { Err(status) }
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(status)
+        }
+    }
+
+    fn release_received(&mut self, capability: Capability) -> Result<(), Self::Error> {
+        let mut status = 12u64;
+        unsafe {
+            asm!(
+                "int 0x80",
+                inlateout("rax") status,
+                in("rdi") capability.token(),
+                in("rsi") 0u64,
+                in("rdx") 0u64,
+                in("r10") 0u64,
+                in("r8") 0u64,
+                in("r9") 0u64,
+                options(nostack)
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(status)
+        }
     }
 }
 
@@ -1100,7 +1475,11 @@ fn shared_buffer_call(
             options(nostack)
         )
     };
-    if status == 0 { Ok(()) } else { Err(status) }
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(status)
+    }
 }
 
 #[cfg(not(feature = "preemption-probe"))]

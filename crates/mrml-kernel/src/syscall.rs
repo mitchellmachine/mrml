@@ -1,5 +1,5 @@
 use crate::arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
-use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, Rights, TaskId};
+use crate::{Capability, ObjectId, Rights, TaskId, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD};
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
@@ -249,6 +249,9 @@ pub enum SyscallRequest {
         service: crate::ServiceId,
         policy: crate::RestartPolicy,
     },
+    ReleaseCapability {
+        capability: Capability,
+    },
 }
 
 impl SyscallRequest {
@@ -452,6 +455,17 @@ impl SyscallRequest {
                     policy,
                 })
             }
+            12 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi | rdx | r10 | r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                Ok(Self::ReleaseCapability {
+                    capability: Capability::from_token(rdi),
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -468,7 +482,8 @@ impl SyscallRequest {
             | Self::WriteSharedBuffer { .. }
             | Self::QueryService { .. }
             | Self::RestartService { .. }
-            | Self::ReplaceServicePolicy { .. } => &[],
+            | Self::ReplaceServicePolicy { .. }
+            | Self::ReleaseCapability { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
@@ -896,6 +911,25 @@ mod tests {
         }
         assert_eq!(
             SyscallRequest::decode(11, capability, service, 3, 10, 40, 1),
+            Err(SyscallError::ReservedArgument)
+        );
+    }
+
+    #[test]
+    fn capability_release_is_exact_and_has_no_ambient_arguments() {
+        let token = (17u64 << 32) | 3;
+        assert_eq!(
+            SyscallRequest::decode(12, token, 0, 0, 0, 0, 0),
+            Ok(SyscallRequest::ReleaseCapability {
+                capability: Capability::from_token(token),
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(12, 3, 0, 0, 0, 0, 0),
+            Err(SyscallError::InvalidCapability)
+        );
+        assert_eq!(
+            SyscallRequest::decode(12, token, 1, 0, 0, 0, 0),
             Err(SyscallError::ReservedArgument)
         );
     }

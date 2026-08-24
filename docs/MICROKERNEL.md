@@ -3182,47 +3182,49 @@ passed. The release UEFI `mrml-service-image` build and scoped strict Clippy wit
 ABI compilation only, not hosted invocation or device durability.
 
 A focused `block-service-probe` now supplies the hosted invocation evidence.
-The kernel creates two disjoint signed CPL3 tasks. The client receives one
-`MAP|READ|WRITE|DELEGATE` capability for a shared page but no mapping, block
-device, session-management, or service-control authority. It transfers
-`MAP|READ` for a block write and `MAP|READ|WRITE` for a block read. The service
-alone owns the live read-write binding, launch-bound principal, generated
-session, and volatile one-page backend. It validates the exact transferred
-shape, session owner/generation, and request IDs 1 then 2; verifies that the
-first operation wrote `0x5a`; replaces the simulated backend bytes with `0x3c`;
-and copies the second result through the capability-selected syscall. The
-client checks both canonical successful responses; the service checks the
-written and returned bytes before yielding back to that client. The client then
+The kernel creates two disjoint signed CPL3 tasks. The client receives separate
+exact local read and read-write shared-buffer handles plus a distinct transfer
+handle, but no block device, session-management, or service-control authority.
+The service has its own exact read and read-write endpoints. The tasks share one
+kernel-owned page through separate generational mapping identities, and every
+IPC-derived leaf is explicitly released through runtime transitive revocation.
+The service alone owns the launch-bound principal, generated session, and
+volatile 16-block backend. The client issues 18 strictly increasing canonical
+requests to stage metadata, write and verify checkpoint data, flush, validate
+four COW metadata images, replace and flush the inactive superblock, and recover
+the exact selected file generation. It consumes the one-use publication receipt
+and reloads the service-bound restart policy. The client then
 exits through `ServiceSupervisor`, its address space is erased, and the service
 must consume the exact typed peer-death event before exiting itself. The service
 cleanup removes its shared mapping and host-resource binding. Only after both
 service slots are `Exited` with no task or pending cleanup can the kernel emit
-the terminal `0x30` marker. Each runner accepts at most 32 host exits and
+the terminal `0x30` marker. Each runner accepts at most 256 host exits and
 requires the exact ordered cleanup markers `0x21`, `0x31`, `0x20`, `0x30`, while
 allowing only service-call stages 1 through 3 between them.
 
 Fresh independently signed version-1 artifacts passed on 2026-08-24:
 
 ```text
-cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features
-# 337 passed
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features --target x86_64-pc-windows-gnullvm
+# 444 passed
 cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-storage --release --no-default-features
-# 101 passed
+# 107 passed
 cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp --release --no-default-features
 # 19 passed, 1 ignored manual performance gate
 cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp-run --release --no-default-features
-# 2 passed
+# 6 passed
 wsl env CARGO_TARGET_DIR=/mnt/c/Users/Mitch/Documents/mrml/.codex-kvm-target cargo test -p mrml-kvm-run --release --no-default-features
-# 3 passed
+# 7 passed
 mrml-whp-run ... block-service-probe ...
-# verified independently signed CPL3 block-service loop and lifecycle cleanup under WHP
+# verified independently signed CPL3 block-service stable-policy publication/recovery and lifecycle cleanup under WHP
 mrml-kvm-run ... block-service-probe ...
-# verified independently signed CPL3 block-service loop and lifecycle cleanup under KVM
+# verified independently signed CPL3 block-service stable-policy publication/recovery and lifecycle cleanup under KVM
 ```
 
-Scoped strict Clippy passed for `mrml-storage`, both focused UEFI images, and
-`mrml-whp-run`. These are unit tests, simulation, and hosted controlled probes.
-WHP/KVM do not protect a guest from its host. The backend is volatile memory,
+Scoped strict Clippy passed for `mrml-kernel`, `mrml-storage`, `mrml-config`,
+both focused UEFI images, `mrml-whp-run`, and `mrml-kvm-run`. These are unit
+tests, simulation, and hosted controlled probes.
+WHP/KVM do not protect a guest from its host. The backend is volatile kernel-owned memory,
 not a host block device; no reboot, durability, power-loss, bare-metal, TPM,
 IOMMU, Secure Boot, or physical hardware result is claimed.
 

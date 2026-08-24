@@ -228,8 +228,11 @@ authority; unrelated domains continue.
    consumed. Recovery requires file READ plus configuration-root CONTROL and an
    exact authenticated-recovery-selected file generation; corruption and I/O
    uncertainty fail rather than searching an older generation. This is focused
-   in-memory simulation evidence. Live block-service/device integration,
-   physical power-loss evidence, live stable-storage policy restoration, and
+   in-memory simulation evidence. A signed CPL3 KVM/WHP probe now composes the
+   checkpoint with the isolated MRML-native block service, publishes by exact
+   COW receipt, recovers file generation 2, and reloads the service-bound
+   policy. A nonvolatile device, reboot restoration, physical power-loss
+   evidence, live stable-storage policy restoration, and
    reboot-time capability reconstruction remain pending, so this item is not
    complete. A
    canonical persistent restart-policy record now binds one service object to a
@@ -260,8 +263,10 @@ authority; unrelated domains continue.
    Deterministic integration publishes by one-use COW receipt, recovers the
    exact selected file generation, reloads the service-bound policy, rejects a
    derived read-only block session before writes, and proves parent revocation
-   stales its descendants. This is simulation evidence. Live CPL3 block-service
-   restoration and reboot-time capability reconstruction remain pending, so
+   stales its descendants. Identical signed KVM/WHP artifacts now exercise that
+   exact composition through 18 bounded CPL3 block requests and complete both
+   task/resource lifecycles. The backend remains volatile; reboot-time
+   restoration and capability reconstruction remain pending, so
    this item remains partial.
    The next protocol dependency is now implemented at the kernel ABI boundary:
    operation 11 accepts only an opaque service generation, one task-local
