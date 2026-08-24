@@ -348,13 +348,16 @@ authority; unrelated domains continue.
    registers. A generic executor now composes the current task capability space,
    exact selected binding, direction-validated user copy, opaque resource I/O,
    and fully erased caller scratch. It revalidates immediately before resource
-   use and preserves user/resource backend errors. Concrete kernel-image user-
-   kernel-image opaque-resource wiring remains pending and fails closed rather
+   use and preserves user/resource backend errors. Concrete kernel-image
+   resource wiring remains pending and fails closed rather
    than returning a handle or address. The x86-64 active-page copy adapter now walks
    every live user leaf under the expected current CR3, issues one exact task/
    range/direction ticket, consumes it once, and cancels it on later executor
-   failure. Wiring that adapter and a concrete opaque-resource table into the
-   kernel-image syscall handler remains pending.
+   failure. A fixed-capacity opaque-resource table now owns monotonically issued
+   handles, rejects live aliases and stale handles, bounds I/O before backend
+   access, and integrates with final-reference retirement. Its direct-memory
+   adapter is confined to an unsafe supervisor boundary. Wiring both adapters
+   into the kernel-image syscall handler remains pending.
    Service-side binding selection is implemented: the exact transferred
    capability and kernel-known VM/task identity must select exactly one live
    binding of the required access, while missing, ambiguous, and stale

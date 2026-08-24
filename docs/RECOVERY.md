@@ -157,9 +157,12 @@ explicitly and downgrade the status rather than guessing.
   binding selection, validated directional user copy, opaque resource I/O, and
   erased scratch. The x86-64 active-page copy adapter validates the expected CR3
   and every touched user leaf, then permits exactly one matching task/range/
-  direction copy; failure cancels any unused ticket. Concrete kernel-image
-  resource wiring is deliberately still absent, so the hosted service probe
-  halts on those operations.
+  direction copy; failure cancels any unused ticket. A fixed-capacity opaque-
+  resource table now issues fresh monotonic handles, bounds every operation,
+  rejects live aliases and stale handles, and retires through the existing
+  cleanup path while preserving backend failures. Its address-backed adapter is
+  an unsafe supervisor-only boundary. Concrete kernel-image wiring is still
+  absent, so the hosted service probe halts on those operations.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

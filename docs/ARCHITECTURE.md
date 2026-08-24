@@ -293,7 +293,11 @@ selected shared-buffer copy operations without binding IDs or shared addresses.
 A generic executor binds those requests to the current task capability space,
 kernel-known VM/task identity, exact live binding, direction-validated user-copy
 backend, opaque resource backend, and erased bounded scratch. Concrete kernel-
-image opaque-resource wiring remains unimplemented and fails closed. The x86-64
+image wiring remains unimplemented and fails closed. A fixed-capacity kernel-
+owned opaque-resource table now issues monotonically increasing nonzero handles,
+rejects live aliases, independently bounds transfers, retires stale handles
+through the existing cleanup hook, and preserves backend uncertainty. Its
+supervisor-memory adapter keeps raw addresses behind an unsafe boundary. The x86-64
 active-page user-copy adapter is implemented: it binds validation to expected
 CR3 and task plus exact address, length, and direction in a one-use ticket;
 executor failure cancels an unconsumed ticket. Bounded in-memory directory state

@@ -1182,3 +1182,16 @@ and performs a bounded direct copy while address-space mutation is excluded.
 This adds no novel page-table, syscall, ticket, or user-copy technique.
 
 Patent review: `NOT_TRIGGERED` — conventional validated active-memory copy.
+
+## 2026-08-23 — bounded opaque host-resource table
+
+MRML source: `crates/mrml-kernel/src/host_resource.rs`.
+
+The kernel conventionally assigns monotonic opaque handles to fixed-capacity
+resource entries, rejects live aliases and stale handles, checks transfer bounds
+before an internal backend copy, and removes entries through an existing
+retirement hook. Raw supervisor addresses remain behind an explicit unsafe
+adapter. This adds no novel handle-table, bounds-checking, revocation, or memory-
+copy technique.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded resource indirection.

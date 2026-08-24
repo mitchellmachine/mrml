@@ -3058,8 +3058,21 @@ does not translate a request-supplied address into authority: it is usable only
 behind the active-root validation ticket while page-table mutation is excluded.
 Unit tests cover exact transfer, task/range/direction mismatch, consumption on
 mismatch, and reuse; existing active-walker tests cover canonical range, leaf
-permissions, and mapping bounds. Kernel-image handler wiring and a concrete
-opaque-resource backend still remain pending.
+permissions, and mapping bounds. Kernel-image handler/resource wiring remains
+pending.
+
+The kernel now has a concrete fixed-capacity `HostResourceTable`. Registration
+is an explicit unsafe supervisor operation because an address-backed resource
+must remain live for its declared extent. The table assigns fresh monotonic
+nonzero handles, rejects duplicate live resources, and never returns its
+internal resource token through buffer I/O. Every transfer independently
+rejects empty, overflowing, stale, or out-of-range requests before backend
+access. Removal makes a handle stale; registering the same resource later
+produces a different handle. The table implements the existing final-reference
+retirement hook. Its direct supervisor-memory adapter checks address arithmetic
+and performs exact copies behind an unsafe boundary; backend uncertainty is
+preserved. This is unit-tested mechanism, not kernel-image integration or
+hosted/physical device evidence.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
 object metadata and requires exact root, publication generation, and range for
@@ -3186,7 +3199,7 @@ This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-nine focused storage tests and 321 focused kernel tests plus strict
+Ninety-nine focused storage tests and 327 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
 block-service process and concrete receive/syscall integration, a
 concrete hosted/physical device backend,
@@ -3201,17 +3214,30 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 99 tests, both kernel runs pass 321 tests, and
+Both storage unit-test runs pass 99 tests, both kernel runs pass 327 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
 kernel capability-transfer state, opaque-handle bounded buffer I/O, generic
-shared-buffer syscall execution, and in-process block transport composition,
+shared-buffer syscall execution, monotonic opaque-resource retirement, and
+in-process block transport composition,
 not
 block-device, power-loss, hosted VMM, bare-metal, or physical-disk evidence.
 
-Patent review: `NOT_TRIGGERED` — conventional one-use validation tickets over
-active page-table range checks and bounded copies; see
+Patent review: `NOT_TRIGGERED` — conventional one-use validation tickets and a
+bounded monotonic resource-handle table; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
+For this increment, the `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+remote disclosure, DRM/publisher veto, owner-attestation restriction,
+accessibility exclusion, AI authority, or persistence. Handles are local
+non-authorizing indirection and expose neither identity nor content. The
+`HOSTILE SECURITY REVIEW` treats handles, offsets, lengths, resource lifetime,
+and backend results as hostile: only table-issued live handles resolve; checked
+arithmetic and declared extents precede backend access; live aliases, stale
+handles, empty transfers, exhaustion, and uncertain backend outcomes fail
+closed. Registration remains an explicit unsafe ownership/lifetime boundary,
+and final-reference cleanup uses the existing revocation path. This agent review
+does not replace the constitution's independent human dual review.
 
 The ancestry, successor-construction, and object-ID allocator increments also passed the two
 repository reviews. The

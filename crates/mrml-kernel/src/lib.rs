@@ -13,6 +13,7 @@ mod early;
 mod framebuffer;
 mod grant;
 mod handoff;
+mod host_resource;
 mod ipc;
 mod memory;
 mod pe;
@@ -48,6 +49,10 @@ pub use handoff::{
     BootHandoff, HANDOFF_HEADER_BYTES, HANDOFF_REGION_BYTES, HANDOFF_SERVICE_BYTES, HandoffError,
     MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_HANDOFF_REGIONS, ServiceLaunch, encode_handoff,
     encode_handoff_with_madt, encode_handoff_with_smp, encode_handoff_with_smp_and_service,
+};
+pub use host_resource::{
+    DirectHostResourceError, DirectHostResourceMemory, HostResourceIoError, HostResourceMemory,
+    HostResourceRetireError, HostResourceTable, HostResourceTableError,
 };
 pub use ipc::{
     AuthorizedIpcCapability, AuthorizedSharedIpcBuffer, Endpoint, IpcError, IpcSharedBufferBackend,
