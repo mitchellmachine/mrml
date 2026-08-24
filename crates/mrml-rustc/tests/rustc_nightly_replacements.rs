@@ -4004,6 +4004,13 @@ fn rustc_conditional_ownership_program_points_preserve_native_objects() {
 }
 
 #[test]
+fn rustc_cfg_mapped_ownership_points_preserve_native_objects() {
+    let source = "fn select(input: &mut u16, first: bool) -> &mut u16 { if first { return input; } input } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, first: bool, mode: bool) -> u16 { let selected: &mut u16 = select(input, first); if mode { *selected += 2; return *selected; } else { *selected = 7; return *selected; } *selected }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",

@@ -2365,6 +2365,14 @@ struct RuntimeControlFlowEdgeFact {
     kind: RuntimeControlFlowEdgeKind,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeOwnershipControlPoint {
+    Entry,
+    Block(RuntimeBasicBlockId),
+    Edge(usize),
+    Unreachable,
+}
+
 struct RuntimeBodyFacts<'source> {
     locals: [Option<RuntimeLocalFact<'source>>; MAX_RUNTIME_LOCAL_FACTS],
     local_count: usize,
@@ -2558,6 +2566,189 @@ impl<'source> RuntimeBodyFacts<'source> {
             | (RuntimeOwnershipEventLocation::ConditionalAssignmentCondition { .. }, _)
             | (RuntimeOwnershipEventLocation::ConditionalAssignmentAction { .. }, _)
             | (RuntimeOwnershipEventLocation::ReturnValue { .. }, _) => false,
+        }
+    }
+
+    fn top_level_block_for_statement(&self, statement_index: usize) -> Option<RuntimeBasicBlockId> {
+        self.basic_blocks[..self.basic_block_count]
+            .iter()
+            .flatten()
+            .find(|block| {
+                block.source == RuntimeBasicBlockSource::TopLevel
+                    && statement_index >= block.first_statement
+                    && block
+                        .first_statement
+                        .checked_add(block.statement_count)
+                        .is_some_and(|end| statement_index < end)
+            })
+            .map(|block| block.id)
+    }
+
+    fn block_with_source(&self, source: RuntimeBasicBlockSource) -> Option<RuntimeBasicBlockId> {
+        self.basic_blocks[..self.basic_block_count]
+            .iter()
+            .flatten()
+            .find(|block| block.source == source)
+            .map(|block| block.id)
+    }
+
+    fn return_edge(
+        &self,
+        from: RuntimeBasicBlockId,
+        kind: RuntimeControlFlowEdgeKind,
+    ) -> Option<usize> {
+        self.control_flow_edges[..self.control_flow_edge_count]
+            .iter()
+            .position(|edge| {
+                edge.is_some_and(|edge| {
+                    edge.from == from
+                        && edge.target == RuntimeControlFlowTarget::Return
+                        && edge.kind == kind
+                })
+            })
+    }
+
+    fn conditional_return_block(
+        &self,
+        statement_index: usize,
+        branch_index: usize,
+    ) -> Option<RuntimeBasicBlockId> {
+        if branch_index == 0 {
+            self.top_level_block_for_statement(statement_index)
+        } else {
+            self.block_with_source(RuntimeBasicBlockSource::ConditionalReturnBranch {
+                statement_index,
+                branch_index,
+            })
+        }
+    }
+
+    fn conditional_assignment_action_block(
+        &self,
+        statement_index: usize,
+        branch_index: Option<usize>,
+        action_index: usize,
+    ) -> Option<RuntimeBasicBlockId> {
+        if let Some(block) = self.basic_blocks[..self.basic_block_count]
+            .iter()
+            .flatten()
+            .find(|block| {
+                matches!(
+                    block.source,
+                    RuntimeBasicBlockSource::ConditionalAssignmentUnreachableActions {
+                        statement_index: source_statement,
+                        branch_index: source_branch,
+                        first_action,
+                        action_count,
+                    } if source_statement == statement_index
+                        && source_branch == branch_index
+                        && action_index >= first_action
+                        && first_action
+                            .checked_add(action_count)
+                            .is_some_and(|end| action_index < end)
+                )
+            })
+        {
+            return Some(block.id);
+        }
+        self.block_with_source(match branch_index {
+            Some(branch_index) => RuntimeBasicBlockSource::ConditionalAssignmentActions {
+                statement_index,
+                branch_index,
+            },
+            None => RuntimeBasicBlockSource::ConditionalAssignmentElseActions { statement_index },
+        })
+    }
+
+    fn ownership_control_point(
+        &self,
+        location: RuntimeOwnershipEventLocation,
+    ) -> Option<RuntimeOwnershipControlPoint> {
+        if !self.control_flow_complete {
+            return None;
+        }
+        match location {
+            RuntimeOwnershipEventLocation::ParameterEntry => {
+                Some(RuntimeOwnershipControlPoint::Entry)
+            }
+            RuntimeOwnershipEventLocation::TopLevelStatement(statement_index)
+            | RuntimeOwnershipEventLocation::ReturnValue { statement_index } => self
+                .top_level_block_for_statement(statement_index)
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::ConditionalReturnCondition {
+                statement_index,
+                branch_index,
+            } => self
+                .conditional_return_block(statement_index, branch_index)
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::ConditionalReturnValue {
+                statement_index,
+                branch_index,
+            } => {
+                let block = self.conditional_return_block(statement_index, branch_index)?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::True)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
+            RuntimeOwnershipEventLocation::ConditionalReturnElseValue { statement_index } => {
+                let RuntimeOwnershipStatementShape::ConditionalReturn { branch_count, .. } = self
+                    .ownership_statement_shapes
+                    .get(statement_index)
+                    .and_then(|shape| *shape)?
+                else {
+                    return None;
+                };
+                let block =
+                    self.conditional_return_block(statement_index, branch_count.checked_sub(1)?)?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::False)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
+            RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
+                statement_index,
+                branch_index,
+            } => {
+                let block = if branch_index == 0 {
+                    self.top_level_block_for_statement(statement_index)
+                } else {
+                    self.block_with_source(
+                        RuntimeBasicBlockSource::ConditionalAssignmentCondition {
+                            statement_index,
+                            branch_index,
+                        },
+                    )
+                }?;
+                Some(RuntimeOwnershipControlPoint::Block(block))
+            }
+            RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                statement_index,
+                branch_index,
+                action_index,
+            } => self
+                .conditional_assignment_action_block(statement_index, branch_index, action_index)
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::Tail => {
+                let Some(block) = self.basic_blocks[..self.basic_block_count]
+                    .iter()
+                    .flatten()
+                    .filter(|block| block.source == RuntimeBasicBlockSource::TopLevel)
+                    .max_by_key(|block| block.first_statement)
+                else {
+                    return self
+                        .ownership_has_tail
+                        .then_some(RuntimeOwnershipControlPoint::Unreachable);
+                };
+                self.return_edge(block.id, RuntimeControlFlowEdgeKind::Unconditional)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+                    .or_else(|| {
+                        (self.ownership_has_tail
+                            && self.control_flow_edges[..self.control_flow_edge_count]
+                                .iter()
+                                .flatten()
+                                .any(|edge| edge.from == block.id))
+                        .then_some(RuntimeOwnershipControlPoint::Unreachable)
+                    })
+            }
+            RuntimeOwnershipEventLocation::Unassigned
+            | RuntimeOwnershipEventLocation::EmissionExpansion => None,
         }
     }
 
@@ -13381,6 +13572,12 @@ impl<
                 || initialization.path != root.id
                 || initialization.origin != expected_origin
                 || initialization.span != expected_span
+                || (self.body_facts.control_flow_complete
+                    && initialization.location != RuntimeOwnershipEventLocation::EmissionExpansion
+                    && self
+                        .body_facts
+                        .ownership_control_point(initialization.location)
+                        .is_none())
                 || match initialization.origin {
                     RuntimeInitializationOrigin::Parameter => {
                         initialization.location != RuntimeOwnershipEventLocation::ParameterEntry
@@ -13521,6 +13718,12 @@ impl<
             if path.id != effect.path
                 || effect.span.end < effect.span.start
                 || !self.body_facts.ownership_location_is_valid(effect.location)
+                || (self.body_facts.control_flow_complete
+                    && effect.location != RuntimeOwnershipEventLocation::EmissionExpansion
+                    && self
+                        .body_facts
+                        .ownership_control_point(effect.location)
+                        .is_none())
                 || effect.location == RuntimeOwnershipEventLocation::ParameterEntry
                 || match effect.kind {
                     RuntimePlaceEffectKind::Copy => !runtime_type_is_copy(path.ty),
@@ -23899,6 +24102,22 @@ mod tests {
                             })
                 })
         );
+        assert_eq!(
+            facts.ownership_control_point(
+                RuntimeOwnershipEventLocation::ConditionalReturnCondition {
+                    statement_index: 0,
+                    branch_index: 0,
+                }
+            ),
+            Some(RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(0)))
+        );
+        assert_eq!(
+            facts.ownership_control_point(RuntimeOwnershipEventLocation::ConditionalReturnValue {
+                statement_index: 0,
+                branch_index: 0,
+            }),
+            Some(RuntimeOwnershipControlPoint::Edge(0))
+        );
 
         let conditional_tail = "fn value(input: &mut u16, choose: bool) -> &mut u16 { if choose { input } else { &mut *input } }";
         let module = Parser::new(conditional_tail)
@@ -23955,6 +24174,29 @@ mod tests {
             branch_index: None,
             action_index: 0,
         };
+        let branch_block = facts
+            .block_with_source(RuntimeBasicBlockSource::ConditionalAssignmentActions {
+                statement_index: 1,
+                branch_index: 0,
+            })
+            .unwrap();
+        let else_block = facts
+            .block_with_source(RuntimeBasicBlockSource::ConditionalAssignmentElseActions {
+                statement_index: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            facts.ownership_control_point(condition),
+            Some(RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(0)))
+        );
+        assert_eq!(
+            facts.ownership_control_point(branch_action),
+            Some(RuntimeOwnershipControlPoint::Block(branch_block))
+        );
+        assert_eq!(
+            facts.ownership_control_point(else_action),
+            Some(RuntimeOwnershipControlPoint::Block(else_block))
+        );
         assert!(
             facts.effects[..facts.effect_count]
                 .iter()
@@ -24010,6 +24252,20 @@ mod tests {
             runtime_call_local_floor: None,
         };
         emitter.validate_runtime_place_facts().unwrap();
+        let valid_branch_block = emitter.body_facts.basic_blocks[branch_block.0].unwrap();
+        emitter.body_facts.basic_blocks[branch_block.0] = Some(RuntimeBasicBlockFact {
+            source: RuntimeBasicBlockSource::TopLevel,
+            ..valid_branch_block
+        });
+        assert_eq!(
+            emitter.body_facts.ownership_control_point(branch_action),
+            None
+        );
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.basic_blocks[branch_block.0] = Some(valid_branch_block);
         let valid_condition = emitter.body_facts.effects[condition_effect].unwrap();
         emitter.body_facts.effects[condition_effect] = Some(RuntimePlaceEffectFact {
             location: RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
