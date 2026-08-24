@@ -2198,6 +2198,62 @@ enum RuntimeOwnershipEventLocation {
         branch_index: Option<usize>,
         action_index: usize,
     },
+    LoopHeader {
+        statement_index: usize,
+    },
+    LoopOperation {
+        statement_index: usize,
+        operation_index: usize,
+    },
+    LoopConditionalReturnCondition {
+        statement_index: usize,
+        operation_index: usize,
+    },
+    LoopConditionalReturnValue {
+        statement_index: usize,
+        operation_index: usize,
+    },
+    LoopReturnValue {
+        statement_index: usize,
+        operation_index: usize,
+    },
+    LoopConditionalCondition {
+        statement_index: usize,
+        operation_index: usize,
+        arm_index: usize,
+    },
+    LoopConditionalAction {
+        statement_index: usize,
+        operation_index: usize,
+        arm_index: usize,
+        action_index: usize,
+    },
+    LoopConditionalTerminal {
+        statement_index: usize,
+        operation_index: usize,
+        arm_index: usize,
+    },
+    NestedLoopHeader {
+        statement_index: usize,
+        operation_index: usize,
+    },
+    NestedLoopControlCondition {
+        statement_index: usize,
+        operation_index: usize,
+        action_index: usize,
+        control_order: usize,
+    },
+    NestedLoopControlValue {
+        statement_index: usize,
+        operation_index: usize,
+        action_index: usize,
+        control_order: usize,
+    },
+    NestedLoopAction {
+        statement_index: usize,
+        operation_index: usize,
+        action_index: usize,
+    },
     ReturnValue {
         statement_index: usize,
     },
@@ -2223,6 +2279,40 @@ const fn runtime_ownership_location_statement_index(
         | RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
             statement_index, ..
         }
+        | RuntimeOwnershipEventLocation::LoopHeader { statement_index }
+        | RuntimeOwnershipEventLocation::LoopOperation {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::LoopConditionalReturnCondition {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::LoopConditionalReturnValue {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::LoopReturnValue {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::LoopConditionalCondition {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::LoopConditionalAction {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::LoopConditionalTerminal {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopHeader {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopControlValue {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopAction {
+            statement_index, ..
+        }
         | RuntimeOwnershipEventLocation::ReturnValue { statement_index } => Some(statement_index),
         RuntimeOwnershipEventLocation::Unassigned
         | RuntimeOwnershipEventLocation::ParameterEntry
@@ -2244,6 +2334,9 @@ enum RuntimeOwnershipStatementShape {
     ConditionalAssignment {
         branch_count: usize,
         action_counts: [usize; MAX_RUNTIME_CONDITIONAL_ACTION_ORIGINS],
+    },
+    Loop {
+        operation_count: usize,
     },
     Return,
 }
@@ -2499,9 +2592,18 @@ impl<'source> RuntimeBodyFacts<'source> {
                         .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
                     RuntimeOwnershipStatementShape::Return
                 }
+                crate::BodyStatement::Loop(index) => {
+                    let loop_statement = body
+                        .while_loops()
+                        .get(*index)
+                        .and_then(Option::as_ref)
+                        .ok_or(CodegenErrorKind::InvalidRuntimePlaceFacts)?;
+                    RuntimeOwnershipStatementShape::Loop {
+                        operation_count: loop_statement.operations().iter().flatten().count(),
+                    }
+                }
                 crate::BodyStatement::Local(_)
                 | crate::BodyStatement::Assignment(_)
-                | crate::BodyStatement::Loop(_)
                 | crate::BodyStatement::Expression(_) => RuntimeOwnershipStatementShape::Plain,
             };
             self.ownership_statement_shapes[statement_index] = Some(shape);
@@ -2558,6 +2660,47 @@ impl<'source> RuntimeBodyFacts<'source> {
                 RuntimeOwnershipEventLocation::ReturnValue { .. },
                 Some(RuntimeOwnershipStatementShape::Return),
             ) => true,
+            (
+                RuntimeOwnershipEventLocation::LoopHeader { .. },
+                Some(RuntimeOwnershipStatementShape::Loop { .. }),
+            ) => true,
+            (
+                RuntimeOwnershipEventLocation::LoopOperation {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::LoopConditionalReturnCondition {
+                    operation_index,
+                    ..
+                }
+                | RuntimeOwnershipEventLocation::LoopConditionalReturnValue {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::LoopReturnValue {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::LoopConditionalCondition {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::LoopConditionalAction {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::LoopConditionalTerminal {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopHeader {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopControlValue {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopAction {
+                    operation_index, ..
+                },
+                Some(RuntimeOwnershipStatementShape::Loop { operation_count }),
+            ) => operation_index < operation_count,
             (RuntimeOwnershipEventLocation::Unassigned, _)
             | (RuntimeOwnershipEventLocation::TopLevelStatement(_), _)
             | (RuntimeOwnershipEventLocation::ConditionalReturnCondition { .. }, _)
@@ -2565,6 +2708,18 @@ impl<'source> RuntimeBodyFacts<'source> {
             | (RuntimeOwnershipEventLocation::ConditionalReturnElseValue { .. }, _)
             | (RuntimeOwnershipEventLocation::ConditionalAssignmentCondition { .. }, _)
             | (RuntimeOwnershipEventLocation::ConditionalAssignmentAction { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopHeader { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopOperation { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopConditionalReturnCondition { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopConditionalReturnValue { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopReturnValue { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopConditionalCondition { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopConditionalAction { .. }, _)
+            | (RuntimeOwnershipEventLocation::LoopConditionalTerminal { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopHeader { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopControlCondition { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopControlValue { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopAction { .. }, _)
             | (RuntimeOwnershipEventLocation::ReturnValue { .. }, _) => false,
         }
     }
@@ -2660,6 +2815,73 @@ impl<'source> RuntimeBodyFacts<'source> {
         })
     }
 
+    fn loop_body_block_for_operation(
+        &self,
+        statement_index: usize,
+        operation_index: usize,
+    ) -> Option<RuntimeBasicBlockId> {
+        self.basic_blocks[..self.basic_block_count]
+            .iter()
+            .flatten()
+            .find(|block| {
+                matches!(
+                    block.source,
+                    RuntimeBasicBlockSource::LoopBody {
+                        statement_index: source_statement,
+                        first_operation,
+                        operation_count,
+                    } if source_statement == statement_index
+                        && operation_index >= first_operation
+                        && first_operation
+                            .checked_add(operation_count)
+                            .is_some_and(|end| operation_index < end)
+                )
+            })
+            .map(|block| block.id)
+    }
+
+    fn loop_conditional_action_block(
+        &self,
+        statement_index: usize,
+        operation_index: usize,
+        arm_index: usize,
+        action_index: Option<usize>,
+    ) -> Option<RuntimeBasicBlockId> {
+        self.basic_blocks[..self.basic_block_count]
+            .iter()
+            .flatten()
+            .find(|block| {
+                matches!(
+                    block.source,
+                    RuntimeBasicBlockSource::LoopConditionalActions {
+                        statement_index: source_statement,
+                        operation_index: source_operation,
+                        arm_index: source_arm,
+                        action_count,
+                    } if source_statement == statement_index
+                        && source_operation == operation_index
+                        && source_arm == arm_index
+                        && action_index.is_none_or(|index| index < action_count)
+                )
+            })
+            .map(|block| block.id)
+    }
+
+    fn nested_loop_control_block(
+        &self,
+        statement_index: usize,
+        operation_index: usize,
+        action_index: usize,
+        control_order: usize,
+    ) -> Option<RuntimeBasicBlockId> {
+        self.block_with_source(RuntimeBasicBlockSource::NestedLoopControl {
+            statement_index,
+            operation_index,
+            action_index,
+            control_order,
+        })
+    }
+
     fn ownership_control_point(
         &self,
         location: RuntimeOwnershipEventLocation,
@@ -2724,6 +2946,127 @@ impl<'source> RuntimeBodyFacts<'source> {
                 action_index,
             } => self
                 .conditional_assignment_action_block(statement_index, branch_index, action_index)
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::LoopHeader { statement_index } => self
+                .top_level_block_for_statement(statement_index)
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::LoopOperation {
+                statement_index,
+                operation_index,
+            }
+            | RuntimeOwnershipEventLocation::LoopConditionalReturnCondition {
+                statement_index,
+                operation_index,
+            } => self
+                .loop_body_block_for_operation(statement_index, operation_index)
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::LoopConditionalReturnValue {
+                statement_index,
+                operation_index,
+            } => {
+                let block = self.loop_body_block_for_operation(statement_index, operation_index)?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::True)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
+            RuntimeOwnershipEventLocation::LoopReturnValue {
+                statement_index,
+                operation_index,
+            } => {
+                let block = self.loop_body_block_for_operation(statement_index, operation_index)?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::Unconditional)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
+            RuntimeOwnershipEventLocation::LoopConditionalCondition {
+                statement_index,
+                operation_index,
+                arm_index,
+            } => {
+                let block = if arm_index == 0 {
+                    self.loop_body_block_for_operation(statement_index, operation_index)
+                } else {
+                    self.block_with_source(RuntimeBasicBlockSource::LoopConditionalCondition {
+                        statement_index,
+                        operation_index,
+                        arm_index,
+                    })
+                }?;
+                Some(RuntimeOwnershipControlPoint::Block(block))
+            }
+            RuntimeOwnershipEventLocation::LoopConditionalAction {
+                statement_index,
+                operation_index,
+                arm_index,
+                action_index,
+            } => self
+                .loop_conditional_action_block(
+                    statement_index,
+                    operation_index,
+                    arm_index,
+                    Some(action_index),
+                )
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::LoopConditionalTerminal {
+                statement_index,
+                operation_index,
+                arm_index,
+            } => {
+                let block = self.loop_conditional_action_block(
+                    statement_index,
+                    operation_index,
+                    arm_index,
+                    None,
+                )?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::Unconditional)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
+            RuntimeOwnershipEventLocation::NestedLoopHeader {
+                statement_index,
+                operation_index,
+            } => self
+                .block_with_source(RuntimeBasicBlockSource::NestedLoopHeader {
+                    statement_index,
+                    operation_index,
+                })
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                statement_index,
+                operation_index,
+                action_index,
+                control_order,
+            } => self
+                .nested_loop_control_block(
+                    statement_index,
+                    operation_index,
+                    action_index,
+                    control_order,
+                )
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::NestedLoopControlValue {
+                statement_index,
+                operation_index,
+                action_index,
+                control_order,
+            } => {
+                let block = self.nested_loop_control_block(
+                    statement_index,
+                    operation_index,
+                    action_index,
+                    control_order,
+                )?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::True)
+                    .or_else(|| self.return_edge(block, RuntimeControlFlowEdgeKind::Unconditional))
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
+            RuntimeOwnershipEventLocation::NestedLoopAction {
+                statement_index,
+                operation_index,
+                action_index,
+            } => self
+                .block_with_source(RuntimeBasicBlockSource::NestedLoopAction {
+                    statement_index,
+                    operation_index,
+                    action_index,
+                })
                 .map(RuntimeOwnershipControlPoint::Block),
             RuntimeOwnershipEventLocation::Tail => {
                 let Some(block) = self.basic_blocks[..self.basic_block_count]
@@ -5601,10 +5944,20 @@ fn preanalyze_runtime_loop_actions<
     facts: &mut RuntimeBodyFacts<'source>,
     outer_locals: &[Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
     outer_local_count: usize,
+    statement_index: usize,
+    operation_index: usize,
+    arm_index: usize,
 ) -> Result<([Option<RuntimeLocal<'source>>; MAX_PARAMETERS], usize), CodegenError> {
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
-    for action in actions.iter().flatten() {
+    for (action_index, action) in actions.iter().flatten().enumerate() {
+        facts.current_ownership_event_location =
+            RuntimeOwnershipEventLocation::LoopConditionalAction {
+                statement_index,
+                operation_index,
+                arm_index,
+                action_index,
+            };
         match *action {
             crate::ConditionalLoopAction::Local(local) => {
                 preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
@@ -5661,10 +6014,16 @@ fn preanalyze_runtime_nested_loop_block<
     facts: &mut RuntimeBodyFacts<'source>,
     outer_locals: &[Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
     outer_local_count: usize,
+    statement_index: usize,
+    operation_index: usize,
 ) -> Result<(), CodegenError> {
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
     if let Some(condition) = block.entry_condition {
+        facts.current_ownership_event_location = RuntimeOwnershipEventLocation::NestedLoopHeader {
+            statement_index,
+            operation_index,
+        };
         preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             facts,
             &locals[..local_count],
@@ -5698,6 +6057,13 @@ fn preanalyze_runtime_nested_loop_block<
                     continue;
                 }
                 if let crate::NestedLoopUnconditionalControl::Return(value) = control {
+                    facts.current_ownership_event_location =
+                        RuntimeOwnershipEventLocation::NestedLoopControlValue {
+                            statement_index,
+                            operation_index,
+                            action_index,
+                            control_order,
+                        };
                     preanalyze_runtime_source_expression_reads::<
                         R,
                         MAX_PARAMETERS,
@@ -5721,6 +6087,13 @@ fn preanalyze_runtime_nested_loop_block<
                 .zip(block.conditional_break_control_orders())
             {
                 if action_index == *stored_action_index && control_order == *stored_order {
+                    facts.current_ownership_event_location =
+                        RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                            statement_index,
+                            operation_index,
+                            action_index,
+                            control_order,
+                        };
                     preanalyze_runtime_source_expression_reads::<
                         R,
                         MAX_PARAMETERS,
@@ -5746,6 +6119,13 @@ fn preanalyze_runtime_nested_loop_block<
                 if action_index != *stored_action_index || control_order != *stored_order {
                     continue;
                 }
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                        statement_index,
+                        operation_index,
+                        action_index,
+                        control_order,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -5759,6 +6139,13 @@ fn preanalyze_runtime_nested_loop_block<
                     conditional.condition_span,
                     body_start,
                 )?;
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::NestedLoopControlValue {
+                        statement_index,
+                        operation_index,
+                        action_index,
+                        control_order,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -5781,6 +6168,13 @@ fn preanalyze_runtime_nested_loop_block<
                 .zip(block.conditional_continue_control_orders())
             {
                 if action_index == *stored_action_index && control_order == *stored_order {
+                    facts.current_ownership_event_location =
+                        RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                            statement_index,
+                            operation_index,
+                            action_index,
+                            control_order,
+                        };
                     preanalyze_runtime_source_expression_reads::<
                         R,
                         MAX_PARAMETERS,
@@ -5804,6 +6198,11 @@ fn preanalyze_runtime_nested_loop_block<
             kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
             span: function.name_span,
         })?;
+        facts.current_ownership_event_location = RuntimeOwnershipEventLocation::NestedLoopAction {
+            statement_index,
+            operation_index,
+            action_index,
+        };
         match action {
             crate::ConditionalLoopAction::Local(local) => {
                 preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
@@ -5860,10 +6259,13 @@ fn preanalyze_runtime_loop_declarations<
     facts: &mut RuntimeBodyFacts<'source>,
     outer_locals: &[Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
     outer_local_count: usize,
+    statement_index: usize,
 ) -> Result<(), CodegenError> {
     let mut locals = *outer_locals;
     let mut local_count = outer_local_count;
     if let Some(condition) = loop_statement.condition {
+        facts.current_ownership_event_location =
+            RuntimeOwnershipEventLocation::LoopHeader { statement_index };
         preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             facts,
             &locals[..local_count],
@@ -5874,7 +6276,11 @@ fn preanalyze_runtime_loop_declarations<
             body_start,
         )?;
     }
-    for operation in loop_statement.operations().iter().flatten() {
+    for (operation_index, operation) in loop_statement.operations().iter().flatten().enumerate() {
+        facts.current_ownership_event_location = RuntimeOwnershipEventLocation::LoopOperation {
+            statement_index,
+            operation_index,
+        };
         match *operation {
             crate::LoopOperation::Local(local) => {
                 preanalyze_runtime_local_binding::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
@@ -5911,6 +6317,8 @@ fn preanalyze_runtime_loop_declarations<
                     facts,
                     &locals,
                     local_count,
+                    statement_index,
+                    operation_index,
                 )?;
             }
             crate::LoopOperation::ConditionalBlock(index) => {
@@ -5918,6 +6326,12 @@ fn preanalyze_runtime_loop_declarations<
                     kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                     span: function.name_span,
                 })?;
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::LoopConditionalCondition {
+                        statement_index,
+                        operation_index,
+                        arm_index: 0,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -5941,8 +6355,17 @@ fn preanalyze_runtime_loop_declarations<
                         facts,
                         &locals,
                         local_count,
+                        statement_index,
+                        operation_index,
+                        0,
                     )?;
                 if let Some(crate::ConditionalLoopTerminal::Return(value)) = block.terminal {
+                    facts.current_ownership_event_location =
+                        RuntimeOwnershipEventLocation::LoopConditionalTerminal {
+                            statement_index,
+                            operation_index,
+                            arm_index: 0,
+                        };
                     preanalyze_runtime_source_expression_reads::<
                         R,
                         MAX_PARAMETERS,
@@ -5958,12 +6381,20 @@ fn preanalyze_runtime_loop_declarations<
                     )?;
                 }
                 if let Some(else_index) = block.else_arm {
-                    for arm in loop_statement.conditional_else_arms()
+                    for (else_offset, arm) in loop_statement.conditional_else_arms()
                         [else_index..else_index + block.else_arm_count]
                         .iter()
                         .flatten()
+                        .enumerate()
                     {
+                        let arm_index = else_offset + 1;
                         if let Some(condition) = arm.condition {
+                            facts.current_ownership_event_location =
+                                RuntimeOwnershipEventLocation::LoopConditionalCondition {
+                                    statement_index,
+                                    operation_index,
+                                    arm_index,
+                                };
                             preanalyze_runtime_source_expression_reads::<
                                 R,
                                 MAX_PARAMETERS,
@@ -5991,8 +6422,17 @@ fn preanalyze_runtime_loop_declarations<
                             facts,
                             &locals,
                             local_count,
+                            statement_index,
+                            operation_index,
+                            arm_index,
                         )?;
                         if let Some(crate::ConditionalLoopTerminal::Return(value)) = arm.terminal {
+                            facts.current_ownership_event_location =
+                                RuntimeOwnershipEventLocation::LoopConditionalTerminal {
+                                    statement_index,
+                                    operation_index,
+                                    arm_index,
+                                };
                             preanalyze_runtime_source_expression_reads::<
                                 R,
                                 MAX_PARAMETERS,
@@ -6041,6 +6481,11 @@ fn preanalyze_runtime_loop_declarations<
                 )?;
             }
             crate::LoopOperation::ConditionalReturn(control) => {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::LoopConditionalReturnCondition {
+                        statement_index,
+                        operation_index,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -6054,6 +6499,11 @@ fn preanalyze_runtime_loop_declarations<
                     control.condition_span,
                     body_start,
                 )?;
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::LoopConditionalReturnValue {
+                        statement_index,
+                        operation_index,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -6069,6 +6519,11 @@ fn preanalyze_runtime_loop_declarations<
                 )?;
             }
             crate::LoopOperation::Return(value) => {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::LoopReturnValue {
+                        statement_index,
+                        operation_index,
+                    };
                 preanalyze_runtime_source_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -7668,6 +8123,7 @@ fn preanalyze_runtime_body_declarations<
                 facts,
                 &locals,
                 local_count,
+                statement_index,
             )?;
         }
     }
@@ -24142,6 +24598,59 @@ mod tests {
     }
 
     #[test]
+    fn runtime_loop_return_origins_map_conditions_and_values_to_cfg() {
+        let source = "fn value(input: &mut u16, stop: bool) -> &mut u16 { loop { if stop { return input; } return &mut *input; } }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 2, 16>(
+            &function,
+            &NoConstants,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        for (location, point) in [
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalReturnCondition {
+                    statement_index: 0,
+                    operation_index: 0,
+                },
+                RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(1)),
+            ),
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalReturnValue {
+                    statement_index: 0,
+                    operation_index: 0,
+                },
+                RuntimeOwnershipControlPoint::Edge(1),
+            ),
+            (
+                RuntimeOwnershipEventLocation::LoopReturnValue {
+                    statement_index: 0,
+                    operation_index: 1,
+                },
+                RuntimeOwnershipControlPoint::Edge(3),
+            ),
+        ] {
+            assert!(
+                facts.effects[..facts.effect_count]
+                    .iter()
+                    .flatten()
+                    .any(|effect| effect.location == location),
+                "missing {location:?}"
+            );
+            assert_eq!(facts.ownership_control_point(location), Some(point));
+        }
+    }
+
+    #[test]
     fn runtime_ownership_origins_distinguish_conditional_assignment_program_points() {
         let source = "fn value(input: u16, choose: bool) -> u16 { let mut output: u16 = input; if choose { output += input; } else { output = input; } output }";
         let module = Parser::new(source).parse_module::<2, 4>().unwrap();
@@ -24629,6 +25138,68 @@ mod tests {
                 }),
             ]
         );
+        for (location, point) in [
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalCondition {
+                    statement_index: 1,
+                    operation_index: 0,
+                    arm_index: 0,
+                },
+                RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(2)),
+            ),
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalAction {
+                    statement_index: 1,
+                    operation_index: 0,
+                    arm_index: 0,
+                    action_index: 0,
+                },
+                RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(3)),
+            ),
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalCondition {
+                    statement_index: 1,
+                    operation_index: 0,
+                    arm_index: 1,
+                },
+                RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(4)),
+            ),
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalAction {
+                    statement_index: 1,
+                    operation_index: 0,
+                    arm_index: 1,
+                    action_index: 0,
+                },
+                RuntimeOwnershipControlPoint::Block(RuntimeBasicBlockId(5)),
+            ),
+            (
+                RuntimeOwnershipEventLocation::LoopConditionalTerminal {
+                    statement_index: 1,
+                    operation_index: 0,
+                    arm_index: 2,
+                },
+                RuntimeOwnershipControlPoint::Edge(7),
+            ),
+        ] {
+            assert!(
+                facts.effects[..facts.effect_count]
+                    .iter()
+                    .flatten()
+                    .any(|effect| effect.location == location),
+                "missing {location:?}"
+            );
+            assert_eq!(facts.ownership_control_point(location), Some(point));
+        }
+        assert_eq!(
+            facts.ownership_control_point(RuntimeOwnershipEventLocation::LoopConditionalAction {
+                statement_index: 1,
+                operation_index: 0,
+                arm_index: 0,
+                action_index: 1,
+            }),
+            None
+        );
 
         let unreachable_suffix = "fn value(mode: bool) -> u8 { loop { if mode { return 1; } else { return 2; } let unreachable: u8 = 3; unreachable; } }";
         let module = Parser::new(unreachable_suffix)
@@ -24785,6 +25356,50 @@ mod tests {
                 kind: RuntimeControlFlowEdgeKind::Unconditional,
             })
         );
+        for (location, block) in [
+            (
+                RuntimeOwnershipEventLocation::LoopHeader { statement_index: 1 },
+                RuntimeBasicBlockId(0),
+            ),
+            (
+                RuntimeOwnershipEventLocation::NestedLoopAction {
+                    statement_index: 1,
+                    operation_index: 0,
+                    action_index: 0,
+                },
+                RuntimeBasicBlockId(5),
+            ),
+            (
+                RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                    statement_index: 1,
+                    operation_index: 0,
+                    action_index: 1,
+                    control_order: 0,
+                },
+                RuntimeBasicBlockId(6),
+            ),
+            (
+                RuntimeOwnershipEventLocation::NestedLoopControlCondition {
+                    statement_index: 1,
+                    operation_index: 0,
+                    action_index: 1,
+                    control_order: 1,
+                },
+                RuntimeBasicBlockId(7),
+            ),
+        ] {
+            assert!(
+                facts.effects[..facts.effect_count]
+                    .iter()
+                    .flatten()
+                    .any(|effect| effect.location == location),
+                "missing {location:?}"
+            );
+            assert_eq!(
+                facts.ownership_control_point(location),
+                Some(RuntimeOwnershipControlPoint::Block(block))
+            );
+        }
     }
 
     #[test]
@@ -25742,6 +26357,24 @@ mod tests {
             assert_eq!(fact.unwrap().base, identity);
             assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
         }
+
+        let mut saw_header = false;
+        let mut saw_action = false;
+        let mut saw_condition = false;
+        let mut saw_value = false;
+        for effect in facts.effects[..facts.effect_count].iter().flatten() {
+            match effect.location {
+                RuntimeOwnershipEventLocation::NestedLoopHeader { .. } => saw_header = true,
+                RuntimeOwnershipEventLocation::NestedLoopAction { .. } => saw_action = true,
+                RuntimeOwnershipEventLocation::NestedLoopControlCondition { .. } => {
+                    saw_condition = true;
+                }
+                RuntimeOwnershipEventLocation::NestedLoopControlValue { .. } => saw_value = true,
+                _ => continue,
+            }
+            assert!(facts.ownership_control_point(effect.location).is_some());
+        }
+        assert!(saw_header && saw_action && saw_condition && saw_value);
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
