@@ -693,8 +693,18 @@ retirement. Reset/removal completions and
 request-ID exhaustion record an explicit terminal cause. Only reset may recover:
 rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal
-state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
-queue resume, unbounded progress, and PCI discovery remain pending. One freshly
+state. Removal and exhaustion remain permanently terminal. A canonical 192-byte
+resume-state record now embeds the complete active configuration plus producer,
+request-consumer, completion-producer, completion-consumer, last-admitted-ID,
+and last-published-ID state. Only a live, unpoisoned bridge paired with the exact
+active device can capture it; uncertain guest-memory reads poison the bridge.
+The record carries no authority. Guest reconstruction requires its exact slot-
+count request snapshot, stable counter ordering, bounded outstanding distance,
+canonical generation/geometry, strictly increasing IDs, exact admitted and
+published history anchors, and correct physical slot positions. Nonzero idle
+history advances from the last published ID instead of reusing it. Live mapped
+resume publication, quiescence/crash orchestration, unbounded progress, and PCI
+discovery remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

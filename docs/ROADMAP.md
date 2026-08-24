@@ -695,9 +695,16 @@ KVM and WHP now discover this record in live controlled probes. PCI or another
 transport remains pending.
 
 The first reusable guest-driver state is now implemented as allocation-free
-backend-neutral policy. Discovery requires the canonical record plus four exact
-zero queue counters; nonzero restart state is rejected because the current
-record cannot reconstruct prior request-ID history safely. Request preparation
+backend-neutral policy. Fresh discovery requires the canonical configuration
+plus four exact zero queue counters. Nonzero reconstruction now requires a
+canonical 192-byte live resume record containing the complete configuration,
+four queue watermarks, and separate last-admitted and last-published request-ID
+anchors. The active device and unpoisoned bridge capture it only from a stable
+queue; uncertain reads poison the bridge. Reconstruction accepts exactly the
+configured physical request slots, revalidates every outstanding canonical
+request and geometry, requires strict ID order and both history anchors, and
+rebuilds pending ownership without republishing or retrying work. The record is
+data, not authority. Request preparation
 is non-mutating, exact publication tickets fill at most the configured queue
 capacity, and completion acceptance binds the next published counter and slot,
 generation, request ID, status, and expected byte count before returning an
@@ -716,7 +723,8 @@ cycle publishes two disjoint writes before either completion retires, drains
 both in order, and reuses both slots for corresponding reads against a volatile
 two-page backend. The exact probe budget covers 32 requests and their 32
 protected acknowledgements; counters advance beyond queue capacity while the
-two physical slots repeatedly wrap. Unbounded progress, nonzero-queue restart,
+two physical slots repeatedly wrap. Live mapping of the resume record, exact
+quiescence/crash orchestration, hosted restart execution, unbounded progress,
 and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport

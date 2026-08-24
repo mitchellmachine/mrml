@@ -1665,3 +1665,13 @@ entry ring transaction for eight cycles with monotonically advancing counters,
 slot wrap, distinct test patterns, and an exact finite VM-exit budget. It adds no
 new protocol, authority model, storage format, or patent-candidate mechanism.
 This agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Virtual-block nonzero resume state
+
+**Result: NOT_TRIGGERED.** The change uses a conventional canonical state record
+and bounded ring reconstruction to retain queue counters and replay-prevention
+IDs across driver reinitialization. Exact slot decoding, monotonic history
+checks, and fail-stop memory handling are standard defensive recovery
+techniques. No new protocol, authority model, storage format, or patent-
+candidate mechanism was identified. This agent review does not replace the
+required independent human dual review.

@@ -7,6 +7,7 @@ use crate::{
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
 pub const VIRTUAL_BLOCK_COMPLETION_BYTES: usize = 32;
 pub const VIRTUAL_BLOCK_CONFIGURATION_BYTES: usize = 128;
+pub const VIRTUAL_BLOCK_RESUME_STATE_BYTES: usize = 192;
 pub const MAX_VIRTUAL_BLOCK_QUEUE_SLOTS: usize = 64;
 pub const MAX_VIRTUAL_BLOCK_TRANSFER_BYTES: u32 = 1024 * 1024;
 pub const VIRTUAL_BLOCK_FEATURE_FLUSH: u64 = 1 << 0;
@@ -17,6 +18,7 @@ pub const VIRTUAL_BLOCK_COMPLETION_ACK_VALUE: u32 = 1;
 const REQUEST_MAGIC: [u8; 4] = *b"MRBQ";
 const COMPLETION_MAGIC: [u8; 4] = *b"MRBC";
 const CONFIGURATION_MAGIC: [u8; 4] = *b"MRBD";
+const RESUME_STATE_MAGIC: [u8; 4] = *b"MRBR";
 const MRML_SPECIFIC_DEVICE_CLASS: u8 = 1;
 const VERSION: u8 = 1;
 const QUEUE_HEADER_BYTES: u64 = 128;
@@ -512,6 +514,107 @@ impl VirtualBlockConfigurationPage {
     }
 }
 
+/// Canonical data-only snapshot needed to reconstruct this guest driver's
+/// nonzero queue history. It carries no capability and is useful only while it
+/// exactly matches the quiesced active device, bridge, and request ring.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockResumeState {
+    configuration: VirtualBlockConfiguration,
+    request_producer: u64,
+    request_consumed: u64,
+    completion_published: u64,
+    completion_consumer: u64,
+    last_admitted_request_id: u64,
+    last_published_request_id: u64,
+}
+
+impl VirtualBlockResumeState {
+    pub const fn configuration(self) -> VirtualBlockConfiguration {
+        self.configuration
+    }
+
+    pub const fn request_producer(self) -> u64 {
+        self.request_producer
+    }
+
+    pub const fn request_consumed(self) -> u64 {
+        self.request_consumed
+    }
+
+    pub const fn completion_published(self) -> u64 {
+        self.completion_published
+    }
+
+    pub const fn completion_consumer(self) -> u64 {
+        self.completion_consumer
+    }
+
+    pub const fn last_admitted_request_id(self) -> u64 {
+        self.last_admitted_request_id
+    }
+
+    pub const fn last_published_request_id(self) -> u64 {
+        self.last_published_request_id
+    }
+
+    pub fn encode(self, output: &mut [u8; VIRTUAL_BLOCK_RESUME_STATE_BYTES]) {
+        output.fill(0);
+        self.configuration.encode(
+            (&mut output[..VIRTUAL_BLOCK_CONFIGURATION_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        output[128..132].copy_from_slice(&RESUME_STATE_MAGIC);
+        output[132] = VERSION;
+        output[136..144].copy_from_slice(&self.request_producer.to_le_bytes());
+        output[144..152].copy_from_slice(&self.request_consumed.to_le_bytes());
+        output[152..160].copy_from_slice(&self.completion_published.to_le_bytes());
+        output[160..168].copy_from_slice(&self.completion_consumer.to_le_bytes());
+        output[168..176].copy_from_slice(&self.last_admitted_request_id.to_le_bytes());
+        output[176..184].copy_from_slice(&self.last_published_request_id.to_le_bytes());
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, VirtualBlockError> {
+        if input.len() != VIRTUAL_BLOCK_RESUME_STATE_BYTES
+            || input[128..132] != RESUME_STATE_MAGIC
+            || input[132] != VERSION
+            || input[133..136].iter().any(|byte| *byte != 0)
+            || input[184..].iter().any(|byte| *byte != 0)
+        {
+            return Err(VirtualBlockError::InvalidConfiguration);
+        }
+        let configuration =
+            VirtualBlockConfiguration::decode(&input[..VIRTUAL_BLOCK_CONFIGURATION_BYTES])?;
+        let state = Self {
+            configuration,
+            request_producer: u64::from_le_bytes(input[136..144].try_into().unwrap()),
+            request_consumed: u64::from_le_bytes(input[144..152].try_into().unwrap()),
+            completion_published: u64::from_le_bytes(input[152..160].try_into().unwrap()),
+            completion_consumer: u64::from_le_bytes(input[160..168].try_into().unwrap()),
+            last_admitted_request_id: u64::from_le_bytes(input[168..176].try_into().unwrap()),
+            last_published_request_id: u64::from_le_bytes(input[176..184].try_into().unwrap()),
+        };
+        state.validate()?;
+        Ok(state)
+    }
+
+    fn validate(self) -> Result<(), VirtualBlockError> {
+        let capacity = u64::from(self.configuration.queue().slots());
+        if self.completion_consumer > self.completion_published
+            || self.completion_published != self.request_consumed
+            || self.request_consumed > self.request_producer
+            || self.request_producer - self.completion_consumer > capacity
+            || self.request_producer - self.request_consumed > capacity
+            || (self.request_consumed == 0) != (self.last_admitted_request_id == 0)
+            || (self.request_producer == 0) != (self.last_published_request_id == 0)
+            || self.last_admitted_request_id > self.last_published_request_id
+        {
+            return Err(VirtualBlockError::InvalidQueue);
+        }
+        Ok(())
+    }
+}
+
 /// A prepared single-request publication. Encoding the request and publishing
 /// the returned producer counter must complete before this ticket is committed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -681,6 +784,87 @@ impl VirtualBlockGuestDriver {
             pending: [None; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS],
             pending_count: 0,
             terminal: None,
+        })
+    }
+
+    /// Reconstructs bounded pending ownership from a canonical quiesced device
+    /// snapshot and the exact physical request slots. The snapshot is data, not
+    /// authority; its provider must separately ensure it still matches the live
+    /// capability-bound device and bridge before allowing I/O to resume.
+    pub fn reconstruct(
+        encoded_state: &[u8],
+        encoded_requests: &[[u8; VIRTUAL_BLOCK_REQUEST_BYTES]],
+    ) -> Result<Self, VirtualBlockError> {
+        let state = VirtualBlockResumeState::decode(encoded_state)?;
+        let configuration = state.configuration();
+        let slots = usize::from(configuration.queue().slots());
+        if encoded_requests.len() != slots {
+            return Err(VirtualBlockError::InvalidQueue);
+        }
+
+        let mut pending = [None; MAX_VIRTUAL_BLOCK_QUEUE_SLOTS];
+        let pending_count = u16::try_from(state.request_producer() - state.completion_consumer())
+            .map_err(|_| VirtualBlockError::InvalidQueue)?;
+        let mut last_request_id = if state.request_consumed() == state.completion_consumer() {
+            state.last_admitted_request_id()
+        } else {
+            0
+        };
+        if pending_count != 0 {
+            let first = state
+                .completion_consumer()
+                .checked_add(1)
+                .ok_or(VirtualBlockError::SequenceExhausted)?;
+            for position in first..=state.request_producer() {
+                let slot = ((position - 1) % slots as u64) as usize;
+                let request = VirtualBlockRequest::decode(&encoded_requests[slot])?;
+                let expected_transferred =
+                    Self::validate_reconstructed_request(configuration, request)?;
+                if request.request_id() <= last_request_id {
+                    return Err(VirtualBlockError::Replay);
+                }
+                if position == state.request_consumed()
+                    && request.request_id() != state.last_admitted_request_id()
+                {
+                    return Err(VirtualBlockError::InvalidQueue);
+                }
+                last_request_id = request.request_id();
+                pending[slot] = Some(VirtualBlockGuestSubmission {
+                    request,
+                    producer: position,
+                    slot: slot as u16,
+                    expected_transferred,
+                });
+            }
+        }
+        if state.request_producer() == state.completion_consumer() && state.request_producer() != 0
+        {
+            let slot = ((state.request_producer() - 1) % slots as u64) as usize;
+            let latest = VirtualBlockRequest::decode(&encoded_requests[slot])?;
+            Self::validate_reconstructed_request(configuration, latest)?;
+            last_request_id = latest.request_id();
+        }
+        if last_request_id != state.last_published_request_id() {
+            return Err(VirtualBlockError::InvalidQueue);
+        }
+        let (next_request_id, request_ids_exhausted) = match last_request_id.checked_add(1) {
+            Some(next) => (next, false),
+            None => (u64::MAX, true),
+        };
+        let terminal = if request_ids_exhausted && pending_count == 0 {
+            Some(VirtualBlockGuestTerminalReason::SequenceExhausted)
+        } else {
+            None
+        };
+        Ok(Self {
+            configuration,
+            next_request_id,
+            request_ids_exhausted,
+            request_producer: state.request_producer(),
+            completion_consumer: state.completion_consumer(),
+            pending,
+            pending_count,
+            terminal,
         })
     }
 
@@ -1133,6 +1317,56 @@ impl VirtualBlockGuestDriver {
             buffer_length,
         );
         self.submission(request, expected)
+    }
+
+    fn validate_reconstructed_request(
+        configuration: VirtualBlockConfiguration,
+        request: VirtualBlockRequest,
+    ) -> Result<u32, VirtualBlockError> {
+        if request.generation() != configuration.generation() {
+            return Err(VirtualBlockError::StaleGeneration);
+        }
+        match request.operation() {
+            VirtualBlockOperation::Flush => {
+                if configuration.negotiated_features() & VIRTUAL_BLOCK_FEATURE_FLUSH == 0 {
+                    return Err(VirtualBlockError::InvalidFeatures);
+                }
+                if request.block() != 0
+                    || request.block_count() != 0
+                    || request.buffer_address() != 0
+                    || request.buffer_length() != 0
+                {
+                    return Err(VirtualBlockError::MalformedRequest);
+                }
+                Ok(0)
+            }
+            VirtualBlockOperation::Read | VirtualBlockOperation::Write => {
+                if request.block_count() == 0 || request.buffer_address() == 0 {
+                    return Err(VirtualBlockError::InvalidBuffer);
+                }
+                let block_end = request
+                    .block()
+                    .checked_add(u64::from(request.block_count()))
+                    .ok_or(VirtualBlockError::InvalidRange)?;
+                if block_end > configuration.block_count() {
+                    return Err(VirtualBlockError::InvalidRange);
+                }
+                let expected = configuration
+                    .block_size()
+                    .checked_mul(request.block_count())
+                    .ok_or(VirtualBlockError::InvalidBuffer)?;
+                if expected != request.buffer_length()
+                    || expected > MAX_VIRTUAL_BLOCK_TRANSFER_BYTES
+                {
+                    return Err(VirtualBlockError::InvalidBuffer);
+                }
+                request
+                    .buffer_address()
+                    .checked_add(u64::from(request.buffer_length()))
+                    .ok_or(VirtualBlockError::InvalidBuffer)?;
+                Ok(expected)
+            }
+        }
     }
 
     fn submission(
@@ -1841,6 +2075,53 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
 
     pub const fn layout(&self) -> VirtualBlockQueueLayout {
         self.layout
+    }
+
+    /// Captures canonical data for a quiesced active device/bridge pair. A
+    /// backend read failure poisons the bridge, and the returned record carries
+    /// no authority to resume or access the device.
+    pub fn resume_state<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &B,
+        device: &VirtualBlockDevice<N>,
+    ) -> Result<VirtualBlockResumeState, VirtualBlockQueueError<B::Error>> {
+        self.require_live()?;
+        let configuration = device
+            .configuration()
+            .map_err(VirtualBlockQueueError::Protocol)?;
+        if configuration.queue() != self.layout {
+            return Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::InvalidConfiguration,
+            ));
+        }
+        let request_producer = self.read_counter(backend, self.layout.request_base)?;
+        let last_published_request_id = if request_producer == 0 {
+            0
+        } else {
+            let address = slot_address(
+                self.layout.request_base,
+                request_producer,
+                N,
+                VIRTUAL_BLOCK_REQUEST_BYTES,
+            )
+            .map_err(VirtualBlockQueueError::Protocol)?;
+            let mut encoded = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
+            self.read(backend, address, &mut encoded)?;
+            VirtualBlockRequest::decode(&encoded)
+                .map_err(VirtualBlockQueueError::Protocol)?
+                .request_id()
+        };
+        let state = VirtualBlockResumeState {
+            configuration,
+            request_producer,
+            request_consumed: self.request_consumed,
+            completion_published: self.completion_published,
+            completion_consumer: self.completion_consumed,
+            last_admitted_request_id: device.last_request_id,
+            last_published_request_id,
+        };
+        state.validate().map_err(VirtualBlockQueueError::Protocol)?;
+        Ok(state)
     }
 
     pub fn read_payload<B: VirtualBlockVmmMemory>(
@@ -2801,6 +3082,149 @@ mod tests {
     }
 
     #[test]
+    fn guest_driver_reconstructs_exact_nonzero_pending_history() {
+        let configuration = active::<2>().configuration().unwrap();
+        let state = VirtualBlockResumeState {
+            configuration,
+            request_producer: 5,
+            request_consumed: 4,
+            completion_published: 4,
+            completion_consumer: 3,
+            last_admitted_request_id: 40,
+            last_published_request_id: 50,
+        };
+        let mut encoded_state = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        state.encode(&mut encoded_state);
+        assert_eq!(VirtualBlockResumeState::decode(&encoded_state), Ok(state));
+
+        let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+        VirtualBlockRequest::read(1, 40, 0, 1, 0x80_0000, 4096).encode(&mut requests[1]);
+        VirtualBlockRequest::write(1, 50, 1, 1, 0x81_0000, 4096).encode(&mut requests[0]);
+        let mut driver = VirtualBlockGuestDriver::reconstruct(&encoded_state, &requests).unwrap();
+        assert_eq!(driver.configuration(), configuration);
+        assert_eq!(driver.request_producer(), 5);
+        assert_eq!(driver.completion_consumer(), 3);
+        assert_eq!(driver.pending_count(), 2);
+        assert_eq!(
+            driver.prepare_read(0, 1, 0x90_0000, 4096),
+            Err(VirtualBlockError::QueueFull)
+        );
+
+        let completion = completion_bytes(1, 40, VirtualBlockCompletionStatus::Ok, 4096);
+        driver.accept_completion(4, &completion).unwrap();
+        let next = driver.prepare_read(0, 1, 0x90_0000, 4096).unwrap();
+        assert_eq!(next.producer(), 6);
+        assert_eq!(next.slot(), 1);
+        assert_eq!(next.request().request_id(), 51);
+    }
+
+    #[test]
+    fn guest_driver_reconstructs_nonzero_idle_history_without_reusing_ids() {
+        let configuration = active::<2>().configuration().unwrap();
+        let state = VirtualBlockResumeState {
+            configuration,
+            request_producer: 5,
+            request_consumed: 5,
+            completion_published: 5,
+            completion_consumer: 5,
+            last_admitted_request_id: 50,
+            last_published_request_id: 50,
+        };
+        let mut encoded_state = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        state.encode(&mut encoded_state);
+        let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+        VirtualBlockRequest::write(1, 50, 1, 1, 0x81_0000, 4096).encode(&mut requests[0]);
+        let driver = VirtualBlockGuestDriver::reconstruct(&encoded_state, &requests).unwrap();
+        assert!(!driver.has_pending());
+        let next = driver.prepare_read(0, 1, 0x90_0000, 4096).unwrap();
+        assert_eq!(next.request().request_id(), 51);
+        assert_eq!(next.producer(), 6);
+
+        let exhausted = VirtualBlockResumeState {
+            request_producer: u64::MAX,
+            request_consumed: u64::MAX,
+            completion_published: u64::MAX,
+            completion_consumer: u64::MAX,
+            last_admitted_request_id: u64::MAX,
+            last_published_request_id: u64::MAX,
+            ..state
+        };
+        exhausted.encode(&mut encoded_state);
+        VirtualBlockRequest::read(1, u64::MAX, 0, 1, 0x80_0000, 4096).encode(&mut requests[0]);
+        let exhausted_driver =
+            VirtualBlockGuestDriver::reconstruct(&encoded_state, &requests).unwrap();
+        assert_eq!(
+            exhausted_driver.terminal_reason(),
+            Some(VirtualBlockGuestTerminalReason::SequenceExhausted)
+        );
+    }
+
+    #[test]
+    fn guest_driver_reconstruction_rejects_counter_slot_and_history_substitution() {
+        let configuration = active::<2>().configuration().unwrap();
+        let canonical = VirtualBlockResumeState {
+            configuration,
+            request_producer: 5,
+            request_consumed: 4,
+            completion_published: 4,
+            completion_consumer: 3,
+            last_admitted_request_id: 40,
+            last_published_request_id: 50,
+        };
+        let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+        VirtualBlockRequest::read(1, 40, 0, 1, 0x80_0000, 4096).encode(&mut requests[1]);
+        VirtualBlockRequest::write(1, 50, 1, 1, 0x81_0000, 4096).encode(&mut requests[0]);
+
+        for invalid in [
+            VirtualBlockResumeState {
+                completion_published: 3,
+                ..canonical
+            },
+            VirtualBlockResumeState {
+                completion_consumer: 2,
+                ..canonical
+            },
+            VirtualBlockResumeState {
+                last_admitted_request_id: 41,
+                ..canonical
+            },
+            VirtualBlockResumeState {
+                last_published_request_id: 49,
+                ..canonical
+            },
+        ] {
+            let mut encoded = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+            invalid.encode(&mut encoded);
+            assert!(VirtualBlockGuestDriver::reconstruct(&encoded, &requests).is_err());
+        }
+
+        let mut encoded = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        canonical.encode(&mut encoded);
+        assert_eq!(
+            VirtualBlockGuestDriver::reconstruct(&encoded, &requests[..1]),
+            Err(VirtualBlockError::InvalidQueue)
+        );
+        let mut replay = requests;
+        VirtualBlockRequest::write(1, 40, 1, 1, 0x81_0000, 4096).encode(&mut replay[0]);
+        assert_eq!(
+            VirtualBlockGuestDriver::reconstruct(&encoded, &replay),
+            Err(VirtualBlockError::Replay)
+        );
+        let mut stale = requests;
+        VirtualBlockRequest::write(2, 50, 1, 1, 0x81_0000, 4096).encode(&mut stale[0]);
+        assert_eq!(
+            VirtualBlockGuestDriver::reconstruct(&encoded, &stale),
+            Err(VirtualBlockError::StaleGeneration)
+        );
+        let mut hidden = encoded;
+        hidden[191] = 1;
+        assert_eq!(
+            VirtualBlockGuestDriver::reconstruct(&hidden, &requests),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
+    }
+
+    #[test]
     fn guest_driver_submission_and_completion_are_exact_two_phase_state() {
         let device = active::<2>();
         let mut driver = discovered_driver(&device);
@@ -3423,6 +3847,55 @@ mod tests {
                 .copy_from_slice(input);
             Ok(())
         }
+    }
+
+    #[test]
+    fn live_bridge_resume_state_binds_device_history_and_poison_on_uncertainty() {
+        let mut device = active::<2>();
+        let queue = layout::<2>();
+        let mut bridge = VirtualBlockQueueBridge::<2>::new(queue).unwrap();
+        let first = VirtualBlockRequest::read(1, 10, 0, 1, 0x4000, 4096);
+        let second = VirtualBlockRequest::write(1, 20, 1, 1, 0x4000, 4096);
+        device.admit(&encoded(first)).unwrap();
+        device.admit(&encoded(second)).unwrap();
+        bridge.request_consumed = 2;
+        bridge.completion_published = 2;
+        bridge.completion_consumed = 1;
+
+        let mut vmm = MockVmm::new();
+        vmm.bytes[queue.request_base() as usize..queue.request_base() as usize + 8]
+            .copy_from_slice(&2_u64.to_le_bytes());
+        let first_address = queue.request_base() as usize + QUEUE_HEADER_BYTES as usize;
+        vmm.bytes[first_address..first_address + VIRTUAL_BLOCK_REQUEST_BYTES]
+            .copy_from_slice(&encoded(first));
+        let second_address = first_address + VIRTUAL_BLOCK_REQUEST_BYTES;
+        vmm.bytes[second_address..second_address + VIRTUAL_BLOCK_REQUEST_BYTES]
+            .copy_from_slice(&encoded(second));
+
+        let state = bridge.resume_state(&vmm, &device).unwrap();
+        assert_eq!(state.configuration(), device.configuration().unwrap());
+        assert_eq!(state.request_producer(), 2);
+        assert_eq!(state.request_consumed(), 2);
+        assert_eq!(state.completion_published(), 2);
+        assert_eq!(state.completion_consumer(), 1);
+        assert_eq!(state.last_admitted_request_id(), 20);
+        assert_eq!(state.last_published_request_id(), 20);
+
+        let mut encoded_state = [0; VIRTUAL_BLOCK_RESUME_STATE_BYTES];
+        state.encode(&mut encoded_state);
+        let requests = [encoded(first), encoded(second)];
+        let driver = VirtualBlockGuestDriver::reconstruct(&encoded_state, &requests).unwrap();
+        assert_eq!(driver.pending_count(), 1);
+        assert_eq!(driver.completion_consumer(), 1);
+
+        let mut uncertain_bridge = VirtualBlockQueueBridge::<2>::new(queue).unwrap();
+        let mut uncertain_vmm = MockVmm::new();
+        uncertain_vmm.fail_read = true;
+        assert_eq!(
+            uncertain_bridge.resume_state(&uncertain_vmm, &device),
+            Err(VirtualBlockQueueError::Backend(MockError::Injected))
+        );
+        assert!(uncertain_bridge.is_poisoned());
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

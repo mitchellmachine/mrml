@@ -3655,6 +3655,49 @@ handoff admits exactly one or two framebuffer pages and rejects every other
 count; no payload aliases queue memory, and the volatile backend independently
 checks block multiplication, range addition, exact length, and slice bounds.
 
+The next nonzero-history prerequisite is now implemented as a canonical 192-
+byte virtual-block resume record and allocation-free reconstruction policy. The
+record embeds the entire 128-byte active configuration and binds the request
+producer, device-owned request consumer, completion producer, protected
+completion consumer, last device-admitted request ID, and last guest-published
+request ID. Capture succeeds only for an active device whose queue exactly
+matches an unpoisoned bridge. It reads the producer and latest physical request
+slot through the VMM memory boundary; uncertainty poisons the bridge. Stable
+capture requires completion publication to equal request consumption and all
+outstanding distances to fit configured capacity.
+
+Reconstruction accepts exactly the configured number of physical request slots.
+It decodes every retained outstanding request, derives the physical slot from
+its monotonic position, rechecks generation, operation, negotiated flush,
+geometry, transfer bound, address arithmetic, strict request-ID order, and both
+history anchors, then rebuilds pending ownership without republishing or
+retrying any request. An idle nonzero queue validates its retained latest slot
+and chooses the exact successor ID. Exhaustion remains terminal. Wrong lengths,
+counter substitution, stale generations, replayed or reordered IDs, mismatched
+admitted/published anchors, malformed requests, hidden bytes, and backend read
+failure all reject without a usable reconstructed driver.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2 each
+pass all 386 `mrml-kernel` release tests and scoped strict Clippy. Four new
+focused tests cover pending and idle nonzero reconstruction, counter/slot/
+history substitution, canonical encoding, exact successor IDs, live device-
+bridge capture, and poison on uncertain reads. This is unit/simulation evidence
+only. No mapped resume page, quiescence/crash protocol, hosted restart run,
+durability, PCI transport, native boot, or physical hardware was exercised.
+
+The reconstruction `DIGITAL-RIGHTS REVIEW` found no identity, collection,
+retention, correlation, attestation mandate, DRM, disclosure, vendor control,
+accessibility restriction, persistence, or third-party authority. The bounded
+record contains only queue mechanics required to avoid replay and grants no
+authority. The `HOSTILE SECURITY REVIEW` treats the configuration, every
+counter, ID anchor, request slot, generation, operation, geometry, address,
+length, ordering relationship, backend read, and reconstructed descendant as
+hostile. Exact live device/bridge binding precedes capture; uncertainty poisons;
+all validation precedes reconstruction; and no request is retried or published
+by reconstruction. Existing capability, revocation, rollback-resistance,
+accessibility, evidence, and owner-sovereignty gates remain unchanged. This
+agent review does not replace the required independent human dual review.
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

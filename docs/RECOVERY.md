@@ -395,9 +395,17 @@ explicitly and downgrade the status rather than guessing.
   WHP images now repeat eight two-entry windows with disjoint writes, drain each
   in order, and reuse both slots for reads. The 32 requests and 32 protected
   acknowledgements exercise repeated counter and slot wrap against volatile
-  storage only. Nonzero restart history, unbounded progress, and PCI transport
-  remain pending. A common unsafe guest queue-
-  transport boundary now derives
+  storage only. A canonical data-only resume record now binds the complete
+  active configuration, all four queue watermarks, and separate last-admitted
+  and last-published request IDs. A live unpoisoned bridge captures it against
+  the exact active device and poisons on uncertain memory reads. Allocation-free
+  guest reconstruction validates exact slot count and placement, canonical
+  request encodings and geometry, counter bounds, generation, strict ID order,
+  and both history anchors before rebuilding pending ownership. Idle nonzero
+  state advances beyond the last published ID. This is unit/simulation policy,
+  not crash or recovery evidence. Resume-page mapping, quiescence/restart
+  orchestration, unbounded progress, and PCI transport remain pending. A common
+  unsafe guest queue-transport boundary now derives
   exact queue addresses, orders request-slot publication before its producer and
   the exact doorbell, acquires the completion watermark before the next consumer
   slot, and uses the exact protected acknowledgement tuple before local
