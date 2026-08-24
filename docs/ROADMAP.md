@@ -631,9 +631,9 @@ now preflights admission and completion-ring
 capacity before consumption, distinguishes idle and backpressure, rejects a
 consumed malformed request before backend access, executes once, and publishes
 the bound completion. If completion publication becomes uncertain after possible
-mutation, the device and bridge fail rather than retry. A concrete hosted/
-physical backend, PCI transport, KVM/WHP
-attachment, a guest driver, QEMU comparison, and fuzzing remain pending. This is
+mutation, the device and bridge fail rather than retry. A concrete block
+backend, PCI transport, native runner dispatch, a guest driver, QEMU comparison,
+and fuzzing remain pending. This is
 not VirtIO-compatible. Completion publication now latches one coalesced
 notification. Delivery uses the device-configured vector through the existing
 allowlisted, exact-`SIGNAL`-capability VM interrupt boundary and acknowledges
@@ -650,6 +650,12 @@ direction, and value before queue access and processes at most one request per
 accepted disposition. The port and value carry no backend or interrupt
 authority. This remains shared-policy simulation; native runner wiring is
 pending.
+Prepared KVM and WHP guests now implement the common virtual-block memory
+contract and transactionally attach the validated request/completion ranges.
+Native request memory is guest-writable, while completion memory rejects the
+ordinary guest-write path and remains writable by the isolated device path.
+Controlled live tests cover both backends, but no guest executes this protocol
+yet.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

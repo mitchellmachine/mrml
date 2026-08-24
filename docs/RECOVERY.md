@@ -352,8 +352,11 @@ explicitly and downgrade the status rather than guessing.
   policy only. An exact MRML-specific 32-bit write/value doorbell over the
   common I/O disposition processes at most one request and rejects every scalar
   mismatch before queue/backend access. No concrete hosted/physical backend,
-  KVM/WHP device attachment, native-runner wiring, guest driver, or durability
-  evidence exists yet. A
+  native-runner dispatch, guest driver, or durability evidence exists yet.
+  Prepared KVM and WHP guests do now attach the same validated request and
+  guest-read-only completion ranges transactionally; ordinary completion writes
+  fail while the device-memory path can publish. This is controlled hosted
+  queue-memory evidence, not a running virtual-block device. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

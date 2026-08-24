@@ -7,7 +7,7 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE,
     PeImage, PhysAddr, RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
-    VmBackend, VmExit,
+    VirtualBlockQueueLayout, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -624,6 +624,31 @@ impl<'system> PreparedWhpGuest<'system> {
         Ok(self)
     }
 
+    /// Attaches one validated MRML virtual-block request/completion pair using
+    /// separate WHP GPA ranges. Requests are guest-writable; completions are
+    /// guest-read-only and writable only through the device-memory path.
+    /// Consuming `self` prevents use after a partial native attachment failure.
+    pub fn attach_virtual_block_queue_memory(
+        mut self,
+        layout: VirtualBlockQueueLayout,
+    ) -> Result<Self, WhpError> {
+        let bytes = layout
+            .pages_per_queue()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(WhpError::MemoryOverflow)?;
+        self.partition.map_zeroed(range(
+            layout.request_base(),
+            bytes,
+            MapPermissions::read_write(),
+        )?)?;
+        self.partition.map_zeroed_service_readonly(range(
+            layout.completion_base(),
+            bytes,
+            MapPermissions::read_only(),
+        )?)?;
+        Ok(self)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn attach_isolated_service(
         self,
@@ -934,6 +959,12 @@ impl RevocableVmBackend for PreparedWhpGuest<'_> {
 
 impl GpuVmmMemory for PreparedWhpGuest<'_> {
     fn write_gpu_service(&mut self, address: u64, input: &[u8]) -> Result<(), Self::Error> {
+        self.partition.write_service(address, input)
+    }
+}
+
+impl VirtualBlockVmmMemory for PreparedWhpGuest<'_> {
+    fn write_virtual_block(&mut self, address: u64, input: &[u8]) -> Result<(), Self::Error> {
         self.partition.write_service(address, input)
     }
 }
@@ -1978,8 +2009,11 @@ mod tests {
         )
         .unwrap();
         let queue_layout = GpuSharedQueueLayout::new(0x50_0000, 0x50_2000, 64).unwrap();
+        let block_layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 64).unwrap();
         let mut guest = system
             .prepare_gpu_guest(&executable, &valid_handoff(), layout, queue_layout)
+            .unwrap()
+            .attach_virtual_block_queue_memory(block_layout)
             .unwrap();
         assert_eq!(guest.entry(), 0x20_1000);
         let stack_layout =
@@ -2037,6 +2071,25 @@ mod tests {
             VmBackend::write_guest(&mut guest, queue_layout.completion_base(), &[1]),
             Err(WhpError::ReadOnlyMemory)
         );
+        VmBackend::write_guest(&mut guest, block_layout.request_base(), &[0x31]).unwrap();
+        assert_eq!(
+            VmBackend::write_guest(&mut guest, block_layout.completion_base(), &[0x32]),
+            Err(WhpError::ReadOnlyMemory)
+        );
+        VirtualBlockVmmMemory::write_virtual_block(
+            &mut guest,
+            block_layout.completion_base(),
+            &[0x33],
+        )
+        .unwrap();
+        let mut block_completion = [0; 1];
+        VmBackend::read_guest(
+            &guest,
+            block_layout.completion_base(),
+            &mut block_completion,
+        )
+        .unwrap();
+        assert_eq!(block_completion, [0x33]);
         assert_eq!(
             guest.run(),
             Ok(VmExit::Unknown {

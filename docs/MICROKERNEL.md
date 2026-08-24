@@ -3337,6 +3337,45 @@ doorbell cannot drain an unbounded queue. Data remains non-authorizing, and all
 existing uncertainty paths remain fail-stop. This agent review does not replace
 the required independent human dual review.
 
+`PreparedKvmGuest` and `PreparedWhpGuest` now implement the common
+`VirtualBlockVmmMemory` contract and expose consuming transactional attachment
+for one validated `VirtualBlockQueueLayout`. Each backend creates two disjoint
+native ranges of the layout's exact rounded size. The request range is guest-
+writable. The completion range is guest-read-only through ordinary VM memory
+access but remains host-writable through the dedicated virtual-block device path.
+If either native mapping fails, the consumed partially attached guest is not
+returned to the caller. This mirrors guest-visible directionality across KVM
+and WHP without moving queue policy into either backend.
+
+Recorded verification on 2026-08-24: the Windows gnullvm `mrml-whp` release
+suite passes 19 active tests (one manual benchmark ignored), including a live
+WHP signed-guest test that attaches the block ranges, accepts a request write,
+rejects an ordinary completion write, publishes a completion through
+`VirtualBlockVmmMemory`, reads it back exactly, and reaches the signed guest's
+expected endpoint. The Arch Linux/WSL2 `mrml-kvm` release suite passes 16 active
+tests (one manual benchmark ignored) with the equivalent live `/dev/kvm` path.
+Strict Clippy passes for each native package; the opposite-platform ABI suites
+also pass (six KVM tests on Windows and ten WHP tests on Linux). These are
+controlled hosted queue-memory tests. They do not execute a block doorbell in a
+guest, attach a concrete block backend, prove host-resistant isolation, or
+establish durability or physical-device behavior.
+
+The existing 10,000-iteration live native map/revoke regression gates also
+pass: WHP measured 241,167,600 ns total (24,116 ns per lifecycle), versus the
+prior 240,192,000 ns/24,019 ns sample; KVM measured 668,296,254 ns total (66,829
+ns per lifecycle), versus 692,148,811 ns/69,214 ns previously. These are noisy
+single samples of allocation plus native mapping/removal, not virtual-block
+throughput or an optimization claim.
+
+The native-attachment `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
+retention, identity expansion, DRM, attestation, remote disclosure, vendor
+preference, accessibility restriction, or durable owner-state change. The
+`HOSTILE SECURITY REVIEW` treats layout arithmetic, range overlap, mapping-slot
+capacity, native mapping results, directionality, ordinary guest writes, and
+partial attachment as hostile; validation and consuming construction prevent a
+partially attached guest from being resumed through this API. This agent review
+does not replace the required independent human dual review.
+
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one
 capability-selected shared buffer.

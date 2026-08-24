@@ -633,8 +633,14 @@ backend uncertainty leaves it pending, while terminal device transitions clear
 it. An MRML-specific scalar doorbell now takes the common I/O disposition,
 accepts only the exact 32-bit write/value tuple, and processes at most one
 request; every mismatch fails before queue or backend access. The port is
-routing data and does not grant block or interrupt authority. It has no concrete hosted or
-physical backend, PCI transport, KVM/WHP attachment, or guest driver yet.
+routing data and does not grant block or interrupt authority. It has no concrete
+hosted or physical block backend, PCI transport, runner dispatch, or guest
+driver yet.
+Prepared KVM and WHP guests can now transactionally attach the same validated
+request/completion layout as disjoint native ranges: requests are guest-
+writable, completions are guest-read-only, and the dedicated virtual-block path
+retains completion-write access. This is queue-memory attachment, not a complete
+device.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

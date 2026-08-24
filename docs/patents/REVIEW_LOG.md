@@ -1367,6 +1367,15 @@ exit handling, canonical responses, and byte comparisons are defensive systems
 integration. No new patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — KVM/WHP virtual-block queue-memory attachment
+
+**Result: NOT_TRIGGERED.** The change conventionally maps separate request and
+completion ranges with asymmetric guest permissions and exposes host-only
+completion writes through an existing device-memory trait. Consuming attachment
+to prevent reuse after partial failure is a standard defensive resource-
+construction technique. No patent-candidate mechanism was identified. This
+agent review does not replace the required independent human dual review.
+
 # 2026-08-24 — MRML virtual-block scalar doorbell
 
 **Result: NOT_TRIGGERED.** The change conventionally assigns a fixed I/O port
