@@ -171,6 +171,17 @@ authenticated, monotonic, power-loss-atomic storage; measured boot; exact
 artifact-set admission; corruption handling; recovery; and key rotation remain
 required. Development signing is not production Secure Boot.
 
+The loader now extends a canonical selected-set record after the separate
+authenticated kernel and service payload events. Its fixed encoding binds the
+ordered kernel/service kinds, nonzero signed versions, and verified SHA3-512
+digests; zero identity fields fail before measurement. The measured-boot flag
+requires all three successful PCR 11 extensions. This prevents the current
+handoff from calling two independently extended payloads a measured selected
+pair without recording their relationship. It does not establish a coherent
+same-release manifest, owner trust-root persistence, remote attestation, or
+measurement of planned VM, CUDA, launch-policy, configuration, and compiler/
+runtime artifacts, so Phase 6 exact artifact-set admission remains partial.
+
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary
 slots under a shared nonzero policy digest, with every SHA-256 TPM Name
@@ -183,7 +194,10 @@ session. Full slot writes are read-verified and counter advancement rechecks the
 exact predecessor and successor. A concrete provider starts a fresh unsalted,
 unbound SHA-256 policy session using explicit nonzero caller entropy, executes
 one exact configured `PolicyPCR` recipe, and accepts only the requested next NV
-operation. Zero or immediately reused caller nonces fail closed. Operation
+operation. The concrete provider exists only after admission of the three exact
+index/Name/policy tuples, and the next command must repeat the admitted index in
+both handle fields along with the exact operation and session handle. Zero or
+immediately reused caller nonces fail closed. Operation
 mismatch, policy failure, and a malformed nonce following
 a valid returned session handle trigger best-effort cleanup. The TPM still
 enforces the admitted NV index's exact policy digest; the provider does not
@@ -192,7 +206,8 @@ not provision the owner policy, authenticate an owner UI, establish transport
 confidentiality, prove firmware integration, or establish physical durability,
 so this remains protocol evidence rather than rollback-resistance evidence.
 The safe journal constructor first admits all three exact NV public identities
-through this provider, so mismatched layout policy never yields a usable store.
+on the raw transport, then constructs the provider from that sealed admission;
+mismatched layout policy never yields a usable store.
 The UEFI loader's optional development integration requires all six exact
 configuration fields together, obtains every session nonce from a separate
 firmware RNG call, and authenticates only the counter-selected slot before

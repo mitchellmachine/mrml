@@ -634,6 +634,44 @@ pub fn parse_nonzero_version(encoded: &[u8]) -> Option<u64> {
     (value != 0).then_some(value)
 }
 
+pub const SELECTED_BOOT_ARTIFACT_SET_BYTES: usize = 192;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SelectedArtifactSetError {
+    InvalidIdentity,
+}
+
+/// Encodes the exact verified kernel/service pairing extended into the boot
+/// PCR. This record is evidence data, not authority or remote attestation.
+pub fn encode_selected_boot_artifact_set(
+    kernel_version: u64,
+    kernel_digest: [u8; 64],
+    service_version: u64,
+    service_digest: [u8; 64],
+) -> Result<[u8; SELECTED_BOOT_ARTIFACT_SET_BYTES], SelectedArtifactSetError> {
+    if kernel_version == 0
+        || service_version == 0
+        || kernel_digest.iter().all(|byte| *byte == 0)
+        || service_digest.iter().all(|byte| *byte == 0)
+    {
+        return Err(SelectedArtifactSetError::InvalidIdentity);
+    }
+    let mut output = [0; SELECTED_BOOT_ARTIFACT_SET_BYTES];
+    output[..16].copy_from_slice(b"MRML-BOOTSET-v1\0");
+    output[16..18].copy_from_slice(&(SELECTED_BOOT_ARTIFACT_SET_BYTES as u16).to_le_bytes());
+    output[18..20].copy_from_slice(&1u16.to_le_bytes());
+    output[20..22].copy_from_slice(&2u16.to_le_bytes());
+    encode_artifact_identity(&mut output[32..112], 1, kernel_version, kernel_digest);
+    encode_artifact_identity(&mut output[112..192], 2, service_version, service_digest);
+    Ok(output)
+}
+
+fn encode_artifact_identity(output: &mut [u8], kind: u16, version: u64, digest: [u8; 64]) {
+    output[..2].copy_from_slice(&kind.to_le_bytes());
+    output[8..16].copy_from_slice(&version.to_le_bytes());
+    output[16..80].copy_from_slice(&digest);
+}
+
 fn hex(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -685,6 +723,44 @@ mod tests {
         );
         assert!(parse_nonzero_version(b"0").is_none());
         assert!(parse_nonzero_version(b"18446744073709551616").is_none());
+    }
+
+    #[test]
+    fn selected_boot_artifact_set_is_canonical_and_ordered() {
+        let encoded = encode_selected_boot_artifact_set(7, [0x11; 64], 9, [0x22; 64]).unwrap();
+        assert_eq!(&encoded[..16], b"MRML-BOOTSET-v1\0");
+        assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 192);
+        assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(encoded[20..22].try_into().unwrap()), 2);
+        assert!(encoded[22..32].iter().all(|byte| *byte == 0));
+        assert_eq!(u16::from_le_bytes(encoded[32..34].try_into().unwrap()), 1);
+        assert!(encoded[34..40].iter().all(|byte| *byte == 0));
+        assert_eq!(u64::from_le_bytes(encoded[40..48].try_into().unwrap()), 7);
+        assert_eq!(&encoded[48..112], &[0x11; 64]);
+        assert_eq!(u16::from_le_bytes(encoded[112..114].try_into().unwrap()), 2);
+        assert!(encoded[114..120].iter().all(|byte| *byte == 0));
+        assert_eq!(u64::from_le_bytes(encoded[120..128].try_into().unwrap()), 9);
+        assert_eq!(&encoded[128..192], &[0x22; 64]);
+    }
+
+    #[test]
+    fn selected_boot_artifact_set_rejects_missing_identity() {
+        assert_eq!(
+            encode_selected_boot_artifact_set(0, [1; 64], 1, [2; 64]),
+            Err(SelectedArtifactSetError::InvalidIdentity)
+        );
+        assert_eq!(
+            encode_selected_boot_artifact_set(1, [0; 64], 1, [2; 64]),
+            Err(SelectedArtifactSetError::InvalidIdentity)
+        );
+        assert_eq!(
+            encode_selected_boot_artifact_set(1, [1; 64], 0, [2; 64]),
+            Err(SelectedArtifactSetError::InvalidIdentity)
+        );
+        assert_eq!(
+            encode_selected_boot_artifact_set(1, [1; 64], 1, [0; 64]),
+            Err(SelectedArtifactSetError::InvalidIdentity)
+        );
     }
 
     #[test]

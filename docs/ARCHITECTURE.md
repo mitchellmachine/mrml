@@ -62,6 +62,12 @@ descendants are covered in `TaskRuntime`; the broader derived-state revocation
 requirement still includes mappings, shared memory, DMA, devices, cached
 decisions, and service-specific state. These pieces do not yet form a complete
 production service substrate or hardware-validated security boundary.
+The UEFI measured-boot path now extends the individually authenticated kernel
+and service payloads and then a canonical 192-byte selected-set record binding
+their fixed order, kinds, nonzero versions, and verified SHA3-512 digests. The
+measured-boot handoff bit requires all three extensions. This binds the pair the
+current loader actually selects; it is not same-release admission for the
+planned VM, CUDA, launch-policy, configuration, or compiler/runtime artifacts.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
 authority/verifier work; nested-KVM VMX-root/EPT probes; CUDA mediation and VMM

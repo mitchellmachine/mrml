@@ -1534,7 +1534,11 @@ copies, stacks, and table arenas remain separate.
 
 The real UEFI path now also requires `\EFI\MRML\SERVICE.SIGNED`. The loader
 checks a service-specific embedded root and version floor, extends both kernel
-and service payloads into PCR 11 when TCG2 is available, materializes the
+and service payloads into PCR 11 when TCG2 is available, then extends a
+canonical selected-set record binding their fixed kinds, order, signed versions,
+and verified SHA3-512 digests. The measured-boot bit requires all three events.
+This is the selected kernel/service pair, not the complete planned same-release
+artifact set. The loader materializes the
 service at its signed preferred base, and reserves disjoint image, stack, and
 page-table arenas. Its canonical handoff carries both the immutable signed
 container and materialized pages. After `ExitBootServices`, the kernel repeats

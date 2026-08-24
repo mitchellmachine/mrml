@@ -404,7 +404,16 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         service_signed.payload(),
         b"MRML authenticated service PE",
     )?;
-    let measured_boot = kernel_measured && service_measured;
+    let artifact_set = encode_selected_boot_artifact_set(
+        verified.artifact().version(),
+        *verified.artifact().digest(),
+        service_verified.artifact().version(),
+        *service_verified.artifact().digest(),
+    )
+    .map_err(|_| LOAD_ERROR)?;
+    let artifact_set_measured =
+        measure_artifact(services, &artifact_set, b"MRML selected artifact set")?;
+    let measured_boot = kernel_measured && service_measured && artifact_set_measured;
     if require_tpm_measurement() && !measured_boot {
         return Err(LOAD_ERROR);
     }

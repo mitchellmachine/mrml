@@ -719,7 +719,7 @@ authority; unrelated domains continue.
    volatile compare-and-store behavior only; a conforming authenticated,
    power-loss-atomic backend and physical evidence remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 447 kernel tests, all 18 `mrml-uefi` library tests, all 116
+   each pass all 447 kernel tests, all 20 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict
    Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
    enabled; strict Linux crate-local Clippy also passes. The direct UEFI crypto
@@ -1339,6 +1339,17 @@ can count as trusted consent.
 1. Implement a TPM NV or equivalent authenticated, monotonic, power-loss-atomic
    release-state backend.
 2. Bind measured boot to the exact coherent signed artifact set.
+   **PARTIALLY IMPLEMENTED:** after independently extending the authenticated
+   kernel and service payloads into PCR 11, the UEFI loader now extends one
+   canonical 192-byte selected-boot-set record. It binds a fixed kernel-then-
+   service order, explicit kinds, nonzero signed versions, verified SHA3-512
+   digests, exact length, and zero reserved bytes. The measured-boot handoff bit
+   is set only when all three extensions succeed; focused tests reject missing
+   identity and verify every canonical field. This records the exact pair the
+   current loader selected, but does not yet enforce one release manifest or
+   include the planned VM image, CUDA bundle, launch policy, configuration root,
+   or compiler/runtime artifacts. No TPM-backed execution or remote-attestation
+   evidence is claimed.
 3. Add rollback, stale-update, corruption, interrupted-write, and recovery tests.
 4. Establish reproducible builds, independently controlled release keys,
    Secure Boot integration, recovery, and key rotation.
