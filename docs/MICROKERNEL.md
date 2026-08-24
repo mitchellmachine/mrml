@@ -3219,6 +3219,39 @@ mutation, and payload-memory results as hostile. Data never creates authority;
 uncertain mutation cannot be retried through a live bridge. This agent review
 does not replace the required independent human dual review.
 
+The queue processor now composes one complete backend-neutral request
+transaction without absorbing interrupt policy. It verifies that a nonexhausted
+in-flight slot and completion-ring capacity both exist before consuming a guest
+entry. An empty queue returns idle; a full completion ring or full in-flight
+table returns backpressure without advancing the request-consumed counter.
+Admission skips empty slots whose generations are exhausted. A malformed or
+stale consumed entry returns an exact rejection and reaches neither guest payload
+nor block backend. A valid entry is admitted, executed once, and its bound
+completion is published before success is returned. Insufficient scratch after
+admission, guest-memory uncertainty, uncertain mutation, or completion
+publication uncertainty poisons the bridge and fails the device; a possible
+mutation is never retried to manufacture a completion.
+
+Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
+each pass all 356 `mrml-kernel` release tests and scoped strict Clippy. The 19
+focused virtual-block tests cover complete write transaction and idle behavior,
+pre-consumption completion backpressure, malformed-request consumption without
+backend access, exhausted-slot selection, insufficient-scratch fail-stop, and
+one backend mutation followed by uncertain completion publication in addition
+to the earlier codec, lifecycle, execution, replay, and poison cases. This is
+unit/simulation evidence only. No doorbell, capability-authorized interrupt
+injection from this device, KVM/WHP attachment, concrete hosted/physical backend,
+guest driver, durability behavior, or hardware behavior was exercised.
+
+The transaction `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+tracking, DRM, attestation, remote disclosure, first-party bypass, accessibility
+restriction, or persistent owner-state change. The `HOSTILE SECURITY REVIEW`
+treats request and completion counters, capacity, malformed consumed records,
+generation exhaustion, scratch, backend effects, and completion publication as
+hostile. Backpressure precedes consumption and post-mutation uncertainty is
+terminal. This agent review does not replace the required independent human dual
+review.
+
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one
 capability-selected shared buffer.

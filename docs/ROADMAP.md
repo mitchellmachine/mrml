@@ -627,8 +627,14 @@ guest-memory I/O. A backend-neutral executor copies reads and writes through
 erased bounded private scratch, issues flush only after admission, returns a
 detail-free device error for a backend-guaranteed clean rejection, and fails the
 device plus bridge after uncertain mutation. A concrete hosted/physical backend,
-doorbells, interrupt delivery, PCI transport, KVM/WHP attachment, a guest driver,
-QEMU comparison, and fuzzing remain pending. This is not VirtIO-compatible.
+A complete one-request transaction now preflights admission and completion-ring
+capacity before consumption, distinguishes idle and backpressure, rejects a
+consumed malformed request before backend access, executes once, and publishes
+the bound completion. If completion publication becomes uncertain after possible
+mutation, the device and bridge fail rather than retry. A concrete hosted/
+physical backend, doorbells, interrupt delivery, PCI transport, KVM/WHP
+attachment, a guest driver, QEMU comparison, and fuzzing remain pending. This is
+not VirtIO-compatible.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

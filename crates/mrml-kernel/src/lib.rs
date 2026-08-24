@@ -131,9 +131,10 @@ pub use virtual_block::{
     VirtualBlockBackend, VirtualBlockCompletion, VirtualBlockCompletionStatus, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockExecutionError,
     VirtualBlockExecutionOutcome, VirtualBlockExecutionResult, VirtualBlockMutationError,
-    VirtualBlockOperation, VirtualBlockQueueBridge, VirtualBlockQueueError,
+    VirtualBlockOperation, VirtualBlockProcessError, VirtualBlockProcessOutcome,
+    VirtualBlockProcessResult, VirtualBlockQueueBridge, VirtualBlockQueueError,
     VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockTicket, VirtualBlockVmmMemory,
-    execute_virtual_block_request,
+    execute_virtual_block_request, process_virtual_block_request,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,

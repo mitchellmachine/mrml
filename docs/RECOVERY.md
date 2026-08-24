@@ -342,7 +342,10 @@ explicitly and downgrade the status rather than guessing.
   lifecycle, generation-invalidating reset/removal, and backend-neutral exact
   read/write/flush execution through erased bounded scratch. Clean mutation
   rejection remains distinguishable from uncertainty; uncertainty fails the
-  device and poisons its bridge. It is unit-tested shared policy only: no
+  device and poisons its bridge. A one-request processor preflights admission
+  and completion capacity before consuming, then admits, executes once, and
+  publishes the exact completion; post-mutation publication uncertainty fails
+  closed. It is unit-tested shared policy only: no
   concrete hosted/physical backend, KVM/WHP attachment, interrupt path, guest
   driver, or durability evidence exists yet. A
   canonical fixed-capacity allocation index now supplies exact object-generation

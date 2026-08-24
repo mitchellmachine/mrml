@@ -621,7 +621,11 @@ in-flight work and advance the device generation; VMM memory uncertainty poisons
 the queue bridge. A backend-neutral executor now requires an exact separately
 provisioned block backend, copies reads and writes through erased caller-owned
 bounded scratch, and distinguishes clean mutation rejection from uncertainty;
-uncertainty fails the device and poisons its bridge. It has no concrete hosted
+uncertainty fails the device and poisons its bridge. A one-request processor now
+preflights both admission and completion capacity before consuming a queue entry,
+executes an admitted request once, and publishes its exact completion. Malformed
+entries reach no backend; post-mutation publication uncertainty fails the device
+instead of retrying. It has no concrete hosted
 or physical backend, doorbell, interrupt delivery, PCI transport, KVM/WHP
 attachment, or guest driver yet. **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
