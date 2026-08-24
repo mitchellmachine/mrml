@@ -652,6 +652,15 @@ retains completion-write access. This is queue-memory attachment, not a complete
 device. Dedicated initial-launch builders now also identity-map both ranges into
 the guest page tables with request RW/NX and completion R/NX permissions. Range
 overlap and KVM native-slot undercapacity fail before a guest is returned.
+Because the guest cannot write the protected completion header, an exact
+MRML-specific acknowledgement tuple at port `0x4d43` advances exactly one
+already-published completion. The bridge owns the authoritative consumer
+position and updates the protected header through the device-only memory path.
+Acknowledgement is accepted only for the active bound queue after completion
+notification was confirmed delivered; empty, premature, mismatched-state, or
+uncertain acknowledgements fail the device and poison the bridge. Scalar data
+grants no authority. A native guest completion consumer and acknowledgement
+runner remain pending.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

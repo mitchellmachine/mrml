@@ -367,6 +367,10 @@ explicitly and downgrade the status rather than guessing.
   through the common runner on each backend. This is hosted controlled-probe
   evidence, not a reusable guest block driver, concrete device backend,
   durability result, or physical-device result. A
+  protected completion acknowledgement now lets the bridge retire exactly one
+  published completion through the device-only write path after confirmed
+  notification delivery; the guest-read-only mapping is preserved, and the
+  native probes do not yet issue this acknowledgement. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

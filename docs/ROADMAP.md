@@ -670,6 +670,15 @@ overlap rejection and KVM native-slot undercapacity. The signed doorbell probe
 now exercises these mappings as a one-request guest producer through the common
 runner.
 
+The backend-neutral completion bridge now owns its monotonic consumer position
+instead of trusting a guest write into the read-only completion page. An exact
+32-bit write/value acknowledgement at port `0x4d43` retires one published
+completion only after confirmed interrupt delivery and updates the protected
+header through the device path. Every scalar is rechecked before state or
+memory access; empty, premature, wrong-queue, terminal, or uncertain accepted
+acknowledgements fail closed. This remains shared unit/simulation policy: the
+signed KVM/WHP probes do not yet consume or acknowledge completions themselves.
+
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,
 then a VirtIO-net-compatible device and QEMU comparison. Multiqueue, offloads,

@@ -3415,6 +3415,42 @@ partial attachment as hostile; validation and consuming construction prevent a
 partially attached guest from being resumed through this API. This agent review
 does not replace the required independent human dual review.
 
+The completion ring's consumer counter is now bridge-owned rather than read
+from guest memory. The exact MRML-specific acknowledgement is a 32-bit write of
+value one to port `0x4d43`; it advances one and only one already-published
+completion and writes the resulting monotonic counter through
+`VirtualBlockVmmMemory`, preserving the guest R/NX mapping. The handler accepts
+acknowledgement only while the device is active, the bridge has the exact bound
+queue, and no completion notification remains pending. Wrong port, width,
+direction, or value returns before state or memory access. Empty, premature,
+wrong-state, mismatched-queue, overflow, or device-path uncertainty poisons the
+bridge and fails the device. The tuple is routing data and grants neither block
+nor interrupt authority.
+
+Recorded verification on 2026-08-24: Arch Linux under WSL2 passes all 369
+`mrml-kernel` release tests, the 32 focused virtual-block tests, and scoped
+strict Clippy. Four focused acknowledgement tests cover one-at-a-time protected
+counter advancement and restored capacity, every scalar mismatch before
+mutation, acknowledgement before confirmed notification delivery, uncertain
+protected writes, and empty acknowledgements. The optimized 10,000-iteration
+in-process runner-plus-acknowledgement regression sample measured 1,197,183 ns
+total (119.718 ns per iteration) on Arch Linux/WSL2. Windows code and benchmark
+tests type-check, but this shell had no MSVC linker, so no new Windows execution
+evidence was recorded. These are unit/simulation and noisy benchmark evidence,
+not native guest acknowledgement, storage/hypervisor latency, durability, or
+physical-hardware evidence.
+
+The acknowledgement `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, identity expansion, DRM, attestation, remote disclosure, vendor or
+accessibility restriction, or durable owner-state change. Retiring a completion
+only reduces transient queue state. The `HOSTILE SECURITY REVIEW` treats the
+entire scalar tuple, lifecycle, queue binding, pending-notification state,
+published/consumed positions, arithmetic, and protected memory result as
+hostile; exact validation precedes mutation and accepted uncertainty is
+terminal. Existing capability, revocation, rollback-resistance, accessibility,
+and evidence gates are unchanged. This agent review does not replace the
+required independent human dual review.
+
 The signed native block probe replaces indirect composition evidence with one
 controlled end-to-end hosted path on each backend. Its verified VM image executes
 bounded stores through the initial guest mappings to fill one 4 KiB payload,

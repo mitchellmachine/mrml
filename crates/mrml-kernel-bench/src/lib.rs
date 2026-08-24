@@ -12,14 +12,16 @@ mod tests {
     use core::hint::black_box;
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
-        CapabilitySpace, Endpoint, GuestMemory, GuestRegion, HostResourceHandle, HypercallRouter,
-        InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, KernelScheduler, ObjectId,
-        PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler, SchedulerLoad, SharedAccess,
-        SharedEndpoint, SharedMemoryBindings, TaskRuntime, VIRTUAL_BLOCK_DOORBELL_PORT,
-        VIRTUAL_BLOCK_DOORBELL_VALUE, VirtualBlockBackend, VirtualBlockDevice,
-        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-        VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockVmmMemory, VmBackend, VmExit,
-        VmTable, run_virtual_block_doorbell_once,
+        CapabilitySpace, Endpoint, ExitDisposition, GuestMemory, GuestRegion, HostResourceHandle,
+        HypercallRouter, InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, KernelScheduler,
+        ObjectId, PeriodicBalancer, PhysAddr, Priority, Rights, Scheduler, SchedulerLoad,
+        SharedAccess, SharedEndpoint, SharedMemoryBindings, TaskRuntime,
+        VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        VIRTUAL_BLOCK_DOORBELL_PORT, VIRTUAL_BLOCK_DOORBELL_VALUE, VirtualBlockBackend,
+        VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
+        VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest,
+        VirtualBlockVmmMemory, VmBackend, VmExit, VmTable, process_virtual_block_completion_ack,
+        run_virtual_block_doorbell_once,
     };
     use mrml_runtime::{Instant, mrml_println};
 
@@ -662,7 +664,7 @@ mod tests {
 
     #[test]
     #[ignore = "manual release-mode performance gate"]
-    fn virtual_block_runner_policy_budget() {
+    fn virtual_block_runner_ack_policy_budget() {
         let layout = VirtualBlockQueueLayout::new(0x1000, 0x3000, 1).unwrap();
         let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0).unwrap();
         device.negotiate(0).unwrap();
@@ -700,7 +702,6 @@ mod tests {
             VirtualBlockRequest::write(1, sequence, 0, 1, 0x4000, 4096).encode(&mut request);
             memory.write(0x1000 + 128, &request);
             memory.write(0x1000, &sequence.to_le_bytes());
-            memory.write(0x3000 + 64, &(sequence - 1).to_le_bytes());
             memory.next_exit = Some(VmExit::Io {
                 port: VIRTUAL_BLOCK_DOORBELL_PORT,
                 size: 4,
@@ -728,9 +729,24 @@ mod tests {
                 .unwrap(),
                 VirtualBlockProcessOutcome::Completed(_)
             ));
+            assert_eq!(
+                process_virtual_block_completion_ack(
+                    ExitDisposition::Io {
+                        port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                        size: 4,
+                        write: true,
+                        value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+                    },
+                    &mut device,
+                    &mut bridge,
+                    &mut memory,
+                )
+                .unwrap(),
+                sequence
+            );
         }
         report(
-            "virtual_block_runner_policy",
+            "virtual_block_runner_ack_policy",
             start.elapsed().as_nanos(),
             VIRTUAL_BLOCK_ITERATIONS,
         );

@@ -11,6 +11,8 @@ pub const MAX_VIRTUAL_BLOCK_TRANSFER_BYTES: u32 = 1024 * 1024;
 pub const VIRTUAL_BLOCK_FEATURE_FLUSH: u64 = 1 << 0;
 pub const VIRTUAL_BLOCK_DOORBELL_PORT: u16 = 0x4d42;
 pub const VIRTUAL_BLOCK_DOORBELL_VALUE: u32 = 1;
+pub const VIRTUAL_BLOCK_COMPLETION_ACK_PORT: u16 = 0x4d43;
+pub const VIRTUAL_BLOCK_COMPLETION_ACK_VALUE: u32 = 1;
 const REQUEST_MAGIC: [u8; 4] = *b"MRBQ";
 const COMPLETION_MAGIC: [u8; 4] = *b"MRBC";
 const VERSION: u8 = 1;
@@ -895,6 +897,17 @@ pub type VirtualBlockDoorbellResult<M, D> =
     Result<VirtualBlockProcessOutcome<D>, VirtualBlockDoorbellError<M, D>>;
 
 #[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockCompletionAckError<M> {
+    InvalidExit,
+    Queue {
+        error: VirtualBlockQueueError<M>,
+        invalidated: Result<usize, VirtualBlockError>,
+    },
+}
+
+pub type VirtualBlockCompletionAckResult<M> = Result<u64, VirtualBlockCompletionAckError<M>>;
+
+#[derive(Debug, Eq, PartialEq)]
 pub enum VirtualBlockRunError<M, D> {
     Exit(VmRunError<M>),
     Doorbell(VirtualBlockDoorbellError<M, D>),
@@ -918,6 +931,7 @@ pub struct VirtualBlockQueueBridge<const N: usize> {
     layout: VirtualBlockQueueLayout,
     request_consumed: u64,
     completion_published: u64,
+    completion_consumed: u64,
     poisoned: bool,
 }
 
@@ -930,6 +944,7 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
             layout,
             request_consumed: 0,
             completion_published: 0,
+            completion_consumed: 0,
             poisoned: false,
         })
     }
@@ -964,16 +979,17 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
 
     pub fn completion_ready<B: VirtualBlockVmmMemory>(
         &mut self,
-        backend: &B,
+        _backend: &B,
     ) -> Result<bool, VirtualBlockQueueError<B::Error>> {
         self.require_live()?;
-        let consumed = self.read_counter(backend, self.layout.completion_base + 64)?;
-        if consumed > self.completion_published || self.completion_published - consumed > N as u64 {
+        if self.completion_consumed > self.completion_published
+            || self.completion_published - self.completion_consumed > N as u64
+        {
             return Err(VirtualBlockQueueError::Protocol(
                 VirtualBlockError::InvalidQueue,
             ));
         }
-        Ok(self.completion_published - consumed < N as u64)
+        Ok(self.completion_published - self.completion_consumed < N as u64)
     }
 
     pub fn consume_request<B: VirtualBlockVmmMemory>(
@@ -1021,13 +1037,12 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         completion: VirtualBlockCompletion,
     ) -> Result<(), VirtualBlockQueueError<B::Error>> {
         self.require_live()?;
-        let consumed = self.read_counter(backend, self.layout.completion_base + 64)?;
-        if consumed > self.completion_published {
+        if self.completion_consumed > self.completion_published {
             return Err(VirtualBlockQueueError::Protocol(
                 VirtualBlockError::InvalidQueue,
             ));
         }
-        if self.completion_published - consumed >= N as u64 {
+        if self.completion_published - self.completion_consumed >= N as u64 {
             return Err(VirtualBlockQueueError::Protocol(
                 VirtualBlockError::QueueFull,
             ));
@@ -1051,6 +1066,27 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         self.write_counter(backend, self.layout.completion_base, position)?;
         self.completion_published = position;
         Ok(())
+    }
+
+    fn acknowledge_completion<B: VirtualBlockVmmMemory>(
+        &mut self,
+        backend: &mut B,
+    ) -> Result<u64, VirtualBlockQueueError<B::Error>> {
+        self.require_live()?;
+        if self.completion_consumed >= self.completion_published {
+            return Err(VirtualBlockQueueError::Protocol(
+                VirtualBlockError::QueueEmpty,
+            ));
+        }
+        let consumed =
+            self.completion_consumed
+                .checked_add(1)
+                .ok_or(VirtualBlockQueueError::Protocol(
+                    VirtualBlockError::SequenceExhausted,
+                ))?;
+        self.write_counter(backend, self.layout.completion_base + 64, consumed)?;
+        self.completion_consumed = consumed;
+        Ok(consumed)
     }
 
     fn require_live<E>(&self) -> Result<(), VirtualBlockQueueError<E>> {
@@ -1347,6 +1383,48 @@ where
     }
     process_virtual_block_request(device, bridge, memory, backend, scratch)
         .map_err(VirtualBlockDoorbellError::Process)
+}
+
+/// Acknowledges exactly one already-published completion while keeping the
+/// completion ring guest-read-only. The scalar tuple is routing data only; the
+/// bridge owns the monotonic consumer position and performs the protected
+/// header write. Acknowledgement is accepted only after notification delivery.
+pub fn process_virtual_block_completion_ack<const N: usize, M>(
+    disposition: ExitDisposition,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    memory: &mut M,
+) -> VirtualBlockCompletionAckResult<M::Error>
+where
+    M: VirtualBlockVmmMemory,
+{
+    if disposition
+        != (ExitDisposition::Io {
+            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        })
+    {
+        return Err(VirtualBlockCompletionAckError::InvalidExit);
+    }
+    if device.state() != VirtualBlockDeviceState::Active
+        || device.queue() != Some(bridge.layout())
+        || device.pending_interrupt_vector().is_some()
+    {
+        bridge.fail_stop();
+        return Err(VirtualBlockCompletionAckError::Queue {
+            error: VirtualBlockQueueError::Protocol(VirtualBlockError::InvalidState),
+            invalidated: device.fail(),
+        });
+    }
+    bridge.acknowledge_completion(memory).map_err(|error| {
+        bridge.fail_stop();
+        VirtualBlockCompletionAckError::Queue {
+            error,
+            invalidated: device.fail(),
+        }
+    })
 }
 
 /// Runs one vCPU to an exact virtual-block doorbell, processes at most one
@@ -2701,19 +2779,181 @@ mod tests {
             status: VirtualBlockCompletionStatus::Ok,
             transferred: 4096,
         };
-        assert_eq!(
-            bridge.publish_completion(&mut vmm, completion),
-            Err(VirtualBlockQueueError::Protocol(
-                VirtualBlockError::InvalidQueue
-            ))
-        );
+        bridge.publish_completion(&mut vmm, completion).unwrap();
+        assert_eq!(bridge.completion_consumed, 0);
+        assert_eq!(bridge.completion_published, 1);
         let completion_slot = 0x3000 + QUEUE_HEADER_BYTES;
-        assert!(
-            vmm.bytes[completion_slot as usize
-                ..completion_slot as usize + VIRTUAL_BLOCK_COMPLETION_BYTES]
-                .iter()
-                .all(|byte| *byte == 0)
+        assert_eq!(
+            VirtualBlockCompletion::decode(
+                &vmm.bytes[completion_slot as usize
+                    ..completion_slot as usize + VIRTUAL_BLOCK_COMPLETION_BYTES]
+            ),
+            Ok(completion)
         );
+    }
+
+    fn exact_completion_ack() -> ExitDisposition {
+        ExitDisposition::Io {
+            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        }
+    }
+
+    fn published_completion<const N: usize>(
+        device: &mut VirtualBlockDevice<N>,
+        bridge: &mut VirtualBlockQueueBridge<N>,
+        vmm: &mut MockVmm,
+    ) -> VirtualBlockCompletion {
+        let request = VirtualBlockRequest::flush(device.generation(), 1);
+        let mut encoded = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
+        request.encode(&mut encoded);
+        let admitted = device.admit(&encoded).unwrap();
+        let completion = device
+            .complete(admitted.ticket(), VirtualBlockCompletionStatus::Ok, 0)
+            .unwrap();
+        bridge.publish_completion(vmm, completion).unwrap();
+        completion
+    }
+
+    #[test]
+    fn completion_ack_advances_one_protected_counter_and_restores_capacity() {
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        published_completion(&mut device, &mut bridge, &mut vmm);
+        assert_eq!(bridge.completion_ready(&vmm), Ok(false));
+
+        assert_eq!(
+            process_virtual_block_completion_ack(
+                exact_completion_ack(),
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+            ),
+            Ok(1)
+        );
+        assert_eq!(bridge.completion_consumed, 1);
+        assert_eq!(bridge.completion_ready(&vmm), Ok(true));
+        let mut consumed = [0; 8];
+        vmm.read_guest(0x3000 + 64, &mut consumed).unwrap();
+        assert_eq!(u64::from_le_bytes(consumed), 1);
+    }
+
+    #[test]
+    fn completion_ack_rechecks_every_scalar_before_state_or_memory_access() {
+        for disposition in [
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT + 1,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            },
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                size: 2,
+                write: true,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            },
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                size: 4,
+                write: false,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            },
+            ExitDisposition::Io {
+                port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+                size: 4,
+                write: true,
+                value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE + 1,
+            },
+            ExitDisposition::Stopped,
+        ] {
+            let mut device = active::<1>();
+            let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+            let mut vmm = MockVmm::new();
+            published_completion(&mut device, &mut bridge, &mut vmm);
+            vmm.fail_write = true;
+            assert_eq!(
+                process_virtual_block_completion_ack(
+                    disposition,
+                    &mut device,
+                    &mut bridge,
+                    &mut vmm,
+                ),
+                Err(VirtualBlockCompletionAckError::InvalidExit)
+            );
+            assert_eq!(device.state(), VirtualBlockDeviceState::Active);
+            assert!(!bridge.is_poisoned());
+            assert_eq!(bridge.completion_consumed, 0);
+        }
+    }
+
+    #[test]
+    fn premature_or_uncertain_completion_ack_fails_closed() {
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        published_completion(&mut device, &mut bridge, &mut vmm);
+        device.latch_completion_interrupt().unwrap();
+        assert!(matches!(
+            process_virtual_block_completion_ack(
+                exact_completion_ack(),
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+            ),
+            Err(VirtualBlockCompletionAckError::Queue {
+                error: VirtualBlockQueueError::Protocol(VirtualBlockError::InvalidState),
+                ..
+            })
+        ));
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
+        assert!(bridge.is_poisoned());
+
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        published_completion(&mut device, &mut bridge, &mut vmm);
+        vmm.fail_write = true;
+        assert!(matches!(
+            process_virtual_block_completion_ack(
+                exact_completion_ack(),
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+            ),
+            Err(VirtualBlockCompletionAckError::Queue {
+                error: VirtualBlockQueueError::Backend(MockError::Injected),
+                ..
+            })
+        ));
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
+        assert!(bridge.is_poisoned());
+        assert_eq!(bridge.completion_consumed, 0);
+    }
+
+    #[test]
+    fn empty_completion_ack_fails_device_and_bridge_closed() {
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        assert!(matches!(
+            process_virtual_block_completion_ack(
+                exact_completion_ack(),
+                &mut device,
+                &mut bridge,
+                &mut vmm,
+            ),
+            Err(VirtualBlockCompletionAckError::Queue {
+                error: VirtualBlockQueueError::Protocol(VirtualBlockError::QueueEmpty),
+                ..
+            })
+        ));
+        assert_eq!(device.state(), VirtualBlockDeviceState::Failed);
+        assert!(bridge.is_poisoned());
+        assert_eq!(bridge.completion_consumed, 0);
     }
 
     #[test]

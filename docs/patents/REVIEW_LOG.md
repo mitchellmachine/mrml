@@ -1376,6 +1376,16 @@ to prevent reuse after partial failure is a standard defensive resource-
 construction technique. No patent-candidate mechanism was identified. This
 agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Protected virtual-block completion acknowledgement
+
+**Result: NOT_TRIGGERED.** The change conventionally uses an exact scalar I/O
+tuple to retire one already-published completion while a trusted bridge owns and
+writes the monotonic consumer counter through an existing device-memory path.
+Reject-before-mutation, one-at-a-time acknowledgement, and fail-stop handling of
+empty or uncertain state are standard defensive queue techniques. No new patent-
+candidate mechanism was identified. This agent review does not replace the
+required independent human dual review.
+
 # 2026-08-24 — MRML virtual-block scalar doorbell
 
 **Result: NOT_TRIGGERED.** The change conventionally assigns a fixed I/O port
