@@ -4007,6 +4007,23 @@ fn rustc_shared_loan_owner_mutation_matches_the_oracle() {
 }
 
 #[test]
+fn rustc_shared_loan_owner_move_matches_the_oracle() {
+    let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let shared: &u16 = &*input; let moved = input; *shared + *moved }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(rejected, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeBorrowConflict
+            ))
+        );
+    }
+
+    let accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let shared: &u16 = &*input; let copied = *shared; let moved = input; copied + *moved }";
+    assert_eq!(compile_wide(accepted, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(accepted, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_conditional_shared_loan_liveness_matches_the_oracle() {
     let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16, change: bool) -> u16 { let mut slot = input; let shared: &u16 = &slot; if change { let mutable: &mut u16 = &mut slot; *mutable += 1; } *shared }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {

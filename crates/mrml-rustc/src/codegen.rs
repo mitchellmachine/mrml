@@ -10469,7 +10469,8 @@ fn validate_runtime_bounded_direct_loan_liveness(
             let conflicts_with_loan = match loan.kind {
                 RuntimePlaceEffectKind::SharedBorrow => matches!(
                     conflict.kind,
-                    RuntimePlaceEffectKind::MutableBorrow
+                    RuntimePlaceEffectKind::Move
+                        | RuntimePlaceEffectKind::MutableBorrow
                         | RuntimePlaceEffectKind::Write
                         | RuntimePlaceEffectKind::ReadModifyWrite
                 ),
@@ -27791,6 +27792,35 @@ mod tests {
         );
 
         let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let shared: &u16 = &slot; let copied = *shared; slot += 1; copied + slot }";
+        analyze(accepted).unwrap();
+    }
+
+    #[test]
+    fn runtime_shared_loan_liveness_rejects_only_use_after_owner_move() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        let rejected = "fn value(input: &mut u16) -> u16 { let shared: &u16 = &*input; let moved = input; *shared + *moved }";
+        assert_eq!(
+            analyze(rejected).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: &mut u16) -> u16 { let shared: &u16 = &*input; let copied = *shared; let moved = input; copied + *moved }";
         analyze(accepted).unwrap();
     }
 
