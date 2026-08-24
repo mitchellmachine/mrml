@@ -974,13 +974,55 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             SyscallRequest::Exit => {
                 #[cfg(feature = "block-service-probe")]
                 {
-                    asm!(
-                        "out dx, eax",
-                        in("dx") SERVICE_PROBE_PORT,
-                        in("eax") 0x30u32,
-                        options(nomem, nostack)
-                    );
-                    halt();
+                    let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    let terminated = supervisor.exit_current(runtime).unwrap_or_else(|_| halt());
+                    if terminated.task != current || runtime.context(current).is_ok() {
+                        halt();
+                    }
+                    complete_service_cleanup(supervisor, terminated.cleanup);
+                    match terminated.next {
+                        ScheduleOutcome::Switch { to, .. } => {
+                            let ControlEvent::PeerDied(death) =
+                                runtime.receive_control(to).unwrap_or_else(|_| halt())
+                            else {
+                                halt()
+                            };
+                            if death.peer() != current
+                                || death.reason() != PeerDeathReason::Exited
+                                || runtime.context(to).is_err()
+                            {
+                                halt();
+                            }
+                            asm!(
+                                "out dx, eax",
+                                in("dx") SERVICE_PROBE_PORT,
+                                in("eax") 0x31u32,
+                                options(nomem, nostack)
+                            );
+                            enter_service_task(runtime, to)
+                        }
+                        ScheduleOutcome::Idle => {
+                            let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
+                            if ids[..2].iter().any(|service| {
+                                supervisor.task(*service) != Ok(None)
+                                    || supervisor.pending_cleanup(*service) != Ok(None)
+                                    || supervisor.state(*service)
+                                        != Ok(mrml_kernel::ServiceState::Exited)
+                            }) {
+                                halt();
+                            }
+                            asm!(
+                                "out dx, eax",
+                                in("dx") SERVICE_PROBE_PORT,
+                                in("eax") 0x30u32,
+                                options(nomem, nostack)
+                            );
+                            halt();
+                        }
+                        _ => halt(),
+                    }
                 }
                 #[cfg(not(feature = "block-service-probe"))]
                 {

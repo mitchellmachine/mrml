@@ -374,7 +374,7 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     }
     scratch.fill(0);
     unsafe { yield_now() };
-    halt()
+    unsafe { terminate(3) }
 }
 
 #[cfg(not(feature = "preemption-probe"))]

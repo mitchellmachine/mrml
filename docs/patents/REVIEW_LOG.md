@@ -1367,6 +1367,15 @@ exit handling, canonical responses, and byte comparisons are defensive systems
 integration. No new patent-candidate mechanism was identified. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — Block-service controlled-probe lifecycle cleanup
+
+**Result: NOT_TRIGGERED.** The change conventionally routes both probe-task
+exits through existing supervised retirement, typed peer-death delivery,
+address-space/resource cleanup, and exact hosted stage checking. Requiring both
+service slots to have no task or pending cleanup before success is standard
+defensive lifecycle verification. No patent-candidate mechanism was identified.
+This agent review does not replace the required independent human dual review.
+
 # 2026-08-24 — Atomic storage authority rollback-state transition
 
 **Result: NOT_TRIGGERED.** The change conventionally encodes two monotonic

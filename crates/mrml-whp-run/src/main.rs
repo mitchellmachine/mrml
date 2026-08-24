@@ -633,23 +633,33 @@ fn application_main() -> Result<()> {
     }
     if block_service_mode {
         let mut exit = exit;
+        let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
+        let mut cleanup_stage = 0;
         for _ in 0..32 {
-            if exit
-                == (VmExit::Io {
-                    port: SERVICE_PROBE_PORT,
-                    size: 4,
-                    write: true,
-                    value: 0x30,
-                })
+            if let VmExit::Io {
+                port: SERVICE_PROBE_PORT,
+                size: 4,
+                write: true,
+                value,
+            } = exit
             {
-                println!(
-                    "verified independently signed CPL3 block-service loop under WHP: verify={}us prepare={}us execute={}us total={}us",
-                    verification_micros,
-                    preparation_micros,
-                    execution_started.elapsed().as_micros(),
-                    total_started.elapsed().as_micros()
-                );
-                return Ok(());
+                if cleanup_stages.get(cleanup_stage).copied() != Some(value) {
+                    return Err(anyhow!(
+                        "WHP block-service cleanup stage mismatch: {:?}",
+                        exit
+                    ));
+                }
+                cleanup_stage += 1;
+                if value == 0x30 {
+                    println!(
+                        "verified independently signed CPL3 block-service loop and lifecycle cleanup under WHP: verify={}us prepare={}us execute={}us total={}us",
+                        verification_micros,
+                        preparation_micros,
+                        execution_started.elapsed().as_micros(),
+                        total_started.elapsed().as_micros()
+                    );
+                    return Ok(());
+                }
             }
             if !matches!(
                 exit,
@@ -658,6 +668,14 @@ fn application_main() -> Result<()> {
                     size: 4,
                     write: true,
                     value: 1..=3,
+                }
+            ) && !matches!(
+                exit,
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    ..
                 }
             ) {
                 return Err(anyhow!("WHP block-service stage mismatch: {:?}", exit));

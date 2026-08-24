@@ -527,9 +527,12 @@ instantiates the loop in an isolated CPL3 service: a separate client can
 transfer only an attenuated shared-buffer capability, while the service retains
 the launch-bound principal, session, and one-page simulated block backend. The
 probe verifies one write and one read, including response fields and returned
-bytes, before emitting its terminal marker. This is hosted controlled-probe
-evidence only; the in-image backend is volatile, the focused terminal path does
-not prove lifecycle cleanup, and a hosted device backend, physical device,
+bytes. It now retires the client, consumes the exact typed peer-death event,
+retires the service, completes both cleanup tickets, removes the service shared
+mapping/resource, and emits success only after both supervised slots have no
+task or pending cleanup. Both launchers require the exact ordered cleanup
+markers. This is hosted controlled-probe evidence only; the in-image backend is
+volatile, and a hosted device backend, physical device,
 snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability

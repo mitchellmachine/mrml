@@ -585,8 +585,11 @@ authority; unrelated domains continue.
    process against a volatile one-page in-image backend. A separate client has
    only delegable shared-buffer authority and verifies both responses, while
    the service verifies the written and returned bytes;
-   this does not establish device durability, physical isolation, or focused-
-   probe lifecycle cleanup. The bounded block-service core and exact-block
+   the client and service then retire through the supervised cleanup path. The
+   launchers require ordered client erasure, exact peer-death delivery, service
+   mapping/resource erasure, and terminal proof that both slots have no task or
+   pending cleanup. This does not establish device durability or physical
+   isolation. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.
 4. Add snapshot objects and capability enforcement, then system-generation and

@@ -3087,9 +3087,9 @@ physical-device evidence remain pending.
 
 Recorded verification on 2026-08-24: Windows gnullvm
 `cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-storage --release --no-default-features --target x86_64-pc-windows-gnullvm`
-passed 101 tests, and the corresponding scoped `clippy --no-deps -- -D warnings`
+passed 107 tests, and the corresponding scoped `clippy --no-deps -- -D warnings`
 passed. Linux `cargo test -p mrml-storage --release --no-default-features`
-passed the same 101 tests, and its corresponding scoped strict Clippy command
+passed the same 107 tests, and its corresponding scoped strict Clippy command
 passed. The release UEFI `mrml-service-image` build and scoped strict Clippy with
 `--features block-service-loop` passed. This proves unit/simulation behavior and
 ABI compilation only, not hosted invocation or device durability.
@@ -3105,9 +3105,14 @@ shape, session owner/generation, and request IDs 1 then 2; verifies that the
 first operation wrote `0x5a`; replaces the simulated backend bytes with `0x3c`;
 and copies the second result through the capability-selected syscall. The
 client checks both canonical successful responses; the service checks the
-written and returned bytes before yielding back to that client. Only then can
-the client's exit produce the terminal `0x30` proof marker. Each runner accepts at
-most 32 host exits and only service-call stages 1 through 3 before that marker.
+written and returned bytes before yielding back to that client. The client then
+exits through `ServiceSupervisor`, its address space is erased, and the service
+must consume the exact typed peer-death event before exiting itself. The service
+cleanup removes its shared mapping and host-resource binding. Only after both
+service slots are `Exited` with no task or pending cleanup can the kernel emit
+the terminal `0x30` marker. Each runner accepts at most 32 host exits and
+requires the exact ordered cleanup markers `0x21`, `0x31`, `0x20`, `0x30`, while
+allowing only service-call stages 1 through 3 between them.
 
 Fresh independently signed version-1 artifacts passed on 2026-08-24:
 
@@ -3123,19 +3128,24 @@ cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp-run --release --no-def
 wsl env CARGO_TARGET_DIR=/mnt/c/Users/Mitch/Documents/mrml/.codex-kvm-target cargo test -p mrml-kvm-run --release --no-default-features
 # 3 passed
 mrml-whp-run ... block-service-probe ...
-# verified independently signed CPL3 block-service loop under WHP
+# verified independently signed CPL3 block-service loop and lifecycle cleanup under WHP
 mrml-kvm-run ... block-service-probe ...
-# verified independently signed CPL3 block-service loop under KVM
+# verified independently signed CPL3 block-service loop and lifecycle cleanup under KVM
 ```
 
 Scoped strict Clippy passed for `mrml-storage`, both focused UEFI images, and
 `mrml-whp-run`. These are unit tests, simulation, and hosted controlled probes.
 WHP/KVM do not protect a guest from its host. The backend is volatile memory,
 not a host block device; no reboot, durability, power-loss, bare-metal, TPM,
-IOMMU, Secure Boot, or physical hardware result is claimed. The focused
-terminal path deliberately stops after client verification and therefore does
-not add lifecycle cleanup evidence; the existing ordinary service probes and
-unit tests remain the evidence for cleanup and revocation behavior.
+IOMMU, Secure Boot, or physical hardware result is claimed.
+
+The `DIGITAL-RIGHTS REVIEW` found no new data collection, retention,
+correlation, attestation, DRM, vendor veto, or durable authority. Cleanup only
+reduces live authority and erases transient state. The `HOSTILE SECURITY
+REVIEW` treats exit identity, peer-death reason, service generation, cleanup
+tickets, mappings, resources, and host-visible stage order as hostile; any
+mismatch halts or fails the runner before success. This agent review does not
+replace the required independent human dual review.
 
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one

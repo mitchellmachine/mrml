@@ -330,7 +330,11 @@ explicitly and downgrade the status rather than guessing.
   through the block-volume adapter, but tests still use simulated storage; a
   focused signed KVM/WHP probes now instantiate the isolated block-service loop
   against a volatile one-page in-image backend and verify one write/read
-  exchange. This is not a real hosted or physical device backend, physical
+  exchange. The probes also retire the client and service in order, require the
+  exact peer-death event, complete both cleanup tickets, tear down the service
+  shared mapping/resource, and accept success only after both service slots are
+  exited with no task or pending cleanup. This is not a real hosted or physical
+  device backend, physical
   power-loss evidence,
   repair, and authenticated anti-rollback state do not yet exist. A
   canonical fixed-capacity allocation index now supplies exact object-generation
