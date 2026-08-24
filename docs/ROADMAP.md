@@ -1394,11 +1394,15 @@ can count as trusted consent.
    root path. A distinct canonical handoff flag records which path was used;
    kernel production policy now requires coherent-release evidence alongside
    Secure Boot, measured boot, and rollback protection, while development
-   policy may accept legacy admission. Coherent-set boot admission remains
-   partial because the other manifest artifact kinds and physical reboot/power-
-   loss behavior are not yet integrated. Verification on 2026-08-24 passed all
-   5 artifact tests, all 5
-   release-journal tests, all 24 UEFI library tests, strict kernel/storage/UEFI
+   policy may accept legacy admission. The admitted authenticated monotonic
+   release journal now supplies rollback
+   evidence directly; the standalone version counter remains an optional
+   compatibility source rather than a second mandatory authority.
+   Coherent-set boot admission remains partial because the other manifest
+   artifact kinds and physical reboot/power-loss behavior are not yet
+   integrated. Verification on 2026-08-24 passed all
+   5 artifact tests, all 5 release-journal tests, all 24 UEFI library tests,
+   strict kernel/storage/UEFI
    library Clippy on Windows and Arch Linux/WSL2, strict native UEFI-target
    loader Clippy on Windows, all 452 kernel and 121 storage tests on Arch
    Linux/WSL2, and an optimized native UEFI loader build. A preceding 451-test

@@ -576,7 +576,8 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     if acpi_root == 0 {
         return Err(LOAD_ERROR);
     }
-    let rollback_protected = enforce_rollback_counter(services, kernel_version)?;
+    let legacy_rollback_protected = enforce_rollback_counter(services, kernel_version)?;
+    let rollback_protected = prepared_release.is_some() || legacy_rollback_protected;
     if require_rollback_counter() && !rollback_protected {
         return Err(LOAD_ERROR);
     }

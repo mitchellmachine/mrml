@@ -95,6 +95,10 @@ when this manifest path was used. Kernel production policy requires that bit in
 addition to Secure Boot, measured boot, and rollback protection; development
 policy may explicitly accept the legacy path. The bit is evidence from the
 authenticated loader, not a capability or remote-attestation statement.
+Successful admission through the authenticated monotonic release journal also
+satisfies the handoff rollback-protection bit; the older standalone version
+counter remains only an optional compatibility source. This is a software
+contract and does not promote simulation into physical rollback evidence.
 Release-manifest construction additionally requires the next manifest root and
 all five kind-specific artifact roots to be pairwise distinct. Authenticated
 transition rejects reuse of the current manifest-signing root in any next or

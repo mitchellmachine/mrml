@@ -1804,8 +1804,9 @@ Successful NV validation and advancement is now represented by a dedicated bit
 in the canonical UEFI-to-kernel handoff rather than inferred from the image
 version. The decoder rejects unknown bits, `BootEvidence` retains the result,
 and production `BootPolicy` independently requires Secure Boot, measured boot,
-rollback protection, and coherent-release admission. A version meeting the compiled floor is therefore not
-enough when monotonic enforcement was skipped. A freshly signed version-5
+rollback protection, and coherent-release admission. A version meeting the
+compiled floor is therefore not enough when monotonic enforcement was skipped.
+A freshly signed version-5
 kernel using the expanded evidence contract still reached the QEMU GOP marker.
 
 The standalone image also has a `production-policy` feature. Such builds embed
@@ -1817,6 +1818,12 @@ CR3/GDT/IDT but refused the deliberately unmeasured, non-Secure-Boot QEMU
 handoff, leaving the loader's `RGB(20,33,53)` stage unchanged. All terminal
 kernel paths now use interrupt-disabled `HLT` rather than consuming a CPU in a
 spin loop.
+
+Successful authenticated release-journal admission sets rollback-protection
+evidence directly. `MRML_TPM_NV_INDEX_HEX` remains a compatibility path for the
+older standalone counter and is not additionally required when the release
+journal is active. Neither path is physical rollback-resistance evidence until
+tested on provisioned hardware across reboot and power loss.
 
 The loader also reads the standard global `SecureBoot` and `SetupMode`
 variables through its original raw runtime-services ABI. It reports secure boot

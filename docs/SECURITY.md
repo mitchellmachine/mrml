@@ -228,6 +228,10 @@ than inferring it from version or PCR success. Production `BootPolicy` rejects
 the legacy path even if Secure Boot, measurement, and a rollback counter are
 present; development policy may opt into it. This loader evidence does not
 manufacture authority for missing manifest artifacts and is not attestation.
+An admitted monotonic release journal satisfies loader rollback evidence without
+also requiring the legacy standalone counter. This avoids treating two counters
+as one authority while retaining compatibility; physical resistance remains
+unverified.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary
