@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e26859f`
-  (`compiler: preanalyze direct aggregate call returns`)
+- Compiler checkpoint commit: `604780a`
+  (`compiler: preanalyze direct array value returns`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -121,7 +121,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   interleaved nested-loop controls in exact action-boundary/control order.
   Direct aggregate-producing calls used as supported explicit return operands
   or final tails now reserve their recursively validated arguments in call
-  order; other aggregate return/tail shapes remain outside preanalysis.
+  order. Complete direct fixed-array literals reserve their elements once in
+  source order, and exact-count direct array repeats reserve their operand once;
+  other aggregate return/tail shapes remain outside preanalysis.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
@@ -132,8 +134,9 @@ borrow checker. Unsupported aggregate-leaf call arguments and other aggregate-
 argument
 call-derived fat-reference initializers, call-derived or otherwise unsupported
 wrapped fat-reference returns,
-compound array bases, method/call families, wrapped or non-call aggregate
-returns/tails, and other body reads remain emission-time facts. Names are still
+compound array bases, method/call families, tuple-value and wrapped,
+conditional, or identifier-based array returns/tails, and other body reads
+remain emission-time facts. Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
@@ -173,8 +176,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 628 tests on each host: 344
-library tests, 10 conformance tests, 272 replacement tests, and 2 driver tests.
+The checkpoint source passed 630 tests on each host: 345
+library tests, 10 conformance tests, 273 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
