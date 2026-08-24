@@ -18,6 +18,9 @@ pub enum VirtualPciError {
     InvalidAccess,
     ReadOnly,
     UnsupportedCommand,
+    InvalidState,
+    StaleGeneration,
+    GenerationExhausted,
 }
 
 /// Externally assigned PCI identity and class data. Construction validates
@@ -121,6 +124,34 @@ impl VirtualPciMemoryBar {
         self.address = value & !(self.size - 1) & PCI_BAR_MEMORY_ADDRESS_MASK;
         VirtualPciWriteOutcome::BarAddress(self.address)
     }
+
+    fn reset(&mut self) {
+        self.address = 0;
+        self.probing = false;
+    }
+}
+
+/// Exact guest-selected MMIO window for one configuration generation. This is
+/// routing data, not a mapping capability or proof that native mapping exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualPciMmioWindow {
+    generation: u32,
+    address: u32,
+    size: u32,
+}
+
+impl VirtualPciMmioWindow {
+    pub const fn generation(self) -> u32 {
+        self.generation
+    }
+
+    pub const fn address(self) -> u32 {
+        self.address
+    }
+
+    pub const fn size(self) -> u32 {
+        self.size
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,6 +166,7 @@ pub enum VirtualPciWriteOutcome {
 /// pin, or additional BARs.
 pub struct VirtualPciType0Function {
     identity: VirtualPciIdentity,
+    generation: u32,
     command: u16,
     bar0: VirtualPciMemoryBar,
 }
@@ -143,6 +175,7 @@ impl VirtualPciType0Function {
     pub const fn new(identity: VirtualPciIdentity, bar0: VirtualPciMemoryBar) -> Self {
         Self {
             identity,
+            generation: 1,
             command: 0,
             bar0,
         }
@@ -156,8 +189,51 @@ impl VirtualPciType0Function {
         self.command
     }
 
+    pub const fn generation(&self) -> u32 {
+        self.generation
+    }
+
     pub const fn bar0(&self) -> VirtualPciMemoryBar {
         self.bar0
+    }
+
+    pub fn mmio_window(&self) -> Result<VirtualPciMmioWindow, VirtualPciError> {
+        if self.command & PCI_COMMAND_MEMORY_SPACE == 0 || self.bar0.address == 0 {
+            return Err(VirtualPciError::InvalidState);
+        }
+        Ok(VirtualPciMmioWindow {
+            generation: self.generation,
+            address: self.bar0.address,
+            size: self.bar0.size,
+        })
+    }
+
+    pub fn validate_mmio_window(
+        &self,
+        window: VirtualPciMmioWindow,
+    ) -> Result<(), VirtualPciError> {
+        if window.generation != self.generation {
+            return Err(VirtualPciError::StaleGeneration);
+        }
+        if self.mmio_window()? != window {
+            return Err(VirtualPciError::InvalidState);
+        }
+        Ok(())
+    }
+
+    /// Returns configuration state to its disabled, unassigned form and
+    /// advances the internal lifetime generation. This core is unattached and
+    /// therefore retires no native mapping; a later attachment boundary must
+    /// revoke native state before calling reset.
+    pub fn reset(&mut self) -> Result<u32, VirtualPciError> {
+        let generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(VirtualPciError::GenerationExhausted)?;
+        self.command = 0;
+        self.bar0.reset();
+        self.generation = generation;
+        Ok(generation)
     }
 
     pub fn encode(&self, output: &mut [u8; PCI_TYPE0_CONFIGURATION_BYTES]) {
@@ -200,10 +276,18 @@ impl VirtualPciType0Function {
                 if command & !PCI_COMMAND_SUPPORTED != 0 {
                     return Err(VirtualPciError::UnsupportedCommand);
                 }
+                if command & PCI_COMMAND_MEMORY_SPACE != 0 && self.bar0.address == 0 {
+                    return Err(VirtualPciError::InvalidState);
+                }
                 self.command = command;
                 Ok(VirtualPciWriteOutcome::Command(command))
             }
-            (16, 4) => Ok(self.bar0.write(value)),
+            (16, 4) => {
+                if self.command & PCI_COMMAND_MEMORY_SPACE != 0 {
+                    return Err(VirtualPciError::InvalidState);
+                }
+                Ok(self.bar0.write(value))
+            }
             _ => Err(VirtualPciError::ReadOnly),
         }
     }
@@ -281,6 +365,7 @@ mod tests {
     fn command_denies_bus_mastering_and_is_transactional() {
         let mut function =
             VirtualPciType0Function::new(identity(), VirtualPciMemoryBar::new(4096).unwrap());
+        function.write(16, 4, 0x1234_5000).unwrap();
         assert_eq!(
             function.write(
                 4,
@@ -299,6 +384,56 @@ mod tests {
             function.command(),
             PCI_COMMAND_MEMORY_SPACE | PCI_COMMAND_INTERRUPT_DISABLE
         );
+        assert_eq!(
+            function.write(16, 4, 0x2000_0000),
+            Err(VirtualPciError::InvalidState)
+        );
+        assert_eq!(function.bar0().address(), 0x1234_5000);
+    }
+
+    #[test]
+    fn memory_decode_requires_assignment_and_reset_stales_window() {
+        let mut function =
+            VirtualPciType0Function::new(identity(), VirtualPciMemoryBar::new(4096).unwrap());
+        assert_eq!(
+            function.write(4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE)),
+            Err(VirtualPciError::InvalidState)
+        );
+        assert_eq!(function.mmio_window(), Err(VirtualPciError::InvalidState));
+        function.write(16, 4, 0x2000_0fff).unwrap();
+        function
+            .write(4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .unwrap();
+        let window = function.mmio_window().unwrap();
+        assert_eq!(window.generation(), 1);
+        assert_eq!(window.address(), 0x2000_0000);
+        assert_eq!(window.size(), 4096);
+        assert_eq!(function.validate_mmio_window(window), Ok(()));
+
+        assert_eq!(function.reset(), Ok(2));
+        assert_eq!(function.command(), 0);
+        assert_eq!(function.bar0().address(), 0);
+        assert_eq!(function.read(16, 4), Ok(0));
+        assert_eq!(
+            function.validate_mmio_window(window),
+            Err(VirtualPciError::StaleGeneration)
+        );
+    }
+
+    #[test]
+    fn reset_generation_exhaustion_preserves_live_configuration() {
+        let mut function =
+            VirtualPciType0Function::new(identity(), VirtualPciMemoryBar::new(4096).unwrap());
+        function.write(16, 4, 0x2000_0000).unwrap();
+        function
+            .write(4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .unwrap();
+        function.generation = u32::MAX;
+        let window = function.mmio_window().unwrap();
+        assert_eq!(function.reset(), Err(VirtualPciError::GenerationExhausted));
+        assert_eq!(function.command(), PCI_COMMAND_MEMORY_SPACE);
+        assert_eq!(function.bar0().address(), 0x2000_0000);
+        assert_eq!(function.validate_mmio_window(window), Ok(()));
     }
 
     #[test]

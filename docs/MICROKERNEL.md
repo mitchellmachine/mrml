@@ -4382,12 +4382,39 @@ MRML identity, block binding, VMM configuration-space exit path, or guest
 driver. It is therefore a defensive configuration-state foundation, not a
 complete PCI/PCIe-compatible device.
 
-Recorded verification on 2026-08-24: Arch Linux under WSL2 passed all 396
-release kernel tests, including 6 focused PCI-state tests. Strict scoped Linux
+The unattached function now has a checked nonzero lifetime generation. Memory
+decode cannot be enabled before a nonzero BAR assignment, and BAR probing or
+relocation is rejected while decode is active. `mmio_window` returns the exact
+address, size, and generation only while decode is valid; every later use can
+revalidate that complete value against the live function. `reset` first checks
+that the generation can advance, then clears command, BAR assignment, and probe
+state and publishes the successor generation. An old window therefore fails as
+stale. Generation exhaustion changes nothing. This core owns no native mapping
+or interrupt state, so this is not complete attached-device revocation. A future
+attachment boundary must revoke or quarantine those resources before invoking
+configuration reset; clearing bytes first would violate the lifecycle contract.
+
+Recorded verification on 2026-08-24: Arch Linux under WSL2 passed all 398
+release kernel tests, including 8 focused PCI-state tests. Strict scoped Linux
 Clippy passed for the kernel and KVM runner, and strict nightly UEFI Clippy
-passed for the block-probe image. Native Windows test-target `check` and strict
-scoped Clippy passed for the kernel, WHP adapter, and WHP runner with default/
-CUDA features excluded. The PCI core is unattached, so no signed runtime, PCI
+passed for the block-probe image. Native Windows gnullvm passed the same 398
+release kernel tests, test-target `check`, and strict scoped Clippy for the
+kernel, WHP adapter, and WHP runner with default/CUDA features excluded. The
+exact successful commands were `cargo +nightly-x86_64-pc-windows-gnullvm test
+-p mrml-kernel --release --no-default-features`, `cargo
++nightly-x86_64-pc-windows-gnullvm check -p mrml-kernel -p mrml-whp -p
+mrml-whp-run --tests --no-default-features`, `cargo
++nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel -p mrml-whp -p
+mrml-whp-run --all-targets --no-default-features --no-deps -- -D warnings`,
+`cargo test -q -p mrml-kernel --release --no-default-features`, `cargo clippy
+-q -p mrml-kernel -p mrml-kvm-run --all-targets --no-default-features --no-deps
+-- -D warnings`, and `cargo +nightly clippy -q -p mrml-kernel-image --release
+--target x86_64-unknown-uefi --features block-guest-driver-probe --no-deps -- -D
+warnings`; the final three ran in Arch Linux with isolated
+`CARGO_TARGET_DIR=target/virtual-pci-reset`. An initial unqualified Windows
+`cargo test` selected the repository's MSVC nightly override and failed before
+linking because `link.exe` is unavailable; it is not test evidence. The PCI core
+is unattached, so no signed runtime, PCI
 enumeration, KVM/WHP configuration exit, QEMU differential, nested-
 virtualization, native-boot, bare-metal, or physical-hardware evidence is
 claimed.
@@ -4399,17 +4426,22 @@ AI authority, persistence, or durable owner-state change. Caller-supplied PCI
 identity data is local configuration data and grants no authority. The
 `HOSTILE SECURITY REVIEW` treats every identity field, offset, width, range,
 command bit, BAR size, probe write, address write, arithmetic result, and
-read-only field as hostile. Accesses are aligned and contained before copying;
+read-only field as hostile. Reset ordering, stale windows, and generation
+exhaustion are hostile as well. Accesses are aligned and contained before copying;
 unsupported writes preserve complete state; probe state cannot become an
 address; address masking is bounded; bus mastering is unavailable; and BAR
-data cannot map memory. Existing capability, revocation, rollback-resistance,
+data cannot map memory. Decode requires assignment, active decode prevents BAR
+mutation, stale windows fail after reset, and exhaustion preserves live state.
+The review explicitly found that local reset cannot stand in for native mapping
+or interrupt revocation after attachment. Existing capability, revocation, rollback-resistance,
 accessibility, evidence, owner-sovereignty, data-minimization, anti-DRM, owner-
 controlled-attestation, third-party-accessibility, AI-containment, and anti-
 persistence gates remain unchanged. This agent review does not replace the
 required independent human dual review.
 
 Patent review: `NOT_TRIGGERED` — conventional bounded PCI Type-0 header state,
-BAR probing/masking, and transactional configuration writes; see
+BAR probing/masking, generational reset invalidation, and transactional
+configuration writes; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,

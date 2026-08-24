@@ -173,8 +173,8 @@ pub use virtual_gpu::{
 };
 pub use virtual_pci::{
     PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE, PCI_TYPE0_CONFIGURATION_BYTES,
-    VirtualPciError, VirtualPciIdentity, VirtualPciMemoryBar, VirtualPciType0Function,
-    VirtualPciWriteOutcome,
+    VirtualPciError, VirtualPciIdentity, VirtualPciMemoryBar, VirtualPciMmioWindow,
+    VirtualPciType0Function, VirtualPciWriteOutcome,
 };
 pub use vm::{
     GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,

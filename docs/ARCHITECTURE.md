@@ -677,7 +677,13 @@ one 32-bit non-prefetchable memory BAR, exact size-probe masking, bounded
 aligned 1/2/4-byte reads, and transactional command/BAR writes. The command
 model admits only memory-space enable and interrupt disable; bus mastering is
 rejected because no DMA transport exists. BAR addresses remain routing data and
-cannot create mappings. This core is unattached: MRML has no assigned PCI
+cannot create mappings. Memory decode requires an assigned nonzero BAR, and BAR
+relocation is rejected while decode is active. An exact generational MMIO-window
+view becomes stale when reset transactionally advances the function generation
+and clears command, BAR, and probe state. Generation exhaustion preserves the
+complete live configuration. This local reset does not revoke a native mapping;
+a future attachment must revoke or quarantine mapping and interrupt state before
+committing it. This core is unattached: MRML has no assigned PCI
 identity here, block does not use it, and PCI capabilities, MSI/MSI-X, multiple
 BARs, VMM configuration exits, QEMU comparison, and a PCI-compatible device
 remain unimplemented.

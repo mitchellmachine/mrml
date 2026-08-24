@@ -295,7 +295,11 @@ or device use. Configuration offsets, widths, command bits, BAR probes, BAR
 sizes, and BAR addresses are hostile. Unsupported or partial state transitions
 fail without mutation. Bus mastering remains unavailable until an exact device
 has separately authorized, revocable DMA/IOMMU state with complete reset and
-cleanup. A BAR assignment alone never maps host memory.
+cleanup. A BAR assignment alone never maps host memory. Memory decode requires
+an assigned BAR, and configuration reset invalidates exact generational routing
+views. For an attached device, native mapping and interrupt cleanup must complete
+before configuration reset commits; uncertainty quarantines or fails closed
+rather than treating cleared configuration bytes as completed revocation.
 
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute

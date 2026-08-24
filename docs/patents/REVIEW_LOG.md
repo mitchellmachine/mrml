@@ -1815,3 +1815,15 @@ keeping BAR data separate from mapping authority are standard defensive device-
 model techniques. No assigned device identity, new protocol, compatibility
 claim, authority model, or patent-candidate mechanism was introduced. This
 agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Generational reset for unattached PCI state
+
+**Result: NOT_TRIGGERED.** The change adds conventional checked lifetime-
+generation invalidation to the existing unattached PCI configuration state,
+requires BAR assignment before memory decode, prevents BAR relocation while
+decode is active, clears local command/BAR/probe state on reset, and preserves
+live state on generation exhaustion. It introduces no mapping, interrupt, DMA,
+assigned identity, wire protocol, compatibility claim, authority model, or
+patent-candidate mechanism. A future attached reset still requires separate
+native resource revocation. This agent review does not replace the required
+independent human dual review.
