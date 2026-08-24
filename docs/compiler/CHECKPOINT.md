@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `15a166f`
-  (`compiler: project direct array return reads`)
+- Compiler checkpoint commit: `c8be305`
+  (`compiler: mirror conditional array return reads`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -124,6 +124,10 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   order. Complete direct fixed-array literals reserve their elements once in
   source order, and exact-count direct array repeats reserve their operand once;
   direct array identifiers reserve one indexed read per materialized element.
+  Conditional fixed-array returns with complete exact-length literal branches
+  reserve condition, then-element, and else-element reads per materialized
+  index, matching generated branch order. Aggregate admission is syntax-based,
+  so unsupported packed aggregates cannot fall through the scalar planner.
   Other aggregate return/tail shapes remain outside preanalysis.
 
 The compiler core remains `no_std`, forbids unsafe code, uses no global
@@ -135,9 +139,9 @@ borrow checker. Unsupported aggregate-leaf call arguments and other aggregate-
 argument
 call-derived fat-reference initializers, call-derived or otherwise unsupported
 wrapped fat-reference returns,
-compound array bases, method/call families, tuple-value and wrapped or
-conditional array returns/tails, and other body reads remain emission-time
-facts. Names are still
+compound array bases, method/call families, tuple-value, wrapped array, and
+nonliteral conditional array returns/tails, and other body reads remain
+emission-time facts. Names are still
 resolved during
 emission, expanded inlined-helper declarations append dynamically, and read-
 place discovery is not yet body-wide. Parser locals do not yet carry these IDs.
@@ -177,8 +181,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 632 tests on each host: 346
-library tests, 10 conformance tests, 274 replacement tests, and 2 driver tests.
+The checkpoint source passed 635 tests on each host: 348
+library tests, 10 conformance tests, 275 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
