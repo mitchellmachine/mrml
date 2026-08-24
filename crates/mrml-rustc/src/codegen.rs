@@ -5631,9 +5631,6 @@ fn loop_has_supported_initial_control_flow(
 ) -> Result<bool, CodegenErrorKind> {
     for (operation_index, operation) in loop_statement.operations().iter().enumerate() {
         let operation = operation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-        if matches!(operation, crate::LoopOperation::NestedUnitLoop) {
-            return Ok(false);
-        }
         if let crate::LoopOperation::NestedBlock(index) = operation {
             let block = loop_statement
                 .nested_blocks()
@@ -22490,6 +22487,43 @@ mod tests {
         assert!(!facts.control_flow_complete);
         assert_eq!(facts.basic_block_count, 0);
         assert_eq!(facts.control_flow_edge_count, 0);
+    }
+
+    #[test]
+    fn runtime_body_facts_treat_unit_break_loop_as_a_completed_operation() {
+        let source = "fn value(enter: bool) -> u8 { let mut value: u8 = 0; while enter { loop { break; } value += 1; break; } value }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let loop_statement = body.while_loops()[0].unwrap();
+        assert_eq!(
+            loop_statement.operations()[0],
+            Some(crate::LoopOperation::NestedUnitLoop)
+        );
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u8",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert!(facts.control_flow_complete);
+        assert_eq!(facts.basic_block_count, 3);
+        assert_eq!(facts.control_flow_edge_count, 4);
+        assert_eq!(
+            facts.basic_blocks[2].unwrap().source,
+            RuntimeBasicBlockSource::LoopBody {
+                statement_index: 1,
+                first_operation: 0,
+                operation_count: 3,
+            }
+        );
     }
 
     #[test]
