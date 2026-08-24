@@ -226,6 +226,13 @@ current-task writable range before revocation, consumes one directional copy
 ticket, erases kernel scratch on every return, and treats a copy failure after
 revocation as terminal delivery uncertainty rather than retry permission. This
 is unit-tested mechanism, not live boot-path or physical evidence.
+The kernel-image service path now routes that operation before generic syscall
+decoding, rechecks the complete user return state and active address-space root,
+and constructs the metadata-only capability/delivery for one exact initial task
+generation only when the handoff contains recovery metadata. This launch-policy
+capability authorizes only the one-use metadata copy; the metadata itself still
+cannot authorize storage recovery. The image compiles for the UEFI target, but
+no signed service invocation or native UEFI execution evidence exists yet.
 
 **PLANNED:** owner policy selects boot trust roots and authorizes each measured
 system generation. Recommended project keys are defaults, not a hidden vendor

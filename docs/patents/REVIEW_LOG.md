@@ -2495,6 +2495,18 @@ JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
 review does not replace independent human dual review.
 
+# 2026-08-24 — Kernel-image recovery syscall dispatch
+
+**Result: NOT_TRIGGERED.** The change conventionally routes the existing fixed
+recovery syscall before generic decoding, revalidates the complete user return
+frame and active page-table root, and installs the existing metadata-only exact
+capability/delivery for one initial service generation from typed handoff data.
+It grants no storage recovery authority and adds no attestation, compatibility
+transport, host-share protocol, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
+this agent review does not replace independent human dual review.
+
 # 2026-08-24 — Capability-scoped recovery metadata delivery
 
 **Result: NOT_TRIGGERED.** The change conventionally authorizes one fixed boot

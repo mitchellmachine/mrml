@@ -666,12 +666,16 @@ authority; unrelated domains continue.
    is emitted. Tests prove this metadata can exist while artifact rollback
    evidence remains false. It creates no recovery token, capability, or
    authority table. Actual owner-policy provisioning/recovery, native UEFI-
-   target linkage, live booted storage-service dispatch, and physical testing
-   remain pending. An isolated operation-13 adapter now decodes one exact
+   target linkage/execution, signed booted storage-service invocation, and
+   physical testing remain pending. An isolated operation-13 adapter now decodes one exact
    capability and canonical output address, validates the current task's fixed
    writable range through a one-use directional ticket before revocation,
    erases kernel scratch, and makes post-revocation copy uncertainty terminal.
-   This is focused unit evidence, not live boot-path evidence. A storage-side
+   The kernel-image service dispatcher now routes that operation before generic
+   decoding, binds the active CR3 and current task, and creates the exact
+   metadata-only capability/delivery only for the initial service generation
+   when metadata is present. UEFI-target compile/lint and focused unit evidence
+   exist; no signed invocation or native boot evidence exists. A storage-side
    one-use wrapper now binds the handed metadata to the
    independently authenticated state store: one exact load and one exact
    compare-and-store are permitted, with replay, field substitution, malformed

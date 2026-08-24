@@ -98,11 +98,12 @@ use mrml_kernel::TaskRuntime;
 use mrml_kernel::UserCallFrame;
 #[cfg(feature = "service-probe")]
 use mrml_kernel::{
-    decode_capability_transfers, Capability, CapabilitySpace, ControlEvent,
+    decode_capability_transfers, BootRecoveryDelivery, BootRecoverySyscallExecutor,
+    BootRecoverySyscallRequest, Capability, CapabilitySpace, ControlEvent,
     DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable, PeerDeathReason,
     RestartPolicy, ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceResourceEraser,
     ServiceSupervisor, SharedAccess, SharedBufferSyscallExecutor, SharedEndpoint,
-    SharedEndpointRequest, SharedMemoryBindings, VmId, VmTable,
+    SharedEndpointRequest, SharedMemoryBindings, VmId, VmTable, BOOT_RECOVERY_SYSCALL_OPERATION,
     CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD,
 };
 #[cfg(feature = "uefi-service-preemption-probe")]
@@ -424,6 +425,8 @@ static mut SERVICE_CONTROLS: Option<[Capability; 3]> = None;
 static mut SERVICE_IDS: Option<[ServiceId; 3]> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RECEIVER_SIGNAL: Option<Capability> = None;
+#[cfg(feature = "service-probe")]
+static mut SERVICE_BOOT_RECOVERY: Option<BootRecoveryDelivery> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_RESTARTED: bool = false;
 #[cfg(feature = "service-probe")]
@@ -827,6 +830,32 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             Some(frame) => frame,
             None => halt(),
         };
+        if frame.rax == BOOT_RECOVERY_SYSCALL_OPERATION {
+            let request =
+                BootRecoverySyscallRequest::decode_frame(frame).unwrap_or_else(|_| halt());
+            let runtime = (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
+                .as_mut()
+                .unwrap_or_else(|| halt());
+            let current = runtime.current().unwrap_or_else(|| halt());
+            let root = runtime
+                .context(current)
+                .unwrap_or_else(|_| halt())
+                .page_table();
+            *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
+                UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
+            let active = ActivePageTables::current().unwrap_or_else(|_| halt());
+            if active.root() != root {
+                halt();
+            }
+            let delivery = (*core::ptr::addr_of_mut!(SERVICE_BOOT_RECOVERY))
+                .as_mut()
+                .unwrap_or_else(|| halt());
+            let mut user = ActiveTaskUserCopy::new(&active, root, current, DirectActiveUserMemory);
+            BootRecoverySyscallExecutor::execute(request, runtime, current, delivery, &mut user)
+                .unwrap_or_else(|_| halt());
+            frame.complete(0);
+            return;
+        }
         let request = frame.request().unwrap_or_else(|_| halt());
         let runtime = (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
             .as_mut()
@@ -2977,6 +3006,21 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        let recovery_capability = handoff.recovery_state().map(|metadata| {
+            let object = ObjectId(0xa3);
+            let capability = runtime
+                .capabilities_mut(receiver)
+                .and_then(|space| {
+                    space
+                        .insert(object, Rights::READ)
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            let delivery =
+                BootRecoveryDelivery::new(receiver, object, metadata).unwrap_or_else(|_| halt());
+            core::ptr::addr_of_mut!(SERVICE_BOOT_RECOVERY).write(Some(delivery));
+            capability
+        });
         #[cfg(feature = "block-service-probe")]
         let (resource_capabilities, sender_resources) =
             provision_service_resource(runtime, receiver, Some(sender));
@@ -3054,6 +3098,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         receiver_context.r14 = sender.token();
         receiver_context.r15 = resource_capabilities[0].token();
         receiver_context.rbx = resource_capabilities[1].token();
+        receiver_context.r11 = recovery_capability.map_or(0, Capability::token);
         #[cfg(feature = "service-restart-request-probe")]
         {
             receiver_context.rbp = manager.token();

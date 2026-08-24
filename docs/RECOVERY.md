@@ -365,8 +365,14 @@ explicitly and downgrade the status rather than guessing.
   fixed scratch on every return. Pre-delivery validation failure remains
   retryable; copy uncertainty after revocation is terminal. This is focused unit
   evidence, not live booted service, UEFI, TPM hardware, or durability evidence.
+  The kernel-image service dispatcher now recognizes operation 13 before the
+  generic decoder, revalidates the complete user return frame and active CR3,
+  and initializes the exact metadata-only capability/delivery for the initial
+  service task generation only when handoff metadata exists. The token is
+  launch state, not storage authority. UEFI-target compile/lint evidence exists;
+  no signed service invocation or native UEFI execution evidence exists.
   recovery test now traverses this delivery mechanism before the authenticated-
-  store wrapper. Syscall/user-copy wiring in a booted service remains pending.
+  store wrapper. Signed invocation by a booted service remains pending.
   Dependent
   recovery can run before that commit: one consumed transaction keeps the
   rebuilt table private while a narrowly unsafe side-effect-free validator

@@ -1,6 +1,6 @@
 use crate::{
     BootRecoveryDelivery, BootRecoveryDeliveryError, Capability, HANDOFF_RECOVERY_STATE_BYTES,
-    SharedBufferUserAccess, SharedBufferUserCopy, TaskId, TaskRuntime,
+    SharedBufferUserAccess, SharedBufferUserCopy, TaskId, TaskRuntime, UserCallFrame,
 };
 
 pub const BOOT_RECOVERY_SYSCALL_OPERATION: u64 = 13;
@@ -12,6 +12,18 @@ pub struct BootRecoverySyscallRequest {
 }
 
 impl BootRecoverySyscallRequest {
+    pub fn decode_frame(frame: &UserCallFrame) -> Result<Self, BootRecoverySyscallError<(), ()>> {
+        frame
+            .validate_return()
+            .map_err(|_| BootRecoverySyscallError::Malformed)?;
+        Self::decode(
+            frame.rax,
+            frame.rdi,
+            frame.rsi,
+            [frame.rdx, frame.r10, frame.r8, frame.r9],
+        )
+    }
+
     pub fn decode(
         operation: u64,
         capability: u64,
@@ -91,7 +103,10 @@ impl BootRecoverySyscallExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ObjectId, Priority, RecoveryStateMetadata, Rights, arch::x86_64::UserContext};
+    use crate::{
+        ObjectId, Priority, RecoveryStateMetadata, Rights, X86_USER_CALL_VECTOR,
+        arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR, UserContext},
+    };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum CopyError {
@@ -194,6 +209,45 @@ mod tests {
         ] {
             assert!(result.is_err());
         }
+    }
+
+    #[test]
+    fn frame_decoder_rejects_forged_return_state_before_request_data() {
+        let token = (1u64 << 32) | 1;
+        let mut frame = UserCallFrame {
+            r15: 0,
+            r14: 0,
+            r13: 0,
+            r12: 0,
+            r11: 0,
+            r10: 0,
+            r9: 0,
+            r8: 0,
+            rdi: token,
+            rsi: 0x6000,
+            rbp: 0,
+            rbx: 0,
+            rdx: 0,
+            rcx: u64::from(X86_USER_CALL_VECTOR),
+            rax: BOOT_RECOVERY_SYSCALL_OPERATION,
+            rip: 0x4000,
+            cs: u64::from(USER_CODE_SELECTOR),
+            rflags: 2,
+            rsp: 0x7000,
+            ss: u64::from(USER_DATA_SELECTOR),
+        };
+        assert_eq!(
+            BootRecoverySyscallRequest::decode_frame(&frame),
+            Ok(BootRecoverySyscallRequest {
+                capability: Capability::from_token(token),
+                output_address: 0x6000,
+            })
+        );
+        frame.cs = 0;
+        assert_eq!(
+            BootRecoverySyscallRequest::decode_frame(&frame),
+            Err(BootRecoverySyscallError::Malformed)
+        );
     }
 
     #[test]
