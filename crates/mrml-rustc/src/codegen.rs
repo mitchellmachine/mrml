@@ -4313,10 +4313,21 @@ fn preanalyze_runtime_source_expression_reads<
         }
         return Ok(());
     }
-    if runtime_type_stack_slots(ty) != 1
-        && !(runtime_type_is_fat_reference(ty)
-            && runtime_fat_reference_return_preanalysis_supported(&tree, tree.root(), 0))
-    {
+    let fat_reference_supported = runtime_type_is_fat_reference(ty)
+        && (runtime_fat_reference_return_preanalysis_supported(&tree, tree.root(), 0)
+            || runtime_fat_reference_call_preanalysis_supported(
+                function,
+                resolver,
+                locals,
+                &tree,
+                tree.root(),
+                0,
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, expression_span),
+            })?);
+    if runtime_type_stack_slots(ty) != 1 && !fat_reference_supported {
         return Ok(());
     }
     preanalyze_runtime_expression_reads(facts, locals, function, resolver, &tree, expression_span)
@@ -18086,6 +18097,34 @@ impl<
                 IrErrorKind::NestingLimitExceeded,
             )));
         }
+        if matches!(
+            tree.expression(root).map(|expression| expression.kind),
+            Some(ExprKind::Call { .. })
+        ) && runtime_expression_type_with_locals(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            root,
+            depth + 1,
+        )
+        .is_ok_and(runtime_type_is_fat_reference)
+        {
+            self.emit_expression(tree, root, depth + 1)?;
+            if self.abi == X86_64Abi::Windows {
+                self.emit(&[0x49, 0x89, 0xd0, 0x48, 0x89, 0xc1])?;
+                let local_slots = self.local_stack_slots()?;
+                let hidden_pointer_slot = self
+                    .saved_parameter_slots
+                    .checked_sub(1)
+                    .and_then(|slot| slot.checked_add(self.evaluation_depth))
+                    .and_then(|slot| slot.checked_add(local_slots))
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                self.emit_stack_slot(hidden_pointer_slot)?;
+                self.emit(&[0x48, 0x89, 0x08, 0x4c, 0x89, 0x40, 0x08])?;
+            }
+            return self.emit_epilogue();
+        }
         if let Some(
             ExprKind::If {
                 condition,
@@ -22456,6 +22495,42 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 8192, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_call_derived_fat_reference_returns() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &[usize], choose_call: bool, start: usize, end: usize, bias: usize, prefix: usize) -> &[usize] { if choose_call { return choose(input, start, end, bias); } { prefix; choose(input, start, end, bias) } }";
+        let module = Parser::new(source).parse_module::<1, 6>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<6>().unwrap();
+        let resolver = FatCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 6, 64>(
+            &function,
+            &resolver,
+            &body,
+            "&[usize]",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(facts.assignment_read_count, 10);
+        for (fact, parameter) in facts.assignment_reads[..10]
+            .iter()
+            .zip([1, 0, 2, 3, 4, 5, 0, 2, 3, 4])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 6, 64>(&function, &resolver, abi).unwrap();
         }
     }
 

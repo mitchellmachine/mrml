@@ -3868,6 +3868,13 @@ fn rustc_wrapped_fat_reference_returns_reach_native_objects() {
 }
 
 #[test]
+fn rustc_call_derived_fat_reference_returns_reach_native_objects() {
+    let source = "fn select_slice(values: &[usize], start: usize, end: usize, bias: usize) -> &[usize] { if bias == 0 { &values[start..end] } else { values } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &[usize], choose_call: bool, start: usize, end: usize, bias: usize, prefix: usize) -> &[usize] { if choose_call { return select_slice(input, start, end, bias); } { prefix; select_slice(input, start, end, bias) } }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
