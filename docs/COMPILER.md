@@ -231,12 +231,14 @@ local-array bases retain the exact `Subslice` projection. The recursion is
 bounded to 64 levels. Call-derived fat-reference initializers also use the same
 visitor when every argument is a one-slot scalar, another supported fat
 reference, a direct identifier-backed array or tuple, an array literal or
-single-evaluation repeat, or a supported literal/conditional/wrapped tuple.
+single-evaluation repeat, a direct conditional array with literal branches, or
+a supported literal/conditional/wrapped tuple.
 Prefix expressions and call arguments are reserved left-to-right before
 inlined-helper emission; identifier-backed arrays reserve one `Index` read per
-element and tuples reserve numbered `TupleField` reads. Conditional arrays and
-other aggregate call arguments remain emission-time work because their
-specialized materializers need separate traversal facts.
+element and tuples reserve numbered `TupleField` reads. Direct conditional
+arrays repeat condition/then-element/else-element for every index. Other
+aggregate call arguments remain emission-time work because their specialized
+materializers need separate traversal facts.
 Supported direct identifier, range-derived, and recursively conditional fat-
 reference explicit returns and final tails now use the same bounded read
 preanalysis. Their conditions, runtime endpoints, and bases retain exact source
@@ -275,9 +277,10 @@ nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
 It does not yet preanalyze compound array-base materialization, other wrapped or
-non-literal conditional aggregate values, conditional-array and otherwise
-unsupported aggregate-argument call-derived fat-reference initializers, call-
-derived or otherwise unsupported wrapped fat-reference returns, method/call
+non-literal conditional aggregate values, wrapped/non-literal conditional-array
+and otherwise unsupported aggregate-argument call-derived fat-reference
+initializers, call-derived or otherwise unsupported wrapped fat-reference
+returns, method/call
 families beyond the bounded initializer slice,
 aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
