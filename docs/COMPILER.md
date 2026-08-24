@@ -228,8 +228,11 @@ wrappers, sequence prefixes and tails, and range-derived slice/string values.
 Range-derived slice and string
 initializers reserve their runtime start and end reads before the base read;
 local-array bases retain the exact `Subslice` projection. The recursion is
-bounded to 64 levels. Call-derived fat-reference materialization remains
-emission-time work.
+bounded to 64 levels. Call-derived fat-reference initializers also use the same
+visitor when every argument is either a one-slot scalar or another supported
+fat reference. Prefix expressions and call arguments are reserved left-to-right
+before inlined-helper emission. Aggregate call arguments remain emission-time
+work because their specialized materializers need separate traversal facts.
 Supported direct identifier, range-derived, and recursively conditional fat-
 reference explicit returns and final tails now use the same bounded read
 preanalysis. Their conditions, runtime endpoints, and bases retain exact source
@@ -268,10 +271,10 @@ nested scalar reads of assignment RHS expressions, scalar initializer reads,
 supported scalar expression-statement reads, and the supported scalar
 condition/control/return/tail paths above.
 It does not yet preanalyze compound array-base materialization, other wrapped or
-non-literal conditional aggregate values, call-derived fat-reference
-initializers, call-derived or otherwise unsupported wrapped fat-reference
-returns, method/call, aggregate
-returns/tails, or other body reads, or replace name lookup
+non-literal conditional aggregate values, aggregate-argument call-derived fat-
+reference initializers, call-derived or otherwise unsupported wrapped fat-
+reference returns, method/call families beyond the bounded initializer slice,
+aggregate returns/tails, or other body reads, or replace name lookup
 across the whole body. Expanded
 inlined-helper locals still append dynamically. There is not
 yet a complete typed body table, move path, borrow, loan, or CFG. This runtime

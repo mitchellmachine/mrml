@@ -2938,8 +2938,11 @@ plan supported non-call identifiers, conditionals, transparent return/break/
 inline-const wrappers, sequences, and range-derived slice/string values.
 Range-derived slice and string initializers plan runtime start/end reads
 before the base read, retaining the exact `Subslice` projection for a local-
-array base. Recursion is capped at 64 levels. Call-derived fat-reference forms
-remain later work.
+array base. Recursion is capped at 64 levels. Call-derived fat-reference
+initializers additionally plan left-to-right call-argument reads when every
+argument is a one-slot scalar or another supported fat reference. Sequence
+prefixes remain ahead of those arguments. Aggregate call arguments remain
+later work because their specialized materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
 reads in exact emission order. Call-derived and unsupported wrapped return
@@ -2957,7 +2960,8 @@ blocks/arms, branch-local returns, explicit returns, and the final scalar tail.
 Nested-loop blocks additionally mirror entry conditions and every stored control
 at its exact action boundary and control order before activating the following
 local or action.
-Method/call families, aggregate materialization, unsupported fat-reference returns,
+Method/call families beyond that bounded initializer slice, aggregate call-
+argument materialization, unsupported fat-reference returns,
 aggregate tails,
 remain outside this preanalysis slice.
 The emitter consumes those declarations exactly once. Inlined-helper parameters
@@ -3077,6 +3081,14 @@ WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
 the branch condition, explicit-return start/end/base, and fallthrough-tail
 start/base facts in exact order. Its original replacement emits both COFF and
 ELF64 objects through the same explicit and tail return paths.
+
+The call-derived fat-reference initializer milestone passed all 604 compiler
+and driver tests on Windows gnullvm and all 604 in release mode on native Arch
+Linux WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test
+proves a sequence prefix followed by four scalar/fat-reference call arguments
+in exact left-to-right order before inlined helper emission. Its original
+replacement emits both COFF and ELF64 objects through the same call-derived
+slice-reference initializer.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus
