@@ -219,7 +219,8 @@ impl<T, N> PcrPolicySessionTransport<T, N> {
 
 impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
     fn submit(&mut self, command: &[u8], response: &mut [u8]) -> Result<usize, NvCounterError> {
-        if let Some((handle, operation)) = self.pending.take()
+        let pending = self.pending.take();
+        if let Some((handle, operation)) = pending
             && (command.len() < 31
                 || u32::from_be_bytes(command[22..26].try_into().unwrap()) != handle
                 || operation_for_command(command) != Some(operation))
@@ -227,7 +228,19 @@ impl<T: TpmTransport, N> TpmTransport for PcrPolicySessionTransport<T, N> {
             let _ = flush_context(&mut self.transport, handle);
             return Err(NvCounterError::InvalidSession);
         }
-        self.transport.submit(command, response)
+        match self.transport.submit(command, response) {
+            Ok(length) => Ok(length),
+            Err(error) => {
+                // The transport cannot prove whether the TPM consumed a command
+                // that failed in flight. Retire the satisfied session in either
+                // case; an already-consumed handle simply makes this best-effort
+                // cleanup fail harmlessly.
+                if let Some((handle, _)) = pending {
+                    let _ = flush_context(&mut self.transport, handle);
+                }
+                Err(error)
+            }
+        }
     }
 }
 
@@ -1529,6 +1542,7 @@ mod tests {
     struct PolicyTpm {
         policy_error: bool,
         malformed_start: bool,
+        nv_error: bool,
         flushes: usize,
         policy_calls: usize,
     }
@@ -1571,7 +1585,12 @@ mod tests {
                     response[2..6].copy_from_slice(&10u32.to_be_bytes());
                     Ok(10)
                 }
-                TPM_CC_NV_INCREMENT => Ok(policy_response(response, &[])),
+                TPM_CC_NV_INCREMENT => {
+                    if self.nv_error {
+                        return Err(NvCounterError::Transport);
+                    }
+                    Ok(policy_response(response, &[]))
+                }
                 _ => Err(NvCounterError::Transport),
             }
         }
@@ -1592,6 +1611,7 @@ mod tests {
         let tpm = PolicyTpm {
             policy_error: false,
             malformed_start: false,
+            nv_error: false,
             flushes: 0,
             policy_calls: 0,
         };
@@ -1615,10 +1635,34 @@ mod tests {
     }
 
     #[test]
+    fn pcr_provider_flushes_session_after_ambiguous_nv_transport_failure() {
+        let tpm = PolicyTpm {
+            policy_error: false,
+            malformed_start: false,
+            nv_error: true,
+            flushes: 0,
+            policy_calls: 0,
+        };
+        let mut provider =
+            PcrPolicySessionTransport::new(tpm, Nonce { value: [0x44; 32] }, pcr_policy());
+        let session = provider
+            .authorize_nv(policy_name(), [0x33; 32], NvPolicyOperation::Increment)
+            .unwrap();
+
+        assert_eq!(
+            policy_increment(&mut provider, 0x0180_0010, session),
+            Err(NvCounterError::Transport)
+        );
+        assert_eq!(provider.transport.flushes, 1);
+        assert!(provider.pending.is_none());
+    }
+
+    #[test]
     fn pcr_provider_rejects_bad_entropy_policy_and_command_use() {
         let tpm = PolicyTpm {
             policy_error: false,
             malformed_start: false,
+            nv_error: false,
             flushes: 0,
             policy_calls: 0,
         };
@@ -1653,6 +1697,7 @@ mod tests {
         let tpm = PolicyTpm {
             policy_error: false,
             malformed_start: false,
+            nv_error: false,
             flushes: 0,
             policy_calls: 0,
         };
@@ -1677,6 +1722,7 @@ mod tests {
         let tpm = PolicyTpm {
             policy_error: false,
             malformed_start: true,
+            nv_error: false,
             flushes: 0,
             policy_calls: 0,
         };

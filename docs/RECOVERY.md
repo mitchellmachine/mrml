@@ -331,7 +331,11 @@ explicitly and downgrade the status rather than guessing.
   policy session from explicit nonzero caller entropy, executes the exact
   configured `PolicyPCR` selection/digest, binds it to one requested next NV
   operation, rejects immediate nonce reuse, and best-effort flushes mismatched
-  or failed sessions. A safe constructor composes this provider, admitted NV
+  or failed sessions. An ambiguous NV-command transport failure now clears the
+  local pending authorization and best-effort flushes the TPM handle while
+  preserving the original error; focused Windows gnullvm and Arch Linux/WSL2
+  tests exercise this fail-closed boundary. A safe constructor composes this
+  provider, admitted NV
   layout, TPM backend, and authenticated journal; policy/layout substitution
   fails before journal use. An optional all-or-none UEFI development
   configuration now binds the exact indices and policy recipe to TCG2 and a

@@ -479,6 +479,9 @@ digest, and operation. A concrete provider now starts a fresh unsalted,
 unbound SHA-256 policy session from caller entropy, executes one exact
 owner-configured `PolicyPCR` recipe, and permits only the requested next NV
 operation. Mismatch and policy failure trigger best-effort session cleanup.
+An ambiguous NV transport failure also best-effort flushes the already-satisfied
+session while preserving the original error; the wrapper clears its pending
+authorization and never treats the uncertain TPM handle as reusable.
 Immediate nonce reuse fails closed. A safe composition constructor exposes the
 authenticated journal only after the complete three-index layout is admitted
 through that provider; layout-policy substitution fails construction.

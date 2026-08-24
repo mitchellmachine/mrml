@@ -652,7 +652,10 @@ authority; unrelated domains continue.
    explicit nonzero caller entropy, executes one exact owner-configured
    `PolicyPCR` recipe, and permits only the requested next NV operation;
    immediate nonce reuse fails closed, and mismatch or policy failure triggers
-   best-effort cleanup. A safe constructor now composes this provider, the
+   best-effort cleanup. Ambiguous NV transport failure now also clears the
+   pending authorization and best-effort flushes the satisfied TPM session
+   while returning the original error. A safe constructor now composes this
+   provider, the
    admitted layout, the TPM backend, and the authenticated journal; an end-to-
    end hosted test loads and atomically replaces journal state while rejecting
    layout-policy substitution. The loader now accepts an optional exact all-or-
@@ -710,7 +713,7 @@ authority; unrelated domains continue.
    volatile compare-and-store behavior only; a conforming authenticated,
    power-loss-atomic backend and physical evidence remain pending.
    Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux/WSL2
-   each pass all 447 kernel tests, all 16 `mrml-uefi` library tests, all 116
+   each pass all 447 kernel tests, all 17 `mrml-uefi` library tests, all 116
    storage tests, and all 27 configuration tests. Strict
    Windows Clippy and a hosted gnullvm loader check pass with `uefi-image`
    enabled; strict Linux crate-local Clippy also passes. The direct UEFI crypto
