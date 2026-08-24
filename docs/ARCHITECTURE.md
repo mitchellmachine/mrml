@@ -650,6 +650,14 @@ read-only GDT/IDT data and `iretq`. The probe VM admits exactly the 64 runner
 exits required by 32 requests; other launch modes retain their existing budgets.
 Both KVM and WHP paths have live controlled evidence. This is bounded multi-
 window progress, not a general interrupt framework or unbounded flow.
+The common runner now dispatches both the exact doorbell and protected
+completion acknowledgement as one backend-neutral transport transaction. It
+delivers an already-pending notification before vCPU entry, notifies a newly
+published completion before return, accounts exactly one native exit, and
+fails the VM on every other disposition or stage error. The KVM and WHP block
+launchers use this common dispatch instead of selecting separate host-side
+runner entry points. Progress remains explicitly caller-bounded; this is not a
+general scheduler loop or unbounded execution.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

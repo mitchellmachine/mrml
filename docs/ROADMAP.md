@@ -778,6 +778,16 @@ host-forced execution loss, not asynchronous/unplanned crash capture.
 Asynchronous crash orchestration, backend-in-flight
 recovery, unbounded progress, and PCI transport remain pending.
 
+Both scalar transport directions now cross one common backend-neutral
+transaction runner. Each invocation delivers any pending completion interrupt
+before entry, accounts exactly one native exit, accepts only the canonical
+doorbell or protected acknowledgement tuple, performs its exact queue
+transition, and delivers a newly latched interrupt before returning. Every
+other exit or stage failure fails the VM. KVM and WHP launchers no longer
+choose separate doorbell and acknowledgement runner functions. The caller
+still supplies an exact finite exit budget and invokes one transaction at a
+time; a general scheduler-integrated loop remains pending.
+
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
 configuration, publishes a complete request before its producer, and rings only

@@ -16,8 +16,8 @@ use mrml_kernel::{
     VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
     VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
-    run_virtual_block_doorbell_once, verify_gpu_kernel_bundle,
+    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VmBackend, VmExit, VmTable,
+    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -273,7 +273,7 @@ fn run_block_guest_driver_probe(
     for window in 0..(BLOCK_PROBE_CYCLES * 2) {
         for offset in 0..2 {
             let operation = window * 2 + offset;
-            let outcome = match run_virtual_block_doorbell_once(
+            let outcome = match run_virtual_block_transaction_once(
                 &mut guest,
                 &mut storage,
                 0,
@@ -290,7 +290,13 @@ fn run_block_guest_driver_probe(
                 &mut bridge,
                 &mut scratch,
             ) {
-                Ok(outcome) => outcome,
+                Ok(VirtualBlockTransactionOutcome::Doorbell(outcome)) => outcome,
+                Ok(VirtualBlockTransactionOutcome::CompletionAcknowledged(_)) => {
+                    return Err(anyhow!(
+                        "block operation {} produced an unexpected acknowledgement",
+                        operation + 1
+                    ));
+                }
                 Err(error) => {
                     let state = guest.snapshot().map_err(|snapshot| {
                         anyhow!(
@@ -384,8 +390,9 @@ fn run_block_guest_driver_probe(
         }
         for offset in 0..2 {
             let operation = window * 2 + offset;
-            let acknowledgement = match run_virtual_block_completion_ack_once(
+            let acknowledgement = match run_virtual_block_transaction_once(
                 &mut guest,
+                &mut storage,
                 0,
                 &mut vms,
                 vm,
@@ -393,10 +400,22 @@ fn run_block_guest_driver_probe(
                 &capabilities,
                 &guest_memory,
                 &io_policy,
+                &interrupt_policy,
+                interrupt_capability,
+                interrupt_object,
                 &mut device,
                 &mut bridge,
+                &mut scratch,
             ) {
-                Ok(acknowledgement) => acknowledgement,
+                Ok(VirtualBlockTransactionOutcome::CompletionAcknowledged(acknowledgement)) => {
+                    acknowledgement
+                }
+                Ok(VirtualBlockTransactionOutcome::Doorbell(_)) => {
+                    return Err(anyhow!(
+                        "block acknowledgement {} produced an unexpected doorbell",
+                        operation + 1
+                    ));
+                }
                 Err(error) => {
                     let state = guest.snapshot().map_err(|snapshot| {
                         anyhow!(

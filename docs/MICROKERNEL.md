@@ -4218,6 +4218,56 @@ Patent review: `NOT_TRIGGERED` — conventional linear type-state around an
 unsafe native-resource destruction boundary; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The hosted virtual-block control path now has one backend-neutral transaction
+runner for both scalar transport directions. One invocation first delivers an
+already-pending completion notification, enters the vCPU exactly once through
+the common VM dispatcher and exit-budget accounting, and accepts only the
+canonical MRML-specific doorbell or protected acknowledgement tuple. A
+doorbell processes at most one request and delivers any newly latched
+notification before return; an acknowledgement advances exactly one protected
+consumer position. Any other disposition or any exit, queue, backend, or
+interrupt-stage error fails the VM. KVM and WHP block launchers use this common
+entry point for both directions instead of selecting separate runner
+functions. The existing one-direction functions remain narrow primitives.
+
+Recorded verification on 2026-08-24: Arch Linux under WSL2 passed all 390
+release `mrml-kernel` tests, all 6 release `mrml-kvm-run` tests, strict scoped
+`--no-deps` Clippy for the kernel and KVM runner, and strict nightly UEFI
+Clippy for the `block-guest-driver-probe` image. Native Windows test-target
+`check` and strict scoped Clippy passed for the kernel, WHP adapter, and WHP
+runner with default/CUDA features excluded; `link.exe` remained unavailable,
+so no linked or live WHP claim is made. A fresh one-time Lamport-signed
+version-1 KVM probe completed the common transaction dispatch and existing
+replacement sequence with `verify=16861us prepare=2257us execute=81077us
+total=101410us`. The temporary signing key and signed artifacts were removed.
+This is bounded unit/simulation and hosted controlled KVM evidence. It is not a
+general scheduler loop, asynchronous crash detection, backend-in-flight
+recovery, persistence, durability, host resistance, native boot, bare metal,
+or physical-hardware evidence.
+
+The transaction-runner `DIGITAL-RIGHTS REVIEW` found no new identity,
+collection, retention, correlation, disclosure, attestation mandate, DRM,
+vendor/publisher control, first-party bypass, accessibility restriction, AI
+authority, persistence, or durable owner-state change. Consolidating existing
+local transport mechanics creates no authority and exposes no additional
+state. The `HOSTILE SECURITY REVIEW` treats the native exit, translated
+disposition, port, width, direction, value, exit budget, pending interrupt,
+capability/object pair, queue counters, device/bridge identity and lifecycle,
+backend result, scratch contents, and acknowledgement position as hostile.
+Only the two exact tuples dispatch; pending notification precedes entry; a
+completion is notified before return; every mismatch or uncertain stage fails
+the VM; and existing device/bridge fail-stop behavior remains intact. The
+runner neither infers execution loss nor weakens recovery suspension. Existing
+capability, revocation, rollback-resistance, accessibility, evidence,
+owner-sovereignty, data-minimization, anti-DRM, owner-controlled-attestation,
+third-party-accessibility, AI-containment, and anti-persistence gates remain
+unchanged. This agent review does not replace the required independent human
+dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional consolidation of bounded exit
+dispatch, fixed scalar I/O tuples, queue processing, and interrupt delivery;
+see [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

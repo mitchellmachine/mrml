@@ -2280,6 +2280,24 @@ pub enum VirtualBlockRunError<M, D> {
 pub type VirtualBlockRunResult<M, D> =
     Result<VirtualBlockProcessOutcome<D>, VirtualBlockRunError<M, D>>;
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockTransactionOutcome<E> {
+    Doorbell(VirtualBlockProcessOutcome<E>),
+    CompletionAcknowledged(u64),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum VirtualBlockTransactionRunError<M, D> {
+    Exit(VmRunError<M>),
+    InvalidExit,
+    Doorbell(VirtualBlockDoorbellError<M, D>),
+    Acknowledgement(VirtualBlockCompletionAckError<M>),
+    Interrupt(VirtualBlockInterruptError<M>),
+}
+
+pub type VirtualBlockTransactionRunResult<M, D> =
+    Result<VirtualBlockTransactionOutcome<D>, VirtualBlockTransactionRunError<M, D>>;
+
 /// VMM memory authority for the MRML-specific block transport. Request pages
 /// are guest-writable; completion slots and read-result payloads are writable
 /// only by this device path.
@@ -3229,6 +3247,133 @@ where
         let _ = vms.fail(vm);
         VirtualBlockCompletionAckRunError::Acknowledgement(error)
     })
+}
+
+/// Runs one vCPU for exactly one MRML-specific virtual-block transport
+/// transaction. Only the configured doorbell and protected completion
+/// acknowledgement tuples are accepted. Pending completion notification is
+/// delivered before vCPU entry, and a newly published completion is notified
+/// before returning. Every other exit or stage failure fails the VM, preserving
+/// the caller's explicit exit budget and preventing ambiguous native state from
+/// being resumed.
+#[allow(clippy::too_many_arguments)]
+pub fn run_virtual_block_transaction_once<
+    M,
+    D,
+    const N: usize,
+    const V: usize,
+    const C: usize,
+    const G: usize,
+    const I: usize,
+>(
+    memory: &mut M,
+    block_backend: &mut D,
+    vcpu: u32,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    router: &mut HypercallRouter,
+    capabilities: &CapabilitySpace<C>,
+    guest_memory: &GuestMemory<G>,
+    io_policy: &IoPortPolicy<I>,
+    interrupt_policy: &InterruptPolicy,
+    interrupt_capability: Capability,
+    interrupt_object: ObjectId,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    scratch: &mut [u8],
+) -> VirtualBlockTransactionRunResult<M::Error, D::Error>
+where
+    M: VirtualBlockVmmMemory,
+    D: VirtualBlockBackend,
+{
+    if device.pending_interrupt_vector().is_some() {
+        inject_virtual_block_interrupt(
+            device,
+            memory,
+            vms,
+            vm,
+            vcpu,
+            interrupt_policy,
+            capabilities,
+            interrupt_capability,
+            interrupt_object,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Interrupt(error)
+        })?;
+    }
+
+    let disposition = run_vm_once(
+        memory,
+        vcpu,
+        vms,
+        vm,
+        router,
+        capabilities,
+        guest_memory,
+        io_policy,
+    )
+    .map_err(VirtualBlockTransactionRunError::Exit)?;
+
+    if disposition
+        == (ExitDisposition::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        })
+    {
+        let outcome = process_virtual_block_doorbell(
+            disposition,
+            device,
+            bridge,
+            memory,
+            block_backend,
+            scratch,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Doorbell(error)
+        })?;
+        if matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
+            inject_virtual_block_interrupt(
+                device,
+                memory,
+                vms,
+                vm,
+                vcpu,
+                interrupt_policy,
+                capabilities,
+                interrupt_capability,
+                interrupt_object,
+            )
+            .map_err(|error| {
+                let _ = vms.fail(vm);
+                VirtualBlockTransactionRunError::Interrupt(error)
+            })?;
+        }
+        return Ok(VirtualBlockTransactionOutcome::Doorbell(outcome));
+    }
+
+    if disposition
+        == (ExitDisposition::Io {
+            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        })
+    {
+        return process_virtual_block_completion_ack(disposition, device, bridge, memory)
+            .map(VirtualBlockTransactionOutcome::CompletionAcknowledged)
+            .map_err(|error| {
+                let _ = vms.fail(vm);
+                VirtualBlockTransactionRunError::Acknowledgement(error)
+            });
+    }
+
+    let _ = vms.fail(vm);
+    Err(VirtualBlockTransactionRunError::InvalidExit)
 }
 
 fn slot_address(
@@ -5567,6 +5712,138 @@ mod tests {
         assert_eq!(bridge.completion_published, 2);
         assert_eq!(bridge.completion_consumed, 2);
         assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+    }
+
+    #[test]
+    fn transaction_runner_dispatches_doorbell_then_protected_acknowledgement() {
+        let interrupt_object = ObjectId(96);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(97), ObjectId(98), ObjectId(99));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_transaction_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        let request = encoded(VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096));
+        vmm.bytes[0x4000..0x5000].fill(0x65);
+        vmm.write_guest(0x1000 + QUEUE_HEADER_BYTES, &request)
+            .unwrap();
+        vmm.write_guest(0x1000, &1u64.to_le_bytes()).unwrap();
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_DOORBELL_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_DOORBELL_VALUE,
+        });
+
+        assert!(matches!(
+            run_virtual_block_transaction_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockTransactionOutcome::Doorbell(
+                VirtualBlockProcessOutcome::Completed(_)
+            ))
+        ));
+        assert_eq!(vmm.injected, Some((0, 48)));
+
+        vmm.next_exit = Some(VmExit::Io {
+            port: VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            size: 4,
+            write: true,
+            value: VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        });
+        assert_eq!(
+            run_virtual_block_transaction_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockTransactionOutcome::CompletionAcknowledged(1))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 1, 0));
+        assert_eq!(bridge.completion_consumed, 1);
+    }
+
+    #[test]
+    fn transaction_runner_fails_vm_on_non_transport_exit() {
+        let interrupt_object = ObjectId(100);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(101), ObjectId(102), ObjectId(103));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_transaction_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+        vmm.next_exit = Some(VmExit::Halted);
+
+        assert_eq!(
+            run_virtual_block_transaction_once(
+                &mut vmm,
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Err(VirtualBlockTransactionRunError::InvalidExit)
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
+        assert!(scratch.iter().all(|byte| *byte == 0xa5));
+        assert_eq!(bridge.request_consumed, 0);
+        assert_eq!(bridge.completion_consumed, 0);
     }
 
     #[test]

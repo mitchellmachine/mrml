@@ -19,8 +19,8 @@ use mrml_kernel::{
     VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
     VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
-    run_virtual_block_doorbell_once,
+    VirtualBlockResumePage, VirtualBlockTransactionOutcome, VmBackend, VmExit, VmTable,
+    run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -225,7 +225,7 @@ fn run_block_guest_driver_probe<'system>(
     for window in 0..(BLOCK_PROBE_CYCLES * 2) {
         for offset in 0..2 {
             let operation = window * 2 + offset;
-            let outcome = run_virtual_block_doorbell_once(
+            let outcome = run_virtual_block_transaction_once(
                 &mut guest,
                 &mut storage,
                 0,
@@ -243,6 +243,15 @@ fn run_block_guest_driver_probe<'system>(
                 &mut scratch,
             )
             .map_err(|error| anyhow!("block doorbell {} failed: {:?}", operation + 1, error))?;
+            let outcome = match outcome {
+                VirtualBlockTransactionOutcome::Doorbell(outcome) => outcome,
+                VirtualBlockTransactionOutcome::CompletionAcknowledged(_) => {
+                    return Err(anyhow!(
+                        "block operation {} produced an unexpected acknowledgement",
+                        operation + 1
+                    ));
+                }
+            };
             if !matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
                 return Err(anyhow!(
                     "block operation {} was not completed",
@@ -316,8 +325,9 @@ fn run_block_guest_driver_probe<'system>(
         }
         for offset in 0..2 {
             let operation = window * 2 + offset;
-            let acknowledgement = run_virtual_block_completion_ack_once(
+            let acknowledgement = run_virtual_block_transaction_once(
                 &mut guest,
+                &mut storage,
                 0,
                 &mut vms,
                 vm,
@@ -325,8 +335,12 @@ fn run_block_guest_driver_probe<'system>(
                 &capabilities,
                 &guest_memory,
                 &io_policy,
+                &interrupt_policy,
+                interrupt_capability,
+                interrupt_object,
                 &mut device,
                 &mut bridge,
+                &mut scratch,
             )
             .map_err(|error| {
                 anyhow!(
@@ -335,6 +349,17 @@ fn run_block_guest_driver_probe<'system>(
                     error
                 )
             })?;
+            let acknowledgement = match acknowledgement {
+                VirtualBlockTransactionOutcome::CompletionAcknowledged(acknowledgement) => {
+                    acknowledgement
+                }
+                VirtualBlockTransactionOutcome::Doorbell(_) => {
+                    return Err(anyhow!(
+                        "block acknowledgement {} produced an unexpected doorbell",
+                        operation + 1
+                    ));
+                }
+            };
             if acknowledgement != (operation + 1) as u64 {
                 return Err(anyhow!("block acknowledgement position mismatch"));
             }

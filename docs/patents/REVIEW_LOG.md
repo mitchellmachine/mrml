@@ -1773,3 +1773,13 @@ checks, and fail-stop memory handling are standard defensive recovery
 techniques. No new protocol, authority model, storage format, or patent-
 candidate mechanism was identified. This agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Common virtual-block transaction runner
+
+**Result: NOT_TRIGGERED.** The change conventionally consolidates existing
+bounded VM-exit accounting, fixed scalar doorbell/acknowledgement dispatch,
+queue processing, and capability-authorized interrupt delivery into one common
+runner used by both hosted adapters. Exact tuple matching and fail-closed error
+handling are standard defensive virtual-device techniques. No new protocol,
+authority model, storage format, or patent-candidate mechanism was identified.
+This agent review does not replace the required independent human dual review.
