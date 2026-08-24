@@ -650,11 +650,11 @@ upstream test-pass percentage. The major sequence is:
 9. emit compiler-derived executable security metadata; and
 10. progressively advance the exact future-Rust oracle.
 
-The highest-value next major implementation task is nested-loop call-result
-origins followed by return coercion-site reborrowing before region reasoning.
-Bounded, shadow-aware straight-line local aliases, direct/conditional top-level
-loop returns, and action-free conditional loop-block return terminals are
-implemented; this does not imply branch-local or loop-local mutation dataflow.
+The highest-value next major implementation task is return coercion-site
+reborrowing before region reasoning. Bounded, shadow-aware straight-line local
+aliases, direct/conditional top-level loop returns, action-free conditional
+loop-block terminals, and action-free nested-loop returns are implemented; this
+does not imply branch-local or loop-local mutation dataflow or general regions.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

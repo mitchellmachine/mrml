@@ -3565,3 +3565,16 @@ action, invalid else-arm range, nested loop, mutation, differing origin, parse
 failure, or capacity failure rejects the proof. This does not claim branch-local
 dataflow, nested-loop origins, regions, or return coercions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The nested-loop call-result origin milestone passed all 737 compiler and driver
+tests on Windows gnullvm and all 737 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Action-free parser-represented
+nested loop blocks now contribute their explicit unconditional and conditional
+return values to the same bounded callee-origin merge used by every other exit.
+Nested break/continue controls manufacture no result origin. Caller initializer
+and assignment probes match the oracle's E0499 behavior while the returned child
+is live and restore the owner after its last use. Any nested action, unsupported
+nested-unit shape, mutation, differing origin, malformed input, or capacity
+failure rejects the proof. This does not claim nested local dataflow, regions,
+or return coercions. The `no_std`/allocation/unsafe hygiene scan remained empty.
