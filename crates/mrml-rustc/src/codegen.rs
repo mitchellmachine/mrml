@@ -4478,10 +4478,24 @@ fn preanalyze_runtime_local_binding<
                 .map(|expression| expression.kind),
             Some(ExprKind::Identifier(_))
         );
-        let context = if runtime_type_is_copy(ty) || direct_identifier {
-            RuntimeReadEffectContext::Value
-        } else {
-            RuntimeReadEffectContext::Move
+        let context = match (direct_identifier, local.ty, ty) {
+            (
+                true,
+                Some(_),
+                RuntimeExpressionType::Reference {
+                    mutable: true, ..
+                },
+            ) => RuntimeReadEffectContext::MutableBorrow,
+            (
+                true,
+                Some(_),
+                RuntimeExpressionType::Reference {
+                    mutable: false, ..
+                },
+            ) => RuntimeReadEffectContext::SharedBorrow,
+            (true, _, _) => RuntimeReadEffectContext::Value,
+            _ if runtime_type_is_copy(ty) => RuntimeReadEffectContext::Value,
+            _ => RuntimeReadEffectContext::Move,
         };
         preanalyze_runtime_expression_at_reads_with_tuple(
             facts,
@@ -4566,6 +4580,10 @@ fn preanalyze_runtime_local_binding<
         return Ok(());
     }
     if !runtime_type_is_copy(ty)
+        && !matches!(
+            (local.ty, ty),
+            (Some(_), RuntimeExpressionType::Reference { .. })
+        )
         && let Some(expression) = tree.expression(tree.root())
         && let ExprKind::Identifier(name) = expression.kind
     {
@@ -26176,9 +26194,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(local_count, 2);
-        assert_eq!(facts.effect_count, 4);
+        assert_eq!(facts.effect_count, 5);
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
-        assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Move);
+        assert_eq!(
+            facts.effects[0].unwrap().kind,
+            RuntimePlaceEffectKind::MutableBorrow
+        );
         let pair_root = facts
             .find_move_path(
                 RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
@@ -26203,9 +26224,17 @@ mod tests {
         );
         assert_eq!(
             facts.effects[3].unwrap().path,
+            RuntimeMovePathId(1)
+        );
+        assert_eq!(
+            facts.effects[3].unwrap().kind,
+            RuntimePlaceEffectKind::LoanUse
+        );
+        assert_eq!(
+            facts.effects[4].unwrap().path,
             RuntimeMovePathId(pair_root.0 + 1)
         );
-        assert_eq!(facts.effects[3].unwrap().kind, RuntimePlaceEffectKind::Copy);
+        assert_eq!(facts.effects[4].unwrap().kind, RuntimePlaceEffectKind::Copy);
 
         let assignment_access_count = facts.assignment_access_count;
         let assignment_read_count = facts.assignment_read_count;
@@ -26234,8 +26263,8 @@ mod tests {
             runtime_call_local_floor: None,
         };
         emitter.validate_runtime_place_facts().unwrap();
-        let valid_copy = emitter.body_facts.effects[3].unwrap();
-        emitter.body_facts.effects[3] = Some(RuntimePlaceEffectFact {
+        let valid_copy = emitter.body_facts.effects[4].unwrap();
+        emitter.body_facts.effects[4] = Some(RuntimePlaceEffectFact {
             path: RuntimeMovePathId(0),
             ..valid_copy
         });
@@ -26243,10 +26272,10 @@ mod tests {
             emitter.validate_runtime_place_facts().unwrap_err().kind,
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
-        emitter.body_facts.effects[3] = Some(valid_copy);
+        emitter.body_facts.effects[4] = Some(valid_copy);
         let valid_move = emitter.body_facts.effects[0].unwrap();
         emitter.body_facts.effects[0] = Some(RuntimePlaceEffectFact {
-            path: RuntimeMovePathId(pair_root.0 + 1),
+            path: RuntimeMovePathId(MAX_RUNTIME_MOVE_PATH_FACTS),
             ..valid_move
         });
         assert_eq!(
@@ -26652,6 +26681,68 @@ mod tests {
             &mut facts,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn runtime_expected_mutable_reference_binding_is_an_implicit_reborrow() {
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = parent; let child_value = *child; let parent_value = *parent; parent_value + child_value }";
+        let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let moved = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child = parent; let parent_value = *parent; *child + parent_value }";
+        let module = Parser::new(moved).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeUseAfterMove
+        );
     }
 
     #[test]
