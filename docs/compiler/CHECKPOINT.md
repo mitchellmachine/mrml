@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e2f6842`
-  (`Preanalyze wrapped identifier array call arguments`)
+- Compiler checkpoint commit: `2eda10d`
+  (`Preanalyze wrapped default array call arguments`)
 - Remote state when recorded: the named compiler checkpoint is committed
   locally on `main`; this recovery-document commit follows it.
 - Preceding compiler commits: `4879955` (`Preanalyze runtime assignment
@@ -95,12 +95,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   reference initializers whose arguments are one-slot scalars, supported fat
   references, direct identifier-backed arrays and tuples, array literals or
   single-evaluation repeats, direct conditional arrays with literal branches,
-  sequence-wrapped identifier-backed arrays/literals/repeats/direct conditionals
-  with literal branches, or supported literal/conditional/wrapped tuples,
+  sequence-wrapped identifier-backed/default arrays/literals/repeats/direct
+  conditionals with literal branches, or supported literal/conditional/wrapped
+  tuples,
   with one `Index` read per identifier-array element and numbered `TupleField`
   reads for identifier tuples, and with a sequence-array prefix repeated before
-  every materialized element and exact `Index` reads retained for identifier
-  tails;
+  every materialized element, exact `Index` reads retained for identifier tails,
+  and no invented element-place reads for contextual defaults;
   and
 - scalar expression-statement read planning across top-level bodies,
   conditional arms, direct loop actions, nested loop actions, and post-loop
@@ -160,8 +161,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 614 tests on each host: 337
-library tests, 10 conformance tests, 265 replacement tests, and 2 driver tests.
+The checkpoint source passed 616 tests on each host: 338
+library tests, 10 conformance tests, 266 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
