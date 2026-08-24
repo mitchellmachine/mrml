@@ -768,6 +768,11 @@ configuration-bound resume page before any restoration write. Directional
 slot/counter publication and poison-on-uncertainty are common rather than
 launcher policy. Restoration consumes the non-clonable image once and
 volatile-erases its encoded queue/resume storage on every return; the exact
+capture type cannot call restoration. Both hosted runners first consume and
+destroy the old native VM, then cross one documented unsafe boundary that
+converts the image into a distinct linear lost-execution witness. Only that
+type is accepted by restoration; it is not authenticated evidence or resume
+authority. The exact
 policy budget is reduced to 64 common block exits. This is deterministic
 host-forced execution loss, not asynchronous/unplanned crash capture.
 Asynchronous crash orchestration, backend-in-flight

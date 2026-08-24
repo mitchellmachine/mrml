@@ -555,6 +555,29 @@ impl VirtualBlockRestartImage {
     pub const fn state(&self) -> VirtualBlockResumeState {
         self.state
     }
+
+    /// Confirms that the native execution context captured by this image has
+    /// been irreversibly destroyed and makes the image eligible for one
+    /// replacement restoration.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have consumed and destroyed the exact native VM whose
+    /// guest memory produced this image. No runnable old execution context may
+    /// remain, and no retained memory object may be used to resume that context
+    /// or seed another replacement. The exact device and bridge must remain
+    /// suspended and unchanged. This transition does not itself grant device-
+    /// resume authority.
+    pub unsafe fn confirm_execution_loss(self) -> VirtualBlockLostExecution {
+        VirtualBlockLostExecution { image: self }
+    }
+}
+
+/// Linear type-state witness that the caller crossed the unsafe native
+/// execution-loss boundary. It is not authenticated evidence, carries only
+/// data, and is consumed by the single restoration attempt.
+pub struct VirtualBlockLostExecution {
+    image: VirtualBlockRestartImage,
 }
 
 impl Drop for VirtualBlockRestartImage {
@@ -2480,8 +2503,9 @@ impl<const N: usize> VirtualBlockQueueBridge<N> {
         &mut self,
         backend: &mut B,
         device: &VirtualBlockDevice<N>,
-        image: VirtualBlockRestartImage,
+        lost: VirtualBlockLostExecution,
     ) -> Result<(), VirtualBlockQueueError<B::Error>> {
+        let image = &lost.image;
         self.require_live()?;
         let configuration = device
             .suspended_configuration()
@@ -4542,6 +4566,8 @@ mod tests {
     fn restart_image_is_bounded_one_use_and_restores_only_fresh_memory() {
         assert!(core::mem::needs_drop::<VirtualBlockRestartImage>());
         assert!(core::mem::size_of::<VirtualBlockRestartImage>() <= 16 * 1024);
+        assert!(core::mem::needs_drop::<VirtualBlockLostExecution>());
+        assert!(core::mem::size_of::<VirtualBlockLostExecution>() <= 16 * 1024);
         let mut device = active::<4>();
         let queue = layout::<4>();
         let mut bridge = VirtualBlockQueueBridge::<4>::new(queue).unwrap();
@@ -4629,8 +4655,10 @@ mod tests {
 
         let mut nonfresh = MockVmm::new();
         nonfresh.bytes[queue.request_base() as usize + 1] = 1;
+        // SAFETY: this mock has no runnable native execution context.
+        let nonfresh_loss = unsafe { nonfresh_image.confirm_execution_loss() };
         assert_eq!(
-            bridge.restore_restart_image(&mut nonfresh, &device, nonfresh_image),
+            bridge.restore_restart_image(&mut nonfresh, &device, nonfresh_loss),
             Err(VirtualBlockQueueError::Protocol(
                 VirtualBlockError::InvalidQueue
             ))
@@ -4645,8 +4673,10 @@ mod tests {
             .unwrap();
         let mut replacement = MockVmm::new();
         replacement.bytes[0x4000..0x5000].copy_from_slice(&encoded_fresh_resume);
+        // SAFETY: this mock has no runnable native execution context.
+        let lost = unsafe { image.confirm_execution_loss() };
         bridge
-            .restore_restart_image(&mut replacement, &device, image)
+            .restore_restart_image(&mut replacement, &device, lost)
             .unwrap();
         assert_eq!(
             &replacement.bytes[queue.request_base() as usize..queue.request_base() as usize + 8],
@@ -4690,8 +4720,10 @@ mod tests {
         uncertain.bytes[0x4000..0x5000].copy_from_slice(&encoded_fresh_resume);
         uncertain.fail_write_address =
             Some(slot_address(queue.request_base(), 1, 4, VIRTUAL_BLOCK_REQUEST_BYTES).unwrap());
+        // SAFETY: this mock has no runnable native execution context.
+        let uncertain_loss = unsafe { uncertain_image.confirm_execution_loss() };
         assert_eq!(
-            bridge.restore_restart_image(&mut uncertain, &device, uncertain_image),
+            bridge.restore_restart_image(&mut uncertain, &device, uncertain_loss),
             Err(VirtualBlockQueueError::Backend(MockError::Injected))
         );
         assert!(bridge.is_poisoned());

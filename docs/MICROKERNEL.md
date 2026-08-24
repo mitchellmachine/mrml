@@ -4168,6 +4168,56 @@ Patent review: `NOT_TRIGGERED` — conventional host-selected quiescent cut,
 linear snapshot consumption, and volatile cleanup; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The old-native-execution loss boundary is now explicit type state rather than a
+launcher comment. `capture_restart_image` returns data that cannot be passed to
+restoration. Only unsafe `confirm_execution_loss` can consume it into
+`VirtualBlockLostExecution`, and `restore_restart_image` accepts and consumes
+only that distinct type. The unsafe contract requires the caller to have
+consumed and irreversibly destroyed the exact native VM that supplied the
+captured memory, forbids resuming that context or using retained memory to seed
+another replacement, and requires the exact device and bridge to remain
+suspended and unchanged. The witness is not authenticated evidence, a
+capability, or device-resume authority.
+
+Both KVM and WHP runners own the prepared guest by value. They capture while it
+is stopped and the device is suspended, call `drop(guest)`, and only then cross
+the unsafe confirmation boundary. Replacement preparation follows confirmation,
+so no preparation/restoration failure can return to old execution. Dropping
+either the unconfirmed image or confirmed witness still reaches the same
+volatile encoded-byte erasure.
+
+Fresh one-time Lamport-signed version-1 Arch Linux/WSL2 KVM execution on
+2026-08-24 completed the typed loss transition and reported
+`verify=17093us prepare=2423us execute=102391us total=143285us`. All 388 release
+kernel tests and all 6 release KVM-run tests passed. Strict package-focused
+`--no-deps` Clippy passed for the kernel and KVM runner, and strict nightly UEFI
+Clippy passed for the block-probe image. Native Windows test-target `check` and
+strict scoped Clippy passed for the kernel, WHP adapter, and WHP runner with
+CUDA excluded. No linked/live WHP claim is made. Consumed signing material and
+signed test artifacts were deleted.
+
+The execution-loss type-state `DIGITAL-RIGHTS REVIEW` found no new collection,
+identity, correlation, disclosure, attestation mandate, DRM, vendor/publisher
+control, first-party bypass, accessibility restriction, AI authority,
+persistence, or durable owner-state change. Separating captured data from
+restorable post-loss state narrows accidental replay and creates no authority.
+The `HOSTILE SECURITY REVIEW` treats guest ownership, the caller's unsafe loss
+assertion, destruction ordering, retained aliases, device/bridge identity and
+lifecycle, type transitions, replacement preparation, image erasure,
+restoration result, and resume decision as adversarial. Capture alone cannot
+type-check as restoration input; the concrete runners confirm only after
+consuming the old guest; the witness is linear and erased; and every later
+failure remains suspended with no old execution fallback. This does not prove
+an asynchronous crash detector or authenticate a host claim. Existing
+capability, revocation, rollback-resistance, accessibility, evidence,
+owner-sovereignty, data-minimization, anti-DRM, owner-controlled-attestation,
+AI-containment, and anti-persistence gates remain unchanged. This agent review
+does not replace the required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional linear type-state around an
+unsafe native-resource destruction boundary; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

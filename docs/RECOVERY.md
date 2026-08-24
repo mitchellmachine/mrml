@@ -451,6 +451,10 @@ explicitly and downgrade the status rather than guessing.
   uncertainty poisons the bridge without resuming the device.
   Restoration consumes the non-clonable restart image once and volatile-erases
   encoded request, completion, and resume storage on all return paths. The VM
+  capture type cannot be restored directly. After consuming and destroying the
+  exact native VM, each runner crosses a documented unsafe boundary to obtain a
+  distinct linear lost-execution witness; restoration accepts only that type.
+  It is type state, not authenticated evidence or lifecycle authority. The VM
   budget contains exactly 64 common block exits. This proves deterministic
   host-forced execution loss only; asynchronous/unplanned crash orchestration,
   backend-in-flight recovery, unbounded progress, and PCI transport remain

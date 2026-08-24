@@ -347,6 +347,10 @@ fn run_block_guest_driver_probe(
                 .capture_restart_image(&guest, &device, published)
                 .map_err(|error| anyhow!("block restart snapshot failed: {:?}", error))?;
             drop(guest);
+            // SAFETY: `guest` owned the exact captured native VM and has been
+            // consumed and destroyed. No native execution can resume or seed
+            // another replacement; the same device and bridge stay suspended.
+            let lost_execution = unsafe { restart_image.confirm_execution_loss() };
             let configuration_page =
                 VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
                     .map_err(|_| anyhow!("invalid replacement block configuration page"))?;
@@ -369,7 +373,7 @@ fn run_block_guest_driver_probe(
                 return Err(anyhow!("replacement block payload was not fresh"));
             }
             bridge
-                .restore_restart_image(&mut replacement, &device, restart_image)
+                .restore_restart_image(&mut replacement, &device, lost_execution)
                 .map_err(|error| {
                     anyhow!("replacement block VM state restoration failed: {:?}", error)
                 })?;

@@ -749,6 +749,12 @@ resume page before publishing slots and counters through their directional
 boundaries. Memory uncertainty poisons the bridge and cannot authorize resume.
 Restoration consumes the non-clonable image exactly once and volatile-erases
 its encoded request, completion, and resume storage on every return path. The
+captured image is not directly restorable. An explicit unsafe boundary consumes
+it into a distinct linear lost-execution witness only after the concrete runner
+has consumed and destroyed the old native VM; restoration accepts only that
+witness. The witness is type state, not authenticated evidence or authority.
+KVM and WHP place confirmation immediately after `drop(guest)` and before any
+replacement preparation. The
 VM policy budget is exactly 64 common block exits; the former guest checkpoint
 exit and third I/O permission no longer exist. Asynchronous/unplanned crash
 capture, backend-in-flight recovery, unbounded progress, and PCI discovery
