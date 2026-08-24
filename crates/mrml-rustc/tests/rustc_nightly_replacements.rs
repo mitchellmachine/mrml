@@ -3707,6 +3707,13 @@ fn rustc_sequence_wrapped_aggregate_reads_reach_native_objects() {
 }
 
 #[test]
+fn rustc_simple_fat_reference_initializer_reads_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &[u16], alternate: &[u16], text: &str, choose: bool, prefix: usize) -> usize { let direct: &[u16] = input; let selected: &[u16] = if choose { direct } else { alternate }; let copied_text: &str = { prefix; text }; selected.len() + copied_text.len() }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",

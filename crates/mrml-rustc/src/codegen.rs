@@ -2461,7 +2461,61 @@ fn preanalyze_runtime_local_binding<
         }
         _ => None,
     };
-    if let Some((first, Some(elements), count)) = direct_sequence_aggregate {
+    let simple_fat_reference = runtime_type_is_fat_reference(ty)
+        && match tree
+            .expression(tree.root())
+            .map(|expression| expression.kind)
+        {
+            Some(ExprKind::Identifier(_)) => true,
+            Some(
+                ExprKind::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                }
+                | ExprKind::LoopBreakIf {
+                    then_branch,
+                    else_branch,
+                    ..
+                },
+            ) => {
+                matches!(
+                    tree.expression(then_branch)
+                        .map(|expression| expression.kind),
+                    Some(ExprKind::Identifier(_))
+                ) && matches!(
+                    tree.expression(else_branch)
+                        .map(|expression| expression.kind),
+                    Some(ExprKind::Identifier(_))
+                )
+            }
+            _ => false,
+        };
+    let simple_fat_sequence = if runtime_type_is_fat_reference(ty)
+        && let Some(ExprKind::Sequence { first, then }) = tree
+            .expression(tree.root())
+            .map(|expression| expression.kind)
+        && matches!(
+            tree.expression(then).map(|expression| expression.kind),
+            Some(ExprKind::Identifier(_))
+        ) {
+        Some((first, then))
+    } else {
+        None
+    };
+    if let Some((first, then)) = simple_fat_sequence {
+        for expression in [first, then] {
+            preanalyze_runtime_expression_at_reads(
+                facts,
+                &locals[..*local_count],
+                function,
+                resolver,
+                &tree,
+                expression,
+                local.initializer_span,
+            )?;
+        }
+    } else if let Some((first, Some(elements), count)) = direct_sequence_aggregate {
         for element in &elements[..count] {
             let element = element.ok_or(CodegenError {
                 kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
@@ -2508,6 +2562,7 @@ fn preanalyze_runtime_local_binding<
         || literal_aggregate
         || literal_conditional_tuple
         || matches!(direct_sequence_aggregate, Some((_, None, _)))
+        || simple_fat_reference
     {
         preanalyze_runtime_expression_reads(
             facts,
@@ -19086,6 +19141,45 @@ mod tests {
             RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
         ]) {
             assert_eq!(fact.unwrap().base, identity);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_simple_fat_reference_initializers() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &[u16], alternate: &[u16], text: &str, choose: bool, prefix: usize) -> usize { let direct: &[u16] = input; let selected: &[u16] = if choose { direct } else { alternate }; let copied_text: &str = { prefix; text }; selected.len() + copied_text.len() }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 3);
+        assert_eq!(facts.assignment_read_count, 6);
+        for (fact, identity) in facts.assignment_reads[..6].iter().zip([
+            RuntimePlaceIdentity::Parameter(0),
+            RuntimePlaceIdentity::Parameter(3),
+            RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            RuntimePlaceIdentity::Parameter(1),
+            RuntimePlaceIdentity::Parameter(4),
+            RuntimePlaceIdentity::Parameter(2),
+        ]) {
+            assert_eq!(fact.unwrap().base, identity);
+            assert_eq!(fact.unwrap().projections, RuntimePlaceProjections::EMPTY);
         }
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
