@@ -1851,7 +1851,7 @@ enum RuntimeExpressionType {
         count: usize,
     },
     Tuple {
-        elements: [Option<RuntimeArrayElementType>; crate::expression::MAX_TUPLE_ELEMENTS],
+        elements: [Option<RuntimeTupleElementType>; crate::expression::MAX_TUPLE_ELEMENTS],
         element_count: usize,
     },
 }
@@ -1863,6 +1863,19 @@ enum RuntimeArrayElementType {
     Integer(Option<crate::IntegerType>),
     Bool,
     Char,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeTupleElementType {
+    Scalar(RuntimeArrayElementType),
+    Reference {
+        pointee: RuntimeArrayElementType,
+        mutable: bool,
+    },
+    RawPointer {
+        pointee: RuntimeArrayElementType,
+        mutable: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1938,6 +1951,54 @@ fn runtime_type_from_array_element(element: RuntimeArrayElementType) -> RuntimeE
         RuntimeArrayElementType::Integer(ty) => RuntimeExpressionType::Integer(ty),
         RuntimeArrayElementType::Bool => RuntimeExpressionType::Bool,
         RuntimeArrayElementType::Char => RuntimeExpressionType::Char,
+    }
+}
+
+fn runtime_tuple_element_type(
+    ty: RuntimeExpressionType,
+) -> Result<RuntimeTupleElementType, CodegenErrorKind> {
+    match ty {
+        RuntimeExpressionType::Unit => Ok(RuntimeTupleElementType::Scalar(
+            RuntimeArrayElementType::Unit,
+        )),
+        RuntimeExpressionType::Default => Ok(RuntimeTupleElementType::Scalar(
+            RuntimeArrayElementType::Default,
+        )),
+        RuntimeExpressionType::Integer(ty) => Ok(RuntimeTupleElementType::Scalar(
+            RuntimeArrayElementType::Integer(ty),
+        )),
+        RuntimeExpressionType::Bool => Ok(RuntimeTupleElementType::Scalar(
+            RuntimeArrayElementType::Bool,
+        )),
+        RuntimeExpressionType::Char => Ok(RuntimeTupleElementType::Scalar(
+            RuntimeArrayElementType::Char,
+        )),
+        RuntimeExpressionType::Reference {
+            target: RuntimeReferenceTarget::Scalar(pointee),
+            mutable,
+        } => Ok(RuntimeTupleElementType::Reference { pointee, mutable }),
+        RuntimeExpressionType::RawPointer { pointee, mutable } => {
+            Ok(RuntimeTupleElementType::RawPointer { pointee, mutable })
+        }
+        RuntimeExpressionType::Never
+        | RuntimeExpressionType::Array { .. }
+        | RuntimeExpressionType::Tuple { .. }
+        | RuntimeExpressionType::Reference { .. } => Err(CodegenErrorKind::RuntimeTypeMismatch),
+    }
+}
+
+fn runtime_type_from_tuple_element(element: RuntimeTupleElementType) -> RuntimeExpressionType {
+    match element {
+        RuntimeTupleElementType::Scalar(element) => runtime_type_from_array_element(element),
+        RuntimeTupleElementType::Reference { pointee, mutable } => {
+            RuntimeExpressionType::Reference {
+                target: RuntimeReferenceTarget::Scalar(pointee),
+                mutable,
+            }
+        }
+        RuntimeTupleElementType::RawPointer { pointee, mutable } => {
+            RuntimeExpressionType::RawPointer { pointee, mutable }
+        }
     }
 }
 
@@ -3603,7 +3664,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                     projections: RuntimePlaceProjections::single(
                         RuntimePlaceProjection::TupleField(field),
                     ),
-                    ty: runtime_type_from_array_element(element),
+                    ty: runtime_type_from_tuple_element(element),
                 });
                 self.move_path_count += 1;
             }
@@ -3734,16 +3795,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                     RuntimeReadEffectContext::Value if runtime_type_is_copy(path_ty) => {
                         RuntimePlaceEffectKind::Copy
                     }
-                    RuntimeReadEffectContext::Move
-                        if !runtime_type_is_copy(path_ty)
-                            && self
-                                .move_paths
-                                .get(path.0)
-                                .and_then(|path| *path)
-                                .is_some_and(|path| {
-                                    path.projections == RuntimePlaceProjections::EMPTY
-                                }) =>
-                    {
+                    RuntimeReadEffectContext::Move if !runtime_type_is_copy(path_ty) => {
                         RuntimePlaceEffectKind::Move
                     }
                     RuntimeReadEffectContext::SharedBorrow => RuntimePlaceEffectKind::SharedBorrow,
@@ -3918,8 +3970,28 @@ fn runtime_array_type(text: &str) -> Option<RuntimeExpressionType> {
 }
 
 fn runtime_tuple_type(text: &str) -> Option<RuntimeExpressionType> {
-    let ty = crate::ScalarType::from_name(text)?;
-    matches!(ty, crate::ScalarType::Tuple { .. }).then(|| runtime_type_from_scalar(ty))
+    let body = text.trim().strip_prefix('(')?.strip_suffix(')')?;
+    if !body.contains(',') {
+        return None;
+    }
+    let mut elements = [None; crate::expression::MAX_TUPLE_ELEMENTS];
+    let mut element_count = 0usize;
+    for element in body
+        .split(',')
+        .map(str::trim)
+        .filter(|element| !element.is_empty())
+    {
+        if element_count == elements.len() {
+            return None;
+        }
+        elements[element_count] =
+            Some(runtime_tuple_element_type(runtime_type_from_text(element)?).ok()?);
+        element_count += 1;
+    }
+    (element_count != 0).then_some(RuntimeExpressionType::Tuple {
+        elements,
+        element_count,
+    })
 }
 
 fn runtime_reference_type(text: &str) -> Option<RuntimeExpressionType> {
@@ -4295,7 +4367,7 @@ fn preanalyze_runtime_local_binding<
             &tree,
             tree.root(),
             context,
-            None,
+            runtime_type_is_tuple(ty).then_some(ty),
             local.initializer_span,
         )?;
     } else if (runtime_type_is_array(ty) || runtime_type_is_tuple(ty))
@@ -5358,7 +5430,11 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 span: assignment_span,
             });
         }
-        let RuntimeExpressionType::Tuple { element_count, .. } = expected else {
+        let RuntimeExpressionType::Tuple {
+            elements: expected_elements,
+            element_count,
+        } = expected
+        else {
             return Err(CodegenError {
                 kind: CodegenErrorKind::RuntimeTypeMismatch,
                 span: assignment_span,
@@ -5503,9 +5579,13 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         span: assignment_span,
                     });
                 }
-                for element in &elements[..actual_count] {
+                for (field, element) in elements[..actual_count].iter().enumerate() {
                     let element = element.ok_or(CodegenError {
                         kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                        span: assignment_span,
+                    })?;
+                    let expected_element = expected_elements[field].ok_or(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
                         span: assignment_span,
                     })?;
                     recurse(
@@ -5515,7 +5595,11 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         resolver,
                         tree,
                         element,
-                        RuntimeReadEffectContext::Value,
+                        if runtime_type_is_copy(runtime_type_from_tuple_element(expected_element)) {
+                            RuntimeReadEffectContext::Value
+                        } else {
+                            RuntimeReadEffectContext::Move
+                        },
                         depth + 1,
                         assignment_span,
                     )?;
@@ -5566,6 +5650,32 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 span: assignment_span,
             });
         }
+        let RuntimeExpressionType::Tuple {
+            elements: expected_elements,
+            element_count: expected_count,
+        } = expected
+        else {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::RuntimeTypeMismatch,
+                span: assignment_span,
+            });
+        };
+        if field >= expected_count {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::ValueOutOfRange,
+                span: assignment_span,
+            });
+        }
+        let expected_element = expected_elements[field].ok_or(CodegenError {
+            kind: CodegenErrorKind::RuntimeTypeMismatch,
+            span: assignment_span,
+        })?;
+        let field_context =
+            if runtime_type_is_copy(runtime_type_from_tuple_element(expected_element)) {
+                RuntimeReadEffectContext::Value
+            } else {
+                RuntimeReadEffectContext::Move
+            };
         let expression = tree.expression(id).ok_or(CodegenError {
             kind: CodegenErrorKind::RuntimeExpressionUnsupported,
             span: assignment_span,
@@ -5590,7 +5700,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     element,
-                    RuntimeReadEffectContext::Value,
+                    field_context,
                     depth + 1,
                     assignment_span,
                 )
@@ -5606,7 +5716,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         RuntimePlaceProjection::TupleField(field),
                     ),
                 },
-                RuntimeReadEffectContext::Value,
+                field_context,
                 assignment_span,
             ),
             ExprKind::Return { operand }
@@ -9452,7 +9562,7 @@ fn runtime_place_projections_valid(
                 let Some(element) = elements[field] else {
                     return false;
                 };
-                runtime_type_from_array_element(element)
+                runtime_type_from_tuple_element(element)
             }
             (
                 RuntimePlaceProjection::Subslice,
@@ -9484,8 +9594,22 @@ fn runtime_type_stack_slots(ty: RuntimeExpressionType) -> usize {
     }
 }
 
-const fn runtime_type_is_copy(ty: RuntimeExpressionType) -> bool {
-    !matches!(ty, RuntimeExpressionType::Reference { mutable: true, .. })
+fn runtime_type_is_copy(ty: RuntimeExpressionType) -> bool {
+    match ty {
+        RuntimeExpressionType::Reference { mutable: true, .. } => false,
+        RuntimeExpressionType::Tuple {
+            elements,
+            element_count,
+        } => {
+            element_count <= elements.len()
+                && elements[..element_count].iter().all(|element| {
+                    element.is_some_and(|element| {
+                        runtime_type_is_copy(runtime_type_from_tuple_element(element))
+                    })
+                })
+        }
+        _ => true,
+    }
 }
 
 fn runtime_type_is_fat_reference(ty: RuntimeExpressionType) -> bool {
@@ -10243,13 +10367,15 @@ fn runtime_type_from_scalar(ty: crate::ScalarType) -> RuntimeExpressionType {
         } => {
             let mut runtime_elements = [None; crate::expression::MAX_TUPLE_ELEMENTS];
             for (index, element) in elements[..element_count].iter().enumerate() {
-                runtime_elements[index] = element.map(|element| match element {
-                    crate::CallArrayElement::Unit => RuntimeArrayElementType::Unit,
-                    crate::CallArrayElement::Integer(ty) => {
-                        RuntimeArrayElementType::Integer(Some(ty))
-                    }
-                    crate::CallArrayElement::Bool => RuntimeArrayElementType::Bool,
-                    crate::CallArrayElement::Char => RuntimeArrayElementType::Char,
+                runtime_elements[index] = element.map(|element| {
+                    RuntimeTupleElementType::Scalar(match element {
+                        crate::CallArrayElement::Unit => RuntimeArrayElementType::Unit,
+                        crate::CallArrayElement::Integer(ty) => {
+                            RuntimeArrayElementType::Integer(Some(ty))
+                        }
+                        crate::CallArrayElement::Bool => RuntimeArrayElementType::Bool,
+                        crate::CallArrayElement::Char => RuntimeArrayElementType::Char,
+                    })
                 });
             }
             RuntimeExpressionType::Tuple {
@@ -10414,13 +10540,11 @@ fn runtime_types_compatible(left: RuntimeExpressionType, right: RuntimeExpressio
                     .iter()
                     .zip(&right[..right_count])
                     .all(|(left, right)| match (left, right) {
-                        (Some(RuntimeArrayElementType::Default), Some(_))
-                        | (Some(_), Some(RuntimeArrayElementType::Default)) => true,
-                        (
-                            Some(RuntimeArrayElementType::Integer(left)),
-                            Some(RuntimeArrayElementType::Integer(right)),
-                        ) => left.is_none() || right.is_none() || left == right,
-                        _ => left == right,
+                        (Some(left), Some(right)) => runtime_types_compatible(
+                            runtime_type_from_tuple_element(*left),
+                            runtime_type_from_tuple_element(*right),
+                        ),
+                        _ => false,
                     })
         }
         (
@@ -11416,7 +11540,7 @@ fn runtime_expression_type_with_locals<
             let mut types = [None; crate::expression::MAX_TUPLE_ELEMENTS];
             for (index, element) in elements[..element_count].iter().enumerate() {
                 let element = element.ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
-                types[index] = Some(runtime_array_element_type(
+                types[index] = Some(runtime_tuple_element_type(
                     runtime_expression_type_with_locals(
                         function,
                         resolver,
@@ -11450,7 +11574,7 @@ fn runtime_expression_type_with_locals<
             if field >= element_count {
                 return Err(CodegenErrorKind::ValueOutOfRange);
             }
-            Ok(runtime_type_from_array_element(
+            Ok(runtime_type_from_tuple_element(
                 elements[field].ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?,
             ))
         }
@@ -15504,7 +15628,7 @@ impl<
                         != RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(
                             field,
                         ))
-                    || child.ty != runtime_type_from_array_element(element)
+                    || child.ty != runtime_type_from_tuple_element(element)
                 {
                     return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
                 }
@@ -15612,10 +15736,7 @@ impl<
                 || effect.location == RuntimeOwnershipEventLocation::ParameterEntry
                 || match effect.kind {
                     RuntimePlaceEffectKind::Copy => !runtime_type_is_copy(path.ty),
-                    RuntimePlaceEffectKind::Move => {
-                        runtime_type_is_copy(path.ty)
-                            || path.projections != RuntimePlaceProjections::EMPTY
-                    }
+                    RuntimePlaceEffectKind::Move => runtime_type_is_copy(path.ty),
                     RuntimePlaceEffectKind::SharedBorrow
                     | RuntimePlaceEffectKind::MutableBorrow => false,
                     RuntimePlaceEffectKind::Write => false,
@@ -19989,12 +20110,12 @@ impl<
                 let value = elements[field]
                     .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
                 let previous_width = self.width;
-                self.width = runtime_expression_width(runtime_type_from_array_element(element))
+                self.width = runtime_expression_width(runtime_type_from_tuple_element(element))
                     .unwrap_or(previous_width);
                 let emission = self.emit_expression(tree, value, depth + 1);
                 self.width = previous_width;
                 emission?;
-                return self.emit_normalize_array_element(element);
+                return self.emit_normalize_tuple_element(element);
             }
             Some(ExprKind::Return { operand } | ExprKind::LoopBreak { operand }) => {
                 return self.emit_tuple_field(tree, operand, field, depth + 1);
@@ -20036,7 +20157,7 @@ impl<
                 .and_then(|slots| slots.checked_add(field))
                 .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
             self.emit_stack_slot(slots)?;
-            return self.emit_normalize_array_element(element);
+            return self.emit_normalize_tuple_element(element);
         }
         self.emit_tuple_to_stack(
             tree,
@@ -20047,7 +20168,7 @@ impl<
             },
         )?;
         self.emit_stack_slot(field)?;
-        self.emit_normalize_array_element(element)?;
+        self.emit_normalize_tuple_element(element)?;
         self.evaluation_depth -= element_count;
         self.emit_stack_cleanup_bytes(
             element_count
@@ -20136,7 +20257,7 @@ impl<
                 let element_type = expected_elements[index]
                     .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
                 self.width =
-                    runtime_expression_width(runtime_type_from_array_element(element_type))
+                    runtime_expression_width(runtime_type_from_tuple_element(element_type))
                         .unwrap_or(previous_width);
                 self.emit_expression(tree, element, 0)?;
                 self.emit(&[0x50])?;
@@ -20174,6 +20295,17 @@ impl<
                     .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?,
             ),
             RuntimeArrayElementType::Unit | RuntimeArrayElementType::Default => Ok(()),
+        }
+    }
+
+    fn emit_normalize_tuple_element(
+        &mut self,
+        element: RuntimeTupleElementType,
+    ) -> Result<(), CodegenError> {
+        match element {
+            RuntimeTupleElementType::Scalar(element) => self.emit_normalize_array_element(element),
+            RuntimeTupleElementType::Reference { .. }
+            | RuntimeTupleElementType::RawPointer { .. } => Ok(()),
         }
     }
 
@@ -21544,7 +21676,15 @@ impl<
             kind: CodegenErrorKind::RuntimeTypeMismatch,
             span: translate_span(body_start, assignment.name_span),
         })?;
-        let element_type = runtime_type_from_array_element(element);
+        let element_type = runtime_type_from_tuple_element(element);
+        if !matches!(element, RuntimeTupleElementType::Scalar(_))
+            && assignment.operator != crate::AssignmentOperator::Assign
+        {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::RuntimeTypeMismatch,
+                span: translate_span(body_start, assignment.name_span),
+            });
+        }
         if element_type == RuntimeExpressionType::Bool
             && !matches!(
                 assignment.operator,
@@ -21594,7 +21734,7 @@ impl<
                 self.emit_expression(&tree, tree.root(), 0)?;
             } else {
                 self.emit_stack_slot(destination)?;
-                self.emit_normalize_array_element(element)?;
+                self.emit_normalize_tuple_element(element)?;
                 self.emit(&[0x50])?;
                 self.evaluation_depth += 1;
                 self.emit_expression(&tree, tree.root(), 0)?;
@@ -25115,10 +25255,12 @@ mod tests {
         );
         let tuple_type = RuntimeExpressionType::Tuple {
             elements: [
-                Some(RuntimeArrayElementType::Integer(Some(
-                    crate::IntegerType::U64,
-                ))),
-                Some(RuntimeArrayElementType::Bool),
+                Some(RuntimeTupleElementType::Scalar(
+                    RuntimeArrayElementType::Integer(Some(crate::IntegerType::U64)),
+                )),
+                Some(RuntimeTupleElementType::Scalar(
+                    RuntimeArrayElementType::Bool,
+                )),
                 None,
                 None,
             ],
@@ -26002,6 +26144,117 @@ mod tests {
                 .iter()
                 .flatten()
                 .any(|effect| effect.kind == RuntimePlaceEffectKind::Write)
+        );
+    }
+
+    #[test]
+    fn runtime_tuple_field_initializedness_tracks_partial_moves_and_writes() {
+        let rejected = "fn value(first: &mut u16, second: &mut u16) -> &mut u16 { let pair = (first, second); let moved = pair.0; let repeated = pair.0; repeated }";
+        let module = Parser::new(rejected).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 24>(
+                &function,
+                &NoConstants,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeUseAfterMove
+        );
+
+        let partial = "fn value(first: &mut u16, second: &mut u16) -> &mut u16 { let pair = (first, second); let moved = pair.0; pair.1 }";
+        let module = Parser::new(partial).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 24>(
+                &function,
+                &NoConstants,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap(),
+            2
+        );
+
+        let whole = "fn value(first: &mut u16, second: &mut u16) -> &mut u16 { let pair = (first, second); let moved = pair.0; let consumed = pair; consumed.1 }";
+        let module = Parser::new(whole).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 24>(
+                &function,
+                &NoConstants,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeUseAfterMove
+        );
+
+        let accepted = "fn value(first: &mut u16, second: &mut u16) -> &mut u16 { let mut pair = (first, second); let moved = pair.0; pair.0 = &mut *moved; pair.0 }";
+        let module = Parser::new(accepted).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 24>(
+                &function,
+                &NoConstants,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap(),
+            2
+        );
+        let tuple_path = facts.move_paths[..facts.move_path_count]
+            .iter()
+            .flatten()
+            .find(|path| {
+                path.projections
+                    == RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(0))
+                    && !runtime_type_is_copy(path.ty)
+            })
+            .unwrap()
+            .id;
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.path == tuple_path && effect.kind == RuntimePlaceEffectKind::Move
+                })
+        );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.path == tuple_path && effect.kind == RuntimePlaceEffectKind::Write
+                })
         );
     }
 

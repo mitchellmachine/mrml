@@ -3997,6 +3997,23 @@ fn rustc_single_block_initializedness_rejects_second_moves_and_accepts_writes() 
 }
 
 #[test]
+fn rustc_tuple_field_partial_moves_and_restoration_reach_native_objects() {
+    let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let pair = (first, second); let moved = pair.0; let repeated = pair.0; *moved + *repeated }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(rejected, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeUseAfterMove
+            ))
+        );
+    }
+
+    let accepted = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut pair = (first, second); let moved = pair.0; pair.0 = &mut *moved; let output = pair.0; let other = pair.1; *output += 2; *output + *other }";
+    assert_eq!(compile_wide(accepted, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(accepted, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_cfg_initializedness_rejects_branch_and_loop_exit_use_after_move() {
     let rejected = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> &mut u16 { let mut output: &mut u16 = first; if choose { output = second; } second }",
