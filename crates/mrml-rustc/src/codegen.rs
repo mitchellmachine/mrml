@@ -1999,6 +1999,7 @@ struct RuntimePlace<'source> {
 enum RuntimePlaceProjection {
     Dereference,
     Index,
+    ArrayElement(usize),
     TupleField(usize),
     Subslice,
 }
@@ -2035,6 +2036,36 @@ impl RuntimePlaceProjections {
                     RuntimePlaceProjection::TupleField(field)
                 }
             })?;
+        }
+        Ok(projections)
+    }
+
+    fn from_assignment_with_array_identity<
+        R: ConstantResolver,
+        const MAX_EXPRESSION_NODES: usize,
+    >(
+        assignment: &crate::Assignment<'_>,
+        base_ty: RuntimeExpressionType,
+        resolver: &R,
+    ) -> Result<Self, CodegenErrorKind> {
+        let mut projections = Self::from_assignment(assignment.projection)?;
+        let RuntimeExpressionType::Array { count, .. } = base_ty else {
+            return Ok(projections);
+        };
+        if projections != Self::single(RuntimePlaceProjection::Index) {
+            return Ok(projections);
+        }
+        let Ok(tree) = assignment.parse_index::<MAX_EXPRESSION_NODES>() else {
+            return Ok(projections);
+        };
+        let Ok(index) = tree.evaluate_at(tree.root(), resolver) else {
+            return Ok(projections);
+        };
+        let Ok(index) = usize::try_from(index) else {
+            return Ok(projections);
+        };
+        if index < count {
+            projections.items[0] = Some(RuntimePlaceProjection::ArrayElement(index));
         }
         Ok(projections)
     }
@@ -2126,6 +2157,61 @@ fn discover_runtime_read_place<'source, const MAX_NODES: usize>(
     }
 
     recurse(tree, id, 0)
+}
+
+fn refine_constant_array_read_place<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'source>>],
+    tree: &crate::ExpressionTree<'source, MAX_NODES>,
+    id: crate::ExprId,
+    mut place: RuntimeReadPlace<'source>,
+) -> Result<RuntimeReadPlace<'source>, CodegenErrorKind> {
+    let Some(ExprKind::Index { base, index }) =
+        tree.expression(id).map(|expression| expression.kind)
+    else {
+        return Ok(place);
+    };
+    if place.projections.count != 1
+        || place.projections.items[0] != Some(RuntimePlaceProjection::Index)
+        || !matches!(
+            tree.expression(base).map(|expression| expression.kind),
+            Some(ExprKind::Identifier(_))
+        )
+    {
+        return Ok(place);
+    }
+    let ty = locals
+        .iter()
+        .rev()
+        .flatten()
+        .find(|local| local.name == place.name)
+        .map(|local| local.ty)
+        .or_else(|| {
+            function
+                .parameters()
+                .iter()
+                .flatten()
+                .find(|parameter| parameter.name == place.name)
+                .and_then(|parameter| runtime_type_from_text(parameter.ty.text))
+        });
+    let Some(RuntimeExpressionType::Array { count, .. }) = ty else {
+        return Ok(place);
+    };
+    let Ok(index) = tree.evaluate_at(index, resolver) else {
+        return Ok(place);
+    };
+    let index = usize::try_from(index).map_err(|_| CodegenErrorKind::ValueOutOfRange)?;
+    if index >= count {
+        return Err(CodegenErrorKind::ValueOutOfRange);
+    }
+    place.projections.items[0] = Some(RuntimePlaceProjection::ArrayElement(index));
+    Ok(place)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4581,18 +4667,20 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 span: assignment_span,
                             })?
                             .span;
+                        let constant_index = tree
+                            .evaluate_at(index, resolver)
+                            .ok()
+                            .and_then(|index| usize::try_from(index).ok())
+                            .filter(|index| *index < count);
                         let place = RuntimeReadPlace {
                             name,
                             span: base_span,
-                            projections: RuntimePlaceProjections::single(
+                            projections: RuntimePlaceProjections::single(constant_index.map_or(
                                 RuntimePlaceProjection::Index,
-                            ),
+                                RuntimePlaceProjection::ArrayElement,
+                            )),
                         };
-                        let reads = if tree.evaluate_at(index, resolver).is_ok() {
-                            1
-                        } else {
-                            count
-                        };
+                        let reads = if constant_index.is_some() { 1 } else { count };
                         for _ in 0..reads {
                             push_read(
                                 facts,
@@ -4648,6 +4736,12 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             kind,
             span: assignment_span,
         })? {
+            let place =
+                refine_constant_array_read_place(function, resolver, locals, tree, id, place)
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: assignment_span,
+                    })?;
             push_read(facts, locals, function, place, context, assignment_span)?;
             if let ExprKind::Index { index, .. } = expression.kind {
                 recurse(
@@ -6370,13 +6464,23 @@ fn preanalyze_runtime_assignment_access<
         RuntimePlaceBase::Local { id, .. } => RuntimePlaceIdentity::Local(id),
         RuntimePlaceBase::Parameter { index } => RuntimePlaceIdentity::Parameter(index),
     };
-    let projections =
-        RuntimePlaceProjections::from_assignment(place.projection).map_err(|kind| {
-            CodegenError {
-                kind,
-                span: assignment.name_span,
-            }
+    let base_ty = facts.move_paths[..facts.move_path_count]
+        .iter()
+        .flatten()
+        .find(|path| path.base == base && path.projections == RuntimePlaceProjections::EMPTY)
+        .map(|path| path.ty)
+        .ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+            span: assignment.name_span,
         })?;
+    let projections = RuntimePlaceProjections::from_assignment_with_array_identity::<
+        R,
+        MAX_EXPRESSION_NODES,
+    >(assignment, base_ty, resolver)
+    .map_err(|kind| CodegenError {
+        kind,
+        span: assignment.name_span,
+    })?;
     facts
         .push_assignment_access(RuntimePlaceAccessFact {
             base,
@@ -9315,6 +9419,15 @@ fn runtime_place_projections_valid(
                 RuntimeExpressionType::RawPointer { pointee, .. },
             ) => runtime_type_from_array_element(pointee),
             (RuntimePlaceProjection::Index, RuntimeExpressionType::Array { element, .. }) => {
+                runtime_type_from_array_element(element)
+            }
+            (
+                RuntimePlaceProjection::ArrayElement(index),
+                RuntimeExpressionType::Array { element, count },
+            ) => {
+                if index >= count {
+                    return false;
+                }
                 runtime_type_from_array_element(element)
             }
             (
@@ -14435,17 +14548,27 @@ impl<
         .map_err(|kind| self.error(kind))
     }
 
-    fn record_place_access(
+    fn record_place_access<const MAX_EXPRESSION_NODES: usize>(
         &mut self,
         place: RuntimePlace<'tree>,
-        span: Span,
+        assignment: &crate::Assignment<'tree>,
     ) -> Result<(), CodegenError> {
+        let span = assignment.name_span;
         let base = match place.base {
             RuntimePlaceBase::Local { id, .. } => RuntimePlaceIdentity::Local(id),
             RuntimePlaceBase::Parameter { index } => RuntimePlaceIdentity::Parameter(index),
         };
-        let projections = RuntimePlaceProjections::from_assignment(place.projection)
-            .map_err(|kind| self.error(kind))?;
+        let base_ty = self.body_facts.move_paths[..self.body_facts.move_path_count]
+            .iter()
+            .flatten()
+            .find(|path| path.base == base && path.projections == RuntimePlaceProjections::EMPTY)
+            .map(|path| path.ty)
+            .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
+        let projections = RuntimePlaceProjections::from_assignment_with_array_identity::<
+            R,
+            MAX_EXPRESSION_NODES,
+        >(assignment, base_ty, self.resolver)
+        .map_err(|kind| self.error(kind))?;
         let fact = RuntimePlaceAccessFact {
             base,
             projections,
@@ -14566,6 +14689,15 @@ impl<
         let mut place = discover_runtime_read_place(tree, id)
             .map_err(|kind| self.error(kind))?
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        place = refine_constant_array_read_place(
+            self.function,
+            self.resolver,
+            &self.locals[..self.saved_locals],
+            tree,
+            id,
+            place,
+        )
+        .map_err(|kind| self.error(kind))?;
         if let Some(projection) = trailing_projection {
             place
                 .projections
@@ -19621,6 +19753,7 @@ impl<
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         id: crate::ExprId,
         index: usize,
+        precise_place: bool,
         depth: usize,
     ) -> Result<(), CodegenError> {
         if depth == 64 {
@@ -19707,7 +19840,15 @@ impl<
                 self.emit(&[0x25, 0xff, 0, 0, 0])
             }
             ExprKind::Identifier(name) => {
-                self.record_expression_place_read(tree, id, Some(RuntimePlaceProjection::Index))?;
+                self.record_expression_place_read(
+                    tree,
+                    id,
+                    Some(if precise_place {
+                        RuntimePlaceProjection::ArrayElement(index)
+                    } else {
+                        RuntimePlaceProjection::Index
+                    }),
+                )?;
                 if let Some((local_index, local)) = self.locals[..self.saved_locals]
                     .iter()
                     .enumerate()
@@ -19787,20 +19928,20 @@ impl<
                 self.emit_expression(tree, condition, depth + 1)?;
                 self.emit(&[0x48, 0x85, 0xc0])?;
                 let else_patch = self.emit_forward_branch(0x84)?;
-                self.emit_array_element(tree, then_branch, index, depth + 1)?;
+                self.emit_array_element(tree, then_branch, index, precise_place, depth + 1)?;
                 let end_patch = self.emit_unconditional_forward_branch()?;
                 self.patch_forward_branch(else_patch)?;
-                self.emit_array_element(tree, else_branch, index, depth + 1)?;
+                self.emit_array_element(tree, else_branch, index, precise_place, depth + 1)?;
                 self.patch_forward_branch(end_patch)
             }
             ExprKind::InlineConst { operand }
             | ExprKind::LoopBreak { operand }
             | ExprKind::Return { operand } => {
-                self.emit_array_element(tree, operand, index, depth + 1)
+                self.emit_array_element(tree, operand, index, precise_place, depth + 1)
             }
             ExprKind::Sequence { first, then } => {
                 self.emit_expression(tree, first, depth + 1)?;
-                self.emit_array_element(tree, then, index, depth + 1)
+                self.emit_array_element(tree, then, index, precise_place, depth + 1)
             }
             _ => Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
         }
@@ -20310,6 +20451,12 @@ impl<
     ) -> Result<(), CodegenError> {
         if count > crate::expression::MAX_ARRAY_ELEMENTS || index >= count {
             return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+        }
+        if matches!(
+            tree.expression(base).map(|expression| expression.kind),
+            Some(ExprKind::Identifier(_))
+        ) {
+            return self.emit_array_element(tree, base, index, true, 0);
         }
         self.emit_array_to_stack(tree, base, count)?;
         self.emit_stack_slot(index)?;
@@ -21167,7 +21314,7 @@ impl<
                 kind: error.kind,
                 span: translate_span(body_start, assignment.name_span),
             })?;
-        self.record_place_access(place, assignment.name_span)
+        self.record_place_access::<MAX_EXPRESSION_NODES>(place, assignment)
             .map_err(|error| CodegenError {
                 kind: error.kind,
                 span: translate_span(body_start, assignment.name_span),
@@ -22262,7 +22409,7 @@ impl<
             return Ok(());
         }
         for element in 0..count {
-            self.emit_array_element(tree, root, element, 0)?;
+            self.emit_array_element(tree, root, element, false, 0)?;
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
         }
@@ -24864,7 +25011,7 @@ mod tests {
             })
             .unwrap();
         emitter
-            .record_place_access(first_place, assignment.name_span)
+            .record_place_access::<16>(first_place, &assignment)
             .unwrap();
         assert_eq!(emitter.preanalyzed_assignment_access_cursor, 1);
         emitter
@@ -24912,7 +25059,7 @@ mod tests {
         };
         let compound_place = emitter.resolve_assignment_place(&compound).unwrap();
         emitter
-            .record_place_access(compound_place, compound.name_span)
+            .record_place_access::<16>(compound_place, &compound)
             .unwrap();
         assert_eq!(compound_place.access, RuntimePlaceAccess::ReadModifyWrite);
         let final_place = emitter.resolve_assignment_place(&assignment).unwrap();
@@ -25042,12 +25189,12 @@ mod tests {
         emitter.body_facts.accesses[2] = Some(valid_fact);
         for _ in emitter.body_facts.access_count..MAX_RUNTIME_PLACE_ACCESS_FACTS {
             emitter
-                .record_place_access(final_place, assignment.name_span)
+                .record_place_access::<16>(final_place, &assignment)
                 .unwrap();
         }
         assert_eq!(
             emitter
-                .record_place_access(final_place, assignment.name_span)
+                .record_place_access::<16>(final_place, &assignment)
                 .unwrap_err()
                 .kind,
             CodegenErrorKind::TooManyRuntimePlaceAccessFacts
@@ -25079,6 +25226,59 @@ mod tests {
                 .kind,
             CodegenErrorKind::TooManyRuntimeLocalFacts
         );
+    }
+
+    #[test]
+    fn runtime_places_distinguish_constant_and_runtime_array_elements() {
+        let source = "fn value(index: usize) -> u16 { let mut values: [u16; 2] = [1, 2]; values[1] = 3; values[index] = 4; values[1] }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 4, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(facts.assignment_access_count, 2);
+        assert_eq!(
+            facts.assignment_accesses[0].unwrap().projections,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(1))
+        );
+        assert_eq!(
+            facts.assignment_accesses[1].unwrap().projections,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::Index)
+        );
+        assert!(
+            facts.assignment_reads[..facts.assignment_read_count]
+                .iter()
+                .flatten()
+                .any(|read| {
+                    read.projections
+                        == RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(1))
+                })
+        );
+        let array = RuntimeExpressionType::Array {
+            element: RuntimeArrayElementType::Integer(Some(crate::IntegerType::U16)),
+            count: 2,
+        };
+        assert!(runtime_place_projections_valid(
+            array,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(1))
+        ));
+        assert!(!runtime_place_projections_valid(
+            array,
+            RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(2))
+        ));
     }
 
     #[test]
@@ -27880,7 +28080,7 @@ mod tests {
             ),
             (
                 RuntimePlaceIdentity::Local(RuntimeLocalId(1)),
-                RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+                RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(1)),
             ),
             (
                 RuntimePlaceIdentity::Parameter(3),
