@@ -308,7 +308,15 @@ explicitly and downgrade the status rather than guessing.
   policy. Only after all validation succeeds does compare-and-store advance and
   release both results. Validation failure leaves accepted state unchanged;
   store failure drops both results; configuration scratch is erased on every
-  validator return. A conforming TPM NV or equivalent power-loss-atomic
+  validator return.
+  Service registration can now be planned against one exact vacant supervisor
+  slot and generation during dependent validation without mutation. After the
+  monotonic store advances, only the committed recovered-authority wrapper and
+  matching epoch can consume that plan into a released configuration, authority
+  table, and running service. Slot reuse, capacity loss, or epoch mismatch fails
+  closed and releases no recovered system. This is deterministic in-memory boot
+  composition rather than reboot evidence. A conforming TPM NV or equivalent
+  power-loss-atomic
   backend, platform owner-policy authentication/UI, and boot orchestration
   remain pending, so
   reboot-time capability reconstruction and concrete block durability remain

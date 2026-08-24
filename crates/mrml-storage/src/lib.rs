@@ -42,10 +42,11 @@ pub use authority_checkpoint::{
     AuthorityCheckpointProofIssuer, AuthorityRecoveryCommitError, AuthorityRecoveryGuard,
     AuthorityRecoveryStateStore, AuthorityRecoveryValidationError,
     AuthorityRecoveryValidationResult, AuthorityRecoveryValidator, AuthorityStorageError,
-    OwnerApprovedAuthorityCheckpoint, PreparedStableAuthorities, RecoveredStorageAuthorities,
-    StableAuthorities, StorageRecoveryGrant, authority_checkpoint_digest,
-    encode_authority_checkpoint, prepare_stable_authorities, recover_stable_authorities,
-    recover_stable_authorities_and_commit, recover_validate_and_commit_stable_authorities,
+    CommittedRecoveredStorageAuthorities, OwnerApprovedAuthorityCheckpoint,
+    PreparedStableAuthorities, RecoveredStorageAuthorities, StableAuthorities,
+    StorageRecoveryGrant, authority_checkpoint_digest, encode_authority_checkpoint,
+    prepare_stable_authorities, recover_stable_authorities, recover_stable_authorities_and_commit,
+    recover_validate_and_commit_stable_authorities,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{

@@ -456,9 +456,15 @@ exact selected configuration-file generation and binds its service restart
 policy. Validation failure leaves authenticated monotonic state unchanged;
 compare-and-store failure drops both reconstructed authority and the validated
 configuration/policy result. Scratch containing checkpoint bytes is erased on
-every dependent-validation return. No TPM NV or equivalent power-loss-atomic backend has been
+every dependent-validation return. Kernel service registration now has a
+non-mutating exact-slot plan and a consumed commit that rechecks vacancy and
+generation. The configuration recovery validator can include that plan before
+monotonic commit; only the committed-authority wrapper can consume it into a
+released configuration, authority table, and running service. Epoch mismatch or
+stale supervisor state releases no recovered system. This is typed in-memory
+boot orchestration, not a real reboot path. No TPM NV or equivalent power-loss-atomic backend has been
 implemented or physically tested. The platform owner-policy authenticator/UI
-and boot orchestration are not implemented.
+and complete boot orchestration are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

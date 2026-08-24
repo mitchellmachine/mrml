@@ -13,14 +13,15 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, RestartPolicy,
-    Rights, ServiceError, ServiceId, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    Rights, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor,
+    TaskId, TaskRuntime,
 };
 use mrml_storage::{
-    AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError, ExtentMap,
-    FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
-    MetadataPointer, PreparedFileWrite, RecoveredStorageAuthorities, StorageAuthorityTable,
-    StorageBlockDevice, StorageHandle, StoragePrincipal, StorageTransaction, TransactionError,
-    TransactionReceipt,
+    AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
+    CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata, FileReadBackend, FileReadError,
+    FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
+    RecoveredStorageAuthorities, StorageAuthorityTable, StorageBlockDevice, StorageHandle,
+    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
 };
 
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
@@ -515,6 +516,31 @@ impl BoundRestartPolicy {
         supervisor: &mut ServiceSupervisor<SERVICES>,
         task: TaskId,
     ) -> Result<ServiceId, PersistedRestartPolicyError> {
+        let plan = self.plan_registration(
+            configuration,
+            capabilities,
+            policy_capability,
+            supervisor,
+            task,
+        )?;
+        supervisor
+            .commit_registration(plan)
+            .map_err(PersistedRestartPolicyError::Service)
+    }
+
+    pub fn plan_registration<
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
+        self,
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        policy_capability: Capability,
+        supervisor: &ServiceSupervisor<SERVICES>,
+        task: TaskId,
+    ) -> Result<ServiceRegistrationPlan, PersistedRestartPolicyError> {
         let current = load_persisted_restart_policy(
             configuration,
             capabilities,
@@ -526,7 +552,7 @@ impl BoundRestartPolicy {
             return Err(PersistedRestartPolicyError::PolicyChanged);
         }
         supervisor
-            .register_with_policy(self.policy.service, task, self.policy.restart_policy()?)
+            .plan_registration(self.policy.service, task, self.policy.restart_policy()?)
             .map_err(PersistedRestartPolicyError::Service)
     }
 
@@ -1000,6 +1026,151 @@ unsafe impl<
         Ok(RecoveredStableConfiguration {
             configuration,
             policy,
+        })
+    }
+}
+
+/// Recovered configuration plus a non-mutating, exact-slot service
+/// registration decision. Only the committed-authority wrapper can consume it
+/// into a released system state.
+pub struct PreparedRecoveredService<const SETTINGS: usize, const AUDIT: usize> {
+    recovered: RecoveredStableConfiguration<SETTINGS, AUDIT>,
+    registration: ServiceRegistrationPlan,
+    authority_epoch: u64,
+}
+
+pub struct RecoveredSystemState<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize> {
+    authorities: CommittedRecoveredStorageAuthorities<GRANTS>,
+    configuration: ConfigurationService<SETTINGS, AUDIT>,
+    service: ServiceId,
+}
+
+impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
+    RecoveredSystemState<GRANTS, SETTINGS, AUDIT>
+{
+    pub const fn authorities(&self) -> &CommittedRecoveredStorageAuthorities<GRANTS> {
+        &self.authorities
+    }
+
+    pub const fn configuration(&self) -> &ConfigurationService<SETTINGS, AUDIT> {
+        &self.configuration
+    }
+
+    pub const fn service(&self) -> ServiceId {
+        self.service
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        CommittedRecoveredStorageAuthorities<GRANTS>,
+        ConfigurationService<SETTINGS, AUDIT>,
+        ServiceId,
+    ) {
+        (self.authorities, self.configuration, self.service)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredSystemCommitError {
+    AuthorityEpochMismatch,
+    Service(ServiceError),
+}
+
+impl<const SETTINGS: usize, const AUDIT: usize> PreparedRecoveredService<SETTINGS, AUDIT> {
+    pub fn commit<const GRANTS: usize, const SERVICES: usize>(
+        self,
+        authorities: CommittedRecoveredStorageAuthorities<GRANTS>,
+        supervisor: &mut ServiceSupervisor<SERVICES>,
+    ) -> Result<RecoveredSystemState<GRANTS, SETTINGS, AUDIT>, RecoveredSystemCommitError> {
+        if authorities.epoch() != self.authority_epoch {
+            return Err(RecoveredSystemCommitError::AuthorityEpochMismatch);
+        }
+        let service = supervisor
+            .commit_registration(self.registration)
+            .map_err(RecoveredSystemCommitError::Service)?;
+        let (configuration, _) = self.recovered.into_parts();
+        Ok(RecoveredSystemState {
+            authorities,
+            configuration,
+            service,
+        })
+    }
+}
+
+pub struct StableServiceRecoveryValidator<
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> {
+    configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
+    supervisor: &'a ServiceSupervisor<SERVICES>,
+    task: TaskId,
+}
+
+impl<
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+{
+    pub const fn new(
+        configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
+        supervisor: &'a ServiceSupervisor<SERVICES>,
+        task: TaskId,
+    ) -> Self {
+        Self {
+            configuration,
+            supervisor,
+            task,
+        }
+    }
+}
+
+// SAFETY: the nested validator retains no storage authority. Registration is
+// only planned against immutable supervisor state; no lifecycle mutation occurs
+// until a committed-authority wrapper later consumes the output.
+unsafe impl<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> AuthorityRecoveryValidator<GRANTS>
+    for StableServiceRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+{
+    type Output = PreparedRecoveredService<SETTINGS, AUDIT>;
+    type Error = StableConfigurationRecoveryError<B::Error>;
+
+    fn validate(
+        &mut self,
+        authorities: &RecoveredStorageAuthorities<GRANTS>,
+    ) -> Result<Self::Output, Self::Error> {
+        let recovered = self.configuration.validate(authorities)?;
+        let registration = recovered
+            .policy
+            .plan_registration(
+                &recovered.configuration,
+                self.configuration.capabilities,
+                self.configuration.policy_capability,
+                self.supervisor,
+                self.task,
+            )
+            .map_err(StableConfigurationRecoveryError::Policy)?;
+        Ok(PreparedRecoveredService {
+            recovered,
+            registration,
+            authority_epoch: authorities.epoch(),
         })
     }
 }
@@ -2509,13 +2680,15 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 mod tests {
     use super::*;
     use mrml_storage::{
-        AuthenticatedAuthorityRecoveryState, AuthorityCheckpointProofIssuer,
-        AuthorityRecoveryGuard, BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService,
-        BlockServiceBackend, BlockServiceError, BlockVolume, CowMetadataImage, CowMetadataWrite,
-        CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
+        AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
+        AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
+        BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
+        BlockServiceError, BlockVolume, CowMetadataImage, CowMetadataWrite, CowPublicationBackend,
+        CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
         OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
         StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
         VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+        recover_validate_and_commit_stable_authorities,
     };
 
     fn fixture() -> (
@@ -3607,6 +3780,91 @@ mod tests {
         }
     }
 
+    struct CheckpointReadBackend {
+        object: StorageObjectId,
+        bytes: [u8; STABLE_BLOCK_BYTES],
+    }
+
+    unsafe impl FileReadBackend for CheckpointReadBackend {
+        type Error = u8;
+
+        fn read_verified_extent(
+            &mut self,
+            record: ExtentRecord,
+            byte_offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            if record.file() != self.object
+                || record.metadata_generation() != 2
+                || record.content_digest() != stable_digest(&self.bytes)
+            {
+                return Err(1);
+            }
+            let start = usize::try_from(byte_offset).map_err(|_| 2)?;
+            let end = start.checked_add(output.len()).ok_or(2)?;
+            output.copy_from_slice(self.bytes.get(start..end).ok_or(2)?);
+            Ok(())
+        }
+    }
+
+    struct RecoveryStateStore {
+        bytes: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+    }
+
+    impl RecoveryStateStore {
+        fn new(epoch: u64, generation: u32) -> Self {
+            let mut bytes = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+            bytes[..16].copy_from_slice(b"MRML-AUTHSTATE1\0");
+            bytes[16..24].copy_from_slice(&epoch.to_le_bytes());
+            bytes[24..28].copy_from_slice(&generation.to_le_bytes());
+            Self { bytes }
+        }
+    }
+
+    impl AuthorityRecoveryStateStore for RecoveryStateStore {
+        type Error = u8;
+
+        fn load_authenticated(
+            &self,
+            output: &mut [u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        ) -> Result<(), Self::Error> {
+            output.copy_from_slice(&self.bytes);
+            Ok(())
+        }
+
+        fn compare_and_store(
+            &mut self,
+            expected_epoch: u64,
+            expected_handle_generation: u32,
+            replacement: &[u8; AUTHORITY_RECOVERY_STATE_BYTES],
+        ) -> Result<(), Self::Error> {
+            let epoch = u64::from_le_bytes(self.bytes[16..24].try_into().map_err(|_| 1)?);
+            let generation = u32::from_le_bytes(self.bytes[24..28].try_into().map_err(|_| 1)?);
+            if epoch != expected_epoch || generation != expected_handle_generation {
+                return Err(2);
+            }
+            self.bytes.copy_from_slice(replacement);
+            Ok(())
+        }
+    }
+
+    fn checkpoint_file(
+        object: StorageObjectId,
+        length: usize,
+        bytes: &[u8; STABLE_BLOCK_BYTES],
+    ) -> FileState<1> {
+        let extent = ExtentRecord::data(object, 2, 0, 1, 11, stable_digest(bytes)).unwrap();
+        let extents = ExtentMap::build(
+            stable_header(),
+            object,
+            2,
+            u64::try_from(length).unwrap(),
+            &[extent],
+        )
+        .unwrap();
+        FileState::new(object, 2, u64::try_from(length).unwrap(), extents).unwrap()
+    }
+
     struct PublicationBackend;
 
     unsafe impl CowPublicationBackend for PublicationBackend {
@@ -4236,32 +4494,97 @@ mod tests {
                 OwnerApprovedAuthorityCheckpoint::new(9, stable_volume(), 14, 2, authority_digest)
             };
             let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
-            let proof = issuer
-                .issue::<1>(&authority_bytes[..authority_length])
+            let authority_object = stable_object(10);
+            let mut authority_backend = CheckpointReadBackend {
+                object: authority_object,
+                bytes: [0; STABLE_BLOCK_BYTES],
+            };
+            authority_backend.bytes[..authority_length]
+                .copy_from_slice(&authority_bytes[..authority_length]);
+            let authority_file =
+                checkpoint_file(authority_object, authority_length, &authority_backend.bytes);
+            let mut bootstrap = StorageAuthorityTable::<1>::new();
+            let bootstrap_file = bootstrap
+                .insert(
+                    authority_object,
+                    StorageObjectKind::File,
+                    StorageRights::READ,
+                    stable_principal(),
+                )
                 .unwrap();
-            let authenticated = unsafe { AuthenticatedAuthorityRecoveryState::new(8, 1) };
-            let mut guard = AuthorityRecoveryGuard::from_authenticated_state(authenticated);
-            let recovered_authority = guard
-                .recover::<1>(&authority_bytes[..authority_length], proof)
+            let mut state_store = RecoveryStateStore::new(8, 1);
+            let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+            let task = runtime
+                .create(
+                    Priority::NORMAL,
+                    UserContext::new(
+                        mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+                        0x40_0000,
+                        0x7000_0000,
+                    )
+                    .unwrap(),
+                )
                 .unwrap();
+            let mut supervisor = ServiceSupervisor::<1>::new();
             let mut recovered_bytes = [0xa5; 512];
-            let mut validator = StableConfigurationRecoveryValidator::<1, 2, _, _, _>::new(
-                stable.file(),
-                0,
-                stable_principal(),
-                2,
-                &capabilities,
-                root,
-                setting_access,
-                setting,
-                service_object,
-                &mut recovered_bytes,
-                &mut volume,
+            let configuration_validator =
+                StableConfigurationRecoveryValidator::<1, 2, _, _, _>::new(
+                    stable.file(),
+                    0,
+                    stable_principal(),
+                    2,
+                    &capabilities,
+                    root,
+                    setting_access,
+                    setting,
+                    service_object,
+                    &mut recovered_bytes,
+                    &mut volume,
+                );
+            let mut validator =
+                StableServiceRecoveryValidator::new(configuration_validator, &supervisor, task);
+            let mut authority_scratch = [0xa5; 128];
+            let (authorities, prepared_service) =
+                recover_validate_and_commit_stable_authorities::<1, 1, 1, _, _, _>(
+                    &authority_file,
+                    &bootstrap,
+                    bootstrap_file,
+                    stable_principal(),
+                    2,
+                    &mut issuer,
+                    &mut authority_scratch,
+                    &mut authority_backend,
+                    &mut state_store,
+                    &mut validator,
+                )
+                .unwrap();
+            assert!(
+                supervisor
+                    .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
+                    .is_ok()
             );
-            let recovered = validator.validate(&recovered_authority).unwrap();
-            assert_eq!(recovered.policy().policy, policy);
+            let recovered = prepared_service
+                .commit(authorities, &mut supervisor)
+                .unwrap();
+            assert_eq!(recovered.service().token(), 1u64 << 32);
             assert_eq!(recovered.configuration().revision(), 1);
+            assert_eq!(recovered.authorities().epoch(), 9);
+            assert_eq!(
+                recovered.authorities().authority_table().authorize(
+                    recovered.authorities().handle(0).unwrap(),
+                    stable_principal(),
+                    StorageObjectKind::File,
+                    StorageRights::READ,
+                ),
+                Ok(stable_object(9))
+            );
+            assert_eq!(
+                u64::from_le_bytes(state_store.bytes[16..24].try_into().unwrap()),
+                9
+            );
+            assert!(authority_scratch.iter().all(|byte| *byte == 0));
             assert!(recovered_bytes.iter().all(|byte| *byte == 0));
+            assert_eq!(supervisor.task(recovered.service()), Ok(Some(task)));
         }
         assert!(backend.writes > 0);
         assert!(backend.reads > 0);

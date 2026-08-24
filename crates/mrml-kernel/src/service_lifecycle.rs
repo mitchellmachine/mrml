@@ -125,6 +125,28 @@ pub struct ServiceRecovery {
     pub next: ScheduleOutcome,
 }
 
+/// One-use registration decision bound to one exact vacant supervisor slot.
+/// The plan carries no capability and cannot authorize any other lifecycle
+/// operation. Commit rechecks the slot generation and vacancy before mutation.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ServiceRegistrationPlan {
+    slot: u32,
+    generation: u32,
+    object: ObjectId,
+    task: TaskId,
+    restart_policy: RestartPolicy,
+}
+
+impl ServiceRegistrationPlan {
+    pub const fn object(&self) -> ObjectId {
+        self.object
+    }
+
+    pub const fn task(&self) -> TaskId {
+        self.task
+    }
+}
+
 /// A one-use, supervisor-created restart decision. Untrusted requests select
 /// only the service and capability; trusted kernel code supplies the launch
 /// context, priority, and observed time before host reprovisioning begins.
@@ -245,26 +267,56 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         task: TaskId,
         restart_policy: RestartPolicy,
     ) -> Result<ServiceId, ServiceError> {
+        let plan = self.plan_registration(object, task, restart_policy)?;
+        self.commit_registration(plan)
+    }
+
+    pub fn plan_registration(
+        &self,
+        object: ObjectId,
+        task: TaskId,
+        restart_policy: RestartPolicy,
+    ) -> Result<ServiceRegistrationPlan, ServiceError> {
         if object.0 == 0 {
             return Err(ServiceError::InvalidObject);
         }
         let (slot, entry) = self
             .slots
-            .iter_mut()
+            .iter()
             .enumerate()
             .find(|(_, entry)| !entry.occupied)
             .ok_or(ServiceError::Full)?;
-        entry.object = object;
-        entry.task = Some(task);
+        Ok(ServiceRegistrationPlan {
+            slot: slot as u32,
+            generation: entry.generation,
+            object,
+            task,
+            restart_policy,
+        })
+    }
+
+    pub fn commit_registration(
+        &mut self,
+        plan: ServiceRegistrationPlan,
+    ) -> Result<ServiceId, ServiceError> {
+        let entry = self
+            .slots
+            .get_mut(plan.slot as usize)
+            .ok_or(ServiceError::InvalidService)?;
+        if entry.occupied || entry.generation != plan.generation {
+            return Err(ServiceError::InvalidService);
+        }
+        entry.object = plan.object;
+        entry.task = Some(plan.task);
         entry.state = ServiceState::Running;
         entry.occupied = true;
-        entry.restart_policy = restart_policy;
+        entry.restart_policy = plan.restart_policy;
         entry.policy_generation = 1;
         entry.completed_restarts = 0;
         entry.next_restart_tick = 0;
         entry.cleanup = None;
         Ok(ServiceId {
-            slot: slot as u32,
+            slot: plan.slot,
             generation: entry.generation,
         })
     }
@@ -800,6 +852,36 @@ mod tests {
         assert_eq!(fault.service, service);
         assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
         complete(&mut supervisor, fault.cleanup);
+    }
+
+    #[test]
+    fn registration_plan_rechecks_exact_vacant_slot_before_commit() {
+        let object = ObjectId(0x60);
+        let policy = RestartPolicy::new(2, 5, 20).unwrap();
+        let task = TaskId::from_token((7u64 << 32) | 1);
+        let competing_task = TaskId::from_token((7u64 << 32) | 2);
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        assert_eq!(
+            supervisor.plan_registration(ObjectId(0), task, policy),
+            Err(ServiceError::InvalidObject)
+        );
+        let stale = supervisor.plan_registration(object, task, policy).unwrap();
+        assert_eq!((stale.object(), stale.task()), (object, task));
+        supervisor.register(ObjectId(0x61), competing_task).unwrap();
+        assert_eq!(
+            supervisor.commit_registration(stale),
+            Err(ServiceError::InvalidService)
+        );
+
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let plan = supervisor.plan_registration(object, task, policy).unwrap();
+        let service = supervisor.commit_registration(plan).unwrap();
+        assert_eq!(supervisor.task(service), Ok(Some(task)));
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Running));
+        assert_eq!(
+            supervisor.plan_registration(ObjectId(0x62), task, policy),
+            Err(ServiceError::Full)
+        );
     }
 
     #[test]

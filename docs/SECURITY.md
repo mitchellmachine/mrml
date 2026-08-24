@@ -157,6 +157,12 @@ released if validation, storage I/O, conflict detection, or compare-and-store
 is uncertain. The validator is an explicit unsafe side-effect-free boundary;
 checkpoint bytes, reconstructed handles, object identities, digests, and policy
 records remain non-authorizing data outside the exact capability checks.
+Service registration is split around that boundary: immutable planning binds an
+exact vacant supervisor slot/generation, service object, task, and validated
+restart policy; consumed commit rechecks the slot only after authenticated state
+has advanced. A distinct committed-authority type prevents safe code from
+releasing a recovered service from pre-commit reconstruction. Epoch mismatch,
+slot reuse, capacity loss, or registration failure drops the recovery result.
 
 ## Persistent state and boot
 

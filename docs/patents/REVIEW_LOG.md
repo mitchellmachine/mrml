@@ -1371,6 +1371,19 @@ accessibility interface, browser semantic interface, JavaScript/WebAssembly
 runtime, media mechanism, or other patent-candidate mechanism. This agent
 review does not replace the required independent human dual review.
 
+# 2026-08-24 — Split-phase recovered service registration
+
+**Result: NOT_TRIGGERED.** The change conventionally plans one exact vacant
+generational supervisor slot without mutation, rechecks it at consumed commit,
+and uses a distinct post-compare-and-store authority wrapper before releasing a
+recovered service. Epoch binding, stale-plan rejection, and build-before-publish
+ordering are standard transactional lifecycle and recovery techniques. It adds
+no VirtIO compatibility, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, or other patent-candidate mechanism. Existing planned scopes remain
+`TRIGGERED`; this agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Explicit reference-reassignment loan generations
 
 **Result: NOT_TRIGGERED.** The compiler conventionally versions a direct loan

@@ -616,6 +616,13 @@ authority; unrelated domains continue.
    until compare-and-store succeeds. Validation failure does not consume the
    accepted monotonic state. This is unit/simulation composition rather than a
    live reboot path.
+   Service registration now has an exact non-mutating slot/generation plan and
+   consumed commit. Dependent validation can prepare that plan while authority
+   remains private; after monotonic compare-and-store, a committed-authority
+   wrapper and matching epoch are required to publish configuration, authority,
+   and the running supervised service together. Stale-slot commit fails without
+   mutation. A deterministic exact-block/block-service test covers this typed
+   in-memory boot sequence, but no real reboot or persistent backend is claimed.
    A conforming TPM NV or equivalent power-loss-atomic backend remains pending.
    The platform owner-policy authenticator/UI and boot orchestration remain pending, so
    reboot-time capability reconstruction is still partial. A hosted/physical

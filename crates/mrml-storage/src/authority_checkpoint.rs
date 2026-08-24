@@ -273,6 +273,13 @@ pub struct RecoveredStorageAuthorities<const N: usize> {
     epoch: u64,
 }
 
+/// Fresh authority released only after its authenticated monotonic recovery
+/// state has been atomically advanced. Safe code cannot construct this wrapper
+/// around pre-commit reconstruction.
+pub struct CommittedRecoveredStorageAuthorities<const N: usize> {
+    recovered: RecoveredStorageAuthorities<N>,
+}
+
 /// Validation performed against freshly reconstructed authority before its
 /// rollback state is committed and before either result is released. An
 /// implementation may inspect and use the temporary table only to validate
@@ -302,7 +309,7 @@ pub type AuthorityRecoveryValidationResult<
     StateError,
     ValidationError,
 > = Result<
-    (RecoveredStorageAuthorities<N>, Output),
+    (CommittedRecoveredStorageAuthorities<N>, Output),
     AuthorityRecoveryValidationError<StorageError, StateError, ValidationError>,
 >;
 
@@ -386,6 +393,39 @@ impl<const N: usize> RecoveredStorageAuthorities<N> {
         u64,
     ) {
         (self.table, self.handles, self.count, self.epoch)
+    }
+}
+
+impl<const N: usize> CommittedRecoveredStorageAuthorities<N> {
+    pub const fn authority_table(&self) -> &StorageAuthorityTable<N> {
+        self.recovered.authority_table()
+    }
+
+    pub const fn handle(&self, index: usize) -> Option<StorageHandle> {
+        self.recovered.handle(index)
+    }
+
+    pub const fn len(&self) -> usize {
+        self.recovered.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.recovered.is_empty()
+    }
+
+    pub const fn epoch(&self) -> u64 {
+        self.recovered.epoch()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        StorageAuthorityTable<N>,
+        [Option<StorageHandle>; N],
+        usize,
+        u64,
+    ) {
+        self.recovered.into_parts()
     }
 }
 
@@ -697,7 +737,10 @@ pub fn recover_stable_authorities_and_commit<
     input: &mut [u8],
     backend: &mut B,
     state_store: &mut S,
-) -> Result<RecoveredStorageAuthorities<GRANTS>, AuthorityRecoveryCommitError<B::Error, S::Error>> {
+) -> Result<
+    CommittedRecoveredStorageAuthorities<GRANTS>,
+    AuthorityRecoveryCommitError<B::Error, S::Error>,
+> {
     let mut encoded_state = [0; AUTHORITY_RECOVERY_STATE_BYTES];
     state_store
         .load_authenticated(&mut encoded_state)
@@ -727,7 +770,7 @@ pub fn recover_stable_authorities_and_commit<
     state_store
         .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
         .map_err(AuthorityRecoveryCommitError::State)?;
-    Ok(recovered)
+    Ok(CommittedRecoveredStorageAuthorities { recovered })
 }
 
 /// Reconstructs authority into private temporary state, validates dependent
@@ -787,7 +830,10 @@ pub fn recover_validate_and_commit_stable_authorities<
     state_store
         .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
         .map_err(AuthorityRecoveryValidationError::State)?;
-    Ok((recovered, validated))
+    Ok((
+        CommittedRecoveredStorageAuthorities { recovered },
+        validated,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -3206,7 +3206,7 @@ Fresh independently signed version-1 artifacts passed on 2026-08-24:
 
 ```text
 cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release --no-default-features --target x86_64-pc-windows-gnullvm
-# 444 passed
+# 445 passed
 cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-storage --release --no-default-features
 # 107 passed
 cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-whp --release --no-default-features
@@ -5592,6 +5592,14 @@ CONTROL and setting READ through the ordinary configuration gates, binds the
 expected service object, and erases its scratch on success or rejection. A
 dependent validation failure leaves accepted state unchanged; a store conflict
 or uncertain write drops both the table and recovered configuration/policy.
+The kernel supervisor now supports an immutable one-use registration plan bound
+to one exact vacant slot generation, object, task, and restart policy. Commit
+rechecks that slot before mutation. The configuration layer can prepare this
+plan during dependent validation; storage commit returns a distinct
+`CommittedRecoveredStorageAuthorities` wrapper, and only that wrapper with the
+matching epoch can consume the plan into a released configuration, authority
+table, and running service. A stale slot or mismatched epoch returns no recovered
+system.
 
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
 each pass all 107 `mrml-storage` tests and scoped strict Clippy. Focused tests
@@ -5601,7 +5609,11 @@ guard advancement; rights
 amplification, forward lineage, hidden reserved data even with a recomputed
 digest, capacity mismatch, dependent-validation rejection without state advance,
 and configuration/policy validation through temporary reconstructed authority.
-All 26 `mrml-config` tests pass on Windows gnullvm. This is unit/simulation
+All 445 `mrml-kernel`, 107 `mrml-storage`, and 26 `mrml-config` tests pass on
+Windows gnullvm and Linux/WSL; scoped strict Clippy passes for all three. The
+configuration suite includes a deterministic exact-block/block-service path
+through authority recovery, dependent policy validation, authenticated
+compare-and-store, planned registration, and final service publication. This is unit/simulation
 evidence only. Stable-
 platform authentication of owner-approved policy, an owner-facing durable-grant
 UI, boot orchestration, and a conforming physical monotonic-store backend remain
