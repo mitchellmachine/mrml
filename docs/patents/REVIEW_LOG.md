@@ -1804,3 +1804,14 @@ exact write-only rules, and denial of wrong widths/directions/unrelated ports
 are standard defensive virtual-device techniques. No new protocol, authority
 model, compatibility claim, or patent-candidate mechanism was introduced. This
 agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Unattached PCI Type-0 configuration state
+
+**Result: NOT_TRIGGERED.** The change implements conventional fixed Type-0
+header encoding, bounded aligned configuration access, one power-of-two 32-bit
+memory BAR, standard all-ones size probing, address masking, and transactional
+command/BAR writes. Denying bus mastering until a DMA/IOMMU path exists and
+keeping BAR data separate from mapping authority are standard defensive device-
+model techniques. No assigned device identity, new protocol, compatibility
+claim, authority model, or patent-candidate mechanism was introduced. This
+agent review does not replace the required independent human dual review.

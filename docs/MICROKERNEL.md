@@ -4358,6 +4358,60 @@ Patent review: `NOT_TRIGGERED` — conventional transactional construction of a
 fixed deny-by-default I/O allowlist from typed transport mechanics; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The next PCI prerequisite is an unattached backend-neutral Type-0
+configuration-state core in `virtual_pci`. `VirtualPciIdentity` retains
+externally supplied vendor, device, revision, programming-interface, class,
+subclass, subsystem-vendor, and subsystem fields without treating them as
+registration evidence or authority. `VirtualPciType0Function` synthesizes one
+exact zero-filled 64-byte conventional header with header type zero and one
+`VirtualPciMemoryBar`. The BAR is 32-bit, non-prefetchable, power-of-two sized,
+at least 16 bytes, and initially unassigned. An all-ones dword write enters
+probe state and reads back the exact size mask without changing the retained
+address; the next ordinary write masks the address to both BAR geometry and
+the memory-BAR address bits.
+
+Configuration reads accept only aligned 1/2/4-byte accesses contained in the
+64-byte header. Writes accept only an exact 16-bit command access or exact
+32-bit BAR0 access; malformed, crossing, partial, or read-only writes return an
+error without mutation. The command register supports only memory-space enable
+and interrupt-disable. Bus mastering is explicitly rejected because this core
+has no DMA transport, IOMMU binding, or revocation path. A BAR value is routing
+data only and cannot create a host or guest mapping. The core exposes no PCI
+capability list, MSI/MSI-X, expansion ROM, legacy pin, additional BAR, assigned
+MRML identity, block binding, VMM configuration-space exit path, or guest
+driver. It is therefore a defensive configuration-state foundation, not a
+complete PCI/PCIe-compatible device.
+
+Recorded verification on 2026-08-24: Arch Linux under WSL2 passed all 396
+release kernel tests, including 6 focused PCI-state tests. Strict scoped Linux
+Clippy passed for the kernel and KVM runner, and strict nightly UEFI Clippy
+passed for the block-probe image. Native Windows test-target `check` and strict
+scoped Clippy passed for the kernel, WHP adapter, and WHP runner with default/
+CUDA features excluded. The PCI core is unattached, so no signed runtime, PCI
+enumeration, KVM/WHP configuration exit, QEMU differential, nested-
+virtualization, native-boot, bare-metal, or physical-hardware evidence is
+claimed.
+
+The PCI-state `DIGITAL-RIGHTS REVIEW` found no identity collection,
+registration claim, retention, correlation, disclosure, attestation mandate,
+DRM, vendor/publisher control, first-party bypass, accessibility restriction,
+AI authority, persistence, or durable owner-state change. Caller-supplied PCI
+identity data is local configuration data and grants no authority. The
+`HOSTILE SECURITY REVIEW` treats every identity field, offset, width, range,
+command bit, BAR size, probe write, address write, arithmetic result, and
+read-only field as hostile. Accesses are aligned and contained before copying;
+unsupported writes preserve complete state; probe state cannot become an
+address; address masking is bounded; bus mastering is unavailable; and BAR
+data cannot map memory. Existing capability, revocation, rollback-resistance,
+accessibility, evidence, owner-sovereignty, data-minimization, anti-DRM, owner-
+controlled-attestation, third-party-accessibility, AI-containment, and anti-
+persistence gates remain unchanged. This agent review does not replace the
+required independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded PCI Type-0 header state,
+BAR probing/masking, and transactional configuration writes; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

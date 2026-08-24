@@ -804,6 +804,17 @@ port constants. Exact scalar writes are admitted; reads, wrong widths, and
 unrelated ports remain denied. This closes scalar admission-policy separation,
 not the pending PCI or QEMU gates.
 
+The first unattached PCI configuration-state core is now implemented. It
+models one exact 64-byte Type-0 header with caller-supplied identity data and
+one bounded 32-bit non-prefetchable memory BAR. It implements aligned 1/2/4-
+byte reads, exact all-ones BAR size probing, masked BAR assignment, and
+transactional writes to only the command register or BAR. Bus mastering and
+all unsupported command bits are rejected without mutation; BAR assignment is
+data and does not map host memory. This is not yet a PCI-presented block device
+or a compatibility claim. Assigned MRML vendor/device IDs, capabilities,
+MSI/MSI-X, additional BARs, VMM configuration-space routing, reset coupling,
+guest-driver discovery, and QEMU differential testing remain dependency gates.
+
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical
 configuration, publishes a complete request before its producer, and rings only

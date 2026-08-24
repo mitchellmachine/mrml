@@ -290,6 +290,13 @@ closed. A virtual-device parser flaw should be contained by narrow component
 capabilities rather than imply authority over the entire host. Secure attention
 and global input remain outside every ordinary guest.
 
+PCI identity and configuration data never authorize mappings, interrupts, DMA,
+or device use. Configuration offsets, widths, command bits, BAR probes, BAR
+sizes, and BAR addresses are hostile. Unsupported or partial state transitions
+fail without mutation. Bus mastering remains unavailable until an exact device
+has separately authorized, revocable DMA/IOMMU state with complete reset and
+cleanup. A BAR assignment alone never maps host memory.
+
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
 are distinct capabilities. The MRML-specific compute path retains exact signed

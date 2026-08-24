@@ -30,6 +30,7 @@ mod syscall;
 mod task_runtime;
 mod virtual_block;
 mod virtual_gpu;
+mod virtual_pci;
 mod vm;
 mod vm_dispatch;
 mod vm_interrupt;
@@ -169,6 +170,11 @@ pub use virtual_gpu::{
     process_gpu_resource_command_with_response, submit_gpu_batch,
     submit_gpu_batch_to_completion_ring, submit_gpu_batch_with_completions,
     submit_gpu_control_batch, verify_gpu_kernel_bundle,
+};
+pub use virtual_pci::{
+    PCI_COMMAND_INTERRUPT_DISABLE, PCI_COMMAND_MEMORY_SPACE, PCI_TYPE0_CONFIGURATION_BYTES,
+    VirtualPciError, VirtualPciIdentity, VirtualPciMemoryBar, VirtualPciType0Function,
+    VirtualPciWriteOutcome,
 };
 pub use vm::{
     GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,

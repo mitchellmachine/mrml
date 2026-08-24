@@ -671,6 +671,16 @@ deny-by-default VM I/O policy, and both hosted launchers use that policy with a
 device constructed from the identical transport value. Reads, wrong widths,
 and unrelated ports remain denied before device dispatch; transport data still
 does not authorize either admitted write.
+A separate backend-neutral PCI Type-0 configuration-state foundation now
+encodes one exact 64-byte conventional header, an externally supplied identity,
+one 32-bit non-prefetchable memory BAR, exact size-probe masking, bounded
+aligned 1/2/4-byte reads, and transactional command/BAR writes. The command
+model admits only memory-space enable and interrupt disable; bus mastering is
+rejected because no DMA transport exists. BAR addresses remain routing data and
+cannot create mappings. This core is unattached: MRML has no assigned PCI
+identity here, block does not use it, and PCI capabilities, MSI/MSI-X, multiple
+BARs, VMM configuration exits, QEMU comparison, and a PCI-compatible device
+remain unimplemented.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path
