@@ -2169,10 +2169,38 @@ struct RuntimeInitializationFact {
     span: Option<Span>,
     event: RuntimeOwnershipEventId,
     location: RuntimeOwnershipEventLocation,
+    expression_path: RuntimeOwnershipExpressionPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeOwnershipEventId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeOwnershipExpressionPath {
+    else_bits: u64,
+    depth: usize,
+}
+
+impl RuntimeOwnershipExpressionPath {
+    const ROOT: Self = Self {
+        else_bits: 0,
+        depth: 0,
+    };
+
+    fn branch(self, else_branch: bool) -> Result<Self, CodegenErrorKind> {
+        if self.depth >= 64 {
+            return Err(CodegenErrorKind::InvalidRuntimePlaceFacts);
+        }
+        Ok(Self {
+            else_bits: self.else_bits | ((else_branch as u64) << self.depth),
+            depth: self.depth + 1,
+        })
+    }
+
+    const fn is_valid(self) -> bool {
+        self.depth <= 64 && (self.depth == 64 || self.else_bits < (1u64 << self.depth))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeOwnershipEventLocation {
@@ -2368,6 +2396,7 @@ struct RuntimePlaceEffectFact {
     span: Span,
     event: RuntimeOwnershipEventId,
     location: RuntimeOwnershipEventLocation,
+    expression_path: RuntimeOwnershipExpressionPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2485,6 +2514,7 @@ struct RuntimeBodyFacts<'source> {
     ownership_event_count: usize,
     ownership_events_single_path: bool,
     current_ownership_event_location: RuntimeOwnershipEventLocation,
+    current_ownership_expression_path: RuntimeOwnershipExpressionPath,
     ownership_statement_count: usize,
     ownership_has_tail: bool,
     ownership_statement_shapes:
@@ -2515,6 +2545,7 @@ impl<'source> RuntimeBodyFacts<'source> {
         ownership_event_count: 0,
         ownership_events_single_path: true,
         current_ownership_event_location: RuntimeOwnershipEventLocation::Unassigned,
+        current_ownership_expression_path: RuntimeOwnershipExpressionPath::ROOT,
         ownership_statement_count: 0,
         ownership_has_tail: false,
         ownership_statement_shapes: [None; crate::parser::MAX_BODY_STATEMENTS],
@@ -3200,6 +3231,12 @@ impl<'source> RuntimeBodyFacts<'source> {
                     self.current_ownership_event_location
                 }
             },
+            expression_path: match origin {
+                RuntimeInitializationOrigin::Parameter => RuntimeOwnershipExpressionPath::ROOT,
+                RuntimeInitializationOrigin::LocalDeclaration => {
+                    self.current_ownership_expression_path
+                }
+            },
         });
         self.initialization_count += 1;
         self.ownership_event_count += 1;
@@ -3253,6 +3290,7 @@ impl<'source> RuntimeBodyFacts<'source> {
             span,
             event: RuntimeOwnershipEventId(self.ownership_event_count),
             location: self.current_ownership_event_location,
+            expression_path: self.current_ownership_expression_path,
         });
         self.effect_count += 1;
         self.ownership_event_count += 1;
@@ -3319,6 +3357,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                     span: fact.span,
                     event: RuntimeOwnershipEventId(self.ownership_event_count),
                     location: self.current_ownership_event_location,
+                    expression_path: self.current_ownership_expression_path,
                 })
             });
         if effect.is_some() && self.effect_count >= self.effects.len() {
@@ -4510,8 +4549,28 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 else_branch,
             } => {
                 visit_value!(condition)?;
-                visit!(then_branch)?;
-                visit!(else_branch)?;
+                let parent_path = facts.current_ownership_expression_path;
+                for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                    facts.current_ownership_expression_path = parent_path
+                        .branch(else_branch)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: assignment_span,
+                        })?;
+                    let result = recurse(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        branch,
+                        context,
+                        depth + 1,
+                        assignment_span,
+                    );
+                    facts.current_ownership_expression_path = parent_path;
+                    result?;
+                }
             }
             ExprKind::Array {
                 elements,
@@ -4916,8 +4975,15 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     depth + 1,
                     assignment_span,
                 )?;
-                for branch in [then_branch, else_branch] {
-                    recurse_tuple_value(
+                let parent_path = facts.current_ownership_expression_path;
+                for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                    facts.current_ownership_expression_path = parent_path
+                        .branch(else_branch)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: assignment_span,
+                        })?;
+                    let result = recurse_tuple_value(
                         facts,
                         locals,
                         function,
@@ -4927,7 +4993,9 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         expected,
                         depth + 1,
                         assignment_span,
-                    )?;
+                    );
+                    facts.current_ownership_expression_path = parent_path;
+                    result?;
                 }
                 Ok(())
             }
@@ -5354,28 +5422,30 @@ fn preanalyze_runtime_return_array_element_reads<
                 condition,
                 expression_span,
             )?;
-            preanalyze_runtime_return_array_element_reads(
-                facts,
-                locals,
-                function,
-                resolver,
-                tree,
-                then_branch,
-                index,
-                depth + 1,
-                expression_span,
-            )?;
-            preanalyze_runtime_return_array_element_reads(
-                facts,
-                locals,
-                function,
-                resolver,
-                tree,
-                else_branch,
-                index,
-                depth + 1,
-                expression_span,
-            )
+            let parent_path = facts.current_ownership_expression_path;
+            for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                facts.current_ownership_expression_path =
+                    parent_path
+                        .branch(else_branch)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: expression_span,
+                        })?;
+                let result = preanalyze_runtime_return_array_element_reads(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    branch,
+                    index,
+                    depth + 1,
+                    expression_span,
+                );
+                facts.current_ownership_expression_path = parent_path;
+                result?;
+            }
+            Ok(())
         }
         ExprKind::InlineConst { operand }
         | ExprKind::LoopBreak { operand }
@@ -5628,28 +5698,30 @@ fn preanalyze_runtime_return_array_reads<
                 condition,
                 expression_span,
             )?;
-            preanalyze_runtime_return_array_reads(
-                facts,
-                locals,
-                function,
-                resolver,
-                tree,
-                then_branch,
-                count,
-                depth + 1,
-                expression_span,
-            )?;
-            preanalyze_runtime_return_array_reads(
-                facts,
-                locals,
-                function,
-                resolver,
-                tree,
-                else_branch,
-                count,
-                depth + 1,
-                expression_span,
-            )
+            let parent_path = facts.current_ownership_expression_path;
+            for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
+                facts.current_ownership_expression_path =
+                    parent_path
+                        .branch(else_branch)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: expression_span,
+                        })?;
+                let result = preanalyze_runtime_return_array_reads(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    branch,
+                    count,
+                    depth + 1,
+                    expression_span,
+                );
+                facts.current_ownership_expression_path = parent_path;
+                result?;
+            }
+            Ok(())
         }
         Some(_) => {
             for index in 0..count {
@@ -8354,6 +8426,12 @@ fn preanalyze_runtime_body_declarations<
             body.tail_span,
             body_start,
         )?;
+    }
+    if facts.current_ownership_expression_path != RuntimeOwnershipExpressionPath::ROOT {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+            span: body.tail_span,
+        });
     }
     facts.current_ownership_event_location = RuntimeOwnershipEventLocation::EmissionExpansion;
     preanalyze_runtime_body_control_flow(body, facts).map_err(|kind| CodegenError {
@@ -14219,6 +14297,9 @@ impl<
                 || initialization.path != root.id
                 || initialization.origin != expected_origin
                 || initialization.span != expected_span
+                || !initialization.expression_path.is_valid()
+                || (initialization.origin == RuntimeInitializationOrigin::Parameter
+                    && initialization.expression_path != RuntimeOwnershipExpressionPath::ROOT)
                 || (self.body_facts.control_flow_complete
                     && initialization.location != RuntimeOwnershipEventLocation::EmissionExpansion
                     && self
@@ -14364,6 +14445,7 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
             if path.id != effect.path
                 || effect.span.end < effect.span.start
+                || !effect.expression_path.is_valid()
                 || !self.body_facts.ownership_location_is_valid(effect.location)
                 || (self.body_facts.control_flow_complete
                     && effect.location != RuntimeOwnershipEventLocation::EmissionExpansion
@@ -24055,6 +24137,7 @@ mod tests {
                 span: Some(function.parameters()[0].unwrap().span),
                 event: RuntimeOwnershipEventId(0),
                 location: RuntimeOwnershipEventLocation::ParameterEntry,
+                expression_path: RuntimeOwnershipExpressionPath::ROOT,
             })
         );
 
@@ -24786,6 +24869,77 @@ mod tests {
         .unwrap();
         assert_eq!(facts.basic_block_count, 1);
         assert!(!facts.ownership_events_single_path);
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| effect.kind == RuntimePlaceEffectKind::Move
+                    && effect.expression_path
+                        == RuntimeOwnershipExpressionPath {
+                            else_bits: 0,
+                            depth: 1,
+                        })
+        );
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(
+                    |effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                        && effect.expression_path
+                            == RuntimeOwnershipExpressionPath {
+                                else_bits: 1,
+                                depth: 1,
+                            }
+                )
+        );
+
+        let nested = "fn value(input: &mut u16, first: bool, second: bool) -> &mut u16 { if first { if second { input } else { &mut *input } } else { &mut *input } }";
+        let module = Parser::new(nested).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 24>(
+            &function,
+            &NoConstants,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        for (kind, expression_path) in [
+            (
+                RuntimePlaceEffectKind::Move,
+                RuntimeOwnershipExpressionPath {
+                    else_bits: 0,
+                    depth: 2,
+                },
+            ),
+            (
+                RuntimePlaceEffectKind::MutableBorrow,
+                RuntimeOwnershipExpressionPath {
+                    else_bits: 2,
+                    depth: 2,
+                },
+            ),
+            (
+                RuntimePlaceEffectKind::MutableBorrow,
+                RuntimeOwnershipExpressionPath {
+                    else_bits: 1,
+                    depth: 1,
+                },
+            ),
+        ] {
+            assert!(
+                facts.effects[..facts.effect_count]
+                    .iter()
+                    .flatten()
+                    .any(|effect| effect.kind == kind && effect.expression_path == expression_path)
+            );
+        }
     }
 
     #[test]
@@ -25068,6 +25222,17 @@ mod tests {
         );
         emitter.body_facts.basic_blocks[branch_block.0] = Some(valid_branch_block);
         let valid_condition = emitter.body_facts.effects[condition_effect].unwrap();
+        emitter.body_facts.effects[condition_effect] = Some(RuntimePlaceEffectFact {
+            expression_path: RuntimeOwnershipExpressionPath {
+                else_bits: 2,
+                depth: 1,
+            },
+            ..valid_condition
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
         emitter.body_facts.effects[condition_effect] = Some(RuntimePlaceEffectFact {
             location: RuntimeOwnershipEventLocation::ConditionalAssignmentCondition {
                 statement_index: 1,
