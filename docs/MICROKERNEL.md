@@ -5582,13 +5582,27 @@ or backend uncertainty returns no capabilities. An ordinary file is explicitly
 not a conforming store. No TPM NV or equivalent backend or physical durability
 evidence exists yet.
 
+Dependent recovery now shares that release boundary. A consumed generic
+transaction reconstructs the fresh table privately, invokes an explicitly
+unsafe validator that must retain no storage authority or external side effect,
+then performs the exact authenticated compare-and-store before returning either
+result. The configuration validator uses one indexed reconstructed handle to
+read only the selected stable-file generation, rechecks configuration-root
+CONTROL and setting READ through the ordinary configuration gates, binds the
+expected service object, and erases its scratch on success or rejection. A
+dependent validation failure leaves accepted state unchanged; a store conflict
+or uncertain write drops both the table and recovered configuration/policy.
+
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
 each pass all 107 `mrml-storage` tests and scoped strict Clippy. Focused tests
 cover fresh attenuated lineage, descendant revocation, and cross-recovery stale-
 token rejection; corruption and root-generation substitution; replay without
 guard advancement; rights
 amplification, forward lineage, hidden reserved data even with a recomputed
-digest, and capacity mismatch. This is unit/simulation evidence only. Stable-
+digest, capacity mismatch, dependent-validation rejection without state advance,
+and configuration/policy validation through temporary reconstructed authority.
+All 26 `mrml-config` tests pass on Windows gnullvm. This is unit/simulation
+evidence only. Stable-
 platform authentication of owner-approved policy, an owner-facing durable-grant
 UI, boot orchestration, and a conforming physical monotonic-store backend remain
 unimplemented, so complete reboot reconstruction and rollback resistance are not

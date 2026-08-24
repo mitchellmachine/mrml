@@ -2088,6 +2088,19 @@ patent-candidate mechanism. The planned compatibility, host-share,
 accessibility-device, browser, JavaScript/Wasm, and media scopes remain
 `TRIGGERED`; this agent review does not replace independent human dual review.
 
+# 2026-08-24 — Validate-before-commit reboot recovery composition
+
+**Result: NOT_TRIGGERED.** The change conventionally retains reconstructed
+capability state as a private temporary value, validates one exact dependent
+configuration generation and service-bound policy, and releases both only after
+an existing authenticated compare-and-store succeeds. Failure cleanup, scratch
+erasure, exact-handle selection, and side-effect-free validation are standard
+transactional recovery techniques. It introduces no VirtIO compatibility,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. Existing planned scopes remain `TRIGGERED`; this agent
+review does not replace the required independent human dual review.
+
 # 2026-08-24 — MRML-native PCI-MMIO block notification
 
 **Result: NOT_TRIGGERED.** The change conventionally adds two fixed write-only

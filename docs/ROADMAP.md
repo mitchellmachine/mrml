@@ -608,6 +608,14 @@ authority; unrelated domains continue.
    handle-generation pair. Integrated stable recovery releases no rebuilt
    authority table unless exact compare-and-store atomically advances both
    values; corrupt state, stale conflicts, and backend uncertainty fail closed.
+   A generic consumed validation transaction now keeps that rebuilt table
+   private while a dependent recovery validator uses one exact reconstructed
+   file handle. The configuration adapter recovers only the selected file
+   generation, rechecks configuration-root CONTROL and setting READ, binds the
+   exact expected service policy, erases scratch, and releases neither result
+   until compare-and-store succeeds. Validation failure does not consume the
+   accepted monotonic state. This is unit/simulation composition rather than a
+   live reboot path.
    A conforming TPM NV or equivalent power-loss-atomic backend remains pending.
    The platform owner-policy authenticator/UI and boot orchestration remain pending, so
    reboot-time capability reconstruction is still partial. A hosted/physical

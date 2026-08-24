@@ -149,6 +149,15 @@ is volatile kernel-owned memory, so this is controlled hosted evidence, not
 reboot, durability, power-loss, host-resistance, or rollback-resistance
 evidence.
 
+Reboot-recovery composition now validates dependent configuration and its exact
+service-bound restart policy while reconstructed storage authority remains
+private to one consumed transaction. The authenticated monotonic store advances
+only after that validation succeeds, and neither authority nor policy is
+released if validation, storage I/O, conflict detection, or compare-and-store
+is uncertain. The validator is an explicit unsafe side-effect-free boundary;
+checkpoint bytes, reconstructed handles, object identities, digests, and policy
+records remain non-authorizing data outside the exact capability checks.
+
 ## Persistent state and boot
 
 Signed images alone do not prevent rollback. TPM-backed or equivalent

@@ -450,7 +450,13 @@ issue. A canonical fixed accepted-state record and backend-neutral authenticated
 monotonic-store compare-and-store contract now cover the epoch/generation
 transition. Integrated recovery releases no reconstructed capabilities until
 that exact transition commits, and corrupt, conflicting, or uncertain state
-fails closed. No TPM NV or equivalent power-loss-atomic backend has been
+fails closed. A consumed dependent-validation transaction now keeps the fresh
+authority table private while an unsafe side-effect-free validator recovers an
+exact selected configuration-file generation and binds its service restart
+policy. Validation failure leaves authenticated monotonic state unchanged;
+compare-and-store failure drops both reconstructed authority and the validated
+configuration/policy result. Scratch containing checkpoint bytes is erased on
+every dependent-validation return. No TPM NV or equivalent power-loss-atomic backend has been
 implemented or physically tested. The platform owner-policy authenticator/UI
 and boot orchestration are not implemented.
 Capability-authorized file reads split an arbitrary bounded range across exact

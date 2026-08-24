@@ -273,6 +273,39 @@ pub struct RecoveredStorageAuthorities<const N: usize> {
     epoch: u64,
 }
 
+/// Validation performed against freshly reconstructed authority before its
+/// rollback state is committed and before either result is released. An
+/// implementation may inspect and use the temporary table only to validate
+/// dependent recovery state; it must not persist handles, publish authority,
+/// or cause externally visible mutation.
+///
+/// # Safety
+///
+/// On every return path, the implementation must leave no usable copy or
+/// derivative of the temporary table or handles outside its returned output.
+/// The output itself must not carry storage authority. Failure must leave no
+/// externally visible state that depends on the uncommitted authority.
+pub unsafe trait AuthorityRecoveryValidator<const N: usize> {
+    type Output;
+    type Error;
+
+    fn validate(
+        &mut self,
+        recovered: &RecoveredStorageAuthorities<N>,
+    ) -> Result<Self::Output, Self::Error>;
+}
+
+pub type AuthorityRecoveryValidationResult<
+    const N: usize,
+    Output,
+    StorageError,
+    StateError,
+    ValidationError,
+> = Result<
+    (RecoveredStorageAuthorities<N>, Output),
+    AuthorityRecoveryValidationError<StorageError, StateError, ValidationError>,
+>;
+
 /// Durable-grant checkpoint staged into one fresh stable-file generation. The
 /// successor remains inactive until its exact transaction receipt is consumed.
 pub struct PreparedStableAuthorities<const EXTENTS: usize> {
@@ -320,6 +353,30 @@ impl<const EXTENTS: usize> StableAuthorities<EXTENTS> {
 }
 
 impl<const N: usize> RecoveredStorageAuthorities<N> {
+    pub const fn authority_table(&self) -> &StorageAuthorityTable<N> {
+        &self.table
+    }
+
+    pub const fn handle(&self, index: usize) -> Option<StorageHandle> {
+        if index < self.count {
+            self.handles[index]
+        } else {
+            None
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -673,6 +730,66 @@ pub fn recover_stable_authorities_and_commit<
     Ok(recovered)
 }
 
+/// Reconstructs authority into private temporary state, validates dependent
+/// recovery through that state, and atomically advances authenticated rollback
+/// state before releasing either result. Validation failure or uncertain state
+/// persistence drops both temporary results and leaves the prior accepted state
+/// unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_validate_and_commit_stable_authorities<
+    const GRANTS: usize,
+    const EXTENTS: usize,
+    const BOOTSTRAP_AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: AuthorityRecoveryStateStore,
+    V: AuthorityRecoveryValidator<GRANTS>,
+>(
+    file_state: &FileState<EXTENTS>,
+    bootstrap_authority: &StorageAuthorityTable<BOOTSTRAP_AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    expected_file_generation: u64,
+    issuer: &mut AuthorityCheckpointProofIssuer,
+    input: &mut [u8],
+    backend: &mut B,
+    state_store: &mut S,
+    validator: &mut V,
+) -> AuthorityRecoveryValidationResult<GRANTS, V::Output, B::Error, S::Error, V::Error> {
+    let mut encoded_state = [0; AUTHORITY_RECOVERY_STATE_BYTES];
+    state_store
+        .load_authenticated(&mut encoded_state)
+        .map_err(AuthorityRecoveryValidationError::State)?;
+    let state = AuthenticatedAuthorityRecoveryState::decode_authenticated(&encoded_state)
+        .map_err(AuthorityRecoveryValidationError::Checkpoint)?;
+    let expected_epoch = state.accepted_epoch;
+    let expected_handle_generation = state.accepted_handle_generation;
+    let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
+    let recovered = recover_stable_authorities(
+        file_state,
+        bootstrap_authority,
+        file,
+        principal,
+        expected_file_generation,
+        &mut guard,
+        issuer,
+        input,
+        backend,
+    )
+    .map_err(AuthorityRecoveryValidationError::Storage)?;
+    let validated = validator
+        .validate(&recovered)
+        .map_err(AuthorityRecoveryValidationError::Validation)?;
+    let replacement = AuthenticatedAuthorityRecoveryState {
+        accepted_epoch: guard.accepted_epoch,
+        accepted_handle_generation: guard.accepted_handle_generation,
+    }
+    .encode();
+    state_store
+        .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
+        .map_err(AuthorityRecoveryValidationError::State)?;
+    Ok((recovered, validated))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorityStorageError<E> {
     Checkpoint(AuthorityCheckpointError),
@@ -686,6 +803,14 @@ pub enum AuthorityRecoveryCommitError<StorageError, StateError> {
     Checkpoint(AuthorityCheckpointError),
     State(StateError),
     Storage(AuthorityStorageError<StorageError>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityRecoveryValidationError<StorageError, StateError, ValidationError> {
+    Checkpoint(AuthorityCheckpointError),
+    State(StateError),
+    Storage(AuthorityStorageError<StorageError>),
+    Validation(ValidationError),
 }
 
 struct Decoded<const N: usize> {
@@ -1018,6 +1143,37 @@ mod tests {
         state: [u8; AUTHORITY_RECOVERY_STATE_BYTES],
         fail_load: bool,
         force_conflict: bool,
+    }
+
+    struct DependentValidator {
+        fail: bool,
+        calls: usize,
+    }
+
+    unsafe impl<const N: usize> AuthorityRecoveryValidator<N> for DependentValidator {
+        type Output = StorageObjectId;
+        type Error = u8;
+
+        fn validate(
+            &mut self,
+            recovered: &RecoveredStorageAuthorities<N>,
+        ) -> Result<Self::Output, Self::Error> {
+            self.calls += 1;
+            let handle = recovered.handle(0).ok_or(1)?;
+            let object = recovered
+                .authority_table()
+                .authorize(
+                    handle,
+                    principal(11),
+                    StorageObjectKind::Directory,
+                    StorageRights::OPEN_CHILD,
+                )
+                .map_err(|_| 2)?;
+            if self.fail {
+                return Err(3);
+            }
+            Ok(object)
+        }
     }
 
     impl RecoveryStateBackend {
@@ -1375,18 +1531,103 @@ mod tests {
         };
         let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
         recovery_state.force_conflict = false;
-        let recovered = recover_stable_authorities_and_commit::<2, _, _, _, _>(
-            stable.file(),
-            &authority,
-            file,
-            principal(7),
-            2,
-            &mut issuer,
-            &mut recovered_bytes,
-            &mut backend,
-            &mut recovery_state,
-        )
-        .unwrap();
+        let mut validator = DependentValidator {
+            fail: true,
+            calls: 0,
+        };
+        assert!(matches!(
+            recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                principal(7),
+                2,
+                &mut issuer,
+                &mut recovered_bytes,
+                &mut backend,
+                &mut recovery_state,
+                &mut validator,
+            ),
+            Err(AuthorityRecoveryValidationError::Validation(3))
+        ));
+        assert_eq!(validator.calls, 1);
+        let unchanged =
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
+                .unwrap();
+        assert_eq!(
+            (
+                unchanged.accepted_epoch,
+                unchanged.accepted_handle_generation
+            ),
+            (8, 1)
+        );
+
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                9,
+                volume(),
+                14,
+                2,
+                authority_checkpoint_digest(&expected).unwrap(),
+            )
+        };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        validator.fail = false;
+        recovery_state.force_conflict = true;
+        assert!(matches!(
+            recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                principal(7),
+                2,
+                &mut issuer,
+                &mut recovered_bytes,
+                &mut backend,
+                &mut recovery_state,
+                &mut validator,
+            ),
+            Err(AuthorityRecoveryValidationError::State(3))
+        ));
+        assert_eq!(validator.calls, 2);
+        let unchanged =
+            AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
+                .unwrap();
+        assert_eq!(
+            (
+                unchanged.accepted_epoch,
+                unchanged.accepted_handle_generation
+            ),
+            (8, 1)
+        );
+
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(
+                9,
+                volume(),
+                14,
+                2,
+                authority_checkpoint_digest(&expected).unwrap(),
+            )
+        };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        recovery_state.force_conflict = false;
+        let (recovered, validated) =
+            recover_validate_and_commit_stable_authorities::<2, _, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                principal(7),
+                2,
+                &mut issuer,
+                &mut recovered_bytes,
+                &mut backend,
+                &mut recovery_state,
+                &mut validator,
+            )
+            .unwrap();
+        assert_eq!(validated, object(7));
+        assert_eq!(validator.calls, 3);
         let committed =
             AuthenticatedAuthorityRecoveryState::decode_authenticated(&recovery_state.state)
                 .unwrap();

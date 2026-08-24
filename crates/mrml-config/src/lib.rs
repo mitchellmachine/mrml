@@ -16,10 +16,11 @@ use mrml_kernel::{
     Rights, ServiceError, ServiceId, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
 };
 use mrml_storage::{
-    BlockFileSession, BlockVolume, BlockVolumeError, ExtentMap, FileMetadata, FileReadBackend,
-    FileReadError, FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
-    StorageAuthorityTable, StorageBlockDevice, StorageHandle, StoragePrincipal, StorageTransaction,
-    TransactionError, TransactionReceipt,
+    AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError, ExtentMap,
+    FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
+    MetadataPointer, PreparedFileWrite, RecoveredStorageAuthorities, StorageAuthorityTable,
+    StorageBlockDevice, StorageHandle, StoragePrincipal, StorageTransaction, TransactionError,
+    TransactionReceipt,
 };
 
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
@@ -852,6 +853,155 @@ pub fn recover_stable_configuration<
         digest,
     )
     .map_err(ConfigurationStorageError::Configuration)
+}
+
+/// Configuration and service policy validated through temporary reconstructed
+/// storage authority. Neither value is released by the storage recovery
+/// transaction until authenticated monotonic state has advanced.
+pub struct RecoveredStableConfiguration<const SETTINGS: usize, const AUDIT: usize> {
+    configuration: ConfigurationService<SETTINGS, AUDIT>,
+    policy: BoundRestartPolicy,
+}
+
+impl<const SETTINGS: usize, const AUDIT: usize> RecoveredStableConfiguration<SETTINGS, AUDIT> {
+    pub const fn configuration(&self) -> &ConfigurationService<SETTINGS, AUDIT> {
+        &self.configuration
+    }
+
+    pub const fn policy(&self) -> BoundRestartPolicy {
+        self.policy
+    }
+
+    pub fn into_parts(self) -> (ConfigurationService<SETTINGS, AUDIT>, BoundRestartPolicy) {
+        (self.configuration, self.policy)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StableConfigurationRecoveryError<E> {
+    Storage(ConfigurationStorageError<E>),
+    MissingFileAuthority,
+    Policy(PersistedRestartPolicyError),
+}
+
+/// Side-effect-free dependent validator for the storage authority recovery
+/// transaction. It uses one exact reconstructed file handle to recover the
+/// selected configuration generation and bind its restart policy, retaining
+/// both only as an unpublished return value.
+pub struct StableConfigurationRecoveryValidator<
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> {
+    file_state: &'a FileState<EXTENTS>,
+    file_handle_index: usize,
+    principal: StoragePrincipal,
+    expected_file_generation: u64,
+    capabilities: &'a A,
+    root_capability: Capability,
+    policy_capability: Capability,
+    policy_setting: SettingId,
+    expected_service: ObjectId,
+    input: &'a mut [u8],
+    backend: &'a mut B,
+}
+
+impl<
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
+{
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        file_state: &'a FileState<EXTENTS>,
+        file_handle_index: usize,
+        principal: StoragePrincipal,
+        expected_file_generation: u64,
+        capabilities: &'a A,
+        root_capability: Capability,
+        policy_capability: Capability,
+        policy_setting: SettingId,
+        expected_service: ObjectId,
+        input: &'a mut [u8],
+        backend: &'a mut B,
+    ) -> Self {
+        Self {
+            file_state,
+            file_handle_index,
+            principal,
+            expected_file_generation,
+            capabilities,
+            root_capability,
+            policy_capability,
+            policy_setting,
+            expected_service,
+            input,
+            backend,
+        }
+    }
+}
+
+// SAFETY: validation performs only exact-file reads through the temporary
+// table and builds unpublished in-memory configuration/policy values. It
+// retains no storage handle or table reference and performs no mutation.
+unsafe impl<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> AuthorityRecoveryValidator<GRANTS>
+    for StableConfigurationRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, A, B>
+{
+    type Output = RecoveredStableConfiguration<SETTINGS, AUDIT>;
+    type Error = StableConfigurationRecoveryError<B::Error>;
+
+    fn validate(
+        &mut self,
+        recovered: &RecoveredStorageAuthorities<GRANTS>,
+    ) -> Result<Self::Output, Self::Error> {
+        let file = recovered
+            .handle(self.file_handle_index)
+            .ok_or(StableConfigurationRecoveryError::MissingFileAuthority)?;
+        let configuration = match recover_stable_configuration(
+            self.file_state,
+            recovered.authority_table(),
+            file,
+            self.principal,
+            self.expected_file_generation,
+            self.capabilities,
+            self.root_capability,
+            self.input,
+            self.backend,
+        ) {
+            Ok(configuration) => configuration,
+            Err(error) => {
+                self.input.fill(0);
+                return Err(StableConfigurationRecoveryError::Storage(error));
+            }
+        };
+        let policy = load_persisted_restart_policy(
+            &configuration,
+            self.capabilities,
+            self.policy_capability,
+            self.policy_setting,
+            self.expected_service,
+        );
+        self.input.fill(0);
+        let policy = policy.map_err(StableConfigurationRecoveryError::Policy)?;
+        Ok(RecoveredStableConfiguration {
+            configuration,
+            policy,
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2359,11 +2509,13 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 mod tests {
     use super::*;
     use mrml_storage::{
-        BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-        BlockServiceError, BlockVolume, CowMetadataImage, CowMetadataWrite, CowPublicationBackend,
-        CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend, ServicedBlockDevice,
-        StorageObjectId, StorageObjectKind, StorageRights, StorageTransactionId, Superblock,
-        VolumeHeader, VolumeId,
+        AuthenticatedAuthorityRecoveryState, AuthorityCheckpointProofIssuer,
+        AuthorityRecoveryGuard, BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService,
+        BlockServiceBackend, BlockServiceError, BlockVolume, CowMetadataImage, CowMetadataWrite,
+        CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
+        OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
+        StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
+        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
     };
 
     fn fixture() -> (
@@ -3863,6 +4015,52 @@ mod tests {
                 .and_then(ConfigValue::as_bool),
             Some(true)
         );
+
+        let grants = [StorageRecoveryGrant::root(
+            stable_principal(),
+            stable_object(9),
+            StorageObjectKind::File,
+            StorageRights::READ,
+        )];
+        let mut authority_bytes = [0; 128];
+        let authority_length =
+            encode_authority_checkpoint(9, stable_volume(), 14, 2, &grants, &mut authority_bytes)
+                .unwrap();
+        let authority_digest =
+            authority_checkpoint_digest(&authority_bytes[..authority_length]).unwrap();
+        let admission = unsafe {
+            OwnerApprovedAuthorityCheckpoint::new(9, stable_volume(), 14, 2, authority_digest)
+        };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        let proof = issuer
+            .issue::<1>(&authority_bytes[..authority_length])
+            .unwrap();
+        let authenticated = unsafe { AuthenticatedAuthorityRecoveryState::new(8, 1) };
+        let mut guard = AuthorityRecoveryGuard::from_authenticated_state(authenticated);
+        let recovered_authority = guard
+            .recover::<1>(&authority_bytes[..authority_length], proof)
+            .unwrap();
+        let mut dependent_bytes = [0xa5; 512];
+        let mut validator = StableConfigurationRecoveryValidator::<3, 2, _, _, _>::new(
+            stable.file(),
+            0,
+            stable_principal(),
+            2,
+            &capabilities,
+            root,
+            enabled,
+            SettingId::new(1).unwrap(),
+            ObjectId(99),
+            &mut dependent_bytes,
+            &mut backend,
+        );
+        assert_eq!(
+            validator.validate(&recovered_authority).map(|_| ()),
+            Err(StableConfigurationRecoveryError::Policy(
+                PersistedRestartPolicyError::InvalidRecord
+            ))
+        );
+        assert!(dependent_bytes.iter().all(|byte| *byte == 0));
     }
 
     #[test]
@@ -4016,28 +4214,54 @@ mod tests {
             let stable = prepared.commit(&mut receipt).unwrap();
             assert_eq!(receipt.remaining(), 0);
 
+            let grants = [StorageRecoveryGrant::root(
+                stable_principal(),
+                stable_object(9),
+                StorageObjectKind::File,
+                StorageRights::READ,
+            )];
+            let mut authority_bytes = [0; 128];
+            let authority_length = encode_authority_checkpoint(
+                9,
+                stable_volume(),
+                14,
+                2,
+                &grants,
+                &mut authority_bytes,
+            )
+            .unwrap();
+            let authority_digest =
+                authority_checkpoint_digest(&authority_bytes[..authority_length]).unwrap();
+            let admission = unsafe {
+                OwnerApprovedAuthorityCheckpoint::new(9, stable_volume(), 14, 2, authority_digest)
+            };
+            let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+            let proof = issuer
+                .issue::<1>(&authority_bytes[..authority_length])
+                .unwrap();
+            let authenticated = unsafe { AuthenticatedAuthorityRecoveryState::new(8, 1) };
+            let mut guard = AuthorityRecoveryGuard::from_authenticated_state(authenticated);
+            let recovered_authority = guard
+                .recover::<1>(&authority_bytes[..authority_length], proof)
+                .unwrap();
             let mut recovered_bytes = [0xa5; 512];
-            let recovered = recover_stable_configuration::<1, 2, _, _, _, _>(
+            let mut validator = StableConfigurationRecoveryValidator::<1, 2, _, _, _>::new(
                 stable.file(),
-                &storage_authority,
-                file,
+                0,
                 stable_principal(),
                 2,
                 &capabilities,
                 root,
-                &mut recovered_bytes,
-                &mut volume,
-            )
-            .unwrap();
-            let bound = load_persisted_restart_policy(
-                &recovered,
-                &capabilities,
                 setting_access,
                 setting,
                 service_object,
-            )
-            .unwrap();
-            assert_eq!(bound.policy, policy);
+                &mut recovered_bytes,
+                &mut volume,
+            );
+            let recovered = validator.validate(&recovered_authority).unwrap();
+            assert_eq!(recovered.policy().policy, policy);
+            assert_eq!(recovered.configuration().revision(), 1);
+            assert!(recovered_bytes.iter().all(|byte| *byte == 0));
         }
         assert!(backend.writes > 0);
         assert!(backend.reads > 0);

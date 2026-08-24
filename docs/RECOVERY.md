@@ -301,7 +301,14 @@ explicitly and downgrade the status rather than guessing.
   epoch and handle-generation pair behind an authenticated monotonic-store
   contract. Integrated recovery releases no fresh authority table unless exact
   compare-and-store advances both values; corruption, conflict, and backend
-  uncertainty fail closed. A conforming TPM NV or equivalent power-loss-atomic
+  uncertainty fail closed. Dependent recovery can now run before that commit:
+  one consumed transaction keeps the rebuilt table private while a narrowly
+  unsafe side-effect-free validator reads the exact selected configuration file,
+  reconstructs canonical configuration, and binds its exact service restart
+  policy. Only after all validation succeeds does compare-and-store advance and
+  release both results. Validation failure leaves accepted state unchanged;
+  store failure drops both results; configuration scratch is erased on every
+  validator return. A conforming TPM NV or equivalent power-loss-atomic
   backend, platform owner-policy authentication/UI, and boot orchestration
   remain pending, so
   reboot-time capability reconstruction and concrete block durability remain
