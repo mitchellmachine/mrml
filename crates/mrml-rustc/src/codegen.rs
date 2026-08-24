@@ -5975,13 +5975,28 @@ fn runtime_fat_reference_return_preanalysis_supported<const MAX_NODES: usize>(
             tree.expression(operand).map(|expression| expression.kind),
             Some(ExprKind::RangeIndex { .. })
         ),
-        Some(ExprKind::If {
-            then_branch,
-            else_branch,
-            ..
-        }) => {
+        Some(
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            },
+        ) => {
             runtime_fat_reference_return_preanalysis_supported(tree, then_branch, depth + 1)
                 && runtime_fat_reference_return_preanalysis_supported(tree, else_branch, depth + 1)
+        }
+        Some(
+            ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::InlineConst { operand },
+        ) => runtime_fat_reference_return_preanalysis_supported(tree, operand, depth + 1),
+        Some(ExprKind::Sequence { then, .. }) => {
+            runtime_fat_reference_return_preanalysis_supported(tree, then, depth + 1)
         }
         _ => false,
     }
@@ -18057,20 +18072,55 @@ impl<
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         root: crate::ExprId,
     ) -> Result<(), CodegenError> {
-        if let Some(ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        }) = tree.expression(root).map(|expression| expression.kind)
+        self.emit_slice_return_at(tree, root, 0)
+    }
+
+    fn emit_slice_return_at<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        root: crate::ExprId,
+        depth: usize,
+    ) -> Result<(), CodegenError> {
+        if depth == 64 {
+            return Err(self.error(CodegenErrorKind::Lowering(
+                IrErrorKind::NestingLimitExceeded,
+            )));
+        }
+        if let Some(
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            }
+            | ExprKind::LoopBreakIf {
+                condition,
+                then_branch,
+                else_branch,
+            },
+        ) = tree.expression(root).map(|expression| expression.kind)
         {
-            self.emit_expression(tree, condition, 0)?;
+            self.emit_expression(tree, condition, depth + 1)?;
             self.emit(&[0x48, 0x85, 0xc0])?;
             let else_patch = self.emit_forward_branch(0x84)?;
-            self.emit_slice_return(tree, then_branch)?;
+            self.emit_slice_return_at(tree, then_branch, depth + 1)?;
             self.patch_forward_branch(else_patch)?;
-            return self.emit_slice_return(tree, else_branch);
+            return self.emit_slice_return_at(tree, else_branch, depth + 1);
         }
-        let stacked = self.emit_range_slice_to_stack(tree, root, 0)?;
+        if let Some(
+            ExprKind::LoopBreak { operand }
+            | ExprKind::Return { operand }
+            | ExprKind::InlineConst { operand },
+        ) = tree.expression(root).map(|expression| expression.kind)
+        {
+            return self.emit_slice_return_at(tree, operand, depth + 1);
+        }
+        if let Some(ExprKind::Sequence { first, then }) =
+            tree.expression(root).map(|expression| expression.kind)
+        {
+            self.emit_expression(tree, first, depth + 1)?;
+            return self.emit_slice_return_at(tree, then, depth + 1);
+        }
+        let stacked = self.emit_range_slice_to_stack(tree, root, depth + 1)?;
         if stacked {
             self.emit_stack_slot(1)?;
             self.emit(&[0x48, 0x89, 0xc1])?;
@@ -22370,6 +22420,42 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_preanalyze_wrapped_fat_reference_returns() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &[usize], choose: bool, alternate: bool, prefix: usize, suffix: usize, start: usize, end: usize, left: usize) -> &[usize] { if choose { return { prefix; if alternate { &input[start..end] } else { &input[left..] } }; } { suffix; &input[start..] } }";
+        let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 8, 64>(
+            &function,
+            &resolver,
+            &body,
+            "&[usize]",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(facts.assignment_read_count, 11);
+        for (fact, parameter) in facts.assignment_reads[..11]
+            .iter()
+            .zip([1, 3, 2, 5, 6, 0, 7, 0, 4, 5, 0])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 8192, 8, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
