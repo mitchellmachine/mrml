@@ -218,9 +218,18 @@ authority; unrelated domains continue.
    chronological audit window. Export requires root READ; recovery requires
    root CONTROL and a caller-supplied expected SHA3-256 digest, and rejects
    corruption, hidden data, stale digests, capacity mismatch, and inconsistent
-   revision/audit state. The digest is not self-authentication. The next gate is
-   binding this codec to capability-native stable storage objects and an
-   authenticated atomic commit/recovery protocol before this item is complete.
+   revision/audit state. The digest is not self-authentication. The codec is now
+   bound to one exact capability-native stable file successor: export requires
+   configuration-root READ, staging requires file WRITE and RESIZE, and the
+   object, successor generation, length, content digest, extent metadata, and
+   publication participant must all agree. Staged data becomes active only
+   after the existing COW transaction publishes and an exact one-use receipt is
+   consumed. Recovery requires file READ plus configuration-root CONTROL and an
+   exact authenticated-recovery-selected file generation; corruption and I/O
+   uncertainty fail rather than searching an older generation. This is focused
+   in-memory simulation evidence. Live block-service/device integration,
+   physical power-loss evidence, persistent supervision policy, and reboot-time
+   capability reconstruction remain pending, so this item is not complete.
 2. Define native filesystem object identities and attenuated directory/file
    rights, then the volume/superblock and directory/file metadata formats.
    **IMPLEMENTED:** `mrml-storage` supplies stable nonzero volume/object IDs,

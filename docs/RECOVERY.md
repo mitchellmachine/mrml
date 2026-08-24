@@ -269,6 +269,16 @@ explicitly and downgrade the status rather than guessing.
   `LOOKUP` alone is insufficient, and parent revocation transitively invalidates
   the reopened child. Reboot-time capability checkpoint/reconstruction and
   concrete block durability remain pending.
+  Configuration checkpoints can now participate in this same exact stable-file
+  publication protocol. Preparation binds configuration-root READ and file
+  WRITE/RESIZE to the exact object, successor generation, length, digest,
+  extents, metadata, and transaction participant; no active state changes until
+  its one-use publication receipt is consumed. Recovery requires file READ,
+  configuration-root CONTROL, and the exact nonzero file generation already
+  selected by authenticated reachable recovery. It does not search older
+  generations, and I/O uncertainty is never converted into fallback. Current
+  coverage is deterministic in-memory simulation, not physical power-loss or a
+  live block-service result.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

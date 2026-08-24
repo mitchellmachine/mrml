@@ -15,6 +15,11 @@ use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, Rights, ServiceId,
     ServiceState, ServiceSupervisor, TaskRuntime,
 };
+use mrml_storage::{
+    ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
+    FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityTable, StorageHandle,
+    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+};
 
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
 pub const MAX_WIRE_UPDATES: usize = 4;
@@ -334,6 +339,203 @@ pub enum ConfigError {
 pub struct ConfigurationCheckpoint {
     pub length: usize,
     pub digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES],
+}
+
+/// A checkpoint staged into a fresh stable-file generation. The successor
+/// remains inactive until an exact storage transaction receipt is consumed.
+pub struct PreparedStableConfiguration<const EXTENTS: usize> {
+    file: PreparedFileWrite<EXTENTS>,
+    checkpoint: ConfigurationCheckpoint,
+    revision: u64,
+}
+
+impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
+    pub const fn checkpoint(&self) -> ConfigurationCheckpoint {
+        self.checkpoint
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn admit<const PARTICIPANTS: usize, const WRITES: usize>(
+        &self,
+        transaction: &mut StorageTransaction<PARTICIPANTS, WRITES>,
+    ) -> Result<(), TransactionError> {
+        transaction.admit_file(&self.file)
+    }
+
+    pub fn commit<const PARTICIPANTS: usize>(
+        self,
+        receipt: &mut TransactionReceipt<PARTICIPANTS>,
+    ) -> Result<StableConfiguration<EXTENTS>, TransactionError> {
+        let file = self.file.commit_transaction(receipt)?;
+        Ok(StableConfiguration {
+            file,
+            checkpoint: self.checkpoint,
+            revision: self.revision,
+        })
+    }
+}
+
+/// Exact stable object generation containing one authenticated checkpoint.
+pub struct StableConfiguration<const EXTENTS: usize> {
+    file: FileState<EXTENTS>,
+    checkpoint: ConfigurationCheckpoint,
+    revision: u64,
+}
+
+impl<const EXTENTS: usize> StableConfiguration<EXTENTS> {
+    pub const fn file(&self) -> &FileState<EXTENTS> {
+        &self.file
+    }
+
+    pub const fn checkpoint(&self) -> ConfigurationCheckpoint {
+        self.checkpoint
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigurationStorageError<E> {
+    Configuration(ConfigError),
+    InvalidBinding,
+    Read(FileReadError<E>),
+    Write(FileWriteError<E>),
+}
+
+/// Exports and stages a checkpoint as the complete content of the next
+/// capability-authorized stable file generation. Publication and activation
+/// remain separate and require `StorageTransaction` plus its one-use receipt.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_stable_configuration<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CURRENT_EXTENTS: usize,
+    const NEXT_EXTENTS: usize,
+    const AUTHORITIES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileWriteBackend,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    root_capability: Capability,
+    current_file: &FileState<CURRENT_EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    next_extents: ExtentMap<NEXT_EXTENTS>,
+    next_metadata: FileMetadata,
+    file_metadata_pointer: MetadataPointer,
+    protected_metadata: &[MetadataPointer],
+    output: &mut [u8],
+    backend: &mut B,
+) -> Result<PreparedStableConfiguration<NEXT_EXTENTS>, ConfigurationStorageError<B::Error>> {
+    let checkpoint = configuration
+        .export_checkpoint(capabilities, root_capability, output)
+        .map_err(ConfigurationStorageError::Configuration)?;
+    let bytes = &output[..checkpoint.length];
+    let checkpoint_length =
+        u64::try_from(checkpoint.length).map_err(|_| ConfigurationStorageError::InvalidBinding)?;
+    let mut content = Sha3_256::new();
+    content.update(bytes);
+    if next_metadata.object() != current_file.object()
+        || next_metadata.generation() != current_file.generation().checked_add(1).unwrap_or(0)
+        || next_metadata.length() != checkpoint_length
+        || next_metadata.content_digest() != content.finalize()
+    {
+        return Err(ConfigurationStorageError::InvalidBinding);
+    }
+    let prepared = current_file
+        .prepare_write(
+            storage_authority,
+            file,
+            principal,
+            0,
+            bytes,
+            checkpoint_length,
+            next_extents,
+            next_metadata,
+            file_metadata_pointer,
+            protected_metadata,
+            backend,
+        )
+        .map_err(ConfigurationStorageError::Write)?;
+    Ok(PreparedStableConfiguration {
+        file: prepared,
+        checkpoint,
+        revision: configuration.revision(),
+    })
+}
+
+/// Recovers only from one exact file generation already selected by
+/// authenticated reachable-storage recovery. It never searches older
+/// generations or turns an I/O failure into rollback.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_stable_configuration<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const AUTHORITIES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+>(
+    file_state: &FileState<EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    expected_file_generation: u64,
+    capabilities: &A,
+    root_capability: Capability,
+    input: &mut [u8],
+    backend: &mut B,
+) -> Result<ConfigurationService<SETTINGS, AUDIT>, ConfigurationStorageError<B::Error>> {
+    input.fill(0);
+    if expected_file_generation == 0 || file_state.generation() != expected_file_generation {
+        return Err(ConfigurationStorageError::InvalidBinding);
+    }
+    let setting_bytes = SETTINGS
+        .checked_mul(CONFIG_CHECKPOINT_SETTING_BYTES)
+        .ok_or(ConfigurationStorageError::InvalidBinding)?;
+    let audit_bytes = AUDIT
+        .checked_mul(CONFIG_CHECKPOINT_AUDIT_BYTES)
+        .ok_or(ConfigurationStorageError::InvalidBinding)?;
+    let maximum = CONFIG_CHECKPOINT_HEADER_BYTES
+        .checked_add(setting_bytes)
+        .and_then(|length| length.checked_add(audit_bytes))
+        .ok_or(ConfigurationStorageError::InvalidBinding)?;
+    let length = usize::try_from(file_state.length())
+        .ok()
+        .filter(|length| {
+            *length >= CONFIG_CHECKPOINT_HEADER_BYTES
+                && *length <= input.len()
+                && *length <= maximum
+        })
+        .ok_or(ConfigurationStorageError::InvalidBinding)?;
+    file_state
+        .read(
+            storage_authority,
+            file,
+            principal,
+            0,
+            &mut input[..length],
+            backend,
+        )
+        .map_err(ConfigurationStorageError::Read)?;
+    let digest = input[CONFIG_CHECKPOINT_DIGEST_OFFSET
+        ..CONFIG_CHECKPOINT_DIGEST_OFFSET + CONFIG_CHECKPOINT_DIGEST_BYTES]
+        .try_into()
+        .map_err(|_| ConfigurationStorageError::InvalidBinding)?;
+    ConfigurationService::recover_checkpoint(
+        capabilities,
+        root_capability,
+        &input[..length],
+        digest,
+    )
+    .map_err(ConfigurationStorageError::Configuration)
 }
 
 #[derive(Clone, Copy)]
@@ -1740,6 +1942,11 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_storage::{
+        CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
+        ExtentRecord, FileReadBackend, FileWriteBackend, StorageObjectId, StorageObjectKind,
+        StorageRights, StorageTransactionId, Superblock, VolumeHeader, VolumeId,
+    };
 
     fn fixture() -> (
         ConfigurationService<3, 2>,
@@ -2699,5 +2906,523 @@ mod tests {
             ConfigurationService::<3, 2>::recover_checkpoint(&capabilities, enabled, input, digest,),
             Err(ConfigError::Unauthorized(_))
         ));
+    }
+
+    const STABLE_BLOCK_BYTES: usize = 4096;
+
+    fn stable_volume() -> VolumeId {
+        VolumeId::new([0x51; 16]).unwrap()
+    }
+
+    fn stable_header() -> VolumeHeader {
+        VolumeHeader::new(stable_volume(), STABLE_BLOCK_BYTES as u32, 100, 1, 2).unwrap()
+    }
+
+    fn stable_object(local: u64) -> StorageObjectId {
+        StorageObjectId::new(stable_volume(), local).unwrap()
+    }
+
+    fn stable_principal() -> StoragePrincipal {
+        StoragePrincipal::new(7).unwrap()
+    }
+
+    fn stable_digest(bytes: &[u8]) -> [u8; 32] {
+        let mut digest = Sha3_256::new();
+        digest.update(bytes);
+        digest.finalize()
+    }
+
+    struct StableBackend {
+        bytes: [u8; STABLE_BLOCK_BYTES],
+        staged: usize,
+        flushed: usize,
+        reads: usize,
+        fail_read: bool,
+        corrupt_read: bool,
+    }
+
+    unsafe impl FileWriteBackend for StableBackend {
+        type Error = u8;
+
+        fn stage_new_extent(
+            &mut self,
+            file: StorageObjectId,
+            old_generation: u64,
+            old_length: u64,
+            next: ExtentRecord,
+            new_length: u64,
+            patch_offset: u64,
+            patch: &[u8],
+        ) -> Result<(), Self::Error> {
+            if file != stable_object(9)
+                || old_generation != 1
+                || old_length != 0
+                || next.file() != file
+                || next.metadata_generation() != 2
+                || next.physical_block() != Some(10)
+                || next.block_count() != 1
+                || patch_offset != 0
+                || usize::try_from(new_length).ok() != Some(patch.len())
+            {
+                return Err(1);
+            }
+            self.bytes.fill(0);
+            self.bytes[..patch.len()].copy_from_slice(patch);
+            if next.content_digest() != stable_digest(&self.bytes) {
+                return Err(2);
+            }
+            self.staged += 1;
+            Ok(())
+        }
+
+        fn flush_new_file_data(
+            &mut self,
+            file: StorageObjectId,
+            generation: u64,
+            length: u64,
+            content_digest: [u8; 32],
+        ) -> Result<(), Self::Error> {
+            let length = usize::try_from(length).map_err(|_| 3)?;
+            if file != stable_object(9)
+                || generation != 2
+                || length > self.bytes.len()
+                || content_digest != stable_digest(&self.bytes[..length])
+            {
+                return Err(3);
+            }
+            self.flushed += 1;
+            Ok(())
+        }
+    }
+
+    unsafe impl FileReadBackend for StableBackend {
+        type Error = u8;
+
+        fn read_verified_extent(
+            &mut self,
+            record: ExtentRecord,
+            byte_offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            self.reads += 1;
+            if self.fail_read {
+                return Err(4);
+            }
+            if record.file() != stable_object(9)
+                || record.metadata_generation() != 2
+                || record.content_digest() != stable_digest(&self.bytes)
+            {
+                return Err(5);
+            }
+            let start = usize::try_from(byte_offset).map_err(|_| 5)?;
+            let end = start.checked_add(output.len()).ok_or(5)?;
+            output.copy_from_slice(self.bytes.get(start..end).ok_or(5)?);
+            if self.corrupt_read && !output.is_empty() {
+                output[0] ^= 1;
+            }
+            Ok(())
+        }
+    }
+
+    struct PublicationBackend;
+
+    unsafe impl CowPublicationBackend for PublicationBackend {
+        type Error = ();
+
+        fn verify_new_metadata(&mut self, _: CowMetadataWrite) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            _: &[u8; mrml_storage::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            (block == 2).then_some(()).ok_or(())
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    fn stable_layout(
+        checkpoint: &[u8],
+    ) -> (
+        FileState<0>,
+        ExtentMap<1>,
+        FileMetadata,
+        [CowMetadataImage; 2],
+    ) {
+        let header = stable_header();
+        let object = stable_object(9);
+        let current_extents = ExtentMap::<0>::build(header, object, 1, 0, &[]).unwrap();
+        let current = FileState::new(object, 1, 0, current_extents).unwrap();
+        let mut block = [0; STABLE_BLOCK_BYTES];
+        block[..checkpoint.len()].copy_from_slice(checkpoint);
+        let record = ExtentRecord::data(object, 2, 0, 1, 10, stable_digest(&block)).unwrap();
+        let next = ExtentMap::build(header, object, 2, checkpoint.len() as u64, &[record]).unwrap();
+        let metadata = FileMetadata::new(
+            header,
+            object,
+            2,
+            checkpoint.len() as u64,
+            1,
+            MetadataPointer::new(20, 1).unwrap(),
+            stable_digest(checkpoint),
+        )
+        .unwrap();
+        let mut encoded_metadata = [0; STABLE_BLOCK_BYTES];
+        metadata.encode(
+            (&mut encoded_metadata[..mrml_storage::FILE_METADATA_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let mut encoded_extents = [0; STABLE_BLOCK_BYTES];
+        record.encode(
+            (&mut encoded_extents[..mrml_storage::EXTENT_RECORD_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        (
+            current,
+            next,
+            metadata,
+            [
+                CowMetadataImage::new(
+                    MetadataPointer::new(21, 1).unwrap(),
+                    stable_digest(&encoded_metadata),
+                ),
+                CowMetadataImage::new(
+                    MetadataPointer::new(20, 1).unwrap(),
+                    stable_digest(&encoded_extents),
+                ),
+            ],
+        )
+    }
+
+    fn publication_plan(images: [CowMetadataImage; 2]) -> CowPublicationPlan<4> {
+        let header = stable_header();
+        let root = stable_object(1);
+        let active = Superblock::new(
+            header,
+            1,
+            0,
+            root,
+            MetadataPointer::new(30, 1).unwrap(),
+            MetadataPointer::new(31, 1).unwrap(),
+        )
+        .unwrap();
+        let root_write =
+            CowMetadataWrite::new(MetadataPointer::new(40, 1).unwrap(), 2, [0x40; 32]).unwrap();
+        let allocation_write =
+            CowMetadataWrite::new(MetadataPointer::new(41, 1).unwrap(), 2, [0x41; 32]).unwrap();
+        CowPublicationPlan::build(
+            header,
+            1,
+            active,
+            root,
+            root_write.pointer(),
+            allocation_write.pointer(),
+            &[
+                images[0].bind(2).unwrap(),
+                images[1].bind(2).unwrap(),
+                root_write,
+                allocation_write,
+            ],
+            &[
+                MetadataPointer::new(30, 1).unwrap(),
+                MetadataPointer::new(31, 1).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn stable_checkpoint_requires_both_capabilities_and_one_use_publication_receipt() {
+        let (mut service, capabilities, root, enabled, _) = fixture();
+        let mut update = ConfigTransaction::<1>::new(0);
+        update
+            .push(ConfigUpdate::new(
+                SettingId::new(1).unwrap(),
+                enabled,
+                ConfigValue::boolean(true),
+            ))
+            .unwrap();
+        service.commit(&capabilities, root, &update).unwrap();
+        let mut expected = [0; 512];
+        let checkpoint = service
+            .export_checkpoint(&capabilities, root, &mut expected)
+            .unwrap();
+        let (current, next, metadata, images) = stable_layout(&expected[..checkpoint.length]);
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let file = authority
+            .insert(
+                stable_object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                stable_principal(),
+            )
+            .unwrap();
+        let mut backend = StableBackend {
+            bytes: [0; STABLE_BLOCK_BYTES],
+            staged: 0,
+            flushed: 0,
+            reads: 0,
+            fail_read: false,
+            corrupt_read: false,
+        };
+        let mut output = [0; 512];
+        let prepared = prepare_stable_configuration(
+            &service,
+            &capabilities,
+            root,
+            &current,
+            &authority,
+            file,
+            stable_principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut output,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(prepared.checkpoint(), checkpoint);
+        assert_eq!(prepared.revision(), 1);
+        assert_eq!((backend.staged, backend.flushed), (1, 1));
+
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(70).unwrap(), 2).unwrap();
+        prepared.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let stable = prepared.commit(&mut receipt).unwrap();
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(stable.file().generation(), 2);
+        assert_eq!(stable.checkpoint(), checkpoint);
+
+        let mut recovered_bytes = [0xa5; 512];
+        let recovered = recover_stable_configuration::<3, 2, _, _, _, _>(
+            stable.file(),
+            &authority,
+            file,
+            stable_principal(),
+            stable.file().generation(),
+            &capabilities,
+            root,
+            &mut recovered_bytes,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(recovered.revision(), 1);
+        assert_eq!(
+            recovered
+                .read(&capabilities, enabled, SettingId::new(1).unwrap())
+                .unwrap()
+                .value
+                .and_then(ConfigValue::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn stable_checkpoint_rejects_wrong_authority_binding_corruption_and_io_uncertainty() {
+        let (service, capabilities, root, enabled, _) = fixture();
+        let mut expected = [0; 512];
+        let checkpoint = service
+            .export_checkpoint(&capabilities, root, &mut expected)
+            .unwrap();
+        let (current, next, mut metadata, _) = stable_layout(&expected[..checkpoint.length]);
+        let mut denied_authority = StorageAuthorityTable::<1>::new();
+        let denied = denied_authority
+            .insert(
+                stable_object(9),
+                StorageObjectKind::File,
+                StorageRights::WRITE,
+                stable_principal(),
+            )
+            .unwrap();
+        let mut backend = StableBackend {
+            bytes: [0; STABLE_BLOCK_BYTES],
+            staged: 0,
+            flushed: 0,
+            reads: 0,
+            fail_read: false,
+            corrupt_read: false,
+        };
+        let mut output = [0; 512];
+        assert!(matches!(
+            prepare_stable_configuration(
+                &service,
+                &capabilities,
+                root,
+                &current,
+                &denied_authority,
+                denied,
+                stable_principal(),
+                next,
+                metadata,
+                MetadataPointer::new(21, 1).unwrap(),
+                &[],
+                &mut output,
+                &mut backend,
+            ),
+            Err(ConfigurationStorageError::Write(FileWriteError::Authority(
+                _
+            )))
+        ));
+        assert_eq!(backend.staged, 0);
+
+        let (_, next, _, _) = stable_layout(&expected[..checkpoint.length]);
+        metadata = FileMetadata::new(
+            stable_header(),
+            stable_object(9),
+            2,
+            checkpoint.length as u64,
+            1,
+            MetadataPointer::new(20, 1).unwrap(),
+            [0xff; 32],
+        )
+        .unwrap();
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let file = authority
+            .insert(
+                stable_object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                stable_principal(),
+            )
+            .unwrap();
+        let (_, unauthorized_next, unauthorized_metadata, _) =
+            stable_layout(&expected[..checkpoint.length]);
+        assert!(matches!(
+            prepare_stable_configuration(
+                &service,
+                &capabilities,
+                enabled,
+                &current,
+                &authority,
+                file,
+                stable_principal(),
+                unauthorized_next,
+                unauthorized_metadata,
+                MetadataPointer::new(21, 1).unwrap(),
+                &[],
+                &mut output,
+                &mut backend,
+            ),
+            Err(ConfigurationStorageError::Configuration(
+                ConfigError::WrongObject
+            ))
+        ));
+        assert_eq!(backend.staged, 0);
+        assert!(matches!(
+            prepare_stable_configuration(
+                &service,
+                &capabilities,
+                root,
+                &current,
+                &authority,
+                file,
+                stable_principal(),
+                next,
+                metadata,
+                MetadataPointer::new(21, 1).unwrap(),
+                &[],
+                &mut output,
+                &mut backend,
+            ),
+            Err(ConfigurationStorageError::InvalidBinding)
+        ));
+        assert_eq!(backend.staged, 0);
+
+        let (_, next, metadata, _) = stable_layout(&expected[..checkpoint.length]);
+        let prepared = prepare_stable_configuration(
+            &service,
+            &capabilities,
+            root,
+            &current,
+            &authority,
+            file,
+            stable_principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut output,
+            &mut backend,
+        )
+        .unwrap();
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(71).unwrap(), 2).unwrap();
+        prepared.admit(&mut transaction).unwrap();
+        let (_, _, _, images) = stable_layout(&expected[..checkpoint.length]);
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let stable = prepared.commit(&mut receipt).unwrap();
+
+        let mut recovered_bytes = [0xa5; 512];
+        assert!(matches!(
+            recover_stable_configuration::<3, 2, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                stable_principal(),
+                stable.file().generation() - 1,
+                &capabilities,
+                root,
+                &mut recovered_bytes,
+                &mut backend,
+            ),
+            Err(ConfigurationStorageError::InvalidBinding)
+        ));
+        assert_eq!(backend.reads, 0);
+
+        backend.corrupt_read = true;
+        assert!(matches!(
+            recover_stable_configuration::<3, 2, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                stable_principal(),
+                stable.file().generation(),
+                &capabilities,
+                root,
+                &mut recovered_bytes,
+                &mut backend,
+            ),
+            Err(ConfigurationStorageError::Configuration(
+                ConfigError::InvalidCheckpoint
+            ))
+        ));
+        backend.corrupt_read = false;
+        backend.fail_read = true;
+        assert!(matches!(
+            recover_stable_configuration::<3, 2, _, _, _, _>(
+                stable.file(),
+                &authority,
+                file,
+                stable_principal(),
+                stable.file().generation(),
+                &capabilities,
+                root,
+                &mut recovered_bytes,
+                &mut backend,
+            ),
+            Err(ConfigurationStorageError::Read(FileReadError::Backend(4)))
+        ));
+        assert!(recovered_bytes.iter().all(|byte| *byte == 0));
     }
 }

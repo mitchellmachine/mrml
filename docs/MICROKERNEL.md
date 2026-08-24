@@ -2643,8 +2643,36 @@ root non-aliasing, value constraints, capacity, revision relationships,
 contiguous audit sequence, known settings, and every reserved byte before
 publishing recovered state. The embedded digest is only corruption detection;
 without a separately authenticated expected digest it is not evidence of
-authenticity or rollback resistance. Native stable-object storage, atomic
-commit, and crash recovery remain the next dependency gate.
+authenticity or rollback resistance.
+
+The checkpoint codec is now integrated with capability-native stable files and
+the existing storage transaction protocol. Preparing a successor independently
+requires configuration-root READ and exact file WRITE/RESIZE, binds the same
+object, successor generation, checkpoint length and complete-content digest,
+and stages fresh COW extents without changing the active file. The prepared
+write must be admitted to the publication transaction and can become active
+only by consuming its exact one-use receipt. Recovery requires exact file READ,
+configuration-root CONTROL, and the caller's exact nonzero file generation
+selected by authenticated reachable-storage recovery. A stale generation is
+rejected before I/O; a backend error remains an error, and returned bytes still
+pass the canonical checkpoint digest and invariant checks. Focused tests cover
+dual-authority denial, metadata substitution, stale-generation rejection,
+corruption, I/O uncertainty, receipt consumption, and successful recovery. This
+is in-memory simulation evidence only; live isolated block I/O, physical
+power-loss, authenticated hardware anti-rollback state, and reboot-time
+capability reconstruction remain unimplemented.
+
+Recorded verification on 2026-08-24: Windows gnullvm
+`cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-config -p mrml-storage --release --no-default-features --target x86_64-pc-windows-gnullvm`
+passed 21 configuration and 99 storage tests; the corresponding scoped
+`clippy --no-deps -- -D warnings` passed. Linux
+`cargo test -p mrml-config -p mrml-storage --release --no-default-features`
+passed the same 21 and 99 tests, and its corresponding scoped strict Clippy
+command passed. `cargo fmt --all -- --check`, the release UEFI
+`mrml-service-image` build, and its scoped strict Clippy command passed. An
+additional Windows `--all-targets` Clippy attempt was not an acceptance pass:
+it stopped on the pre-existing `clippy::result-unit-err` diagnostic in
+`mrml-crypto::aes128_ctr_xor`; no claim is based on that failed command.
 
 The first native-storage dependency gate now lives in the separate `no_std`
 `mrml-storage` userspace-service crate, not in the privileged kernel. A stable

@@ -713,9 +713,16 @@ access. A canonical bounded checkpoint now preserves schemas, values, global
 and per-setting revisions, and the retained chronological audit window. Export
 requires exact root READ; recovery into fresh state requires exact root CONTROL,
 canonical invariants, and a caller-supplied expected SHA3-256 digest matching
-the embedded digest. That expected digest is not yet committed by authenticated
-native storage, so this is corruption-detecting storage-neutral recovery rather
-than completed persistence. It is not a clone of the Windows Registry, and
+the embedded digest. The checkpoint is now staged as the complete content of an
+exact stable-file successor under independently checked configuration-root READ
+and file WRITE/RESIZE authority. Object identity, generation, length, content
+digest, extents, and metadata are bound before staging; activation requires the
+existing atomic COW publication and exact one-use transaction receipt. Recovery
+accepts only an exact authenticated-recovery-selected file generation under
+file READ plus configuration-root CONTROL and never treats I/O uncertainty as
+permission to fall back. This remains simulated service-library integration,
+not live block-device persistence, physical power-loss evidence, or reboot-time
+capability reconstruction. It is not a clone of the Windows Registry, and
 secrets remain separate.
 
 Networking is planned around explicit authority and bounded connection objects,

@@ -1333,3 +1333,10 @@ virtual-machine technique.
 
 Patent review: `NOT_TRIGGERED` — conventional capability-authorized service
 restart with trusted reprovisioning and commit-time revalidation.
+# 2026-08-24 — Configuration checkpoint stable-file transaction binding
+
+**Result: NOT_TRIGGERED.** The change composes the existing bounded
+configuration checkpoint codec with the existing capability-bound stable-file
+copy-on-write and one-use transaction-receipt mechanisms. Exact authority,
+generation, digest, and fail-closed recovery checks are conventional defensive
+systems integration; no new patent-candidate mechanism was identified.
