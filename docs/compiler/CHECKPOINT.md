@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `2104bd4`
-  (`compiler: retain conditional expression paths`)
+- Compiler checkpoint commit: `7003640`
+  (`compiler: identify conditional expression occurrences`)
 - Remote state when recorded: the named compiler checkpoint is pushed to
   `origin/main`; this recovery-document commit follows it.
 - Preceding compiler commits: `8ddd42f` (`compiler: refine conditional event
@@ -126,8 +126,16 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   parent before post-join events. The existing parser/expression nesting bound
   limits paths to 64 branches. Final validation rejects excessive depth, set
   bits outside the declared depth, parameter facts outside the root path, and a
-  leaked non-root traversal state. These paths are retained provenance, not yet
-  CFG program points, so conditional-expression initializedness remains gated;
+  leaked non-root traversal state. A fixed 1,280-entry conditional-occurrence
+  table now assigns dense IDs and retains each conditional's enclosing ownership
+  location, source span, parent occurrence, and parent path. Events retain the
+  active occurrence ID, distinguishing nested and sequential conditionals that
+  would otherwise share identical branch bits. Validation requires dense IDs,
+  parent-before-child order, exact location agreement, a valid parent path, and
+  an existing event occurrence; forged IDs, malformed parents, holes, and
+  capacity exhaustion fail closed. These paths and occurrences are retained
+  provenance, not yet CFG program points, so conditional-expression
+  initializedness remains gated;
   and
 - parser-shape-validated conditional program points. Conditional-return events
   distinguish each branch condition from its true-return value and final else
@@ -326,9 +334,9 @@ compatibility gaps:
 1. extend contextual effects for implicit coercions and remaining indirect
    call/return and aggregate-materialization shapes without treating ambiguous
    pointee or projected reads as moves;
-2. map the retained conditional-expression paths to exact condition, arm, and
-   join program points, then enable the existing fixed-point initializedness
-   pass for those expression paths;
+2. map the retained conditional-expression occurrences and paths to exact
+   condition, arm, and join program points, then enable the existing fixed-point
+   initializedness pass for those expression paths;
 3. add array-element paths only after place facts retain exact constant element
    identity rather than the current summary `Index` projection;
 4. then stage shared loans, mutable loans/invalidation, full reborrow semantics,

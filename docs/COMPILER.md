@@ -100,7 +100,7 @@ language as a whole.
 | Rust 2024 semantic changes | **PARTIAL** | The workspace uses edition 2024; the parser accepts required unsafe attributes such as `#[unsafe(no_mangle)]` and a bounded unsafe-function/raw-pointer subset. General edition migration rules, unsafe extern/item rules, temporary lifetime changes, and complete 2024 pattern ergonomics are not implemented. |
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
-| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and fixed-point definite-initialization enforcement across supported statement/loop CFGs exist. Conditional-expression events retain nested branch paths but those paths are not yet mapped to CFG program points; there is no loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
+| Modern borrowing / Polonius | **NOT IMPLEMENTED** | References, reborrows, mutable pointee operations, bounded mutability checks, initial bounded ownership/place/effect facts, and fixed-point definite-initialization enforcement across supported statement/loop CFGs exist. Conditional-expression events retain nested branch paths and dense nested/sequential occurrence identities, but those facts are not yet mapped to CFG program points; there is no loan-conflict analysis, region/outlives reasoning, or complete control-flow borrow analysis. |
 | Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
@@ -263,7 +263,12 @@ a move on any continuing join path or loop-exit path. Each expression event now
 also retains a fixed-width nested branch path: conditions remain on the parent,
 then/else arms append zero/one, and nested arms extend the path up to the parser's
 64-level bound. Validation rejects malformed encodings and path state leaking
-between expressions. These paths are not yet condition/arm/join CFG nodes, so
+between expressions. A fixed 1,280-entry table gives every visited conditional
+a dense occurrence ID plus its enclosing ownership location, span, parent ID,
+and parent path. Events retain the active ID, so sequential conditionals with
+the same branch bits and nested conditionals are not conflated. Validation
+rejects holes, forward/malformed parents, location mismatches, forged IDs, and
+capacity exhaustion. These facts are not yet condition/arm/join CFG nodes, so
 any conditional-expression path still disables initializedness enforcement
 instead of being treated as sequential or assigned an invented control point.
 Assignment RHS expressions whose root is a discoverable identifier, dereference,
