@@ -3824,6 +3824,12 @@ impl<'source> RuntimeBodyFacts<'source> {
             })
     }
 
+    fn direct_loan_for_borrower(&self, borrower: RuntimeLocalId) -> Option<RuntimeLoanFact> {
+        (0..self.initialization_count)
+            .filter_map(|index| self.direct_loan_fact(index))
+            .find(|loan| loan.borrower == borrower)
+    }
+
     fn push_assignment_access(
         &mut self,
         fact: RuntimePlaceAccessFact,
@@ -3853,15 +3859,18 @@ impl<'source> RuntimeBodyFacts<'source> {
             .then(|| self.find_move_path(fact.base, RuntimePlaceProjections::EMPTY))
             .flatten()
             .filter(|path| {
-                self.move_paths
+                let Some(root) = self
+                    .move_paths
                     .get(path.0)
                     .and_then(|path| *path)
-                    .is_some_and(|path| {
-                        matches!(
-                            path.ty,
-                            RuntimeExpressionType::Reference { mutable: false, .. }
-                        )
-                    })
+                    .filter(|path| matches!(path.ty, RuntimeExpressionType::Reference { .. }))
+                else {
+                    return false;
+                };
+                let RuntimePlaceIdentity::Local(borrower) = root.base else {
+                    return false;
+                };
+                self.direct_loan_for_borrower(borrower).is_some()
             });
         let effect = exact_path.or(reference_root).and_then(|path| {
             let path_ty = self.move_paths.get(path.0).and_then(|path| *path)?.ty;
@@ -9576,7 +9585,7 @@ fn runtime_ownership_event_precedes(
     runtime_ownership_point_reaches(facts, earlier_point, later_point)
 }
 
-fn validate_runtime_bounded_shared_loan_liveness(
+fn validate_runtime_bounded_direct_loan_liveness(
     facts: &RuntimeBodyFacts<'_>,
     fallback_span: Span,
 ) -> Result<(), CodegenError> {
@@ -9587,9 +9596,6 @@ fn validate_runtime_bounded_shared_loan_liveness(
         let Some(loan) = facts.direct_loan_fact(initialization_index) else {
             continue;
         };
-        if loan.kind != RuntimePlaceEffectKind::SharedBorrow {
-            continue;
-        }
         let issue = facts
             .effects
             .get(loan.issue_effect)
@@ -9612,7 +9618,26 @@ fn validate_runtime_bounded_shared_loan_liveness(
             .flatten()
             .filter(|effect| {
                 effect.path == loan.borrowed_path
-                    && effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                    && effect.event != issue.event
+                    && match loan.kind {
+                        RuntimePlaceEffectKind::SharedBorrow => {
+                            effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                        }
+                        RuntimePlaceEffectKind::MutableBorrow => matches!(
+                            effect.kind,
+                            RuntimePlaceEffectKind::Copy
+                                | RuntimePlaceEffectKind::Move
+                                | RuntimePlaceEffectKind::SharedBorrow
+                                | RuntimePlaceEffectKind::MutableBorrow
+                                | RuntimePlaceEffectKind::Write
+                                | RuntimePlaceEffectKind::ReadModifyWrite
+                        ),
+                        RuntimePlaceEffectKind::Copy
+                        | RuntimePlaceEffectKind::Move
+                        | RuntimePlaceEffectKind::LoanUse
+                        | RuntimePlaceEffectKind::Write
+                        | RuntimePlaceEffectKind::ReadModifyWrite => false,
+                    }
                     && runtime_ownership_event_precedes(facts, issue, **effect)
             })
         {
@@ -9777,7 +9802,7 @@ fn preanalyze_runtime_body_declarations<
             span: body.tail_span,
         })?;
     validate_runtime_initializedness(facts, body.tail_span)?;
-    validate_runtime_bounded_shared_loan_liveness(facts, body.tail_span)?;
+    validate_runtime_bounded_direct_loan_liveness(facts, body.tail_span)?;
     Ok(facts.local_count)
 }
 
@@ -16024,6 +16049,13 @@ impl<
                     | RuntimePlaceEffectKind::MutableBorrow => false,
                     RuntimePlaceEffectKind::LoanUse => {
                         !matches!(path.ty, RuntimeExpressionType::Reference { .. })
+                            || match path.base {
+                                RuntimePlaceIdentity::Local(borrower) => self
+                                    .body_facts
+                                    .direct_loan_for_borrower(borrower)
+                                    .is_none(),
+                                RuntimePlaceIdentity::Parameter(_) => true,
+                            }
                     }
                     RuntimePlaceEffectKind::Write => false,
                     RuntimePlaceEffectKind::ReadModifyWrite => !runtime_type_is_copy(path.ty),
@@ -26200,7 +26232,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(local_count, 5);
-        assert_eq!(facts.effect_count, 6);
+        assert_eq!(facts.effect_count, 8);
         assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Copy);
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
         assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Copy);
@@ -26220,11 +26252,16 @@ mod tests {
             RuntimePlaceEffectKind::MutableBorrow
         );
         assert_eq!(facts.effects[4].unwrap().path, RuntimeMovePathId(1));
-        assert_eq!(
-            facts.effects[5].unwrap().kind,
-            RuntimePlaceEffectKind::LoanUse
-        );
-        assert_eq!(facts.effects[5].unwrap().path, RuntimeMovePathId(4));
+        for (effect_index, path) in [(5, 4), (6, 5), (7, 6)] {
+            assert_eq!(
+                facts.effects[effect_index].unwrap().kind,
+                RuntimePlaceEffectKind::LoanUse
+            );
+            assert_eq!(
+                facts.effects[effect_index].unwrap().path,
+                RuntimeMovePathId(path)
+            );
+        }
         assert_eq!(
             facts.direct_loan_fact(4),
             Some(RuntimeLoanFact {
@@ -26294,6 +26331,16 @@ mod tests {
             CodegenErrorKind::InvalidRuntimePlaceFacts
         );
         emitter.body_facts.effects[2] = Some(valid_borrow);
+        let valid_loan_use = emitter.body_facts.effects[5].unwrap();
+        emitter.body_facts.effects[5] = Some(RuntimePlaceEffectFact {
+            path: RuntimeMovePathId(1),
+            ..valid_loan_use
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+        emitter.body_facts.effects[5] = Some(valid_loan_use);
         assert_eq!(emitter.body_facts.direct_loan_fact(0), None);
     }
 
@@ -26371,6 +26418,47 @@ mod tests {
         );
 
         let accepted = "fn value(input: u16, change: bool) -> u16 { let mut slot = input; let shared: &u16 = &slot; let copied = *shared; if change { let mutable: &mut u16 = &mut slot; *mutable += 1; } copied }";
+        let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn runtime_mutable_loan_invalidation_rejects_only_later_borrower_use() {
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let mutable: &mut u16 = &mut slot; let shared: &u16 = &slot; *mutable += 1; *shared + *mutable }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let mutable: &mut u16 = &mut slot; *mutable += 1; let shared: &u16 = &slot; *shared }";
         let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
