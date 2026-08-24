@@ -5922,6 +5922,90 @@ discovery over the existing common/native runner. The planned VirtIO,
 host-share, accessibility-device, browser, JavaScript/Wasm, and media scopes
 remain `TRIGGERED`. Agent review does not replace independent human dual review.
 
+### MRML-native PCI-MMIO block notification
+
+The canonical block transport now distinguishes the existing
+`MrmlSpecificScalarIo` mechanics from `MrmlSpecificPciMmio`. The latter grants
+no scalar-I/O ports and encodes two fixed 32-bit write-only offsets for the
+doorbell and protected completion acknowledgement. It remains the MRML-native
+queue protocol and makes no VirtIO compatibility claim. Configuration data,
+BDF, BAR address, offsets, and written values remain routing data rather than
+mapping, queue, interrupt, or backend authority.
+
+The common MMIO runner revalidates the exact live PCI/block generations, queue,
+vector, capability-selected backend region, and confirmed BAR window before any
+queue access. It accepts only the exact mapped GPA, width, direction, and value.
+Successful device processing precedes native write retirement; completion
+failure fail-stops the VM. KVM retains and completely re-decodes the pending run
+page tuple. WHP translates only the bounded `C7 00 imm32` write form used by the
+signed probe, retains the exact GPA/width/value, and advances RIP by the decoded
+six-byte instruction only after common acceptance. Both prevent vCPU re-entry
+while a write remains pending.
+
+Dedicated initial launch paths install one supervisor RW/NX first-level MMIO
+leaf without a second-level RAM mapping. The signed guest reads the attached
+test identity/class, assigns BAR0 at `0x00c00000`, enables memory decode through
+the exact attachment mapper, and writes the idle doorbell. The common runner
+observes an empty queue, retires precisely that write, and the guest continues
+to its existing proof port. This proves hosted trapped-notification execution;
+it does not prove a completed block request, MMIO completion acknowledgement,
+native interrupt routing, MSI/MSI-X, DMA, VirtIO, QEMU interoperability,
+production PCI identity, physical hardware, or host-resistant isolation.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel --lib --no-default-features pci_mmio_
+  PASS: 2 passed
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel --lib --no-default-features mmio_
+  PASS: 8 passed
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kvm --lib --no-default-features
+  PASS: 7 passed
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-whp --lib --no-default-features
+  PASS: 22 passed; 1 ignored unrelated manual performance test
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kvm-run -p mrml-whp-run --no-default-features
+  PASS: KVM-run 4; WHP-run 5
+
+wsl.exe -d archlinux -- bash -lc 'cd /mnt/c/Users/Mitch/Documents/mrml && CARGO_TARGET_DIR=target/mmio-linux cargo test -q -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --no-default-features && CARGO_TARGET_DIR=target/mmio-linux cargo clippy -q -p mrml-kernel -p mrml-kvm -p mrml-kvm-run --all-targets --no-default-features --no-deps -- -D warnings'
+  PASS: kernel 434; KVM 18 passed/1 ignored; KVM-run 6; strict Clippy passed
+
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-kvm -p mrml-whp -p mrml-kvm-run -p mrml-whp-run --all-targets --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+cargo +nightly-x86_64-pc-windows-msvc clippy -q -p mrml-kernel-image --target x86_64-unknown-uefi --no-default-features --features pci-configuration-probe -- -D warnings -A clippy::result_unit_err
+  PASS; the explicit allowance is for the pre-existing mrml-crypto unit-error API
+
+target/pci-mmio-kvm-linux/release/mrml-kvm-run target/pci-mmio-evidence/artifacts/kernel.signed target/pci-mmio-evidence/artifacts/release.public 1 pci-configuration-probe
+  PASS: verify=16974us prepare=2499us execute=35872us total=77014us
+target/pci-mmio-evidence/release/mrml-whp-run.exe target/pci-mmio-evidence/artifacts/kernel.signed target/pci-mmio-evidence/artifacts/release.public 1 pci-configuration-probe
+  PASS: verify=17832us prepare=4143us execute=1265us total=27124us
+```
+
+The Windows full kernel test process separately reached 433/434 before the
+pre-existing task-runtime capacity test overflowed its Windows process stack;
+the complete 434-test kernel suite passed under Arch Linux. The live KVM and WHP
+runs used the identical freshly built UEFI image and one-use Lamport signature;
+the signer consumed the private key.
+
+DIGITAL-RIGHTS REVIEW: the transport introduces no telemetry, host path,
+attestation, DRM, publisher preference, accessibility restriction, AI-only
+interface, persistence, secret export, or remote authority. Owner policy still
+selects the exact backend only through a separately revocable capability, and
+the test identity/BAR cannot authorize it.
+
+HOSTILE SECURITY REVIEW: signed admission, exit budget, BDF, selectors, BAR,
+command state, function/block generations, mapped window, queue/vector/backend
+binding, GPA, width, direction, value, instruction bytes, pending completion,
+and every backend result are hostile. Mapping is confirmed before decode
+publishes; queue access follows exact revalidation; native re-entry follows only
+accepted completion; mismatch or uncertainty fails closed. Reset/removal still
+requires exact cleanup of mappings, interrupts, DMA state, queues, cached
+decisions, descendants, and handles.
+
+Patent review: `NOT_TRIGGERED` — conventional fixed write-only MMIO registers,
+page-table trapping, exact-generation mapping validation, and completion-before-
+reentry for the existing MRML-native device. The planned VirtIO, host-share,
+accessibility-device, browser, JavaScript/Wasm, and media scopes remain
+`TRIGGERED`. Agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

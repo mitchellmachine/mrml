@@ -7,8 +7,8 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    BootHandoff, IoReadCompleter, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr,
-    RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
+    BootHandoff, IoReadCompleter, MAX_PE_SECTIONS, MmioWriteCompleter, PAGE_SIZE, PeImage,
+    PhysAddr, RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
 };
 
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
@@ -319,6 +319,7 @@ impl KvmVm {
             run,
             run_bytes: self.run_bytes,
             pending_io_read: None,
+            pending_mmio_write: None,
         })
     }
 }
@@ -328,6 +329,7 @@ pub(crate) struct KvmVcpu {
     run: NonNull<u8>,
     run_bytes: usize,
     pending_io_read: Option<(u16, u8)>,
+    pending_mmio_write: Option<(u64, u8, u64)>,
 }
 
 // SAFETY: the descriptor and run mapping have one owner. Moving them to a
@@ -389,7 +391,7 @@ impl KvmVcpu {
     }
 
     pub(crate) fn run(&mut self) -> Result<VmExit, KvmError> {
-        if self.pending_io_read.is_some() {
+        if self.pending_io_read.is_some() || self.pending_mmio_write.is_some() {
             return Err(KvmError::InvalidRegisterState);
         }
         if unsafe { ioctl(self.file.0, KVM_RUN, 0 as c_ulong) } < 0 {
@@ -405,8 +407,40 @@ impl KvmVcpu {
         } = exit
         {
             self.pending_io_read = Some((port, size));
+        } else if let VmExit::Mmio {
+            guest_address,
+            size,
+            write: true,
+            value,
+        } = exit
+        {
+            self.pending_mmio_write = Some((guest_address, size, value));
         }
         Ok(exit)
+    }
+
+    fn complete_mmio_write(
+        &mut self,
+        guest_address: u64,
+        size: u8,
+        value: u64,
+    ) -> Result<(), KvmError> {
+        if self.pending_mmio_write != Some((guest_address, size, value)) {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        let bytes = unsafe { slice::from_raw_parts(self.run.as_ptr(), self.run_bytes) };
+        if decode_run_page(bytes)?
+            != (VmExit::Mmio {
+                guest_address,
+                size,
+                write: true,
+                value,
+            })
+        {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        self.pending_mmio_write = None;
+        Ok(())
     }
 
     fn complete_io_read(&mut self, port: u16, size: u8, value: u32) -> Result<(), KvmError> {
@@ -1414,6 +1448,21 @@ impl<const N: usize> IoReadCompleter for KvmBackend<N> {
             return Err(KvmError::InvalidVcpu);
         }
         self.vcpu.complete_io_read(port, size, value)
+    }
+}
+
+impl<const N: usize> MmioWriteCompleter for KvmBackend<N> {
+    fn complete_mmio_write(
+        &mut self,
+        vcpu: u32,
+        guest_address: u64,
+        size: u8,
+        value: u64,
+    ) -> Result<(), Self::Error> {
+        if vcpu != self.vcpu_id {
+            return Err(KvmError::InvalidVcpu);
+        }
+        self.vcpu.complete_mmio_write(guest_address, size, value)
     }
 }
 

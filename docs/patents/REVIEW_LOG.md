@@ -1999,6 +1999,19 @@ patent-candidate mechanism. The planned compatibility, host-share,
 accessibility-device, browser, JavaScript/Wasm, and media scopes remain
 `TRIGGERED`; this agent review does not replace independent human dual review.
 
+# 2026-08-24 — MRML-native PCI-MMIO block notification
+
+**Result: NOT_TRIGGERED.** The change conventionally adds two fixed write-only
+MMIO notification registers to the existing MRML-native block queue, installs
+an ordinary first-level trapped page without RAM backing, validates the exact
+generational PCI/block/BAR relationship, and requires completion of the exact
+native write before vCPU re-entry. It introduces no VirtIO compatibility,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, production identity, DMA
+protocol, or new patent-candidate mechanism. The previously recorded planned
+mechanisms remain `TRIGGERED`; this agent review does not replace the required
+independent human dual review.
+
 # 2026-08-24 — Mutable-reference tuple-field initializedness
 
 **Result: NOT_TRIGGERED.** The change conventionally retains thin scalar

@@ -27,6 +27,7 @@ struct KernelDevices {
     block_queue: Option<VirtualBlockQueueLayout>,
     block_configuration: Option<VirtualBlockConfigurationPage>,
     block_resume: Option<VirtualBlockResumePage>,
+    trapped_mmio: Option<u64>,
     cpus: u8,
     service_shared: bool,
 }
@@ -827,6 +828,19 @@ impl<const N: usize> mrml_kernel::IoReadCompleter for PreparedKvmGuest<N> {
     }
 }
 
+impl<const N: usize> mrml_kernel::MmioWriteCompleter for PreparedKvmGuest<N> {
+    fn complete_mmio_write(
+        &mut self,
+        vcpu: u32,
+        guest_address: u64,
+        size: u8,
+        value: u64,
+    ) -> Result<(), Self::Error> {
+        self.backend
+            .complete_mmio_write(vcpu, guest_address, size, value)
+    }
+}
+
 impl<const N: usize> RevocableVmBackend for PreparedKvmGuest<N> {
     fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
         self.backend.revoke_guest_mapping(guest_address, bytes)
@@ -865,6 +879,7 @@ impl KvmSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -892,6 +907,7 @@ impl KvmSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -919,6 +935,7 @@ impl KvmSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 cpus: 1,
                 service_shared: true,
             },
@@ -945,6 +962,7 @@ impl KvmSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -971,6 +989,7 @@ impl KvmSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 cpus: 2,
                 service_shared: false,
             },
@@ -1000,6 +1019,7 @@ impl KvmSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 cpus: 1,
                 service_shared: false,
             },
@@ -1032,6 +1052,43 @@ impl KvmSystem {
                 block_queue: Some(queue),
                 block_configuration: Some(configuration),
                 block_resume: Some(resume),
+                trapped_mmio: None,
+                cpus: 1,
+                service_shared: false,
+            },
+        )
+    }
+
+    /// Prepares the MRML-native block queue plus one first-level MMIO trap
+    /// page. No second-level RAM slot is created for the page.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_kernel_block_mmio_guest<const N: usize>(
+        &self,
+        vcpu_id: u32,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: KvmLaunchLayout,
+        queue: VirtualBlockQueueLayout,
+        configuration: VirtualBlockConfigurationPage,
+        resume: VirtualBlockResumePage,
+        mmio_address: u64,
+    ) -> Result<PreparedKvmGuest<N>, KvmError> {
+        if !mmio_address.is_multiple_of(PAGE_SIZE) {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.prepare_guest_inner(
+            vcpu_id,
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: false,
+                gpu_queue: None,
+                block_queue: Some(queue),
+                block_configuration: Some(configuration),
+                block_resume: Some(resume),
+                trapped_mmio: Some(mmio_address),
                 cpus: 1,
                 service_shared: false,
             },
@@ -1052,6 +1109,7 @@ impl KvmSystem {
         let block_queue = devices.block_queue;
         let block_configuration = devices.block_configuration;
         let block_resume = devices.block_resume;
+        let trapped_mmio = devices.trapped_mmio;
         let smp = devices.cpus == 2;
         if !matches!(devices.cpus, 1 | 2)
             || N < 4
@@ -1184,7 +1242,7 @@ impl KvmSystem {
                 physical_count += 1;
             }
             validate_ranges(&physical_ranges[..physical_count])?;
-            let mut virtual_ranges = [(0, 0); 9];
+            let mut virtual_ranges = [(0, 0); 10];
             virtual_ranges[..3].copy_from_slice(&[
                 (layout.image_virtual, image_bytes),
                 (layout.handoff_virtual, handoff_bytes),
@@ -1207,6 +1265,10 @@ impl KvmSystem {
             }
             if let Some(resume) = block_resume {
                 virtual_ranges[virtual_count] = (resume.base(), PAGE_SIZE);
+                virtual_count += 1;
+            }
+            if let Some(address) = trapped_mmio {
+                virtual_ranges[virtual_count] = (address, PAGE_SIZE);
                 virtual_count += 1;
             }
             validate_ranges(&virtual_ranges[..virtual_count])?;
@@ -1351,6 +1413,15 @@ impl KvmSystem {
                     VirtAddr::new(trampoline).map_err(|_| KvmError::InvalidMapping)?,
                     PhysAddr::new(trampoline).map_err(|_| KvmError::InvalidMapping)?,
                     PagePermissions::KERNEL_LOW_READ_WRITE,
+                )
+                .map_err(|_| KvmError::PageTable)?;
+        }
+        if let Some(address) = trapped_mmio {
+            tables
+                .map_page(
+                    VirtAddr::new(address).map_err(|_| KvmError::InvalidMapping)?,
+                    PhysAddr::new(address).map_err(|_| KvmError::InvalidMapping)?,
+                    PagePermissions::KERNEL_MMIO_READ_WRITE,
                 )
                 .map_err(|_| KvmError::PageTable)?;
         }

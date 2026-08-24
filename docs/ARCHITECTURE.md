@@ -677,12 +677,13 @@ runner entry points. Progress remains explicitly caller-bounded; this is not a
 general scheduler loop or unbounded execution.
 Virtual-block transport identity is now an explicit part of the device and its
 canonical configuration rather than a set of independently repeated port
-constants. The guest driver, configuration encoder/decoder, device processing,
-and common host runner derive the doorbell and protected acknowledgement
-mechanics from the exact `MrmlSpecificScalarIo` binding. The binding is data,
-not port or device authority, and reset validation still rejects stale
-configuration generations. No PCI, VirtIO, MMIO, or compatibility transport is
-implemented by this separation.
+constants. The configuration encoder/decoder, device processing, and common
+host runners distinguish `MrmlSpecificScalarIo` from
+`MrmlSpecificPciMmio`. The MMIO variant grants no scalar ports and defines only
+fixed 32-bit write-only doorbell/acknowledgement offsets; the exact active PCI/
+block attachment and confirmed generational BAR window are revalidated before
+queue access. These bindings are data, not port, mapping, device, interrupt, or
+backend authority. This remains MRML-native and is not VirtIO compatibility.
 The same binding now transactionally constructs the complete two-rule
 deny-by-default VM I/O policy, and both hosted launchers use that policy with a
 device constructed from the identical transport value. Reads, wrong widths,
@@ -730,9 +731,14 @@ vector, and capability-selected backend region. Its block-specific mapper tracks
 only confirmed mapping of the exact assigned window, and its reset/removal
 adapter performs external resource cleanup before changing either lifecycle.
 The signed test-only guest now discovers that exact attached function's vendor/
-device and block-class configuration dwords through native KVM and WHP. This is
-hosted discovery evidence, not an MMIO block transport, native KVM/WHP BAR
-adapter, assigned production identity, interrupt/DMA path, or block operation.
+device and block-class configuration dwords, assigns BAR0, enables memory
+decode through the exact attachment mapper, and issues one idle MRML-native
+MMIO doorbell through native KVM and WHP. Initial page-table builders install a
+first-level MMIO leaf without second-level RAM backing, and native completion
+blocks re-entry until the exact accepted write is retired. This is hosted
+controlled evidence for configuration, trapped routing, and idle notification,
+not a completed block transfer, native interrupt adapter, MSI/MSI-X, DMA,
+VirtIO, production identity, physical device, or host-resistant isolation.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector
@@ -860,8 +866,8 @@ KVM and WHP place confirmation immediately after `drop(guest)` and before any
 replacement preparation. The
 VM policy budget is exactly 64 common block exits; the former guest checkpoint
 exit and third I/O permission no longer exist. Asynchronous/unplanned crash
-capture, backend-in-flight recovery, unbounded progress, and PCI discovery
-remain pending. One freshly
+capture, backend-in-flight recovery, unbounded progress, and completed PCI-MMIO
+block operations remain pending. One freshly
 one-time-signed compiled image now discovers this common state from the mapped
 configuration page on KVM and WHP. Across eight bounded cycles, its two-slot
 queue publishes writes to two disjoint blocks and payload pages before draining

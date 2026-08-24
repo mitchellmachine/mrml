@@ -14,12 +14,15 @@ use mrml_kernel::{
     ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
     VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockPciAttachment, VirtualBlockPciCleanupRecord, VirtualBlockPciMemoryMapper,
+    VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
     VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockTransactionOutcome,
     VirtualBlockTransport, VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter,
     VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation, VirtualPciMemoryBar,
-    VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
-    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
+    VirtualPciNativeResourceError, VirtualPciType0Function, VmBackend, VmExit, VmTable,
+    run_pci_configuration_once, run_pci_configuration_once_with_mapper,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -116,6 +119,12 @@ const PCI_TEST_CLASS_SELECTOR: u32 = PCI_TEST_SELECTOR + 8;
 const PCI_TEST_VENDOR_DEVICE: u32 = 0x5678_1234;
 #[cfg(target_os = "linux")]
 const PCI_TEST_CLASS: u32 = 0x0180_0001;
+#[cfg(target_os = "linux")]
+const PCI_TEST_BAR_SELECTOR: u32 = PCI_TEST_SELECTOR + 16;
+#[cfg(target_os = "linux")]
+const PCI_TEST_COMMAND_SELECTOR: u32 = PCI_TEST_SELECTOR + 4;
+#[cfg(target_os = "linux")]
+const PCI_TEST_MMIO_BASE: u64 = 0x00c0_0000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg(any(test, target_os = "linux"))]
@@ -171,6 +180,46 @@ impl LaunchMode {
 struct DriverProbeBlock([u8; 8192]);
 
 #[cfg(target_os = "linux")]
+struct PreinstalledPciMmioWindow {
+    mapped: bool,
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl VirtualBlockPciWindowBackend for PreinstalledPciMmioWindow {
+    fn map_block_window(
+        &mut self,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> core::result::Result<(), VirtualPciNativeResourceError> {
+        let window = record
+            .pci()
+            .mmio_window()
+            .ok_or(VirtualPciNativeResourceError::Rejected)?;
+        if self.mapped
+            || record.mapped_window().is_some()
+            || u64::from(window.address()) != PCI_TEST_MMIO_BASE
+            || u64::from(window.size()) != mrml_kernel::PAGE_SIZE
+        {
+            return Err(VirtualPciNativeResourceError::Rejected);
+        }
+        self.mapped = true;
+        Ok(())
+    }
+
+    fn unmap_block_window(
+        &mut self,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> core::result::Result<(), VirtualPciNativeResourceError> {
+        if !self.mapped || record.mapped_window() != record.pci().mmio_window() {
+            return Err(VirtualPciNativeResourceError::Rejected);
+        }
+        // This controlled probe can validate its preinstalled trap window, but
+        // cannot remove the first-level leaf after launch.  Never report a
+        // successful revocation that the backend did not actually perform.
+        Err(VirtualPciNativeResourceError::Uncertain)
+    }
+}
+
+#[cfg(target_os = "linux")]
 unsafe impl VirtualBlockBackend for DriverProbeBlock {
     type Error = ();
 
@@ -223,8 +272,9 @@ unsafe impl VirtualBlockBackend for DriverProbeBlock {
 #[cfg(target_os = "linux")]
 fn block_configuration(
     layout: VirtualBlockQueueLayout,
+    transport: VirtualBlockTransport,
 ) -> Result<mrml_kernel::VirtualBlockConfiguration> {
-    let mut device = VirtualBlockDevice::<2>::new(4096, 2, 0)
+    let mut device = VirtualBlockDevice::<2>::new_with_transport(4096, 2, 0, transport)
         .map_err(|_| anyhow!("invalid block probe geometry"))?;
     device
         .negotiate(0)
@@ -494,13 +544,13 @@ fn run_block_guest_driver_probe(
 fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
     let mut vms = VmTable::<1>::new();
     let vm = vms
-        .create(4)
+        .create(9)
         .map_err(|_| anyhow!("failed to create PCI probe VM state"))?;
     vms.mark_loaded(vm)
         .and_then(|()| vms.start(vm))
         .map_err(|_| anyhow!("failed to start PCI probe VM state"))?;
     let mut hypercalls = HypercallRouter::new(ObjectId(0x311), ObjectId(0x312), ObjectId(0x313));
-    let mut capabilities = CapabilitySpace::<1>::new();
+    let mut capabilities = CapabilitySpace::<2>::new();
     let memory = GuestMemory::<0>::new();
     let mut transport = VirtualPciConfigurationMechanismOne::new();
     let mut router = VirtualPciConfigurationRouter::new();
@@ -517,15 +567,20 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
             ),
         )
         .map_err(|_| anyhow!("failed to attach test-only PCI function"))?;
-    let layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 1)
+    let layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 2)
         .map_err(|_| anyhow!("invalid PCI block queue layout"))?;
-    let mut device = VirtualBlockDevice::<1>::new(4096, 64, 0)
-        .map_err(|_| anyhow!("invalid PCI block device"))?;
+    let mut device = VirtualBlockDevice::<2>::new_with_transport(
+        4096,
+        64,
+        0,
+        VirtualBlockTransport::MrmlSpecificPciMmio,
+    )
+    .map_err(|_| anyhow!("invalid PCI block device"))?;
     device
         .negotiate(0)
         .and_then(|_| device.activate(layout, 48))
         .map_err(|_| anyhow!("failed to activate PCI block device"))?;
-    let bridge = VirtualBlockQueueBridge::<1>::new(layout)
+    let mut bridge = VirtualBlockQueueBridge::<2>::new(layout)
         .map_err(|_| anyhow!("failed to bind PCI block queue"))?;
     let block_object = ObjectId(0x314);
     let block_capability = capabilities
@@ -534,14 +589,19 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
             Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
         )
         .map_err(|_| anyhow!("failed to create PCI block backend capability"))?;
-    let _attachment = VirtualBlockPciAttachment::new(
+    let interrupt_object = ObjectId(0x315);
+    let interrupt_capability = capabilities
+        .insert(interrupt_object, Rights::SIGNAL)
+        .map_err(|_| anyhow!("failed to create PCI block interrupt capability"))?;
+    let authority = VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64)
+        .map_err(|_| anyhow!("invalid PCI block backend authority"))?;
+    let mut attachment = VirtualBlockPciAttachment::new(
         router
             .describe_attachment(pci)
             .map_err(|_| anyhow!("failed to describe test-only PCI function"))?,
         &device,
         &bridge,
-        VirtualBlockBackendAuthority::new(block_capability, block_object, 8, 64)
-            .map_err(|_| anyhow!("invalid PCI block backend authority"))?,
+        authority,
     )
     .map_err(|_| anyhow!("failed to bind test-only PCI block function"))?;
 
@@ -610,6 +670,116 @@ fn run_pci_configuration_probe(mut guest: PreparedKvmGuest<16>) -> Result<()> {
     .map_err(|error| anyhow!("KVM PCI class-read transaction failed: {:?}", error))?;
     if class != VirtualPciIoOutcome::Read(PCI_TEST_CLASS) {
         return Err(anyhow!("KVM PCI class-read outcome mismatch: {:?}", class));
+    }
+    let bar_selector = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("KVM PCI BAR selector failed: {:?}", error))?;
+    if bar_selector != VirtualPciIoOutcome::AddressRegister(PCI_TEST_BAR_SELECTOR) {
+        return Err(anyhow!("KVM PCI BAR selector mismatch: {:?}", bar_selector));
+    }
+    let bar = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("KVM PCI BAR assignment failed: {:?}", error))?;
+    if bar
+        != VirtualPciIoOutcome::Write(mrml_kernel::VirtualPciWriteOutcome::BarAddress(
+            PCI_TEST_MMIO_BASE as u32,
+        ))
+    {
+        return Err(anyhow!("KVM PCI BAR assignment mismatch: {:?}", bar));
+    }
+    let command_selector = run_pci_configuration_once(
+        &mut guest,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &mut transport,
+        &mut router,
+    )
+    .map_err(|error| anyhow!("KVM PCI command selector failed: {:?}", error))?;
+    if command_selector != VirtualPciIoOutcome::AddressRegister(PCI_TEST_COMMAND_SELECTOR) {
+        return Err(anyhow!(
+            "KVM PCI command selector mismatch: {:?}",
+            command_selector
+        ));
+    }
+    let mut window_backend = PreinstalledPciMmioWindow { mapped: false };
+    let command = {
+        let mut mapper =
+            VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+        run_pci_configuration_once_with_mapper(
+            &mut guest,
+            0,
+            &mut vms,
+            vm,
+            &mut hypercalls,
+            &capabilities,
+            &memory,
+            &mut transport,
+            &mut router,
+            &mut mapper,
+        )
+    }
+    .map_err(|error| anyhow!("KVM PCI memory enable failed: {:?}", error))?;
+    if command
+        != VirtualPciIoOutcome::Write(mrml_kernel::VirtualPciWriteOutcome::Command(
+            mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
+        ))
+        || !window_backend.mapped
+    {
+        return Err(anyhow!("KVM PCI memory enable mismatch: {:?}", command));
+    }
+    let io = VirtualBlockTransport::MrmlSpecificPciMmio
+        .io_policy()
+        .map_err(|_| anyhow!("failed to construct deny-all MMIO I/O policy"))?;
+    let mut interrupt_policy = InterruptPolicy::deny_all();
+    interrupt_policy
+        .allow(48)
+        .map_err(|_| anyhow!("failed to allow PCI block interrupt"))?;
+    let mut backend = DriverProbeBlock([0; 8192]);
+    let mut scratch = [0u8; 4096];
+    let mmio = run_virtual_block_mmio_transaction_once(
+        &mut guest,
+        &mut backend,
+        authority,
+        0,
+        &mut vms,
+        vm,
+        &mut hypercalls,
+        &capabilities,
+        &memory,
+        &io,
+        &interrupt_policy,
+        interrupt_capability,
+        interrupt_object,
+        &attachment,
+        &mut device,
+        &mut bridge,
+        &mut scratch,
+    )
+    .map_err(|error| anyhow!("KVM PCI-MMIO doorbell failed: {:?}", error))?;
+    if mmio != VirtualBlockTransactionOutcome::Doorbell(VirtualBlockProcessOutcome::Idle) {
+        return Err(anyhow!("KVM PCI-MMIO outcome mismatch: {:?}", mmio));
     }
     let proof = VmBackend::run(&mut guest, 0)
         .map_err(|error| anyhow!("KVM PCI proof execution failed: {:?}", error))?;
@@ -756,7 +926,10 @@ fn application_main() -> Result<()> {
             executable.artifact().version(),
             entropy,
             *executable.artifact().digest(),
-            u64::from(mode == LaunchMode::BlockGuestDriverProbe) + 1,
+            u64::from(matches!(
+                mode,
+                LaunchMode::BlockGuestDriverProbe | LaunchMode::PciConfigurationProbe
+            )) + 1,
         )?
     };
     let user_probe = matches!(mode, LaunchMode::UserProbe | LaunchMode::PreemptionProbe);
@@ -801,7 +974,12 @@ fn application_main() -> Result<()> {
         .map_err(|_| anyhow!("invalid fixed GPU queue layout"))?;
     let block_layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 2)
         .map_err(|_| anyhow!("invalid fixed block queue layout"))?;
-    let block_configuration = block_configuration(block_layout)?;
+    let block_transport = if mode == LaunchMode::PciConfigurationProbe {
+        VirtualBlockTransport::MrmlSpecificPciMmio
+    } else {
+        VirtualBlockTransport::MrmlSpecificScalarIo
+    };
+    let block_configuration = block_configuration(block_layout, block_transport)?;
     let mut guest = match mode {
         LaunchMode::GpuBenchmark => system.prepare_kernel_gpu_guest::<16>(
             0,
@@ -824,6 +1002,22 @@ fn application_main() -> Result<()> {
                     .map_err(|_| anyhow!("invalid block configuration page"))?,
             )
             .map_err(|_| anyhow!("invalid block resume page"))?,
+        ),
+        LaunchMode::PciConfigurationProbe => system.prepare_kernel_block_mmio_guest::<16>(
+            0,
+            &executable,
+            handoff.as_slice(),
+            layout,
+            block_layout,
+            VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, block_configuration)
+                .map_err(|_| anyhow!("invalid block configuration page"))?,
+            VirtualBlockResumePage::fresh(
+                BLOCK_RESUME_BASE,
+                VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, block_configuration)
+                    .map_err(|_| anyhow!("invalid block configuration page"))?,
+            )
+            .map_err(|_| anyhow!("invalid block resume page"))?,
+            PCI_TEST_MMIO_BASE,
         ),
         LaunchMode::TimerProbe
         | LaunchMode::PreemptionProbe
@@ -968,7 +1162,7 @@ fn application_main() -> Result<()> {
     if mode == LaunchMode::PciConfigurationProbe {
         run_pci_configuration_probe(guest)?;
         println!(
-            "verified signed test-only attached block-class PCI discovery under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO doorbell under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

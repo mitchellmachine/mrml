@@ -203,6 +203,25 @@ fn decode_memory(input: &[u8]) -> Result<VmExit, WhpError> {
             return Err(WhpError::MalformedExit);
         }
     }
+    if access == GuestAccess::Write {
+        let available = usize::from(input[48]);
+        let instruction = input
+            .get(52..52 + available.min(6))
+            .ok_or(WhpError::TruncatedExit)?;
+        // The first MRML MMIO transport deliberately admits only
+        // `mov dword ptr [rax], imm32` (C7 /0). This extracts no register or
+        // host pointer and leaves every other memory instruction classified
+        // as an ordinary guest fault until a separately reviewed decoder is
+        // added.
+        if available >= 6 && instruction.len() == 6 && instruction[..2] == [0xc7, 0x00] {
+            return Ok(VmExit::Mmio {
+                guest_address,
+                size: 4,
+                write: true,
+                value: u64::from(u32::from_le_bytes(instruction[2..6].try_into().unwrap())),
+            });
+        }
+    }
     Ok(VmExit::GuestMemoryFault {
         guest_address,
         access,
@@ -399,6 +418,61 @@ mod tests {
         bytes[49] = 0;
         bytes[80..88].copy_from_slice(&0x0000_8000_0000_0000u64.to_ne_bytes());
         assert_eq!(decode_exit_context(&bytes), Err(WhpError::MalformedExit));
+    }
+
+    #[test]
+    fn memory_exit_translates_only_the_bounded_mmio_write_encoding() {
+        let mut bytes = [0u8; 88];
+        bytes[..4].copy_from_slice(&EXIT_MEMORY_ACCESS.to_ne_bytes());
+        bytes[48] = 6;
+        bytes[10] = 6;
+        bytes[52..58].copy_from_slice(&[0xc7, 0x00, 0x4d, 0x52, 0x4d, 0x4c]);
+        bytes[68..72].copy_from_slice(&1u32.to_ne_bytes());
+        bytes[72..80].copy_from_slice(&0xc000_1000u64.to_ne_bytes());
+        assert_eq!(
+            decode_exit_context(&bytes),
+            Ok(VmExit::Mmio {
+                guest_address: 0xc000_1000,
+                size: 4,
+                write: true,
+                value: 0x4c4d_524d,
+            })
+        );
+
+        for mutation in [
+            [0xc6, 0x00, 0x4d, 0x52, 0x4d, 0x4c],
+            [0xc7, 0x01, 0x4d, 0x52, 0x4d, 0x4c],
+        ] {
+            bytes[52..58].copy_from_slice(&mutation);
+            assert_eq!(
+                decode_exit_context(&bytes),
+                Ok(VmExit::GuestMemoryFault {
+                    guest_address: 0xc000_1000,
+                    access: GuestAccess::Write,
+                })
+            );
+        }
+
+        bytes[52..58].copy_from_slice(&[0xc7, 0x00, 0x4d, 0x52, 0x4d, 0x4c]);
+        bytes[48] = 5;
+        assert_eq!(
+            decode_exit_context(&bytes),
+            Ok(VmExit::GuestMemoryFault {
+                guest_address: 0xc000_1000,
+                access: GuestAccess::Write,
+            })
+        );
+        bytes[48] = 6;
+
+        bytes[52..58].copy_from_slice(&[0xc7, 0x00, 1, 2, 3, 4]);
+        bytes[68..72].copy_from_slice(&0u32.to_ne_bytes());
+        assert_eq!(
+            decode_exit_context(&bytes),
+            Ok(VmExit::GuestMemoryFault {
+                guest_address: 0xc000_1000,
+                access: GuestAccess::Read,
+            })
+        );
     }
 
     #[test]

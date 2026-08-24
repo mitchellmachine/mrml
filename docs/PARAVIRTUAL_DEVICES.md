@@ -187,11 +187,16 @@ queue layout, interrupt vector, and capability-selected backend region. The
 common adapter tracks confirmed BAR mapping separately from BAR assignment and
 requires exact resource cleanup before block reset/removal and PCI reset/detach.
 Stale generations, class or geometry substitution, poisoned queue state, mapping
-failure, and cleanup failure preserve state or fail closed. A signed test-only
-guest now discovers the exact attached vendor/device and block-class identity
-through the common Configuration Mechanism #1 runner on KVM and WHP. This is
-hosted discovery evidence only: no MMIO block transport, MSI/MSI-X, DMA, native
-KVM/WHP BAR adapter, production PCI identity, or device operation is implemented.
+failure, and cleanup failure preserve state or fail closed. The MRML-native
+transport now also has two fixed write-only PCI-MMIO notification registers in
+one exact generational BAR window. A signed test-only guest discovers the
+attached identity, assigns and enables the BAR through Configuration Mechanism
+#1, and rings an idle doorbell through the common MMIO runner on KVM and WHP.
+Both native backends block re-entry until that exact accepted write is retired.
+This is hosted controlled evidence for PCI configuration, trapped MMIO routing,
+and an idle MRML-native notification only: no completed MMIO block transfer,
+MSI/MSI-X, DMA, VirtIO, QEMU comparison, production PCI identity, physical
+device, or host-resistant isolation is implemented.
 
 Sector, offset, and length are checked request data. They cannot select another
 object. Bounded-region capabilities may expose a whole disk, partition, image,

@@ -131,10 +131,11 @@ pub use virtual_block::{
     MAX_VIRTUAL_BLOCK_QUEUE_SLOTS, MAX_VIRTUAL_BLOCK_TRANSFER_BYTES,
     VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
     VIRTUAL_BLOCK_COMPLETION_BYTES, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
-    VIRTUAL_BLOCK_DOORBELL_VALUE, VIRTUAL_BLOCK_FEATURE_FLUSH, VIRTUAL_BLOCK_REQUEST_BYTES,
-    VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockAuthorityError, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockCapabilityError, VirtualBlockCompletion,
-    VirtualBlockCompletionAckError, VirtualBlockCompletionAckResult,
+    VIRTUAL_BLOCK_DOORBELL_VALUE, VIRTUAL_BLOCK_FEATURE_FLUSH,
+    VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET, VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET,
+    VIRTUAL_BLOCK_REQUEST_BYTES, VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockAuthorityError,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCapabilityError,
+    VirtualBlockCompletion, VirtualBlockCompletionAckError, VirtualBlockCompletionAckResult,
     VirtualBlockCompletionAckRunError, VirtualBlockCompletionAckRunResult,
     VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockConfigurationPage,
     VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockDoorbellError,
@@ -153,9 +154,10 @@ pub use virtual_block::{
     VirtualBlockTicket, VirtualBlockTransactionOutcome, VirtualBlockTransactionRunError,
     VirtualBlockTransactionRunResult, VirtualBlockTransport, VirtualBlockVmmMemory,
     execute_virtual_block_request, process_virtual_block_completion_ack,
-    process_virtual_block_doorbell, process_virtual_block_request,
+    process_virtual_block_doorbell, process_virtual_block_mmio_completion_ack,
+    process_virtual_block_mmio_doorbell, process_virtual_block_request,
     run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
-    run_virtual_block_transaction_once,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
 };
 pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,
@@ -190,12 +192,13 @@ pub use virtual_pci::{
 pub use vm::{
     GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,
     Hypercall, HypercallOperation, HypercallRouter, IoReadCompleter, MAX_GUEST_REGIONS,
-    MappingRevocationError, RevocableVmBackend, RoutedHypercall, VmBackend, VmError, VmExit, VmId,
-    VmRunError, VmState, VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
+    MappingRevocationError, MmioWriteCompleter, RevocableVmBackend, RoutedHypercall, VmBackend,
+    VmError, VmExit, VmId, VmRunError, VmState, VmTable, decode_hypercall_exit,
+    revoke_mapping_before_resume,
 };
 pub use vm_dispatch::{
     ExitDisposition, IoDirection, IoPortPolicy, IoPortRule, MAX_IO_PORT_RULES, dispatch_vm_exit,
-    run_vm_once,
+    run_vm_once, run_vm_once_for_mmio,
 };
 pub use vm_interrupt::{
     InterruptPolicy, VirtualBlockInterruptError, inject_virtual_block_interrupt,

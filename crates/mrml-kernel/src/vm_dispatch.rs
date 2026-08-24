@@ -104,6 +104,46 @@ pub fn run_vm_once<B: VmBackend, const V: usize, const C: usize, const M: usize,
     dispatch_vm_exit(&*backend, vms, vm, exit, router, capabilities, memory, io)
 }
 
+/// Runs one vCPU while preserving a decoded MMIO operation for a specialized
+/// device path. This does not authorize MMIO: the caller must bind the exit to
+/// an exact live mapping and retire it before any subsequent vCPU entry.
+#[allow(clippy::too_many_arguments)]
+pub fn run_vm_once_for_mmio<
+    B: VmBackend,
+    const V: usize,
+    const C: usize,
+    const M: usize,
+    const I: usize,
+>(
+    backend: &mut B,
+    vcpu: u32,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    router: &mut HypercallRouter,
+    capabilities: &CapabilitySpace<C>,
+    memory: &GuestMemory<M>,
+    io: &IoPortPolicy<I>,
+) -> Result<ExitDisposition, VmRunError<B::Error>> {
+    let exit = match backend.run(vcpu) {
+        Ok(exit) => exit,
+        Err(error) => {
+            let _ = vms.fail(vm);
+            return Err(VmRunError::Backend(error));
+        }
+    };
+    dispatch_vm_exit_inner(
+        &*backend,
+        vms,
+        vm,
+        exit,
+        router,
+        capabilities,
+        memory,
+        io,
+        true,
+    )
+}
+
 impl<const N: usize> Default for IoPortPolicy<N> {
     fn default() -> Self {
         Self::deny_all()
@@ -130,6 +170,12 @@ pub enum ExitDisposition {
         write: bool,
         value: u32,
     },
+    Mmio {
+        guest_address: u64,
+        size: u8,
+        write: bool,
+        value: u64,
+    },
     Stopped,
 }
 
@@ -152,10 +198,41 @@ pub fn dispatch_vm_exit<
     memory: &GuestMemory<M>,
     io: &IoPortPolicy<I>,
 ) -> Result<ExitDisposition, VmRunError<B::Error>> {
+    dispatch_vm_exit_inner(
+        backend,
+        vms,
+        vm,
+        exit,
+        router,
+        capabilities,
+        memory,
+        io,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_vm_exit_inner<
+    B: VmBackend,
+    const V: usize,
+    const C: usize,
+    const M: usize,
+    const I: usize,
+>(
+    backend: &B,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    exit: VmExit,
+    router: &mut HypercallRouter,
+    capabilities: &CapabilitySpace<C>,
+    memory: &GuestMemory<M>,
+    io: &IoPortPolicy<I>,
+    allow_mmio: bool,
+) -> Result<ExitDisposition, VmRunError<B::Error>> {
     if let Err(error) = vms.account_exit(vm) {
         return Err(VmRunError::Policy(error));
     }
-    let result = dispatch_inner(backend, exit, router, capabilities, memory, io);
+    let result = dispatch_inner(backend, exit, router, capabilities, memory, io, allow_mmio);
     let disposition = match result {
         Ok(value) => value,
         Err(error) => {
@@ -176,6 +253,7 @@ fn dispatch_inner<B: VmBackend, const C: usize, const M: usize, const I: usize>(
     capabilities: &CapabilitySpace<C>,
     memory: &GuestMemory<M>,
     io: &IoPortPolicy<I>,
+    allow_mmio: bool,
 ) -> Result<ExitDisposition, VmRunError<B::Error>> {
     match exit {
         VmExit::Hypercall { .. } => {
@@ -219,6 +297,17 @@ fn dispatch_inner<B: VmBackend, const C: usize, const M: usize, const I: usize>(
             value,
         }),
         VmExit::Io { .. } => Err(VmRunError::Policy(VmError::IoDenied)),
+        VmExit::Mmio {
+            guest_address,
+            size,
+            write,
+            value,
+        } if allow_mmio => Ok(ExitDisposition::Mmio {
+            guest_address,
+            size,
+            write,
+            value,
+        }),
         VmExit::Interrupted => Ok(ExitDisposition::Resume),
         VmExit::Halted => Ok(ExitDisposition::Stopped),
         VmExit::GuestMemoryFault { .. } | VmExit::Mmio { .. } | VmExit::Unknown { .. } => {

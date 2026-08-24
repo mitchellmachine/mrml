@@ -1,10 +1,10 @@
 use crate::{
     Capability, CapabilityError, CapabilitySpace, ExitDisposition, GuestMemory, HypercallRouter,
-    InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, ObjectId, PAGE_SIZE, Rights,
-    VirtualBlockInterruptError, VirtualPciAttachedFunction, VirtualPciAttachedResources,
-    VirtualPciFunctionRevoker, VirtualPciMemoryMapper, VirtualPciMmioWindow,
-    VirtualPciNativeResourceError, VmBackend, VmError, VmId, VmRunError, VmTable,
-    inject_virtual_block_interrupt, run_vm_once,
+    InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, MmioWriteCompleter, ObjectId,
+    PAGE_SIZE, Rights, VirtualBlockInterruptError, VirtualPciAttachedFunction,
+    VirtualPciAttachedResources, VirtualPciFunctionRevoker, VirtualPciMemoryMapper,
+    VirtualPciMmioWindow, VirtualPciNativeResourceError, VmBackend, VmError, VmId, VmRunError,
+    VmTable, inject_virtual_block_interrupt, run_vm_once, run_vm_once_for_mmio,
 };
 
 pub const VIRTUAL_BLOCK_REQUEST_BYTES: usize = 64;
@@ -18,6 +18,8 @@ pub const VIRTUAL_BLOCK_DOORBELL_PORT: u16 = 0x4d42;
 pub const VIRTUAL_BLOCK_DOORBELL_VALUE: u32 = 1;
 pub const VIRTUAL_BLOCK_COMPLETION_ACK_PORT: u16 = 0x4d43;
 pub const VIRTUAL_BLOCK_COMPLETION_ACK_VALUE: u32 = 1;
+pub const VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET: u32 = 0;
+pub const VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET: u32 = 4;
 const REQUEST_MAGIC: [u8; 4] = *b"MRBQ";
 const COMPLETION_MAGIC: [u8; 4] = *b"MRBC";
 const CONFIGURATION_MAGIC: [u8; 4] = *b"MRBD";
@@ -279,11 +281,12 @@ pub struct VirtualBlockQueueLayout {
 
 /// Transport identity for an MRML virtual-block configuration. Transport data
 /// selects mechanics only and never grants queue, interrupt, backend, or port
-/// authority. The sole implemented variant is MRML-specific scalar I/O; PCI
-/// and compatibility transports require distinct later implementations.
+/// authority. Both variants retain the MRML-native queue protocol; PCI-MMIO
+/// changes only the notification mechanics and is not VirtIO compatibility.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VirtualBlockTransport {
     MrmlSpecificScalarIo,
+    MrmlSpecificPciMmio,
 }
 
 impl VirtualBlockTransport {
@@ -292,40 +295,54 @@ impl VirtualBlockTransport {
     /// either rule is invalid or aliases the other.
     pub fn io_policy(self) -> Result<IoPortPolicy<2>, VmError> {
         let mut policy = IoPortPolicy::deny_all();
-        policy.allow(IoPortRule::new(
-            self.doorbell_port(),
-            4,
-            IoDirection::Write,
-        )?)?;
-        policy.allow(IoPortRule::new(
-            self.completion_acknowledgement_port(),
-            4,
-            IoDirection::Write,
-        )?)?;
+        if let Some(port) = self.doorbell_port() {
+            policy.allow(IoPortRule::new(port, 4, IoDirection::Write)?)?;
+        }
+        if let Some(port) = self.completion_acknowledgement_port() {
+            policy.allow(IoPortRule::new(port, 4, IoDirection::Write)?)?;
+        }
         Ok(policy)
     }
 
-    pub const fn doorbell_port(self) -> u16 {
+    pub const fn doorbell_port(self) -> Option<u16> {
         match self {
-            Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_DOORBELL_PORT,
+            Self::MrmlSpecificScalarIo => Some(VIRTUAL_BLOCK_DOORBELL_PORT),
+            Self::MrmlSpecificPciMmio => None,
         }
     }
 
     pub const fn doorbell_value(self) -> u32 {
         match self {
             Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_DOORBELL_VALUE,
+            Self::MrmlSpecificPciMmio => VIRTUAL_BLOCK_DOORBELL_VALUE,
         }
     }
 
-    pub const fn completion_acknowledgement_port(self) -> u16 {
+    pub const fn completion_acknowledgement_port(self) -> Option<u16> {
         match self {
-            Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+            Self::MrmlSpecificScalarIo => Some(VIRTUAL_BLOCK_COMPLETION_ACK_PORT),
+            Self::MrmlSpecificPciMmio => None,
         }
     }
 
     pub const fn completion_acknowledgement_value(self) -> u32 {
         match self {
             Self::MrmlSpecificScalarIo => VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+            Self::MrmlSpecificPciMmio => VIRTUAL_BLOCK_COMPLETION_ACK_VALUE,
+        }
+    }
+
+    pub const fn doorbell_mmio_offset(self) -> Option<u32> {
+        match self {
+            Self::MrmlSpecificScalarIo => None,
+            Self::MrmlSpecificPciMmio => Some(VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET),
+        }
+    }
+
+    pub const fn completion_acknowledgement_mmio_offset(self) -> Option<u32> {
+        match self {
+            Self::MrmlSpecificScalarIo => None,
+            Self::MrmlSpecificPciMmio => Some(VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET),
         }
     }
 }
@@ -453,13 +470,21 @@ impl VirtualBlockConfiguration {
         output[56..64].copy_from_slice(&self.queue.pages_per_queue().to_le_bytes());
         output[64..66].copy_from_slice(&self.queue.slots().to_le_bytes());
         output[66] = self.interrupt_vector;
-        output[68..70].copy_from_slice(&self.transport.doorbell_port().to_le_bytes());
-        output[70..72].copy_from_slice(
-            &self
-                .transport
-                .completion_acknowledgement_port()
-                .to_le_bytes(),
-        );
+        match self.transport {
+            VirtualBlockTransport::MrmlSpecificScalarIo => {
+                output[67] = 0;
+                output[68..70].copy_from_slice(&VIRTUAL_BLOCK_DOORBELL_PORT.to_le_bytes());
+                output[70..72].copy_from_slice(&VIRTUAL_BLOCK_COMPLETION_ACK_PORT.to_le_bytes());
+            }
+            VirtualBlockTransport::MrmlSpecificPciMmio => {
+                output[67] = 1;
+                output[68..70]
+                    .copy_from_slice(&(VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET as u16).to_le_bytes());
+                output[70..72].copy_from_slice(
+                    &(VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET as u16).to_le_bytes(),
+                );
+            }
+        }
         output[72..76].copy_from_slice(&MAX_VIRTUAL_BLOCK_TRANSFER_BYTES.to_le_bytes());
         output[76..78].copy_from_slice(&(VIRTUAL_BLOCK_REQUEST_BYTES as u16).to_le_bytes());
         output[78..80].copy_from_slice(&(VIRTUAL_BLOCK_COMPLETION_BYTES as u16).to_le_bytes());
@@ -471,11 +496,7 @@ impl VirtualBlockConfiguration {
             || input[4] != VERSION
             || input[5] != MRML_SPECIFIC_DEVICE_CLASS
             || input[6..8].iter().any(|byte| *byte != 0)
-            || input[67] != 0
             || input[80..].iter().any(|byte| *byte != 0)
-            || u16::from_le_bytes(input[68..70].try_into().unwrap()) != VIRTUAL_BLOCK_DOORBELL_PORT
-            || u16::from_le_bytes(input[70..72].try_into().unwrap())
-                != VIRTUAL_BLOCK_COMPLETION_ACK_PORT
             || u32::from_le_bytes(input[72..76].try_into().unwrap())
                 != MAX_VIRTUAL_BLOCK_TRANSFER_BYTES
             || u16::from_le_bytes(input[76..78].try_into().unwrap())
@@ -485,6 +506,23 @@ impl VirtualBlockConfiguration {
         {
             return Err(VirtualBlockError::InvalidConfiguration);
         }
+        let transport = match input[67] {
+            0 if u16::from_le_bytes(input[68..70].try_into().unwrap())
+                == VIRTUAL_BLOCK_DOORBELL_PORT
+                && u16::from_le_bytes(input[70..72].try_into().unwrap())
+                    == VIRTUAL_BLOCK_COMPLETION_ACK_PORT =>
+            {
+                VirtualBlockTransport::MrmlSpecificScalarIo
+            }
+            1 if u16::from_le_bytes(input[68..70].try_into().unwrap())
+                == VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET as u16
+                && u16::from_le_bytes(input[70..72].try_into().unwrap())
+                    == VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET as u16 =>
+            {
+                VirtualBlockTransport::MrmlSpecificPciMmio
+            }
+            _ => return Err(VirtualBlockError::InvalidConfiguration),
+        };
         let generation = u32::from_le_bytes(input[8..12].try_into().unwrap());
         let block_size = u32::from_le_bytes(input[12..16].try_into().unwrap());
         let block_count = u64::from_le_bytes(input[16..24].try_into().unwrap());
@@ -520,7 +558,7 @@ impl VirtualBlockConfiguration {
             negotiated_features,
             queue,
             interrupt_vector,
-            transport: VirtualBlockTransport::MrmlSpecificScalarIo,
+            transport,
         })
     }
 }
@@ -1300,13 +1338,16 @@ impl VirtualBlockGuestDriver {
         }
         let mut encoded = [0; VIRTUAL_BLOCK_REQUEST_BYTES];
         submission.request.encode(&mut encoded);
+        let doorbell_port = configuration.transport().doorbell_port().ok_or(
+            VirtualBlockGuestQueueTransportError::Protocol(VirtualBlockError::InvalidConfiguration),
+        )?;
         transport
             .publish_request_and_notify(
                 request_address,
                 &encoded,
                 configuration.queue().request_base(),
                 submission.producer,
-                configuration.transport().doorbell_port(),
+                doorbell_port,
                 configuration.transport().doorbell_value(),
             )
             .map_err(VirtualBlockGuestQueueTransportError::Transport)?;
@@ -1472,13 +1513,18 @@ impl VirtualBlockGuestDriver {
             .ok_or(VirtualBlockGuestQueueTransportError::Protocol(
                 VirtualBlockError::RangeOverflow,
             ))?;
+        let acknowledgement_port = self
+            .configuration
+            .transport()
+            .completion_acknowledgement_port()
+            .ok_or(VirtualBlockGuestQueueTransportError::Protocol(
+                VirtualBlockError::InvalidConfiguration,
+            ))?;
         transport
             .acknowledge_completion(
                 consumer_address,
                 acknowledgement,
-                self.configuration
-                    .transport()
-                    .completion_acknowledgement_port(),
+                acknowledgement_port,
                 self.configuration
                     .transport()
                     .completion_acknowledgement_value(),
@@ -2499,6 +2545,29 @@ impl VirtualBlockPciAttachment {
         self.mapped_window
     }
 
+    /// Revalidates the complete live relationship before an MMIO operation.
+    /// The returned window remains routing data; native completion and block
+    /// backend authority are still exercised through separate capabilities.
+    pub fn validate_mmio_window<const N: usize>(
+        &self,
+        device: &VirtualBlockDevice<N>,
+        bridge: &VirtualBlockQueueBridge<N>,
+    ) -> Result<VirtualPciMmioWindow, VirtualBlockPciError> {
+        if self.state != VirtualBlockPciAttachmentState::Attached
+            || device.transport() != VirtualBlockTransport::MrmlSpecificPciMmio
+            || device.state() != VirtualBlockDeviceState::Active
+            || device.generation() != self.block_generation
+            || device.queue() != Some(self.queue)
+            || bridge.layout() != self.queue
+            || bridge.is_poisoned()
+            || device.interrupt_vector() != Some(self.interrupt_vector)
+            || self.backend.exposed_block_count() != device.block_count()
+        {
+            return Err(VirtualBlockPciError::InvalidState);
+        }
+        self.mapped_window.ok_or(VirtualBlockPciError::InvalidState)
+    }
+
     fn cleanup_record<const N: usize>(
         &self,
         pci: VirtualPciAttachedResources,
@@ -2922,6 +2991,7 @@ pub enum VirtualBlockTransactionRunError<M, D> {
     Doorbell(VirtualBlockDoorbellError<M, D>),
     Acknowledgement(VirtualBlockCompletionAckError<M>),
     Interrupt(VirtualBlockInterruptError<M>),
+    Completion(M),
 }
 
 pub type VirtualBlockTransactionRunResult<M, D> =
@@ -3688,12 +3758,65 @@ where
     D: VirtualBlockBackend,
 {
     let transport = device.transport();
+    let Some(doorbell_port) = transport.doorbell_port() else {
+        return Err(VirtualBlockDoorbellError::InvalidExit);
+    };
     if disposition
         != (ExitDisposition::Io {
-            port: transport.doorbell_port(),
+            port: doorbell_port,
             size: 4,
             write: true,
             value: transport.doorbell_value(),
+        })
+    {
+        return Err(VirtualBlockDoorbellError::InvalidExit);
+    }
+    process_virtual_block_request(device, bridge, memory, backend, scratch)
+        .map_err(VirtualBlockDoorbellError::Process)
+}
+
+fn exact_mmio_register(
+    window: VirtualPciMmioWindow,
+    offset: u32,
+) -> Result<u64, VirtualBlockPciError> {
+    let end = offset
+        .checked_add(4)
+        .ok_or(VirtualBlockPciError::InvalidState)?;
+    if end > window.size() {
+        return Err(VirtualBlockPciError::InvalidState);
+    }
+    u64::from(window.address())
+        .checked_add(u64::from(offset))
+        .ok_or(VirtualBlockPciError::InvalidState)
+}
+
+/// Processes one write-only MRML-native PCI-MMIO doorbell after exact live
+/// PCI/block/mapping revalidation. No BAR address or device identity grants
+/// backend authority; those remain separately capability-selected.
+pub fn process_virtual_block_mmio_doorbell<const N: usize, M, D>(
+    disposition: ExitDisposition,
+    attachment: &VirtualBlockPciAttachment,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    memory: &mut M,
+    backend: &mut D,
+    scratch: &mut [u8],
+) -> VirtualBlockDoorbellResult<M::Error, D::Error>
+where
+    M: VirtualBlockVmmMemory,
+    D: VirtualBlockBackend,
+{
+    let window = attachment
+        .validate_mmio_window(device, bridge)
+        .map_err(|_| VirtualBlockDoorbellError::InvalidExit)?;
+    let address = exact_mmio_register(window, VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET)
+        .map_err(|_| VirtualBlockDoorbellError::InvalidExit)?;
+    if disposition
+        != (ExitDisposition::Mmio {
+            guest_address: address,
+            size: 4,
+            write: true,
+            value: u64::from(VIRTUAL_BLOCK_DOORBELL_VALUE),
         })
     {
         return Err(VirtualBlockDoorbellError::InvalidExit);
@@ -3716,9 +3839,12 @@ where
     M: VirtualBlockVmmMemory,
 {
     let transport = device.transport();
+    let Some(acknowledgement_port) = transport.completion_acknowledgement_port() else {
+        return Err(VirtualBlockCompletionAckError::InvalidExit);
+    };
     if disposition
         != (ExitDisposition::Io {
-            port: transport.completion_acknowledgement_port(),
+            port: acknowledgement_port,
             size: 4,
             write: true,
             value: transport.completion_acknowledgement_value(),
@@ -3730,6 +3856,50 @@ where
         || device.queue() != Some(bridge.layout())
         || device.pending_interrupt_vector().is_some()
     {
+        bridge.fail_stop();
+        return Err(VirtualBlockCompletionAckError::Queue {
+            error: VirtualBlockQueueError::Protocol(VirtualBlockError::InvalidState),
+            invalidated: device.fail(),
+        });
+    }
+    bridge.acknowledge_completion(memory).map_err(|error| {
+        bridge.fail_stop();
+        VirtualBlockCompletionAckError::Queue {
+            error,
+            invalidated: device.fail(),
+        }
+    })
+}
+
+/// Retires one protected completion through the separately mapped PCI-MMIO
+/// acknowledgement register. The exact generational mapping is revalidated
+/// before the common monotonic completion consumer is advanced.
+pub fn process_virtual_block_mmio_completion_ack<const N: usize, M>(
+    disposition: ExitDisposition,
+    attachment: &VirtualBlockPciAttachment,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    memory: &mut M,
+) -> VirtualBlockCompletionAckResult<M::Error>
+where
+    M: VirtualBlockVmmMemory,
+{
+    let window = attachment
+        .validate_mmio_window(device, bridge)
+        .map_err(|_| VirtualBlockCompletionAckError::InvalidExit)?;
+    let address = exact_mmio_register(window, VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET)
+        .map_err(|_| VirtualBlockCompletionAckError::InvalidExit)?;
+    if disposition
+        != (ExitDisposition::Mmio {
+            guest_address: address,
+            size: 4,
+            write: true,
+            value: u64::from(VIRTUAL_BLOCK_COMPLETION_ACK_VALUE),
+        })
+    {
+        return Err(VirtualBlockCompletionAckError::InvalidExit);
+    }
+    if device.pending_interrupt_vector().is_some() {
         bridge.fail_stop();
         return Err(VirtualBlockCompletionAckError::Queue {
             error: VirtualBlockQueueError::Protocol(VirtualBlockError::InvalidState),
@@ -3973,10 +4143,11 @@ where
     )
     .map_err(VirtualBlockTransactionRunError::Exit)?;
     let transport = device.transport();
+    let doorbell_port = transport.doorbell_port();
 
     if disposition
         == (ExitDisposition::Io {
-            port: transport.doorbell_port(),
+            port: doorbell_port.unwrap_or(0),
             size: 4,
             write: true,
             value: transport.doorbell_value(),
@@ -4020,9 +4191,10 @@ where
         return Ok(VirtualBlockTransactionOutcome::Doorbell(outcome));
     }
 
+    let acknowledgement_port = transport.completion_acknowledgement_port();
     if disposition
         == (ExitDisposition::Io {
-            port: transport.completion_acknowledgement_port(),
+            port: acknowledgement_port.unwrap_or(0),
             size: 4,
             write: true,
             value: transport.completion_acknowledgement_value(),
@@ -4038,6 +4210,178 @@ where
 
     let _ = vms.fail(vm);
     Err(VirtualBlockTransactionRunError::InvalidExit)
+}
+
+/// Runs one exact MRML-native PCI-MMIO block notification transaction. The
+/// live generational BAR mapping and block attachment are revalidated before
+/// queue access, and the native write exit is retired only after successful
+/// device processing. Any mismatch or completion uncertainty fail-stops the
+/// VM and prevents native re-entry.
+#[allow(clippy::too_many_arguments)]
+pub fn run_virtual_block_mmio_transaction_once<
+    M,
+    D,
+    const N: usize,
+    const V: usize,
+    const C: usize,
+    const G: usize,
+    const I: usize,
+>(
+    memory: &mut M,
+    block_backend: &mut D,
+    block_authority: VirtualBlockBackendAuthority,
+    vcpu: u32,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    router: &mut HypercallRouter,
+    capabilities: &CapabilitySpace<C>,
+    guest_memory: &GuestMemory<G>,
+    io_policy: &IoPortPolicy<I>,
+    interrupt_policy: &InterruptPolicy,
+    interrupt_capability: Capability,
+    interrupt_object: ObjectId,
+    attachment: &VirtualBlockPciAttachment,
+    device: &mut VirtualBlockDevice<N>,
+    bridge: &mut VirtualBlockQueueBridge<N>,
+    scratch: &mut [u8],
+) -> VirtualBlockTransactionRunResult<M::Error, VirtualBlockCapabilityError<D::Error>>
+where
+    M: VirtualBlockVmmMemory + MmioWriteCompleter,
+    D: VirtualBlockBackend,
+{
+    if block_authority != attachment.backend()
+        || block_authority.exposed_block_count() != device.block_count()
+        || attachment.validate_mmio_window(device, bridge).is_err()
+    {
+        let _ = vms.fail(vm);
+        return Err(VirtualBlockTransactionRunError::Authority(
+            VirtualBlockAuthorityError::GeometryMismatch,
+        ));
+    }
+    if device.pending_interrupt_vector().is_some() {
+        inject_virtual_block_interrupt(
+            device,
+            memory,
+            vms,
+            vm,
+            vcpu,
+            interrupt_policy,
+            capabilities,
+            interrupt_capability,
+            interrupt_object,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Interrupt(error)
+        })?;
+    }
+
+    let disposition = run_vm_once_for_mmio(
+        memory,
+        vcpu,
+        vms,
+        vm,
+        router,
+        capabilities,
+        guest_memory,
+        io_policy,
+    )
+    .map_err(VirtualBlockTransactionRunError::Exit)?;
+    let ExitDisposition::Mmio {
+        guest_address,
+        size,
+        write: true,
+        value,
+    } = disposition
+    else {
+        let _ = vms.fail(vm);
+        return Err(VirtualBlockTransactionRunError::InvalidExit);
+    };
+
+    let window = attachment
+        .validate_mmio_window(device, bridge)
+        .map_err(|_| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::InvalidExit
+        })?;
+    let doorbell_address = exact_mmio_register(window, VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET)
+        .map_err(|_| VirtualBlockTransactionRunError::InvalidExit)?;
+    let acknowledgement_address =
+        exact_mmio_register(window, VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET)
+            .map_err(|_| VirtualBlockTransactionRunError::InvalidExit)?;
+
+    let outcome = if guest_address == doorbell_address
+        && size == 4
+        && value == u64::from(VIRTUAL_BLOCK_DOORBELL_VALUE)
+    {
+        let mut selected_backend = CapabilitySelectedVirtualBlockBackend::new(
+            block_backend,
+            capabilities,
+            block_authority,
+            device.block_size(),
+        );
+        let processed = process_virtual_block_mmio_doorbell(
+            disposition,
+            attachment,
+            device,
+            bridge,
+            memory,
+            &mut selected_backend,
+            scratch,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Doorbell(error)
+        })?;
+        VirtualBlockTransactionOutcome::Doorbell(processed)
+    } else if guest_address == acknowledgement_address
+        && size == 4
+        && value == u64::from(VIRTUAL_BLOCK_COMPLETION_ACK_VALUE)
+    {
+        let consumed = process_virtual_block_mmio_completion_ack(
+            disposition,
+            attachment,
+            device,
+            bridge,
+            memory,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Acknowledgement(error)
+        })?;
+        VirtualBlockTransactionOutcome::CompletionAcknowledged(consumed)
+    } else {
+        let _ = vms.fail(vm);
+        return Err(VirtualBlockTransactionRunError::InvalidExit);
+    };
+
+    memory
+        .complete_mmio_write(vcpu, guest_address, size, value)
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Completion(error)
+        })?;
+    if matches!(
+        &outcome,
+        VirtualBlockTransactionOutcome::Doorbell(VirtualBlockProcessOutcome::Completed(_))
+    ) {
+        inject_virtual_block_interrupt(
+            device,
+            memory,
+            vms,
+            vm,
+            vcpu,
+            interrupt_policy,
+            capabilities,
+            interrupt_capability,
+            interrupt_object,
+        )
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualBlockTransactionRunError::Interrupt(error)
+        })?;
+    }
+    Ok(outcome)
 }
 
 fn slot_address(
@@ -4073,6 +4417,19 @@ mod tests {
 
     fn active<const N: usize>() -> VirtualBlockDevice<N> {
         let mut device = VirtualBlockDevice::new(4096, 64, VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
+        device.negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
+        device.activate(layout::<N>(), 48).unwrap();
+        device
+    }
+
+    fn active_mmio<const N: usize>() -> VirtualBlockDevice<N> {
+        let mut device = VirtualBlockDevice::new_with_transport(
+            4096,
+            64,
+            VIRTUAL_BLOCK_FEATURE_FLUSH,
+            VirtualBlockTransport::MrmlSpecificPciMmio,
+        )
+        .unwrap();
         device.negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
         device.activate(layout::<N>(), 48).unwrap();
         device
@@ -4147,11 +4504,11 @@ mod tests {
         );
         assert_eq!(
             configuration.transport().doorbell_port(),
-            VIRTUAL_BLOCK_DOORBELL_PORT
+            Some(VIRTUAL_BLOCK_DOORBELL_PORT)
         );
         assert_eq!(
             configuration.transport().completion_acknowledgement_port(),
-            VIRTUAL_BLOCK_COMPLETION_ACK_PORT
+            Some(VIRTUAL_BLOCK_COMPLETION_ACK_PORT)
         );
         let transport_policy = configuration.transport().io_policy().unwrap();
         assert!(transport_policy.permits(VIRTUAL_BLOCK_DOORBELL_PORT, 4, true));
@@ -4168,6 +4525,55 @@ mod tests {
         );
         assert!(encoded[80..].iter().all(|byte| *byte == 0));
         assert_eq!(device.validate_configuration(configuration), Ok(()));
+    }
+
+    #[test]
+    fn pci_mmio_configuration_is_canonical_and_grants_no_scalar_ports() {
+        let configuration = active_mmio::<2>().configuration().unwrap();
+        assert_eq!(
+            configuration.transport(),
+            VirtualBlockTransport::MrmlSpecificPciMmio
+        );
+        assert_eq!(configuration.transport().doorbell_port(), None);
+        assert_eq!(
+            configuration.transport().completion_acknowledgement_port(),
+            None
+        );
+        assert_eq!(
+            configuration.transport().doorbell_mmio_offset(),
+            Some(VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET)
+        );
+        assert_eq!(
+            configuration
+                .transport()
+                .completion_acknowledgement_mmio_offset(),
+            Some(VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET)
+        );
+        let policy = configuration.transport().io_policy().unwrap();
+        assert!(!policy.permits(VIRTUAL_BLOCK_DOORBELL_PORT, 4, true));
+        assert!(!policy.permits(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, true));
+
+        let mut encoded = [0xa5; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        configuration.encode(&mut encoded);
+        assert_eq!(encoded[67], 1);
+        assert_eq!(
+            u16::from_le_bytes(encoded[68..70].try_into().unwrap()),
+            VIRTUAL_BLOCK_MMIO_DOORBELL_OFFSET as u16
+        );
+        assert_eq!(
+            u16::from_le_bytes(encoded[70..72].try_into().unwrap()),
+            VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET as u16
+        );
+        assert_eq!(
+            VirtualBlockConfiguration::decode(&encoded),
+            Ok(configuration)
+        );
+
+        encoded[67] = 2;
+        assert_eq!(
+            VirtualBlockConfiguration::decode(&encoded),
+            Err(VirtualBlockError::InvalidConfiguration)
+        );
     }
 
     #[test]
@@ -5232,6 +5638,8 @@ mod tests {
         next_exit: Option<VmExit>,
         injected: Option<(u32, u8)>,
         fail_inject: bool,
+        completed_mmio: Option<(u32, u64, u8, u64)>,
+        fail_mmio_completion: bool,
     }
 
     impl MockVmm {
@@ -5244,6 +5652,8 @@ mod tests {
                 next_exit: None,
                 injected: None,
                 fail_inject: false,
+                completed_mmio: None,
+                fail_mmio_completion: false,
             }
         }
     }
@@ -5274,6 +5684,22 @@ mod tests {
                 return Err(MockError::Injected);
             }
             self.injected = Some((vcpu, vector));
+            Ok(())
+        }
+    }
+
+    impl MmioWriteCompleter for MockVmm {
+        fn complete_mmio_write(
+            &mut self,
+            vcpu: u32,
+            guest_address: u64,
+            size: u8,
+            value: u64,
+        ) -> Result<(), Self::Error> {
+            if self.fail_mmio_completion || self.completed_mmio.is_some() {
+                return Err(MockError::Injected);
+            }
+            self.completed_mmio = Some((vcpu, guest_address, size, value));
             Ok(())
         }
     }
@@ -6243,6 +6669,135 @@ mod tests {
     }
 
     #[test]
+    fn pci_mmio_doorbell_requires_exact_live_mapping_and_tuple() {
+        let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let mut device = active_mmio::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(
+                ObjectId(0x30a),
+                crate::Rights::READ.union(crate::Rights::WRITE),
+            )
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x30a), 0, 64).unwrap();
+        let mut attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            &device,
+            &bridge,
+            authority,
+        )
+        .unwrap();
+        router.write(location, 16, 4, 0x20_0000).unwrap();
+        let mut window_backend = RecordingBlockPciWindowBackend {
+            map_result: Ok(()),
+            unmap_result: Ok(()),
+            maps: 0,
+            unmaps: 0,
+            last: None,
+        };
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+            router
+                .write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+                .unwrap();
+        }
+
+        let exact = ExitDisposition::Mmio {
+            guest_address: 0x20_0000,
+            size: 4,
+            write: true,
+            value: u64::from(VIRTUAL_BLOCK_DOORBELL_VALUE),
+        };
+        let mut memory = MockVmm::new();
+        let mut block = MockBlock::new();
+        let mut scratch = [0; 4096];
+        assert_eq!(
+            process_virtual_block_mmio_doorbell(
+                exact,
+                &attachment,
+                &mut device,
+                &mut bridge,
+                &mut memory,
+                &mut block,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockProcessOutcome::Idle)
+        );
+
+        for hostile in [
+            ExitDisposition::Mmio {
+                guest_address: 0x20_0004,
+                size: 4,
+                write: true,
+                value: 1,
+            },
+            ExitDisposition::Mmio {
+                guest_address: 0x20_0000,
+                size: 2,
+                write: true,
+                value: 1,
+            },
+            ExitDisposition::Mmio {
+                guest_address: 0x20_0000,
+                size: 4,
+                write: true,
+                value: 2,
+            },
+            ExitDisposition::Mmio {
+                guest_address: 0x20_0000,
+                size: 4,
+                write: false,
+                value: 1,
+            },
+        ] {
+            assert_eq!(
+                process_virtual_block_mmio_doorbell(
+                    hostile,
+                    &attachment,
+                    &mut device,
+                    &mut bridge,
+                    &mut memory,
+                    &mut block,
+                    &mut scratch,
+                ),
+                Err(VirtualBlockDoorbellError::InvalidExit)
+            );
+        }
+
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+            router
+                .write_with_mapper(location, 4, 2, 0, &mut mapper)
+                .unwrap();
+        }
+        assert_eq!(
+            process_virtual_block_mmio_doorbell(
+                exact,
+                &attachment,
+                &mut device,
+                &mut bridge,
+                &mut memory,
+                &mut block,
+                &mut scratch,
+            ),
+            Err(VirtualBlockDoorbellError::InvalidExit)
+        );
+        assert_eq!((block.reads, block.writes, block.flushes), (0, 0, 0));
+    }
+
+    #[test]
     fn pci_block_bar_mapping_failures_preserve_configuration_and_attachment_state() {
         for error in [
             VirtualPciNativeResourceError::Rejected,
@@ -6936,6 +7491,173 @@ mod tests {
                 .unwrap();
         }
         policy
+    }
+
+    fn mapped_mmio_attachment(
+        device: &VirtualBlockDevice<1>,
+        bridge: &VirtualBlockQueueBridge<1>,
+        authority: VirtualBlockBackendAuthority,
+    ) -> VirtualBlockPciAttachment {
+        let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let mut attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            device,
+            bridge,
+            authority,
+        )
+        .unwrap();
+        router.write(location, 16, 4, 0x20_0000).unwrap();
+        let mut backend = RecordingBlockPciWindowBackend {
+            map_result: Ok(()),
+            unmap_result: Ok(()),
+            maps: 0,
+            unmaps: 0,
+            last: None,
+        };
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut attachment, device, &mut backend);
+            router
+                .write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+                .unwrap();
+        }
+        assert_eq!(backend.maps, 1);
+        attachment
+    }
+
+    #[test]
+    fn mmio_transaction_runner_retires_only_the_consumed_exact_write() {
+        let interrupt_object = ObjectId(0x320);
+        let block_object = ObjectId(0x321);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(0x322), ObjectId(0x323), ObjectId(0x324));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = IoPortPolicy::<0>::deny_all();
+        let mut device = active_mmio::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let attachment = mapped_mmio_attachment(&device, &bridge, authority);
+        let mut vmm = MockVmm::new();
+        vmm.next_exit = Some(VmExit::Mmio {
+            guest_address: 0x20_0000,
+            size: 4,
+            write: true,
+            value: 1,
+        });
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+
+        assert_eq!(
+            run_virtual_block_mmio_transaction_once(
+                &mut vmm,
+                &mut backend,
+                authority,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &attachment,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockTransactionOutcome::Doorbell(
+                VirtualBlockProcessOutcome::Idle
+            ))
+        );
+        assert_eq!(vmm.completed_mmio, Some((0, 0x20_0000, 4, 1)));
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Running));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
+    }
+
+    #[test]
+    fn mmio_completion_uncertainty_fail_stops_the_vm() {
+        let interrupt_object = ObjectId(0x330);
+        let block_object = ObjectId(0x331);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(block_object, crate::Rights::READ)
+            .unwrap();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(0x332), ObjectId(0x333), ObjectId(0x334));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = IoPortPolicy::<0>::deny_all();
+        let mut device = active_mmio::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let attachment = mapped_mmio_attachment(&device, &bridge, authority);
+        let mut vmm = MockVmm::new();
+        vmm.fail_mmio_completion = true;
+        vmm.next_exit = Some(VmExit::Mmio {
+            guest_address: 0x20_0000,
+            size: 4,
+            write: true,
+            value: 1,
+        });
+        let mut backend = MockBlock::new();
+        let mut scratch = [0; 4096];
+
+        assert_eq!(
+            run_virtual_block_mmio_transaction_once(
+                &mut vmm,
+                &mut backend,
+                authority,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &attachment,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Err(VirtualBlockTransactionRunError::Completion(
+                MockError::Injected
+            ))
+        );
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!(vmm.completed_mmio, None);
     }
 
     #[test]

@@ -630,6 +630,21 @@ pub trait IoReadCompleter: VmBackend {
     ) -> Result<(), Self::Error>;
 }
 
+/// Backend contract for retiring one exact MMIO write exit before another
+/// vCPU entry. Implementations must bind completion to the still-pending
+/// exit's vCPU, guest-physical address, width, and value. A caller may invoke
+/// this only after the device path has accepted and durably consumed the
+/// operation; failed device processing leaves the VM non-resumable.
+pub trait MmioWriteCompleter: VmBackend {
+    fn complete_mmio_write(
+        &mut self,
+        vcpu: u32,
+        guest_address: u64,
+        size: u8,
+        value: u64,
+    ) -> Result<(), Self::Error>;
+}
+
 /// Backend contract for retiring a complete native second-level mapping.
 /// Implementations must prevent every vCPU from running if native teardown
 /// fails or leaves the mapping state uncertain.

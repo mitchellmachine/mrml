@@ -176,6 +176,12 @@ const PCI_TEST_SELECTOR: u32 = 0x8000_2000;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_CLASS_SELECTOR: u32 = PCI_TEST_SELECTOR + 8;
 #[cfg(feature = "pci-configuration-probe")]
+const PCI_TEST_BAR_SELECTOR: u32 = PCI_TEST_SELECTOR + 16;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_TEST_COMMAND_SELECTOR: u32 = PCI_TEST_SELECTOR + 4;
+#[cfg(feature = "pci-configuration-probe")]
+const PCI_TEST_MMIO_BASE: u64 = 0x00c0_0000;
+#[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_VENDOR_DEVICE: u32 = 0x5678_1234;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_CLASS: u32 = 0x0180_0001;
@@ -2477,6 +2483,39 @@ unsafe fn run_pci_configuration_probe() -> ! {
     };
     if class != PCI_TEST_CLASS {
         halt();
+    }
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") 0xcf8u16,
+            in("eax") PCI_TEST_BAR_SELECTOR,
+            options(nomem, nostack)
+        );
+        asm!(
+            "out dx, eax",
+            in("dx") 0xcfcu16,
+            in("eax") PCI_TEST_MMIO_BASE as u32,
+            options(nomem, nostack)
+        );
+        asm!(
+            "out dx, eax",
+            in("dx") 0xcf8u16,
+            in("eax") PCI_TEST_COMMAND_SELECTOR,
+            options(nomem, nostack)
+        );
+        asm!(
+            "out dx, ax",
+            in("dx") 0xcfcu16,
+            in("ax") mrml_kernel::PCI_COMMAND_MEMORY_SPACE,
+            options(nomem, nostack)
+        );
+        // This deliberately fixed encoding is the only write form translated
+        // by the initial WHP MMIO boundary.
+        asm!(
+            "mov dword ptr [rax], 1",
+            in("rax") PCI_TEST_MMIO_BASE,
+            options(nostack)
+        );
     }
     unsafe {
         asm!(

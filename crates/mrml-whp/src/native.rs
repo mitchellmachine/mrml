@@ -222,6 +222,7 @@ impl WhpSystem {
             mappings: [const { None }; MAX_MAPPINGS],
             vp_count: processor_count,
             pending_io_reads: [None; 2],
+            pending_mmio_writes: [None; 2],
             mapping_poisoned: false,
             _system: core::marker::PhantomData,
         };
@@ -253,6 +254,7 @@ pub struct PreparedWhpPartition<'system> {
     mappings: [Option<OwnedMapping>; MAX_MAPPINGS],
     vp_count: u32,
     pending_io_reads: [Option<PendingIoRead>; 2],
+    pending_mmio_writes: [Option<PendingMmioWrite>; 2],
     mapping_poisoned: bool,
     _system: core::marker::PhantomData<&'system WhpSystem>,
 }
@@ -261,6 +263,14 @@ pub struct PreparedWhpPartition<'system> {
 struct PendingIoRead {
     port: u16,
     size: u8,
+    instruction_bytes: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingMmioWrite {
+    guest_address: u64,
+    size: u8,
+    value: u64,
     instruction_bytes: u8,
 }
 
@@ -755,7 +765,9 @@ impl PreparedWhpPartition<'_> {
         if index >= self.vp_count {
             return Err(WhpError::InvalidVcpu);
         }
-        if self.pending_io_reads[index as usize].is_some() {
+        if self.pending_io_reads[index as usize].is_some()
+            || self.pending_mmio_writes[index as usize].is_some()
+        {
             return Err(WhpError::InvalidRegisterState);
         }
         let mut context = [0u8; WHP_EXIT_CONTEXT_BYTES];
@@ -786,8 +798,44 @@ impl PreparedWhpPartition<'_> {
                 size,
                 instruction_bytes,
             });
+        } else if let VmExit::Mmio {
+            guest_address,
+            size,
+            write: true,
+            value,
+        } = exit
+        {
+            let instruction_bytes = 6;
+            self.pending_mmio_writes[index as usize] = Some(PendingMmioWrite {
+                guest_address,
+                size,
+                value,
+                instruction_bytes,
+            });
         }
         Ok(exit)
+    }
+
+    fn complete_mmio_write(
+        &mut self,
+        index: u32,
+        guest_address: u64,
+        size: u8,
+        value: u64,
+    ) -> Result<(), WhpError> {
+        if index >= self.vp_count {
+            return Err(WhpError::InvalidVcpu);
+        }
+        let pending = self.pending_mmio_writes[index as usize]
+            .filter(|pending| {
+                pending.guest_address == guest_address
+                    && pending.size == size
+                    && pending.value == value
+            })
+            .ok_or(WhpError::InvalidRegisterState)?;
+        self.advance_output_instruction(index, pending.instruction_bytes)?;
+        self.pending_mmio_writes[index as usize] = None;
+        Ok(())
     }
 
     fn complete_io_read(

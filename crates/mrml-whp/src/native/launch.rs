@@ -26,6 +26,7 @@ struct KernelDevices {
     block_queue: Option<VirtualBlockQueueLayout>,
     block_configuration: Option<VirtualBlockConfigurationPage>,
     block_resume: Option<VirtualBlockResumePage>,
+    trapped_mmio: Option<u64>,
     intercept_breakpoint: bool,
     cpus: u8,
 }
@@ -967,6 +968,19 @@ impl mrml_kernel::IoReadCompleter for PreparedWhpGuest<'_> {
     }
 }
 
+impl mrml_kernel::MmioWriteCompleter for PreparedWhpGuest<'_> {
+    fn complete_mmio_write(
+        &mut self,
+        vcpu: u32,
+        guest_address: u64,
+        size: u8,
+        value: u64,
+    ) -> Result<(), Self::Error> {
+        self.partition
+            .complete_mmio_write(vcpu, guest_address, size, value)
+    }
+}
+
 impl RevocableVmBackend for PreparedWhpGuest<'_> {
     fn revoke_guest_mapping(&mut self, guest_address: u64, bytes: u64) -> Result<(), Self::Error> {
         self.partition.revoke_guest_mapping(guest_address, bytes)
@@ -1003,6 +1017,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1028,6 +1043,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: false,
                 cpus: 1,
             },
@@ -1052,6 +1068,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1076,6 +1093,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: false,
                 cpus: 1,
             },
@@ -1103,6 +1121,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1129,6 +1148,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1158,6 +1178,41 @@ impl WhpSystem {
                 block_queue: Some(queue),
                 block_configuration: Some(configuration),
                 block_resume: Some(resume),
+                trapped_mmio: None,
+                intercept_breakpoint: true,
+                cpus: 1,
+            },
+        )
+    }
+
+    /// Prepares the MRML-native block queue plus one first-level MMIO trap
+    /// page without creating a WHP GPA RAM mapping for that page.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_kernel_block_mmio_guest<'system>(
+        &'system self,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: WhpLaunchLayout,
+        queue: VirtualBlockQueueLayout,
+        configuration: VirtualBlockConfigurationPage,
+        resume: VirtualBlockResumePage,
+        mmio_address: u64,
+    ) -> Result<PreparedWhpGuest<'system>, WhpError> {
+        if !mmio_address.is_multiple_of(PAGE_SIZE) {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.prepare_guest_inner(
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: false,
+                gpu_queue: None,
+                block_queue: Some(queue),
+                block_configuration: Some(configuration),
+                block_resume: Some(resume),
+                trapped_mmio: Some(mmio_address),
                 intercept_breakpoint: true,
                 cpus: 1,
             },
@@ -1184,6 +1239,7 @@ impl WhpSystem {
                 block_queue: None,
                 block_configuration: None,
                 block_resume: None,
+                trapped_mmio: None,
                 intercept_breakpoint: true,
                 cpus: 2,
             },
@@ -1202,6 +1258,7 @@ impl WhpSystem {
         let block_queue = devices.block_queue;
         let block_configuration = devices.block_configuration;
         let block_resume = devices.block_resume;
+        let trapped_mmio = devices.trapped_mmio;
         let smp = devices.cpus == 2;
         if !matches!(devices.cpus, 1 | 2) {
             return Err(WhpError::InvalidVcpu);
@@ -1314,7 +1371,7 @@ impl WhpSystem {
             physical_count += 1;
         }
         validate_ranges(&physical_ranges[..physical_count])?;
-        let mut virtual_ranges = [(0, 0); 11];
+        let mut virtual_ranges = [(0, 0); 12];
         virtual_ranges[..4].copy_from_slice(&[
             (layout.table_physical, PAGE_SIZE),
             (layout.image_virtual, image_bytes),
@@ -1346,6 +1403,10 @@ impl WhpSystem {
         }
         if let Some(trampoline) = trampoline {
             virtual_ranges[virtual_count] = (trampoline, PAGE_SIZE);
+            virtual_count += 1;
+        }
+        if let Some(address) = trapped_mmio {
+            virtual_ranges[virtual_count] = (address, PAGE_SIZE);
             virtual_count += 1;
         }
         validate_ranges(&virtual_ranges[..virtual_count])?;
@@ -1464,6 +1525,7 @@ impl WhpSystem {
                 block_queue,
                 block_configuration,
                 block_resume,
+                trapped_mmio,
                 cpus: devices.cpus,
                 trampoline,
                 service_shared: !devices.intercept_breakpoint && !devices.framebuffer,
@@ -1509,6 +1571,7 @@ struct PageTableLaunchContext {
     block_queue: Option<VirtualBlockQueueLayout>,
     block_configuration: Option<VirtualBlockConfigurationPage>,
     block_resume: Option<VirtualBlockResumePage>,
+    trapped_mmio: Option<u64>,
     cpus: u8,
     trampoline: Option<u64>,
     service_shared: bool,
@@ -1528,6 +1591,7 @@ fn build_page_tables(
         block_queue,
         block_configuration,
         block_resume,
+        trapped_mmio,
         cpus,
         trampoline,
         service_shared,
@@ -1747,6 +1811,15 @@ fn build_page_tables(
                 VirtAddr::new(resume.base()).map_err(|_| WhpError::InvalidMapping)?,
                 PhysAddr::new(resume.base()).map_err(|_| WhpError::InvalidMapping)?,
                 PagePermissions::KERNEL_SHARED_READ,
+            )
+            .map_err(|_| WhpError::PageTable)?;
+    }
+    if let Some(address) = trapped_mmio {
+        tables
+            .map_page(
+                VirtAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+                PhysAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+                PagePermissions::KERNEL_MMIO_READ_WRITE,
             )
             .map_err(|_| WhpError::PageTable)?;
     }
