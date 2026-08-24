@@ -988,6 +988,48 @@ impl VirtualBlockGuestDriver {
         Self::reconstruct(&encoded_state, encoded_requests)
     }
 
+    /// Selects fresh discovery or nonzero reconstruction only after binding a
+    /// complete canonical resume page to the separately presented
+    /// configuration and all four live queue counters. The page remains data;
+    /// callers must independently hold device and mapping authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resume_from_page(
+        encoded_configuration: &[u8],
+        encoded_page: &[u8],
+        encoded_requests: &[[u8; VIRTUAL_BLOCK_REQUEST_BYTES]],
+        request_producer: u64,
+        request_consumed: u64,
+        completion_published: u64,
+        completion_consumer: u64,
+    ) -> Result<Self, VirtualBlockError> {
+        let configuration = VirtualBlockConfiguration::decode(encoded_configuration)?;
+        let state = VirtualBlockResumePage::decode_page(encoded_page)?;
+        if encoded_requests.len() != usize::from(configuration.queue().slots())
+            || state.configuration() != configuration
+            || state.request_producer() != request_producer
+            || state.request_consumed() != request_consumed
+            || state.completion_published() != completion_published
+            || state.completion_consumer() != completion_consumer
+        {
+            return Err(VirtualBlockError::InvalidQueue);
+        }
+        if request_producer == 0
+            && request_consumed == 0
+            && completion_published == 0
+            && completion_consumer == 0
+        {
+            Self::discover(
+                encoded_configuration,
+                request_producer,
+                request_consumed,
+                completion_published,
+                completion_consumer,
+            )
+        } else {
+            Self::reconstruct_from_page(encoded_page, encoded_requests)
+        }
+    }
+
     /// Reinitializes state only after an exact reset completion and only from
     /// the canonical successor generation with completely fresh queue state.
     /// Removal and sequence exhaustion are permanently terminal.
@@ -3326,6 +3368,47 @@ mod tests {
         assert_eq!(
             VirtualBlockGuestDriver::reconstruct_from_page(&encoded_page, &requests),
             Ok(driver.clone())
+        );
+        let mut encoded_configuration = [0; VIRTUAL_BLOCK_CONFIGURATION_BYTES];
+        configuration.encode(&mut encoded_configuration);
+        assert_eq!(
+            VirtualBlockGuestDriver::resume_from_page(
+                &encoded_configuration,
+                &encoded_page,
+                &requests,
+                5,
+                4,
+                4,
+                3,
+            ),
+            Ok(driver.clone())
+        );
+        for counters in [(6, 4, 4, 3), (5, 5, 4, 3), (5, 4, 5, 3), (5, 4, 4, 4)] {
+            assert_eq!(
+                VirtualBlockGuestDriver::resume_from_page(
+                    &encoded_configuration,
+                    &encoded_page,
+                    &requests,
+                    counters.0,
+                    counters.1,
+                    counters.2,
+                    counters.3,
+                ),
+                Err(VirtualBlockError::InvalidQueue)
+            );
+        }
+        encoded_configuration[16] ^= 1;
+        assert!(
+            VirtualBlockGuestDriver::resume_from_page(
+                &encoded_configuration,
+                &encoded_page,
+                &requests,
+                5,
+                4,
+                4,
+                3,
+            )
+            .is_err()
         );
         assert_eq!(driver.configuration(), configuration);
         assert_eq!(driver.request_producer(), 5);

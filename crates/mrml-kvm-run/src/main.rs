@@ -16,9 +16,9 @@ use mrml_kernel::{
     VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable,
     VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockConfigurationPage,
     VirtualBlockDevice, VirtualBlockMutationError, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage, VmBackend, VmExit,
-    VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once, run_vm_once,
-    verify_gpu_kernel_bundle,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockResumePage,
+    VirtualBlockVmmMemory, VmBackend, VmExit, VmTable, run_virtual_block_completion_ack_once,
+    run_virtual_block_doorbell_once, run_vm_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -227,6 +227,10 @@ fn block_configuration(
 #[cfg(target_os = "linux")]
 fn run_block_guest_driver_probe(
     guest: &mut PreparedKvmGuest<16>,
+    system: &KvmSystem,
+    executable: &VerifiedExecutable<'_>,
+    handoff: &[u8],
+    launch_layout: KvmLaunchLayout,
     layout: VirtualBlockQueueLayout,
 ) -> Result<()> {
     let interrupt_object = ObjectId(0x301);
@@ -367,6 +371,54 @@ fn run_block_guest_driver_probe(
             {
                 return Err(anyhow!("block quiescence state mismatch"));
             }
+            let mut request_page = [0; 4096];
+            let mut completion_page = [0; 4096];
+            let mut encoded_resume_page = [0; 4096];
+            let mut payload_pages = [0; 8192];
+            VmBackend::read_guest(guest, layout.request_base(), &mut request_page)
+                .and_then(|()| {
+                    VmBackend::read_guest(guest, layout.completion_base(), &mut completion_page)
+                })
+                .and_then(|()| {
+                    VmBackend::read_guest(guest, BLOCK_RESUME_BASE, &mut encoded_resume_page)
+                })
+                .and_then(|()| VmBackend::read_guest(guest, FRAMEBUFFER, &mut payload_pages))
+                .map_err(|_| anyhow!("block restart snapshot failed"))?;
+            let configuration_page =
+                VirtualBlockConfigurationPage::new(BLOCK_CONFIGURATION_BASE, configuration)
+                    .map_err(|_| anyhow!("invalid replacement block configuration page"))?;
+            let mut replacement = system
+                .prepare_kernel_block_guest::<16>(
+                    0,
+                    executable,
+                    handoff,
+                    launch_layout,
+                    layout,
+                    configuration_page,
+                    VirtualBlockResumePage::fresh(BLOCK_RESUME_BASE, configuration_page)
+                        .map_err(|_| anyhow!("invalid replacement block resume page"))?,
+                )
+                .map_err(|error| anyhow!("replacement block VM preparation failed: {:?}", error))?;
+            VmBackend::write_guest(&mut replacement, layout.request_base(), &request_page)
+                .and_then(|()| {
+                    VirtualBlockVmmMemory::write_virtual_block(
+                        &mut replacement,
+                        layout.completion_base(),
+                        &completion_page,
+                    )
+                })
+                .and_then(|()| {
+                    VirtualBlockVmmMemory::write_virtual_block(
+                        &mut replacement,
+                        BLOCK_RESUME_BASE,
+                        &encoded_resume_page,
+                    )
+                })
+                .and_then(|()| {
+                    VmBackend::write_guest(&mut replacement, FRAMEBUFFER, &payload_pages)
+                })
+                .map_err(|_| anyhow!("replacement block VM state restoration failed"))?;
+            *guest = replacement;
             device
                 .resume()
                 .map_err(|_| anyhow!("block device did not resume exactly"))?;
@@ -772,7 +824,14 @@ fn application_main() -> Result<()> {
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
     if mode == LaunchMode::BlockGuestDriverProbe {
-        run_block_guest_driver_probe(&mut guest, block_layout)?;
+        run_block_guest_driver_probe(
+            &mut guest,
+            &system,
+            &executable,
+            handoff.as_slice(),
+            layout,
+            block_layout,
+        )?;
         println!(
             "verified signed compiled eight-cycle two-slot common block guest driver under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,

@@ -130,7 +130,7 @@ use mrml_kernel::{
 #[cfg(feature = "block-guest-driver-probe")]
 use mrml_kernel::{
     PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_REQUEST_BYTES,
-    VirtualBlockGuestDriver,
+    VirtualBlockGuestDriver, VirtualBlockResumePage,
 };
 #[cfg(any(
     feature = "timer-probe",
@@ -2296,59 +2296,103 @@ unsafe fn run_block_guest_driver_probe() -> ! {
     let completion_published = unsafe { (queue.completion_base() as *const u64).read_volatile() };
     let completion_consumed =
         unsafe { ((queue.completion_base() + 64) as *const u64).read_volatile() };
-    let mut driver = VirtualBlockGuestDriver::discover(
+    let mut resume_page = [0; PAGE_SIZE as usize];
+    for (offset, byte) in resume_page.iter_mut().enumerate() {
+        *byte = unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
+    }
+    let resume_state = VirtualBlockResumePage::decode_page(&resume_page).unwrap_or_else(|_| halt());
+    if resume_state.configuration() != decoded
+        || resume_state.request_producer() != request_published
+        || resume_state.request_consumed() != request_consumed
+        || resume_state.completion_published() != completion_published
+        || resume_state.completion_consumer() != completion_consumed
+    {
+        halt();
+    }
+    let fresh = request_published == 0
+        && request_consumed == 0
+        && completion_published == 0
+        && completion_consumed == 0
+        && resume_state.last_admitted_request_id() == 0
+        && resume_state.last_published_request_id() == 0;
+    let recovering = request_published == u64::from(BLOCK_QUIESCE_REQUESTS)
+        && request_consumed == u64::from(BLOCK_QUIESCE_REQUESTS)
+        && completion_published == u64::from(BLOCK_QUIESCE_REQUESTS)
+        && completion_consumed == u64::from(BLOCK_QUIESCE_REQUESTS - 2)
+        && resume_state.last_admitted_request_id() == u64::from(BLOCK_QUIESCE_REQUESTS)
+        && resume_state.last_published_request_id() == u64::from(BLOCK_QUIESCE_REQUESTS);
+    if !fresh && !recovering {
+        halt();
+    }
+    let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
+    for (slot, request) in requests.iter_mut().enumerate() {
+        let base = queue.request_base() + 128 + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
+        for (offset, byte) in request.iter_mut().enumerate() {
+            *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
+        }
+    }
+    let mut driver = VirtualBlockGuestDriver::resume_from_page(
         &configuration,
+        &resume_page,
+        &requests,
         request_published,
         request_consumed,
         completion_published,
         completion_consumed,
     )
     .unwrap_or_else(|_| halt());
+    let start_cycle = if recovering {
+        BLOCK_QUIESCE_CYCLE - 1
+    } else {
+        0
+    };
     // SAFETY: the launch builder identity-maps the exact configured request
     // and completion pages with their required directionality.
     let mut transport =
         unsafe { X86VirtualBlockGuestQueueTransport::new(NativeX86VirtualBlockPortIo) };
 
     unsafe { asm!("sti", options(nomem, nostack)) };
-    for cycle in 0..BLOCK_PROBE_CYCLES {
+    for cycle in start_cycle..BLOCK_PROBE_CYCLES {
         let patterns = [0x40u8 + cycle as u8, 0x90u8 + cycle as u8];
-        for (block, value) in patterns.into_iter().enumerate() {
-            let base = BLOCK_PAYLOAD_BASE + block as u64 * 4096;
-            for offset in 0..4096usize {
-                unsafe { ((base as *mut u8).add(offset)).write_volatile(value) };
-            }
-        }
-        for block in 0..2u64 {
-            let write = driver
-                .prepare_write(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
-                .unwrap_or_else(|_| halt());
-            driver
-                .publish_submission(&mut transport, write)
-                .unwrap_or_else(|_| halt());
-        }
-        if cycle + 1 == BLOCK_QUIESCE_CYCLE {
-            unsafe {
-                asm!(
-                    "out dx, eax",
-                    in("dx") BLOCK_QUIESCE_PORT,
-                    in("eax") BLOCK_QUIESCE_REQUESTS,
-                    options(nomem, nostack)
-                )
-            };
-            let mut resume_page = [0; PAGE_SIZE as usize];
-            for (offset, byte) in resume_page.iter_mut().enumerate() {
-                *byte = unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
-            }
-            let mut requests = [[0; VIRTUAL_BLOCK_REQUEST_BYTES]; 2];
-            for (slot, request) in requests.iter_mut().enumerate() {
-                let base =
-                    queue.request_base() + 128 + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
-                for (offset, byte) in request.iter_mut().enumerate() {
-                    *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
+        if !(recovering && cycle + 1 == BLOCK_QUIESCE_CYCLE) {
+            for (block, value) in patterns.into_iter().enumerate() {
+                let base = BLOCK_PAYLOAD_BASE + block as u64 * 4096;
+                for offset in 0..4096usize {
+                    unsafe { ((base as *mut u8).add(offset)).write_volatile(value) };
                 }
             }
-            driver = VirtualBlockGuestDriver::reconstruct_from_page(&resume_page, &requests)
-                .unwrap_or_else(|_| halt());
+            for block in 0..2u64 {
+                let write = driver
+                    .prepare_write(block, 1, BLOCK_PAYLOAD_BASE + block * 4096, 4096)
+                    .unwrap_or_else(|_| halt());
+                driver
+                    .publish_submission(&mut transport, write)
+                    .unwrap_or_else(|_| halt());
+            }
+            if cycle + 1 == BLOCK_QUIESCE_CYCLE {
+                unsafe {
+                    asm!(
+                        "out dx, eax",
+                        in("dx") BLOCK_QUIESCE_PORT,
+                        in("eax") BLOCK_QUIESCE_REQUESTS,
+                        options(nomem, nostack)
+                    )
+                };
+                for (offset, byte) in resume_page.iter_mut().enumerate() {
+                    *byte =
+                        unsafe { ((BLOCK_RESUME_BASE as *const u8).add(offset)).read_volatile() };
+                }
+                for (slot, request) in requests.iter_mut().enumerate() {
+                    let base = queue.request_base()
+                        + 128
+                        + slot as u64 * VIRTUAL_BLOCK_REQUEST_BYTES as u64;
+                    for (offset, byte) in request.iter_mut().enumerate() {
+                        *byte = unsafe { ((base as *const u8).add(offset)).read_volatile() };
+                    }
+                }
+                driver = VirtualBlockGuestDriver::reconstruct_from_page(&resume_page, &requests)
+                    .unwrap_or_else(|_| halt());
+            }
         }
         for _ in 0..2 {
             let write_completion = driver

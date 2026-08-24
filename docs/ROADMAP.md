@@ -738,10 +738,19 @@ and continues through operation 32. Canonical capture/publication now requires
 an explicit device `Suspended` state in addition to the stopped vCPU. Suspension
 admits no device in-flight slot or pending interrupt, and the device resumes
 only after publication and all state checks succeed. Fresh signed KVM execution
-covers this checkpoint. WHP source parity is present, but this increment has no new WHP
-build or execution evidence because the available Windows shell lacked its
-linker. Crash orchestration, backend-in-flight recovery, hosted VM restart
-execution, unbounded progress, and PCI transport remain pending.
+covers this checkpoint. WHP source parity is present, but this increment has no
+new WHP build or execution evidence because the available Windows shell lacked
+its linker. KVM now has controlled native VM-replacement evidence: the runner
+never resumes the stopped VM, prepares a new VM from the same verified
+executable and canonical handoff, copies only the two queue pages, canonical
+resume page, and two payload pages while the device remains suspended, then
+resumes the retained device only after complete restoration. The fresh kernel
+entry accepts only all-zero launch state or the exact `14/14/14/12` checkpoint
+and matching ID anchors before reconstructing. The device, bridge, volatile
+backend, and common policy VM identity are retained, so this is orderly
+execution replacement, not crash recovery. Equivalent WHP replacement,
+unplanned crash orchestration, backend-in-flight recovery, unbounded progress,
+and PCI transport remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

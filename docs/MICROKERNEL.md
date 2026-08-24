@@ -3874,6 +3874,60 @@ Patent review: `NOT_TRIGGERED` — conventional explicit device suspension befor
 bounded canonical state capture and resume after successful publication; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The signed KVM block probe now crosses a real native VM replacement instead of
+resuming the stopped vCPU after checkpoint publication. While the retained
+capability-bound device remains suspended, the runner reads exactly one request
+page, one completion page, the canonical resume page, and the two block payload
+pages. It prepares a fresh native VM from the same already verified executable,
+canonical boot handoff, launch layout, configuration, and read-only/NX resume
+binding; restores request memory through the ordinary host boundary and
+completion/resume memory only through the device-write boundary; restores the
+two bounded payload pages; consumes the old VM by replacement; and only then
+returns the device to `Active`. No unrelated old guest RAM is retained.
+
+The compiled kernel entry now decodes the complete resume page before creating
+driver state and binds all four live queue counters to it. It accepts exactly
+two probe states: canonical all-zero discovery, or producer/consumed/completion-
+published watermarks 14, completion-consumer watermark 12, and both ID anchors
+14. Any other nonzero or mismatched state halts. Recovery entry reconstructs
+the two completed-but-unretired writes, skips their publication and the old
+checkpoint, retires their protected completions, and continues with reads 15
+and 16 through final request 32. The common VM policy identity, exit budget,
+device, bridge, and volatile backend remain live; this is not reboot-time host
+device reconstruction.
+
+Fresh one-time Lamport-signed version-1 Arch Linux/WSL2 KVM execution on
+2026-08-24 completed both kernel entries and reported `verify=17289us
+prepare=2552us execute=46477us total=88649us`. Isolated release verification
+passed all 387 kernel tests and all 6 KVM-run tests. Package-focused strict
+`--no-deps` Clippy passed for the kernel, KVM runner, and UEFI block probe. No
+new WHP build or execution evidence is claimed because the Windows linker was
+unavailable. This proves orderly hosted KVM VM replacement only, not an
+unplanned crash, WHP replacement, backend-in-flight recovery, persistent or
+durable state, host resistance, native boot, bare metal, or physical hardware.
+
+The VM-replacement `DIGITAL-RIGHTS REVIEW` found no identity, collection,
+retention, correlation, disclosure, attestation mandate, DRM, vendor/publisher
+veto, first-party bypass, accessibility restriction, AI authority, or durable
+owner-state change. Copying only five bounded device-required pages minimizes
+retention and grants no authority. The `HOSTILE SECURITY REVIEW` treats the
+verified artifact and handoff binding, checkpoint tuple and budget, old VM stop,
+device suspension, every copied page and byte, queue/page directionality,
+replacement mappings, live counters, history anchors, fresh-entry choice,
+driver reconstruction, completion order, device resume, and backend result as
+hostile. The old VM is never resumed; arbitrary old RAM is not copied; protected
+pages use only the device-write path; focused tests reject configuration
+substitution and each live-counter mismatch; mismatch or uncertainty returns no
+active replacement. Existing capability, revocation, rollback-resistance,
+accessibility, evidence, owner-sovereignty, data-minimization, anti-DRM, owner-
+controlled-attestation, AI-containment, and anti-persistence gates remain
+unchanged. This agent review does not replace the required independent human
+dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional bounded device-page transfer into
+a freshly prepared VM and exact fresh-versus-resume state selection; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE

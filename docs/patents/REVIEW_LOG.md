@@ -1589,6 +1589,15 @@ new authority model, persistent format, device protocol, or patent-candidate
 mechanism. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Controlled virtual-block KVM replacement
+
+**Result: NOT_TRIGGERED.** The change conventionally transfers five bounded
+device-required pages from a stopped VM into a freshly prepared VM while the
+retained device is suspended, then selects an exact canonical recovery entry
+state. It adds no new authority model, persistent format, device protocol, or
+patent-candidate mechanism. This agent review does not replace the required
+independent human dual review.
+
 # 2026-08-24 — Virtual-block queue transaction processor
 
 **Result: NOT_TRIGGERED.** The change conventionally preflights producer/
