@@ -10511,7 +10511,8 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     conflict.path,
                     matches!(
                         conflict.kind,
-                        RuntimePlaceEffectKind::SharedBorrow
+                        RuntimePlaceEffectKind::Move
+                            | RuntimePlaceEffectKind::SharedBorrow
                             | RuntimePlaceEffectKind::MutableBorrow
                             | RuntimePlaceEffectKind::LoanMutation
                     ),
@@ -28133,6 +28134,43 @@ mod tests {
 
         let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let copied = *child; let observed = read(parent); copied + observed }";
         analyze(accepted).unwrap();
+    }
+
+    #[test]
+    fn runtime_owner_moves_suspend_live_children_of_local_reference_ancestors() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let moved = parent; *child + *moved }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let moved = parent; *child + *moved }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for accepted in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; let moved = parent; copied + *moved }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let copied = *child; let moved = parent; copied + *moved }",
+        ] {
+            analyze(accepted).unwrap();
+        }
     }
 
     #[test]

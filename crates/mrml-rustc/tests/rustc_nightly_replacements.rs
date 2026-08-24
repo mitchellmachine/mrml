@@ -4136,6 +4136,33 @@ fn rustc_shared_call_reborrow_suspends_mutable_child_of_local_ancestor_like_the_
 }
 
 #[test]
+fn rustc_local_reference_ancestor_moves_suspend_live_children_like_the_oracle() {
+    let rejected = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let moved = parent; *child + *moved }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let moved = parent; *child + *moved }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; let moved = parent; copied + *moved }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = &mut *parent; let copied = *child; let moved = parent; copied + *moved }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_implicit_mutable_reborrow_matches_the_oracle() {
     let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
