@@ -2785,11 +2785,14 @@ canonical exhausted allocator remains valid and cannot allocate. Authenticated
 anti-rollback and block-device durability remain pending, so create is not yet
 proven crash-safe on a block device. The authority table now supplies the corresponding
 inactive slot reservation. A reservation binds exact object, kind, rights,
-owner, slot, and generation, consumes capacity without becoming authorizing,
+owner, slot, generation, and exact parent handle, consumes capacity without
+becoming authorizing,
 rejects guessed handles, activates exactly once, and advances the slot
 generation when canceled. This prevents intervening insertions from stealing
 capacity reserved for a later durable create. The prepared-create coordinator
-validates the exact reservation before receipt consumption, activates it only
+validates the exact reservation and revalidates the parent owner, directory
+kind, generation, and matching create right before receipt consumption; it
+activates it only
 after every participant is consumed, and can retire it on prepublication
 cancellation.
 The child side of creation now has canonical initialization for both native
@@ -2979,10 +2982,14 @@ to complete directory creation.
 
 The `DIGITAL-RIGHTS REVIEW` found no new collection, retention, correlation,
 remote disclosure, tracking identity, publisher control, DRM, accessibility
-exclusion, cloud dependency, or first-party bypass. Stable object identity
-remains non-authorizing. The `HOSTILE SECURITY REVIEW` treats pointers, lengths,
-generations, canonical bytes, transaction membership, backend outcomes, and
-recovery images as hostile; exact binding, checked ranges, disjoint COW storage,
+exclusion, cloud dependency, or first-party bypass. Stable object identity and
+namespace names remain non-authorizing; no owner, publisher, or first-party
+bypass was added. Recovered-child opening requires a separately delegable
+`OPEN_CHILD` capability, returns only kind-valid requested rights, records
+derivation lineage, and remains subject to transitive parent revocation. The
+`HOSTILE SECURITY REVIEW` treats pointers, lengths, handles, owners, kinds,
+rights, generations, canonical bytes, transaction membership, backend outcomes,
+and recovery images as hostile; exact binding, checked ranges, disjoint COW storage,
 complete-image digests, capacity preflight, and one-use receipts fail closed on
 stale, missing, duplicate, or substituted state. Allocator review additionally
 requires distinct exhausted encoding, checked monotonic advance, disjoint COW
@@ -2992,8 +2999,8 @@ review.
 
 Seventy-seven focused unit tests and strict crate-local clippy pass on Windows
 gnullvm and Arch Linux under WSL2. Concrete block/allocation integration,
-complete directory hierarchy/lifetime handling, post-fail-stop capability reconciliation,
-complete crash recovery, snapshots, a block-device service, and
+complete directory hierarchy/lifetime handling, reboot-time capability
+checkpoint/reconstruction, complete crash recovery, snapshots, a block-device service, and
 configuration-checkpoint persistence remain unimplemented.
 
 ```text
@@ -3059,8 +3066,12 @@ accepted as the more restrictive state, and backend uncertainty never becomes
 permission to roll back. The create cut-point model uses the exact staged bytes
 and complete allocation graph, injects every verification/flush/replacement
 failure, and accepts only complete generation 5 or 6 recovery. No error path
-activates the reserved handle; a durable-new fail-stop is explicitly left for
-later capability reconciliation rather than manufacturing authority.
+activates the reserved handle. For a durable-new fail-stop, the model cancels
+the stale inactive reservation and reopens the recovered named child only from
+the exact surviving parent handle with `OPEN_CHILD`; `LOOKUP` alone fails. The
+fresh handle carries kind-valid requested rights and parent lineage, so revoking
+the parent invalidates it transitively. This is in-memory fail-stop evidence,
+not reboot-time persistent capability reconstruction.
 This agent review is not
 independent human audit.
 

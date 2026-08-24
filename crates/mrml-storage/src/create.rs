@@ -4,8 +4,8 @@ use crate::{
     PreparedAllocationUpdate, PreparedDirectoryMovePlan, PreparedInitialDirectory,
     PreparedInitialFile, PreparedObjectIdReservation, StorageAuthorityError,
     StorageAuthorityReservation, StorageAuthorityTable, StorageHandle, StorageObjectId,
-    StorageObjectKind, StorageTransaction, StorageTransactionId, Superblock, TransactionError,
-    TransactionParticipant, TransactionReceipt, VolumeHeader,
+    StorageObjectKind, StorageRights, StorageTransaction, StorageTransactionId, Superblock,
+    TransactionError, TransactionParticipant, TransactionReceipt, VolumeHeader,
 };
 
 pub enum PreparedInitialObject {
@@ -106,6 +106,7 @@ pub struct PreparedCreate<const C: usize, const E: usize, const A: usize> {
     object_id: PreparedObjectIdReservation,
     allocation: PreparedAllocationUpdate<A>,
     authority: StorageAuthorityReservation,
+    creation_parent: StorageObjectId,
 }
 
 impl<const C: usize, const E: usize, const A: usize> PreparedCreate<C, E, A> {
@@ -127,6 +128,7 @@ impl<const C: usize, const E: usize, const A: usize> PreparedCreate<C, E, A> {
             || child.object() != object_id.allocated()
             || authority.object() != child.object()
             || authority.kind() != child.kind()
+            || !authority.has_parent()
             || !parent_matches
         {
             return Err(PreparedCreateError::InvalidBinding);
@@ -137,6 +139,7 @@ impl<const C: usize, const E: usize, const A: usize> PreparedCreate<C, E, A> {
             object_id,
             allocation,
             authority,
+            creation_parent: creation_parent.ok_or(PreparedCreateError::InvalidBinding)?,
         })
     }
 
@@ -270,7 +273,20 @@ impl<const C: usize, const E: usize, const A: usize> PreparedCreate<C, E, A> {
         receipt: &mut TransactionReceipt<P>,
         authorities: &mut StorageAuthorityTable<N>,
     ) -> Result<CommittedCreate<C, E, A>, (Self, CreateCommitError)> {
-        if !authorities.reservation_is_valid(&self.authority) {
+        let create_right = match self.child.kind() {
+            StorageObjectKind::File => StorageRights::CREATE_FILE,
+            StorageObjectKind::Directory => StorageRights::CREATE_DIRECTORY,
+            StorageObjectKind::Volume => {
+                return Err((self, CreateCommitError::Authority));
+            }
+        };
+        if !authorities.reservation_is_valid(&self.authority)
+            || !authorities.reservation_parent_matches(
+                &self.authority,
+                self.creation_parent,
+                create_right,
+            )
+        {
             return Err((self, CreateCommitError::Authority));
         }
         let (directory_participants, directory_count) = match self.directories.participants() {
@@ -302,6 +318,7 @@ impl<const C: usize, const E: usize, const A: usize> PreparedCreate<C, E, A> {
             object_id,
             allocation,
             authority,
+            creation_parent: _,
         } = self;
         let handle = authorities.activate_validated(authority);
         let (object_id_allocator, allocated) = object_id.into_successor();
@@ -350,9 +367,9 @@ mod tests {
         CowPublicationBackend, CowPublishError, DirectoryAncestryBackend, DirectoryEntry,
         DirectoryImage, DirectoryMetadata, DirectorySuccessorBackend, DirectorySuccessorLayout,
         DirectoryWriteBackend, InitialFileWriteBackend, ObjectIdAllocatorWriteBackend,
-        RecoveryMetadataBackend, StorageName, StoragePrincipal, StorageRights,
-        TransactionPublishError, VolumeId, prepare_initial_directory, prepare_initial_file,
-        prove_directory_mutation_ancestry, recover_reachable_superblock,
+        RecoveryMetadataBackend, StorageName, StoragePrincipal, TransactionPublishError, VolumeId,
+        prepare_initial_directory, prepare_initial_file, prove_directory_mutation_ancestry,
+        recover_reachable_superblock,
     };
 
     fn volume() -> VolumeId {
@@ -754,6 +771,7 @@ mod tests {
             StorageAuthorityTable<2>,
             Backend,
             StoragePrincipal,
+            StorageHandle,
         ),
         PreparedCreateError,
     > {
@@ -856,8 +874,25 @@ mod tests {
         let principal = StoragePrincipal::new(9).unwrap();
         let rights = StorageRights::LOOKUP.union(StorageRights::ENUMERATE);
         let mut authorities = StorageAuthorityTable::<2>::new();
+        let root_handle = authorities
+            .insert(
+                root,
+                StorageObjectKind::Directory,
+                StorageRights::LOOKUP
+                    .union(StorageRights::OPEN_CHILD)
+                    .union(StorageRights::CREATE_DIRECTORY),
+                principal,
+            )
+            .unwrap();
         let authority = authorities
-            .reserve_insert(child, StorageObjectKind::Directory, rights, principal)
+            .reserve_child_insert(
+                root_handle,
+                principal,
+                StorageRights::CREATE_DIRECTORY,
+                child,
+                StorageObjectKind::Directory,
+                rights,
+            )
             .unwrap();
         PreparedCreate::new(
             directories,
@@ -866,7 +901,7 @@ mod tests {
             allocation,
             authority,
         )
-        .map(|prepared| (prepared, authorities, backend, principal))
+        .map(|prepared| (prepared, authorities, backend, principal, root_handle))
     }
 
     #[test]
@@ -969,8 +1004,23 @@ mod tests {
         let principal = StoragePrincipal::new(7).unwrap();
         let rights = StorageRights::READ.union(StorageRights::WRITE);
         let mut authorities = StorageAuthorityTable::<2>::new();
+        let root_handle = authorities
+            .insert(
+                root,
+                StorageObjectKind::Directory,
+                StorageRights::CREATE_FILE,
+                principal,
+            )
+            .unwrap();
         let authority = authorities
-            .reserve_insert(child, StorageObjectKind::File, rights, principal)
+            .reserve_child_insert(
+                root_handle,
+                principal,
+                StorageRights::CREATE_FILE,
+                child,
+                StorageObjectKind::File,
+                rights,
+            )
             .unwrap();
         let prepared = PreparedCreate::new(
             directories,
@@ -982,7 +1032,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             authorities.authorize(
-                StorageHandle::from_token(1_u64 << 32),
+                StorageHandle::from_token((1_u64 << 32) | 1),
                 principal,
                 StorageObjectKind::File,
                 StorageRights::READ,
@@ -1046,6 +1096,16 @@ mod tests {
             Ok(child)
         );
         assert!(matches!(committed.child, InitialObjectState::File(_)));
+        assert_eq!(authorities.revoke(root_handle, principal), Ok(2));
+        assert_eq!(
+            authorities.authorize(
+                committed.handle,
+                principal,
+                StorageObjectKind::File,
+                StorageRights::READ,
+            ),
+            Err(StorageAuthorityError::InvalidHandle)
+        );
     }
 
     #[test]
@@ -1055,7 +1115,7 @@ mod tests {
             Err(PreparedCreateError::InvalidBinding)
         ));
 
-        let (prepared, mut authorities, mut backend, principal) =
+        let (prepared, mut authorities, mut backend, principal, root_handle) =
             prepared_directory_create(object(1)).unwrap();
         let transaction = prepared
             .transaction::<4, 6>(StorageTransactionId::new(52).unwrap(), 6)
@@ -1093,6 +1153,16 @@ mod tests {
         assert_eq!(directory.state().object(), object(10));
         assert_eq!(directory.state().generation(), 1);
         assert!(directory.state().is_empty());
+        assert_eq!(authorities.revoke(root_handle, principal), Ok(2));
+        assert_eq!(
+            authorities.authorize(
+                committed.handle,
+                principal,
+                StorageObjectKind::Directory,
+                StorageRights::LOOKUP,
+            ),
+            Err(StorageAuthorityError::InvalidHandle)
+        );
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1107,7 +1177,7 @@ mod tests {
         persist_on_replace: bool,
         persist_on_failed_flush: bool,
     ) -> (CrashOutcome, u64) {
-        let (prepared, mut authorities, staged, principal) =
+        let (prepared, mut authorities, staged, principal, root_handle) =
             prepared_directory_create(object(1)).unwrap();
         let transaction = prepared
             .transaction::<4, 6>(StorageTransactionId::new(60).unwrap(), 6)
@@ -1149,7 +1219,7 @@ mod tests {
             Err(TransactionPublishError::Publication(CowPublishError::Rejected(_))) => {
                 assert_eq!(
                     authorities.authorize(
-                        StorageHandle::from_token(1_u64 << 32),
+                        StorageHandle::from_token((1_u64 << 32) | 1),
                         principal,
                         StorageObjectKind::Directory,
                         StorageRights::LOOKUP,
@@ -1162,7 +1232,7 @@ mod tests {
             Err(TransactionPublishError::Publication(CowPublishError::FailStop(_))) => {
                 assert_eq!(
                     authorities.authorize(
-                        StorageHandle::from_token(1_u64 << 32),
+                        StorageHandle::from_token((1_u64 << 32) | 1),
                         principal,
                         StorageObjectKind::Directory,
                         StorageRights::LOOKUP,
@@ -1174,7 +1244,33 @@ mod tests {
             }
             Err(TransactionPublishError::WrongPlan) => panic!("complete create plan rejected"),
         };
-        (outcome, crash.recovered_generation())
+        let recovered_generation = crash.recovered_generation();
+        if outcome == CrashOutcome::FailStop && recovered_generation == 6 {
+            let recovered_root =
+                DirectoryImage::<2>::decode(header(), object(1), 6, pointer(61), &crash.images[1])
+                    .unwrap();
+            let (entry, reconciled) = recovered_root
+                .state()
+                .open_child(
+                    &mut authorities,
+                    root_handle,
+                    principal,
+                    StorageName::new("created-directory").unwrap(),
+                    StorageRights::LOOKUP,
+                )
+                .unwrap();
+            assert_eq!(entry.object(), object(10));
+            assert_eq!(
+                authorities.authorize(
+                    reconciled,
+                    principal,
+                    StorageObjectKind::Directory,
+                    StorageRights::LOOKUP,
+                ),
+                Ok(object(10))
+            );
+        }
+        (outcome, recovered_generation)
     }
 
     #[test]

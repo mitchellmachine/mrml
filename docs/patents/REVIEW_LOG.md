@@ -991,6 +991,21 @@ capability, or persistence technique.
 
 Patent review: `NOT_TRIGGERED` — conventional cut-point recovery simulation.
 
+## 2026-08-23 — recovered child capability derivation
+
+MRML source: `crates/mrml-storage/src/authority.rs`, `directory.rs`, and
+`create.rs`.
+
+The service conventionally requires an explicit parent-directory right before
+opening a named recovered child, validates kind-specific requested rights, and
+records the child handle as a generational descendant for transitive
+revocation. Transactional create reservations retain and revalidate the same
+parent lineage. This adds no novel capability, namespace, recovery, or
+revocation technique.
+
+Patent review: `NOT_TRIGGERED` — conventional capability derivation and
+revocation lineage.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

@@ -1301,6 +1301,36 @@ impl<const N: usize> DirectoryState<N> {
         self.entries[index].ok_or(DirectoryError::InvalidState)
     }
 
+    /// Opens one named child using explicit authority over this directory.
+    ///
+    /// The name identifies the child entry. Only the `OPEN_CHILD` capability on
+    /// this exact directory authorizes creation of the returned child handle.
+    pub fn open_child<const A: usize>(
+        &self,
+        authority: &mut StorageAuthorityTable<A>,
+        directory: StorageHandle,
+        principal: StoragePrincipal,
+        name: StorageName,
+        requested: StorageRights,
+    ) -> Result<(DirectoryEntry, StorageHandle), DirectoryError> {
+        self.authorize(authority, directory, principal, StorageRights::OPEN_CHILD)?;
+        let index = self.find_name(name).ok_or(DirectoryError::NotFound)?;
+        let entry = self.entries[index].ok_or(DirectoryError::InvalidState)?;
+        let rights = StorageRights::from_bits(entry.kind(), requested.bits())
+            .map_err(DirectoryError::Authority)?;
+        let handle = authority
+            .insert_child_derived(
+                directory,
+                principal,
+                StorageRights::OPEN_CHILD,
+                entry.object(),
+                entry.kind(),
+                rights,
+            )
+            .map_err(DirectoryError::Authority)?;
+        Ok((entry, handle))
+    }
+
     pub fn enumerate<const A: usize>(
         &self,
         authority: &StorageAuthorityTable<A>,
@@ -1345,7 +1375,14 @@ impl<const N: usize> DirectoryState<N> {
         let entry =
             DirectoryEntry::new(name, object, kind, 1).map_err(|_| DirectoryError::InvalidState)?;
         let child = authority
-            .insert(object, kind, initial_rights, principal)
+            .insert_child_derived(
+                directory,
+                principal,
+                create_right,
+                object,
+                kind,
+                initial_rights,
+            )
             .map_err(DirectoryError::Authority)?;
         let consumed = allocator.consume()?;
         debug_assert_eq!(consumed, object);
@@ -2115,6 +2152,7 @@ mod tests {
             .union(StorageRights::CREATE_DIRECTORY)
             .union(StorageRights::RENAME_CHILD)
             .union(StorageRights::REMOVE_CHILD)
+            .union(StorageRights::OPEN_CHILD)
     }
 
     struct UpdateBackend {
@@ -2563,6 +2601,62 @@ mod tests {
                 StorageRights::WRITE
             ),
             Ok(object(10))
+        );
+        let (opened_entry, opened) = directory
+            .open_child(
+                &mut authority,
+                root,
+                principal(),
+                name("file"),
+                StorageRights::READ,
+            )
+            .unwrap();
+        assert_eq!(opened_entry, entry);
+        assert_eq!(
+            authority.authorize(
+                opened,
+                principal(),
+                StorageObjectKind::File,
+                StorageRights::READ,
+            ),
+            Ok(object(10))
+        );
+        let lookup_only = authority
+            .insert(
+                object(1),
+                StorageObjectKind::Directory,
+                StorageRights::LOOKUP,
+                principal(),
+            )
+            .unwrap();
+        assert!(matches!(
+            directory.open_child(
+                &mut authority,
+                lookup_only,
+                principal(),
+                name("file"),
+                StorageRights::READ,
+            ),
+            Err(DirectoryError::Authority(StorageAuthorityError::Denied))
+        ));
+        assert_eq!(authority.revoke(root, principal()), Ok(3));
+        assert_eq!(
+            authority.authorize(
+                child,
+                principal(),
+                StorageObjectKind::File,
+                StorageRights::READ,
+            ),
+            Err(StorageAuthorityError::InvalidHandle)
+        );
+        assert_eq!(
+            authority.authorize(
+                opened,
+                principal(),
+                StorageObjectKind::File,
+                StorageRights::READ,
+            ),
+            Err(StorageAuthorityError::InvalidHandle)
         );
     }
 

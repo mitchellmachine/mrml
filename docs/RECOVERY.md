@@ -182,9 +182,13 @@ explicitly and downgrade the status rather than guessing.
   and invokes full reachable recovery. Pre-replacement failures select the old
   graph; uncertain replacement/final flush permits only the complete old or
   complete new graph; success selects new. Authority stays inactive without a
-  successful receipt. If fail-stop recovery selects the durable new graph,
-  capability reconciliation remains pending. Concrete block durability remains
-  pending.
+  successful receipt. If fail-stop recovery selects the durable new graph, the
+  in-memory model cancels the stale inactive reservation and requires an exact
+  surviving parent-directory capability carrying `OPEN_CHILD` to derive a
+  fresh, kind-valid child handle. The name identifies but does not authorize;
+  `LOOKUP` alone is insufficient, and parent revocation transitively invalidates
+  the reopened child. Reboot-time capability checkpoint/reconstruction and
+  concrete block durability remain pending.
   Redundant-root
   selection decodes both canonical superblocks, requires complete candidate
   validation, accepts only identical or adjacent usable generations, and marks

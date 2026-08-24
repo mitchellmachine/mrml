@@ -329,10 +329,15 @@ preserves it. A deterministic durability simulation now materializes the exact
 six staged create images, verifies their complete digests, crashes at every COW
 publication event, and runs the full reachable validator. It selects only the
 complete old or complete new graph. Authority remains inactive unless a
-successful publication returns the exact receipt; a fail-stop whose superblock
-became durable can therefore recover the new graph without a handle, and
-capability reconciliation after that outcome remains pending. Concrete block
-integration and physical power-loss evidence remain pending.
+successful publication returns the exact receipt. After a fail-stop whose
+superblock became durable, the in-memory model cancels the stale inactive
+reservation and permits a fresh child handle only through the exact surviving
+parent-directory handle carrying the distinct `OPEN_CHILD` right. The name
+identifies the recovered child but does not authorize it; requested rights must
+be valid for the recovered kind, and the fresh handle retains parent lineage so
+revocation is transitive. `LOOKUP` alone cannot manufacture authority. Reboot-
+time capability checkpoint/reconstruction, concrete block integration, and
+physical power-loss evidence remain pending.
 Capability-authorized file reads split an arbitrary bounded range across exact
 extent records, synthesize sparse holes as zeroes, and require a backend to
 verify the complete physical extent digest before copying any data subrange.

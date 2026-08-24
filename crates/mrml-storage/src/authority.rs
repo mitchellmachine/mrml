@@ -20,6 +20,7 @@ impl StorageRights {
     pub const CREATE_DIRECTORY: Self = Self(1 << 3);
     pub const RENAME_CHILD: Self = Self(1 << 4);
     pub const REMOVE_CHILD: Self = Self(1 << 5);
+    pub const OPEN_CHILD: Self = Self(1 << 6);
     pub const READ: Self = Self(1 << 8);
     pub const WRITE: Self = Self(1 << 9);
     pub const RESIZE: Self = Self(1 << 10);
@@ -34,6 +35,7 @@ impl StorageRights {
         | Self::CREATE_DIRECTORY.0
         | Self::RENAME_CHILD.0
         | Self::REMOVE_CHILD.0
+        | Self::OPEN_CHILD.0
         | Self::READ_METADATA.0
         | Self::WRITE_METADATA.0
         | Self::DELEGATE.0;
@@ -143,6 +145,7 @@ pub struct StorageAuthorityReservation {
     kind: StorageObjectKind,
     rights: StorageRights,
     owner: StoragePrincipal,
+    parent: Option<StorageHandle>,
 }
 
 impl<const N: usize> StorageAuthorityTable<N> {
@@ -173,6 +176,36 @@ impl<const N: usize> StorageAuthorityTable<N> {
         rights: StorageRights,
         owner: StoragePrincipal,
     ) -> Result<StorageAuthorityReservation, StorageAuthorityError> {
+        self.reserve_insert_derived(object, kind, rights, owner, None)
+    }
+
+    pub fn reserve_child_insert(
+        &mut self,
+        parent: StorageHandle,
+        owner: StoragePrincipal,
+        required_parent_right: StorageRights,
+        object: StorageObjectId,
+        kind: StorageObjectKind,
+        rights: StorageRights,
+    ) -> Result<StorageAuthorityReservation, StorageAuthorityError> {
+        let parent_entry = *self.entry(parent)?;
+        if parent_entry.owner != Some(owner)
+            || parent_entry.kind != StorageObjectKind::Directory
+            || !parent_entry.rights.contains(required_parent_right)
+        {
+            return Err(StorageAuthorityError::Denied);
+        }
+        self.reserve_insert_derived(object, kind, rights, owner, Some(parent))
+    }
+
+    fn reserve_insert_derived(
+        &mut self,
+        object: StorageObjectId,
+        kind: StorageObjectKind,
+        rights: StorageRights,
+        owner: StoragePrincipal,
+        parent: Option<StorageHandle>,
+    ) -> Result<StorageAuthorityReservation, StorageAuthorityError> {
         if !rights.valid_for(kind) {
             return Err(StorageAuthorityError::InvalidRights);
         }
@@ -187,7 +220,7 @@ impl<const N: usize> StorageAuthorityTable<N> {
         entry.kind = kind;
         entry.rights = rights;
         entry.owner = Some(owner);
-        entry.parent = None;
+        entry.parent = parent;
         entry.reserved = true;
         Ok(StorageAuthorityReservation {
             slot,
@@ -196,6 +229,7 @@ impl<const N: usize> StorageAuthorityTable<N> {
             kind,
             rights,
             owner,
+            parent,
         })
     }
 
@@ -216,6 +250,22 @@ impl<const N: usize> StorageAuthorityTable<N> {
             .ok()
             .and_then(|slot| self.entries.get(slot))
             .is_some_and(|entry| reservation.matches(*entry))
+    }
+
+    pub(crate) fn reservation_parent_matches(
+        &self,
+        reservation: &StorageAuthorityReservation,
+        parent_object: StorageObjectId,
+        required_right: StorageRights,
+    ) -> bool {
+        reservation.parent.is_some_and(|parent| {
+            self.entry(parent).is_ok_and(|entry| {
+                entry.object == Some(parent_object)
+                    && entry.kind == StorageObjectKind::Directory
+                    && entry.owner == Some(reservation.owner)
+                    && entry.rights.contains(required_right)
+            })
+        })
     }
 
     pub(crate) fn activate_validated(
@@ -279,6 +329,26 @@ impl<const N: usize> StorageAuthorityTable<N> {
             destination_owner,
             Some(handle),
         )
+    }
+
+    pub(crate) fn insert_child_derived(
+        &mut self,
+        parent: StorageHandle,
+        owner: StoragePrincipal,
+        required_parent_right: StorageRights,
+        object: StorageObjectId,
+        kind: StorageObjectKind,
+        requested: StorageRights,
+    ) -> Result<StorageHandle, StorageAuthorityError> {
+        let parent_entry = *self.entry(parent)?;
+        if parent_entry.owner != Some(owner)
+            || parent_entry.kind != StorageObjectKind::Directory
+            || !parent_entry.rights.contains(required_parent_right)
+            || !requested.valid_for(kind)
+        {
+            return Err(StorageAuthorityError::Denied);
+        }
+        self.insert_derived(object, kind, requested, owner, Some(parent))
     }
     pub fn revoke(
         &mut self,
@@ -398,6 +468,10 @@ impl StorageAuthorityReservation {
         self.kind
     }
 
+    pub(crate) const fn has_parent(&self) -> bool {
+        self.parent.is_some()
+    }
+
     fn matches(&self, entry: Entry) -> bool {
         entry.reserved
             && entry.generation == self.generation
@@ -405,7 +479,7 @@ impl StorageAuthorityReservation {
             && entry.kind == self.kind
             && entry.rights == self.rights
             && entry.owner == Some(self.owner)
-            && entry.parent.is_none()
+            && entry.parent == self.parent
     }
 }
 impl<const N: usize> Default for StorageAuthorityTable<N> {
@@ -508,6 +582,7 @@ mod tests {
             kind: reservation.kind,
             rights: reservation.rights,
             owner: reservation.owner,
+            parent: reservation.parent,
         };
         table.cancel_reservation(reservation).unwrap();
         assert_eq!(
@@ -530,6 +605,7 @@ mod tests {
             kind: reservation.kind,
             rights: reservation.rights,
             owner: reservation.owner,
+            parent: reservation.parent,
         };
         let handle = table.activate_reservation(reservation).unwrap();
         assert_eq!(handle.generation, 2);

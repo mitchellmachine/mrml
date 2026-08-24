@@ -295,9 +295,13 @@ authority; unrelated domains continue.
    durability simulation materializes and verifies all staged bytes, fails at
    every publication event, and runs complete reachable recovery. Only the old
    graph or fully valid new graph is selected, and authority activates only from
-   a successful exact receipt. Post-fail-stop reconciliation when the new root
-   became durable, concrete block integration, and physical power-loss evidence
-   remain pending.
+   a successful exact receipt. When fail-stop recovery selects the durable new
+   graph, the in-memory model cancels the stale reservation and can reopen the
+   child only from an exact surviving parent handle with the separate
+   `OPEN_CHILD` right. The name remains non-authorizing, requested rights must
+   match the child kind, and the new handle is a revocable descendant. Reboot-
+   time capability reconstruction, concrete block integration, and physical
+   power-loss evidence remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
    checked before range details, immutable file state must match its extent-map
    object/generation/length, sparse holes return zeroes, and every physical data
@@ -396,9 +400,10 @@ authority; unrelated domains continue.
    next object generation only after its one-use publication receipt is
    consumed. Persistent object-ID allocation, inactive authority reservation,
    complete in-memory prepared-create coupling, and deterministic interrupted-
-   create publication recovery are implemented. Post-fail-stop capability
-   reconciliation, concrete block integration, and physical power-loss evidence
-   remain pending.
+   create publication recovery and surviving-parent post-fail-stop child
+   reconciliation are implemented in memory. Reboot-time capability
+   checkpoint/reconstruction, concrete block integration, and physical
+   power-loss evidence remain pending.
 4. Add snapshot objects and capability enforcement, then system-generation and
    authenticated update integration.
 5. Add compatibility filesystem readers and optional advanced storage features
