@@ -66,6 +66,12 @@ const SERVICE_B_STACK_PHYSICAL: u64 = 0x00e0_0000;
 #[cfg(target_os = "windows")]
 const SERVICE_B_TABLE_PHYSICAL: u64 = 0x00d0_0000;
 #[cfg(target_os = "windows")]
+const SERVICE_C_PHYSICAL: u64 = 0x0130_0000;
+#[cfg(target_os = "windows")]
+const SERVICE_C_TABLE_PHYSICAL: u64 = 0x0140_0000;
+#[cfg(target_os = "windows")]
+const SERVICE_C_STACK_PHYSICAL: u64 = 0x0150_0000;
+#[cfg(target_os = "windows")]
 const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
 #[cfg(target_os = "windows")]
 const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
@@ -309,6 +315,28 @@ fn application_main() -> Result<()> {
                     error
                 )
             })?;
+        if service_mode {
+            guest = guest
+                .attach_isolated_service_at(
+                    2,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified service executable"))?,
+                    SERVICE_C_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_C_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    2,
+                    SERVICE_C_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| {
+                    anyhow!("third isolated WHP service preparation failed: {:?}", error)
+                })?;
+        }
         let shared = Mapping::new(
             VirtAddr::new(SERVICE_SHARED_VIRTUAL)
                 .map_err(|_| anyhow!("invalid WHP service shared virtual address"))?,
@@ -339,6 +367,10 @@ fn application_main() -> Result<()> {
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
+            || (service_mode
+                && (guest.service_entry_at(2) != Some(service_entry)
+                    || guest.service_page_table_root_at(2)
+                        != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
         {
             return Err(anyhow!("isolated WHP service layout mismatch"));
         }

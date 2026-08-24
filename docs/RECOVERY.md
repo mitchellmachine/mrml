@@ -194,6 +194,10 @@ explicitly and downgrade the status rather than guessing.
   generation, object, cleanup completion, backoff, budget, and one-use plan
   after the host boundary. This is a prerequisite, not evidence that CPL3
   restart dispatch or host reprovisioning is complete.
+  KVM and WHP can additionally construct a third verified service slot with an
+  independent page-table root, image, and stack. The shared and resource pages
+  remain limited to their original slots. Signed hosted runs verify layout and
+  non-overlap only; the kernel does not yet create a management task there.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

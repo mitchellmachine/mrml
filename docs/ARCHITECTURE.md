@@ -681,7 +681,11 @@ priority. Operation 10 admits only capability plus service identity and remains
 detail-free denied in the live image until trusted code stages a matching
 reprovision plan. Planning and commit are split around that boundary: commit
 rechecks the exact service generation, object, completed cleanup, policy budget,
-backoff, and plan freshness before creating a task. The bounded CPL3 request-
+backoff, and plan freshness before creating a task. KVM and WHP can now construct
+a third independently rooted verified service image for the eventual management
+client. Its image, stack, and page tables are disjoint, and it receives neither
+the two-service shared page nor the receiver-only resource mapping. No kernel
+task enters that third image yet. The bounded CPL3 request-
 buffer ABI decodes fixed payload/capability-
 buffer descriptors and validates every active user leaf before a directional
 copy. The signed service

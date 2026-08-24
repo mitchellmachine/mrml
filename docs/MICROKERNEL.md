@@ -3485,6 +3485,17 @@ runs of the existing query/lifecycle path reported KVM `verify=21728us
 prepare=2851us execute=1414us total=49244us` and WHP `verify=18696us
 prepare=3778us execute=906us total=27136us`; operation 10 was not exercised.
 
+The hosted isolation prerequisite for an independent restart client is now
+present on both backends. The fixed service registry holds three verified image,
+root, and instance records, but shared-page and resource-page state remains a
+separate two-slot family. Service-probe runners attach slot 2 at disjoint checked
+image, stack, and page-table ranges and require its entry to match the verified
+service artifact and its root to match the requested table arena. Fresh signed
+runs completed with KVM `verify=20829us prepare=2351us execute=1257us
+total=44966us` and WHP `verify=18795us prepare=4089us execute=832us
+total=27297us`. The kernel did not create or execute a slot-2 task, so this is
+hosted construction evidence only, not restart-message execution.
+
 For this query increment, the `DIGITAL-RIGHTS REVIEW` found no new collection,
 retention, correlation, remote disclosure, DRM or publisher veto,
 owner-attestation restriction, accessibility exclusion, AI authority, or
@@ -3499,7 +3510,11 @@ the exact live service reaches the query. Restart planning adds no user-selected
 clock or execution context, persists nothing, and creates no publisher or remote
 authority. Operation 10 rejects all unstaged requests, and plan commit treats
 generation, object, cleanup, backoff, budget, context binding, runtime capacity,
-and replay as hostile state. The query operation accepts no restart context and
+and replay as hostile state. The third hosted slot adds no communication,
+observation, retained data, or ambient authority; its ranges, slot index,
+artifact digest, image length, entry, and page-table root are hostile and must
+exact-match, while shared/resource APIs continue to reject slot 2. The query
+operation accepts no restart context and
 cannot mutate lifecycle state. This agent review does not replace
 the constitution's independent human dual review.
 

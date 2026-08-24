@@ -184,6 +184,12 @@ authority; unrelated domains continue.
    authorizes CONTROL and snapshots trusted priority/context/time without
    mutation, then revalidates generation, object, cleanup, backoff, budget, and
    one-use state after the reprovisioning boundary before task creation.
+   Both hosted backends now admit a third independently rooted verified service
+   image for the future management client. Its image, stack, and page tables use
+   disjoint checked physical ranges, while the common shared page and per-service
+   resource remain deliberately confined to slots 0 and 1. Signed KVM and WHP
+   regression runs verify construction; the kernel does not yet create or run a
+   task in slot 2, so this is only the isolation prerequisite for restart IPC.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-

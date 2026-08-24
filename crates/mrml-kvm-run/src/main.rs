@@ -67,6 +67,12 @@ const SERVICE_B_STACK_PHYSICAL: u64 = 0x00e0_0000;
 #[cfg(target_os = "linux")]
 const SERVICE_B_TABLE_PHYSICAL: u64 = 0x00d0_0000;
 #[cfg(target_os = "linux")]
+const SERVICE_C_PHYSICAL: u64 = 0x0130_0000;
+#[cfg(target_os = "linux")]
+const SERVICE_C_TABLE_PHYSICAL: u64 = 0x0140_0000;
+#[cfg(target_os = "linux")]
+const SERVICE_C_STACK_PHYSICAL: u64 = 0x0150_0000;
+#[cfg(target_os = "linux")]
 const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
 #[cfg(target_os = "linux")]
 const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
@@ -286,7 +292,7 @@ fn application_main() -> Result<()> {
     let queue_layout = GpuSharedQueueLayout::new(0x00b0_0000, 0x00b0_1000, 1)
         .map_err(|_| anyhow!("invalid fixed GPU queue layout"))?;
     let mut guest = match mode {
-        LaunchMode::GpuBenchmark => system.prepare_kernel_gpu_guest::<13>(
+        LaunchMode::GpuBenchmark => system.prepare_kernel_gpu_guest::<16>(
             0,
             &executable,
             handoff.as_slice(),
@@ -296,22 +302,22 @@ fn application_main() -> Result<()> {
         LaunchMode::TimerProbe
         | LaunchMode::PreemptionProbe
         | LaunchMode::ServicePreemptionProbe => {
-            system.prepare_timer_kernel_guest::<13>(0, &executable, handoff.as_slice(), layout)
+            system.prepare_timer_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout)
         }
         LaunchMode::SmpProbe
         | LaunchMode::SmpSchedulerProbe
         | LaunchMode::SmpIpiProbe
         | LaunchMode::SmpServiceMigrationProbe
         | LaunchMode::SmpPeriodicBalanceProbe => {
-            system.prepare_smp_kernel_guest::<13>(&executable, handoff.as_slice(), layout)
+            system.prepare_smp_kernel_guest::<16>(&executable, handoff.as_slice(), layout)
         }
-        LaunchMode::ServiceProbe => system.prepare_isolated_service_kernel_guest::<13>(
+        LaunchMode::ServiceProbe => system.prepare_isolated_service_kernel_guest::<16>(
             0,
             &executable,
             handoff.as_slice(),
             layout,
         ),
-        _ => system.prepare_kernel_guest::<13>(0, &executable, handoff.as_slice(), layout),
+        _ => system.prepare_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout),
     }
     .map_err(|error| anyhow!("verified kernel launch preparation failed: {:?}", error))?;
     if service_mode {
@@ -355,6 +361,28 @@ fn application_main() -> Result<()> {
                 local_apic,
             )
             .map_err(|error| anyhow!("second isolated service preparation failed: {:?}", error))?;
+        if mode == LaunchMode::ServiceProbe {
+            guest = guest
+                .attach_isolated_service_at(
+                    2,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified service executable"))?,
+                    SERVICE_C_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_C_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    2,
+                    SERVICE_C_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| {
+                    anyhow!("third isolated service preparation failed: {:?}", error)
+                })?;
+        }
         let shared = Mapping::new(
             VirtAddr::new(SERVICE_SHARED_VIRTUAL)
                 .map_err(|_| anyhow!("invalid service shared virtual address"))?,
@@ -385,6 +413,10 @@ fn application_main() -> Result<()> {
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
             || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
+            || (mode == LaunchMode::ServiceProbe
+                && (guest.service_entry_at(2) != Some(service_entry)
+                    || guest.service_page_table_root_at(2)
+                        != PhysAddr::new(SERVICE_C_TABLE_PHYSICAL).ok()))
         {
             return Err(anyhow!(
                 "isolated service layout did not match the signed probe ABI"

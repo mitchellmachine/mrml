@@ -15,6 +15,7 @@ use super::{
 };
 
 const XAPIC_BASE: u64 = 0xfee0_0000;
+const MAX_ISOLATED_SERVICES: usize = 3;
 
 #[derive(Clone, Copy)]
 struct KernelDevices {
@@ -91,9 +92,9 @@ pub struct PreparedKvmGuest<const N: usize> {
     backend: KvmBackend<N>,
     entry: u64,
     root: PhysAddr,
-    service_entry: [Option<u64>; 2],
-    service_root: [Option<PhysAddr>; 2],
-    service_instance: [Option<ServiceInstance>; 2],
+    service_entry: [Option<u64>; MAX_ISOLATED_SERVICES],
+    service_root: [Option<PhysAddr>; MAX_ISOLATED_SERVICES],
+    service_instance: [Option<ServiceInstance>; MAX_ISOLATED_SERVICES],
     service_shared: Option<Mapping>,
     service_shared_live: [bool; 2],
     service_resource: [Option<Mapping>; 2],
@@ -169,14 +170,14 @@ impl<const N: usize> PreparedKvmGuest<N> {
         self.service_root[0]
     }
     pub const fn service_entry_at(&self, slot: usize) -> Option<u64> {
-        if slot < 2 {
+        if slot < MAX_ISOLATED_SERVICES {
             self.service_entry[slot]
         } else {
             None
         }
     }
     pub const fn service_page_table_root_at(&self, slot: usize) -> Option<PhysAddr> {
-        if slot < 2 {
+        if slot < MAX_ISOLATED_SERVICES {
             self.service_root[slot]
         } else {
             None
@@ -231,7 +232,7 @@ impl<const N: usize> PreparedKvmGuest<N> {
         if self.service_shared.is_some()
             || mapping.pages() != 1
             || mapping.permissions() != PagePermissions::USER_READ_WRITE
-            || self.service_instance.iter().any(Option::is_none)
+            || self.service_instance[..2].iter().any(Option::is_none)
         {
             return Err(KvmError::InvalidMapping);
         }
@@ -557,7 +558,7 @@ impl<const N: usize> PreparedKvmGuest<N> {
         table_pages: u64,
         local_apic: bool,
     ) -> Result<Self, KvmError> {
-        if slot >= 2
+        if slot >= MAX_ISOLATED_SERVICES
             || self.service_root[slot].is_some()
             || kernel.artifact().kind() != ArtifactKind::Kernel
             || service.artifact().kind() != ArtifactKind::ServiceImage
@@ -1276,9 +1277,9 @@ impl KvmSystem {
             backend,
             entry: loaded_image.entry(),
             root,
-            service_entry: [None; 2],
-            service_root: [None; 2],
-            service_instance: [None; 2],
+            service_entry: [None; MAX_ISOLATED_SERVICES],
+            service_root: [None; MAX_ISOLATED_SERVICES],
+            service_instance: [None; MAX_ISOLATED_SERVICES],
             service_shared: None,
             service_shared_live: [false; 2],
             service_resource: [None; 2],

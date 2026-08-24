@@ -1305,3 +1305,16 @@ capability, transaction, or host-coordination technique.
 
 Patent review: `NOT_TRIGGERED` — conventional split-phase validation with
 commit-time revalidation and replay rejection.
+
+## 2026-08-24 — third isolated hosted service slot
+
+MRML source: `crates/mrml-{kvm,whp}/src/native/launch.rs` and
+`crates/mrml-{kvm,whp}-run/src/main.rs`.
+
+The hosted backends conventionally extend a fixed verified-service registry by
+one independently mapped image, stack, and page-table root. Existing shared and
+resource pages remain limited to their original slots. This adds no novel
+address-space, artifact-loading, isolation, or device-sharing technique.
+
+Patent review: `NOT_TRIGGERED` — conventional fixed-capacity isolated service
+mapping.
