@@ -11208,11 +11208,48 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 }
                             }
                         }
+                        crate::LoopOperation::NestedBlock(block_index) => {
+                            let block = loop_statement
+                                .nested_blocks()
+                                .get(block_index)
+                                .and_then(|value| *value)?;
+                            if block.action_count() != 0 {
+                                return None;
+                            }
+                            for control in block.unconditional_controls().iter().flatten() {
+                                if let crate::NestedLoopUnconditionalControl::Return(value) =
+                                    *control
+                                {
+                                    let tree = value.parse_value::<MAX_NODES>().ok()?;
+                                    merge(recurse(
+                                        target,
+                                        &tree,
+                                        tree.root(),
+                                        0,
+                                        &local_names,
+                                        &local_origins,
+                                        local_count,
+                                    )?)?;
+                                }
+                            }
+                            for value in block.conditional_returns().iter().flatten() {
+                                let tree = value.parse_value::<MAX_NODES>().ok()?;
+                                merge(recurse(
+                                    target,
+                                    &tree,
+                                    tree.root(),
+                                    0,
+                                    &local_names,
+                                    &local_origins,
+                                    local_count,
+                                )?)?;
+                            }
+                        }
                         crate::LoopOperation::Local(_)
                         | crate::LoopOperation::Assignment(_)
                         | crate::LoopOperation::Expression(_)
                         | crate::LoopOperation::NestedUnitLoop
-                        | crate::LoopOperation::NestedBlock(_) => return None,
+                        => return None,
                     }
                 }
             }
@@ -26389,6 +26426,24 @@ mod tests {
                         body_expression: "loop { if first { return value; } else { return value; } }",
                     })
                 }
+                ("nested_loop", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "nested_loop",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "loop { loop { if first { return value; } } }",
+                    })
+                }
                 _ => None,
             }
         }
@@ -28674,6 +28729,59 @@ mod tests {
                 body_expression:
                     "loop { if first { let changed: &mut u16 = value; return changed; } else { return value; } }",
                 ..loop_branch
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn runtime_nested_loop_call_results_retain_argument_origins() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 40>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = nested_loop(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = nested_loop(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = nested_loop(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = nested_loop(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+        ] {
+            analyze(source).unwrap();
+        }
+
+        let nested_loop = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("nested_loop", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(nested_loop),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression:
+                    "loop { loop { let changed: &mut u16 = value; if first { return changed; } } }",
+                ..nested_loop
             }),
             None
         );
