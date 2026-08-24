@@ -2152,6 +2152,12 @@ enum RuntimeBasicBlockSource {
     ConditionalAssignmentElseActions {
         statement_index: usize,
     },
+    ConditionalAssignmentUnreachableActions {
+        statement_index: usize,
+        branch_index: Option<usize>,
+        first_action: usize,
+        action_count: usize,
+    },
     LoopBody {
         statement_index: usize,
         first_operation: usize,
@@ -5364,20 +5370,88 @@ fn preanalyze_runtime_top_level_statement<
     Ok(())
 }
 
-fn conditional_actions_have_supported_control_flow(
+fn conditional_actions_terminate(
     actions: &[Option<crate::ConditionalAssignmentAction<'_>>],
 ) -> Result<bool, CodegenErrorKind> {
     let mut terminates = false;
-    for (action_index, action) in actions.iter().enumerate() {
+    for action in actions {
         let action = action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
         if matches!(action, crate::ConditionalAssignmentAction::Return(_)) {
-            if action_index + 1 != actions.len() {
-                return Ok(false);
-            }
             terminates = true;
         }
     }
     Ok(terminates)
+}
+
+fn conditional_actions_have_unreachable_fallthrough(
+    actions: &[Option<crate::ConditionalAssignmentAction<'_>>],
+) -> Result<bool, CodegenErrorKind> {
+    let terminates = conditional_actions_terminate(actions)?;
+    Ok(terminates
+        && !matches!(
+            actions.last().and_then(|action| *action),
+            Some(crate::ConditionalAssignmentAction::Return(_))
+        ))
+}
+
+fn push_unreachable_conditional_action_suffixes(
+    actions: &[Option<crate::ConditionalAssignmentAction<'_>>],
+    statement_index: usize,
+    branch_index: Option<usize>,
+    continuation: Option<RuntimeBasicBlockId>,
+    facts: &mut RuntimeBodyFacts<'_>,
+) -> Result<(), CodegenErrorKind> {
+    let Some(first_return) = actions
+        .iter()
+        .position(|action| matches!(action, Some(crate::ConditionalAssignmentAction::Return(_))))
+    else {
+        return Ok(());
+    };
+    let mut first_action = first_return
+        .checked_add(1)
+        .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+    while first_action < actions.len() {
+        let suffix = &actions[first_action..];
+        let terminal_offset = suffix.iter().position(|action| {
+            matches!(action, Some(crate::ConditionalAssignmentAction::Return(_)))
+        });
+        let action_count = if let Some(offset) = terminal_offset {
+            offset
+                .checked_add(1)
+                .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?
+        } else {
+            suffix.len()
+        };
+        for action in &suffix[..action_count] {
+            action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        }
+        let block = facts.push_sourced_basic_block(
+            statement_index,
+            false,
+            RuntimeBasicBlockSource::ConditionalAssignmentUnreachableActions {
+                statement_index,
+                branch_index,
+                first_action,
+                action_count,
+            },
+        )?;
+        let target = if terminal_offset.is_some() {
+            RuntimeControlFlowTarget::Return
+        } else {
+            RuntimeControlFlowTarget::Block(
+                continuation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?,
+            )
+        };
+        facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+            from: block,
+            target,
+            kind: RuntimeControlFlowEdgeKind::Unconditional,
+        })?;
+        first_action = first_action
+            .checked_add(action_count)
+            .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+    }
+    Ok(())
 }
 
 fn conditional_loop_terminal_is_break(
@@ -6009,30 +6083,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
 ) -> Result<(), CodegenErrorKind> {
     for statement in body.statements().iter().flatten() {
         match statement {
-            crate::BodyStatement::ConditionalAssignment(index) => {
-                let conditional = body
-                    .conditional_assignments()
-                    .get(*index)
-                    .and_then(|conditional| *conditional)
-                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-                for branch in conditional.branches() {
-                    let branch = branch.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-                    if !conditional_actions_have_supported_control_flow(branch.actions())?
-                        && branch.actions().iter().flatten().any(|action| {
-                            matches!(action, crate::ConditionalAssignmentAction::Return(_))
-                        })
-                    {
-                        return Ok(());
-                    }
-                }
-                if !conditional_actions_have_supported_control_flow(conditional.else_actions())?
-                    && conditional.else_actions().iter().flatten().any(|action| {
-                        matches!(action, crate::ConditionalAssignmentAction::Return(_))
-                    })
-                {
-                    return Ok(());
-                }
-            }
+            crate::BodyStatement::ConditionalAssignment(_) => {}
             crate::BodyStatement::Loop(index) => {
                 let loop_statement = body
                     .while_loops()
@@ -6134,16 +6185,20 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                     return Err(CodegenErrorKind::InvalidRuntimeControlFlowFacts);
                 }
                 let mut every_path_terminates = conditional.else_action_count() != 0
-                    && conditional_actions_have_supported_control_flow(conditional.else_actions())?;
+                    && conditional_actions_terminate(conditional.else_actions())?;
+                let mut has_unreachable_fallthrough =
+                    conditional_actions_have_unreachable_fallthrough(conditional.else_actions())?;
                 for branch in conditional.branches() {
                     let branch = branch.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-                    every_path_terminates &=
-                        conditional_actions_have_supported_control_flow(branch.actions())?;
+                    every_path_terminates &= conditional_actions_terminate(branch.actions())?;
+                    has_unreachable_fallthrough |=
+                        conditional_actions_have_unreachable_fallthrough(branch.actions())?;
                 }
-                let continuation = if every_path_terminates {
+                let continuation_reachable = current_reachable && !every_path_terminates;
+                let continuation = if every_path_terminates && !has_unreachable_fallthrough {
                     None
                 } else {
-                    Some(facts.push_basic_block(statement_index + 1, current_reachable)?)
+                    Some(facts.push_basic_block(statement_index + 1, continuation_reachable)?)
                 };
                 let mut condition_block = current;
                 for (branch_index, branch) in conditional.branches().iter().enumerate() {
@@ -6164,9 +6219,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                     })?;
                     facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
                         from: actions,
-                        target: if conditional_actions_have_supported_control_flow(
-                            branch.actions(),
-                        )? {
+                        target: if conditional_actions_terminate(branch.actions())? {
                             RuntimeControlFlowTarget::Return
                         } else {
                             RuntimeControlFlowTarget::Block(
@@ -6176,6 +6229,13 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                         },
                         kind: RuntimeControlFlowEdgeKind::Unconditional,
                     })?;
+                    push_unreachable_conditional_action_suffixes(
+                        branch.actions(),
+                        statement_index,
+                        Some(branch_index),
+                        continuation,
+                        facts,
+                    )?;
                     let false_target = if branch_index + 1 < branch_count {
                         let next = facts.push_sourced_basic_block(
                             statement_index,
@@ -6197,9 +6257,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                         )?;
                         facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
                             from: else_actions,
-                            target: if conditional_actions_have_supported_control_flow(
-                                conditional.else_actions(),
-                            )? {
+                            target: if conditional_actions_terminate(conditional.else_actions())? {
                                 RuntimeControlFlowTarget::Return
                             } else {
                                 RuntimeControlFlowTarget::Block(
@@ -6209,6 +6267,13 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                             },
                             kind: RuntimeControlFlowEdgeKind::Unconditional,
                         })?;
+                        push_unreachable_conditional_action_suffixes(
+                            conditional.else_actions(),
+                            statement_index,
+                            None,
+                            continuation,
+                            facts,
+                        )?;
                         RuntimeControlFlowTarget::Block(else_actions)
                     } else {
                         RuntimeControlFlowTarget::Block(
@@ -6223,6 +6288,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                 }
                 if let Some(next) = continuation {
                     current = next;
+                    current_reachable = continuation_reachable;
                     terminated = false;
                 } else {
                     terminated = true;
@@ -21990,27 +22056,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_body_cfg_fails_closed_and_bounds_fact_capacity() {
-        let source = "fn value(mode: bool) -> u8 { let mut result: u8 = 0; if mode { result = 1; return 1; result = 2; } result }";
-        let module = Parser::new(source).parse_module::<1, 2>().unwrap();
-        let Some(Item::Function(function)) = module.items()[0] else {
-            panic!("expected function")
-        };
-        let body = function.parse_body::<2>().unwrap();
-        let mut facts = RuntimeBodyFacts::EMPTY;
-        preanalyze_runtime_body_declarations::<_, 2, 16>(
-            &function,
-            &NoConstants,
-            &body,
-            "u8",
-            function.body_expression_span.start,
-            &mut facts,
-        )
-        .unwrap();
-        assert!(!facts.control_flow_complete);
-        assert_eq!(facts.basic_block_count, 0);
-        assert_eq!(facts.control_flow_edge_count, 0);
-
+    fn runtime_body_cfg_bounds_fact_capacity() {
         let mut capacity = RuntimeBodyFacts::EMPTY;
         for index in 0..MAX_RUNTIME_BASIC_BLOCK_FACTS {
             assert_eq!(
@@ -22808,7 +22854,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_body_facts_model_terminating_actions_and_reject_post_return_actions() {
+    fn runtime_body_facts_model_terminating_and_post_return_actions() {
         let terminating = "fn value(mode: bool) -> u8 { if mode { let first: u8 = 1; return first; } else { let second: u8 = 2; return second; } let unreachable: u8 = 3; unreachable }";
         let module = Parser::new(terminating).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -22846,9 +22892,41 @@ mod tests {
             &mut facts,
         )
         .unwrap();
-        assert!(!facts.control_flow_complete);
-        assert_eq!(facts.basic_block_count, 0);
-        assert_eq!(facts.control_flow_edge_count, 0);
+        assert!(facts.control_flow_complete);
+        let unreachable_block = facts.basic_blocks[..facts.basic_block_count]
+            .iter()
+            .position(|block| {
+                block.is_some_and(|block| {
+                    block.source
+                        == RuntimeBasicBlockSource::ConditionalAssignmentUnreachableActions {
+                            statement_index: 1,
+                            branch_index: Some(0),
+                            first_action: 2,
+                            action_count: 1,
+                        }
+                })
+            })
+            .unwrap();
+        assert!(!facts.basic_blocks[unreachable_block].unwrap().reachable);
+        assert!(
+            !facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .flatten()
+                .any(|edge| {
+                    edge.target
+                        == RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(unreachable_block))
+                })
+        );
+        assert!(
+            facts.control_flow_edges[..facts.control_flow_edge_count]
+                .iter()
+                .flatten()
+                .any(|edge| {
+                    edge.from == RuntimeBasicBlockId(unreachable_block)
+                        && edge.target == RuntimeControlFlowTarget::Block(RuntimeBasicBlockId(1))
+                        && edge.kind == RuntimeControlFlowEdgeKind::Unconditional
+                })
+        );
     }
 
     #[test]

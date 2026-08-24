@@ -3938,6 +3938,13 @@ fn rustc_post_terminal_nested_loop_cfg_reaches_native_objects() {
 }
 
 #[test]
+fn rustc_post_return_conditional_action_cfg_reaches_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(mode: bool) -> u8 { let mut result: u8 = 0; if mode { result = 1; return 1; result = 2; } result }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
