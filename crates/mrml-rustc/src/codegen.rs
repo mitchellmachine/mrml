@@ -10290,11 +10290,7 @@ fn runtime_loan_may_borrow_path(
     include_intermediate: bool,
     depth: usize,
 ) -> Option<bool> {
-    if depth
-        > facts
-            .initialization_count
-            .checked_add(facts.effect_count)?
-    {
+    if depth > facts.initialization_count.checked_add(facts.effect_count)? {
         return None;
     }
     let target_path = facts.move_paths.get(target.0).and_then(|path| *path)?;
@@ -10316,7 +10312,10 @@ fn runtime_loan_may_borrow_path(
     let RuntimePlaceIdentity::Local(parent_borrower) = path.base else {
         return Some(loan.borrowed_path == target);
     };
-    let issue = facts.effects.get(loan.issue_effect).and_then(|effect| *effect)?;
+    let issue = facts
+        .effects
+        .get(loan.issue_effect)
+        .and_then(|effect| *effect)?;
     let mut found_parent = false;
     for parent in (0..facts.initialization_count)
         .filter_map(|index| facts.direct_loan_fact(index))
@@ -10510,7 +10509,11 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     facts,
                     loan,
                     conflict.path,
-                    conflict.kind == RuntimePlaceEffectKind::LoanMutation,
+                    matches!(
+                        conflict.kind,
+                        RuntimePlaceEffectKind::MutableBorrow
+                            | RuntimePlaceEffectKind::LoanMutation
+                    ),
                     0,
                 )
                 .ok_or(CodegenError {
@@ -11369,8 +11372,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         crate::LoopOperation::Local(_)
                         | crate::LoopOperation::Assignment(_)
                         | crate::LoopOperation::Expression(_)
-                        | crate::LoopOperation::NestedUnitLoop
-                        => return None,
+                        | crate::LoopOperation::NestedUnitLoop => return None,
                     }
                 }
             }
@@ -28057,6 +28059,35 @@ mod tests {
     }
 
     #[test]
+    fn runtime_call_reborrows_suspend_live_shared_children_of_local_ancestors() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; touch(parent); *child }";
+        assert_eq!(
+            analyze(rejected).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; touch(parent); copied + *parent }";
+        analyze(accepted).unwrap();
+    }
+
+    #[test]
     fn runtime_expected_mutable_reference_binding_is_an_implicit_reborrow() {
         let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
         let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
@@ -28945,8 +28976,7 @@ mod tests {
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
-                body_expression:
-                    "loop { if first { let changed: &mut u16 = value; return changed; } else { return value; } }",
+                body_expression: "loop { if first { let changed: &mut u16 = value; return changed; } else { return value; } }",
                 ..loop_branch
             }),
             None
@@ -28998,8 +29028,7 @@ mod tests {
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
-                body_expression:
-                    "loop { loop { let changed: &mut u16 = value; if first { return changed; } } }",
+                body_expression: "loop { loop { let changed: &mut u16 = value; if first { return changed; } } }",
                 ..nested_loop
             }),
             None
@@ -29173,11 +29202,15 @@ mod tests {
                 .count(),
             0
         );
-        assert!(facts.effects[..facts.effect_count]
-            .iter()
-            .flatten()
-            .any(|effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
-                && effect.location == RuntimeOwnershipEventLocation::Tail));
+        assert!(
+            facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(
+                    |effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                        && effect.location == RuntimeOwnershipEventLocation::Tail
+                )
+        );
         assert!(
             facts.effects[..facts.effect_count]
                 .iter()
@@ -29245,12 +29278,14 @@ mod tests {
             facts.effects[..facts.effect_count]
                 .iter()
                 .flatten()
-                .any(|effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
-                    && effect.expression_path
-                        == RuntimeOwnershipExpressionPath {
-                            else_bits: 0,
-                            depth: 1,
-                        })
+                .any(
+                    |effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                        && effect.expression_path
+                            == RuntimeOwnershipExpressionPath {
+                                else_bits: 0,
+                                depth: 1,
+                            }
+                )
         );
         assert!(
             facts.effects[..facts.effect_count]
@@ -29425,8 +29460,10 @@ mod tests {
             facts.effects[..facts.effect_count]
                 .iter()
                 .flatten()
-                .any(|effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
-                    && effect.expression_conditional == Some(RuntimeConditionalExpressionId(1)))
+                .any(
+                    |effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                        && effect.expression_conditional == Some(RuntimeConditionalExpressionId(1))
+                )
         );
         assert!(
             facts.effects[..facts.effect_count]
