@@ -2599,6 +2599,7 @@ struct RuntimePlaceEffectFact {
     expression_path: RuntimeOwnershipExpressionPath,
     expression_conditional: Option<RuntimeConditionalExpressionId>,
     expression_point: Option<RuntimeExpressionProgramPointId>,
+    loan_generation_borrower: Option<RuntimeLocalId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2740,6 +2741,8 @@ struct RuntimeBodyFacts<'source> {
         [Option<RuntimeExpressionProgramPointFact>; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS],
     expression_program_point_count: usize,
     current_expression_program_point: Option<RuntimeExpressionProgramPointId>,
+    pending_loan_generation_borrower: Option<RuntimeLocalId>,
+    current_loan_generation_borrower: Option<RuntimeLocalId>,
     expression_control_flow_edges: [Option<RuntimeExpressionControlFlowEdgeFact>;
         MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS],
     expression_control_flow_edge_count: usize,
@@ -2780,6 +2783,8 @@ impl<'source> RuntimeBodyFacts<'source> {
         expression_program_points: [None; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS],
         expression_program_point_count: 0,
         current_expression_program_point: None,
+        pending_loan_generation_borrower: None,
+        current_loan_generation_borrower: None,
         expression_control_flow_edges: [None; MAX_RUNTIME_EXPRESSION_CONTROL_FLOW_EDGE_FACTS],
         expression_control_flow_edge_count: 0,
         ownership_statement_count: 0,
@@ -3777,6 +3782,14 @@ impl<'source> RuntimeBodyFacts<'source> {
             expression_path: self.current_ownership_expression_path,
             expression_conditional: self.current_conditional_expression,
             expression_point,
+            loan_generation_borrower: if matches!(
+                kind,
+                RuntimePlaceEffectKind::SharedBorrow | RuntimePlaceEffectKind::MutableBorrow
+            ) {
+                self.current_loan_generation_borrower
+            } else {
+                None
+            },
         });
         self.effect_count += 1;
         self.ownership_event_count += 1;
@@ -3823,7 +3836,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                                         ..
                                     }
                                     | RuntimeOwnershipEventLocation::NestedLoopAction { .. }
-                            ) || effect.expression_conditional.is_some())
+                            ))
                         })
                 })
         {
@@ -3871,8 +3884,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                 | RuntimeOwnershipEventLocation::LoopOperation { .. }
                 | RuntimeOwnershipEventLocation::LoopConditionalAction { .. }
                 | RuntimeOwnershipEventLocation::NestedLoopAction { .. }
-        ) || generation.expression_conditional.is_some()
-        {
+        ) {
             return None;
         }
         let root = self
@@ -3919,6 +3931,68 @@ impl<'source> RuntimeBodyFacts<'source> {
             })
     }
 
+    fn direct_expression_loan_fact(&self, effect_index: usize) -> Option<RuntimeLoanFact> {
+        let issue = self.effects.get(effect_index).and_then(|effect| *effect)?;
+        let borrower = issue.loan_generation_borrower?;
+        let root = self.move_paths[..self.move_path_count]
+            .iter()
+            .flatten()
+            .find(|path| {
+                path.base == RuntimePlaceIdentity::Local(borrower)
+                    && path.projections == RuntimePlaceProjections::EMPTY
+            })?;
+        let RuntimeExpressionType::Reference { mutable, .. } = root.ty else {
+            return None;
+        };
+        if !matches!(
+            (mutable, issue.kind),
+            (false, RuntimePlaceEffectKind::SharedBorrow)
+                | (true, RuntimePlaceEffectKind::MutableBorrow)
+        ) {
+            return None;
+        }
+        let initialization_event = self.initializations[..self.initialization_count]
+            .iter()
+            .flatten()
+            .filter(|initialization| {
+                initialization.path == root.id && initialization.event.0 > issue.event.0
+            })
+            .map(|initialization| initialization.event)
+            .min_by_key(|event| event.0);
+        let assignment_event = self.effects[..self.effect_count]
+            .iter()
+            .flatten()
+            .filter(|effect| {
+                effect.path == root.id
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.event.0 > issue.event.0
+            })
+            .map(|effect| effect.event)
+            .min_by_key(|event| event.0);
+        let generation_event = match (initialization_event, assignment_event) {
+            (Some(initialization), Some(assignment)) => {
+                if initialization.0 < assignment.0 {
+                    initialization
+                } else {
+                    assignment
+                }
+            }
+            (Some(initialization), None) => initialization,
+            (None, Some(assignment)) => assignment,
+            (None, None) => return None,
+        };
+        Some(RuntimeLoanFact {
+            id: RuntimeLoanId(
+                MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS + effect_index,
+            ),
+            borrower,
+            borrowed_path: issue.path,
+            kind: issue.kind,
+            issue_effect: effect_index,
+            generation_event,
+        })
+    }
+
     fn direct_loan_for_borrower_before(
         &self,
         borrower: RuntimeLocalId,
@@ -3927,6 +4001,9 @@ impl<'source> RuntimeBodyFacts<'source> {
         (0..self.initialization_count)
             .filter_map(|index| self.direct_loan_fact(index))
             .chain((0..self.effect_count).filter_map(|index| self.direct_assigned_loan_fact(index)))
+            .chain(
+                (0..self.effect_count).filter_map(|index| self.direct_expression_loan_fact(index)),
+            )
             .filter(|loan| loan.borrower == borrower && loan.generation_event.0 < before.0)
             .max_by_key(|loan| loan.generation_event.0)
     }
@@ -3942,10 +4019,31 @@ impl<'source> RuntimeBodyFacts<'source> {
                 .and_then(|initialization| *initialization)?;
             (initialization.event == loan.generation_event)
                 .then_some((initialization.event, initialization.location))
-        } else {
+        } else if loan.id.0 < MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS {
             let effect_index = loan.id.0.checked_sub(MAX_RUNTIME_INITIALIZATION_FACTS)?;
             let effect = self.effects.get(effect_index).and_then(|effect| *effect)?;
             (effect.event == loan.generation_event).then_some((effect.event, effect.location))
+        } else {
+            let effect_index = loan
+                .id
+                .0
+                .checked_sub(MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS)?;
+            let derived = self.direct_expression_loan_fact(effect_index)?;
+            if derived.generation_event != loan.generation_event {
+                return None;
+            }
+            self.initializations[..self.initialization_count]
+                .iter()
+                .flatten()
+                .find(|initialization| initialization.event == loan.generation_event)
+                .map(|initialization| (initialization.event, initialization.location))
+                .or_else(|| {
+                    self.effects[..self.effect_count]
+                        .iter()
+                        .flatten()
+                        .find(|effect| effect.event == loan.generation_event)
+                        .map(|effect| (effect.event, effect.location))
+                })
         }
     }
 
@@ -4027,6 +4125,14 @@ impl<'source> RuntimeBodyFacts<'source> {
                 expression_path: self.current_ownership_expression_path,
                 expression_conditional: self.current_conditional_expression,
                 expression_point: self.current_expression_program_point_at_location(),
+                loan_generation_borrower: if matches!(
+                    kind,
+                    RuntimePlaceEffectKind::SharedBorrow | RuntimePlaceEffectKind::MutableBorrow
+                ) {
+                    self.current_loan_generation_borrower
+                } else {
+                    None
+                },
             })
         });
         if effect.is_some() && self.effect_count >= self.effects.len() {
@@ -4349,6 +4455,15 @@ fn preanalyze_runtime_local_binding<
             kind: CodegenErrorKind::Expression(error.kind),
             span: translate_span(body_start + local.initializer_span.start, error.span),
         })?;
+    let conditional_reference_generation = local.name != "_"
+        && matches!(ty, RuntimeExpressionType::Reference { .. })
+        && matches!(
+            tree.expression(tree.root())
+                .map(|expression| expression.kind),
+            Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+        );
+    facts.pending_loan_generation_borrower =
+        conditional_reference_generation.then_some(RuntimeLocalId(facts.local_count));
     let literal_aggregate = matches!(
         tree.expression(tree.root())
             .map(|expression| expression.kind),
@@ -4654,6 +4769,8 @@ fn preanalyze_runtime_local_binding<
                 })?;
         }
     }
+    facts.pending_loan_generation_borrower = None;
+    facts.current_loan_generation_borrower = None;
     if local.name == "_" {
         return Ok(());
     }
@@ -4885,6 +5002,8 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             span: assignment_span,
         })?;
         if let ExprKind::Sequence { first, then } = expression.kind {
+            let generation_borrower = facts.current_loan_generation_borrower;
+            facts.current_loan_generation_borrower = None;
             recurse(
                 facts,
                 locals,
@@ -4896,6 +5015,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 depth + 1,
                 assignment_span,
             )?;
+            facts.current_loan_generation_borrower = generation_borrower;
             recurse(
                 facts,
                 locals,
@@ -5283,7 +5403,10 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     })?;
                 facts.current_conditional_expression = Some(conditional);
                 facts.current_expression_program_point = Some(conditional_fact.condition);
+                let generation_borrower = facts.current_loan_generation_borrower;
+                facts.current_loan_generation_borrower = None;
                 visit_value!(condition)?;
+                facts.current_loan_generation_borrower = generation_borrower;
                 let parent_path = facts.current_ownership_expression_path;
                 for (else_branch, branch) in [(false, then_branch), (true, else_branch)] {
                     facts.current_conditional_expression = Some(conditional);
@@ -5298,6 +5421,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             kind,
                             span: assignment_span,
                         })?;
+                    facts.current_loan_generation_borrower = facts.pending_loan_generation_borrower;
                     let result = recurse(
                         facts,
                         locals,
@@ -5320,6 +5444,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             span: assignment_span,
                         })?;
                     facts.current_ownership_expression_path = parent_path;
+                    facts.current_loan_generation_borrower = generation_borrower;
                     result?;
                 }
                 facts.current_conditional_expression = parent_conditional;
@@ -6142,7 +6267,25 @@ fn preanalyze_runtime_assignment_reads<
     } else {
         RuntimeReadEffectContext::Move
     };
-    preanalyze_runtime_expression_at_reads_with_tuple(
+    let conditional_reference_generation = if assignment.projection.is_none()
+        && assignment.operator == crate::AssignmentOperator::Assign
+        && matches!(ty, RuntimeExpressionType::Reference { .. })
+        && matches!(
+            tree.expression(tree.root())
+                .map(|expression| expression.kind),
+            Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+        ) {
+        resolve_runtime_assignment_place(function, locals, assignment)
+            .ok()
+            .and_then(|target| match target.base {
+                RuntimePlaceBase::Local { id, .. } => Some(id),
+                RuntimePlaceBase::Parameter { .. } => None,
+            })
+    } else {
+        None
+    };
+    facts.pending_loan_generation_borrower = conditional_reference_generation;
+    let result = preanalyze_runtime_expression_at_reads_with_tuple(
         facts,
         locals,
         function,
@@ -6152,7 +6295,10 @@ fn preanalyze_runtime_assignment_reads<
         context,
         matches!(ty, RuntimeExpressionType::Tuple { .. }).then_some(ty),
         assignment.value_span,
-    )
+    );
+    facts.pending_loan_generation_borrower = None;
+    facts.current_loan_generation_borrower = None;
+    result
 }
 
 fn preanalyze_runtime_expression_statement_reads<
@@ -9842,7 +9988,11 @@ fn runtime_specific_loan_is_active_at_effect(
     for replacement in (0..facts.initialization_count)
         .filter_map(|index| facts.direct_loan_fact(index))
         .chain((0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)))
-        .filter(|replacement| replacement.borrower == loan.borrower && replacement.id != loan.id)
+        .chain((0..facts.effect_count).filter_map(|index| facts.direct_expression_loan_fact(index)))
+        .filter(|replacement| {
+            replacement.borrower == loan.borrower
+                && replacement.generation_event != loan.generation_event
+        })
     {
         let Some((replacement_event, replacement_location)) =
             facts.direct_loan_generation_position(replacement)
@@ -9909,7 +10059,11 @@ fn runtime_effect_reaches_specific_loan_use(
     for replacement in (0..facts.initialization_count)
         .filter_map(|index| facts.direct_loan_fact(index))
         .chain((0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)))
-        .filter(|replacement| replacement.borrower == loan.borrower && replacement.id != loan.id)
+        .chain((0..facts.effect_count).filter_map(|index| facts.direct_expression_loan_fact(index)))
+        .filter(|replacement| {
+            replacement.borrower == loan.borrower
+                && replacement.generation_event != loan.generation_event
+        })
     {
         let Some((replacement_event, replacement_location)) =
             facts.direct_loan_generation_position(replacement)
@@ -9974,6 +10128,7 @@ fn runtime_loan_may_borrow_path(
     for parent in (0..facts.initialization_count)
         .filter_map(|index| facts.direct_loan_fact(index))
         .chain((0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)))
+        .chain((0..facts.effect_count).filter_map(|index| facts.direct_expression_loan_fact(index)))
         .filter(|parent| {
             parent.borrower == parent_borrower
                 && runtime_specific_loan_is_active_at_effect(facts, *parent, issue)
@@ -9997,15 +10152,20 @@ fn validate_runtime_bounded_direct_loan_liveness(
     for generation_index in 0..facts
         .initialization_count
         .checked_add(facts.effect_count)
+        .and_then(|count| count.checked_add(facts.effect_count))
         .ok_or(CodegenError {
             kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
             span: fallback_span,
         })?
     {
-        let loan = if generation_index < facts.initialization_count {
+        let assigned_start = facts.initialization_count;
+        let expression_start = assigned_start + facts.effect_count;
+        let loan = if generation_index < assigned_start {
             facts.direct_loan_fact(generation_index)
+        } else if generation_index < expression_start {
+            facts.direct_assigned_loan_fact(generation_index - assigned_start)
         } else {
-            facts.direct_assigned_loan_fact(generation_index - facts.initialization_count)
+            facts.direct_expression_loan_fact(generation_index - expression_start)
         };
         let Some(loan) = loan else {
             continue;
@@ -10044,8 +10204,11 @@ fn validate_runtime_bounded_direct_loan_liveness(
         for parent in (0..facts.initialization_count)
             .filter_map(|index| facts.direct_loan_fact(index))
             .chain(
+                (0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)),
+            )
+            .chain(
                 (0..facts.effect_count)
-                    .filter_map(|index| facts.direct_assigned_loan_fact(index)),
+                    .filter_map(|index| facts.direct_expression_loan_fact(index)),
             )
             .filter(|parent| {
                 parent_borrower == Some(parent.borrower)
@@ -10109,7 +10272,17 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 }
             }
         }
-        for conflict in facts.effects[..facts.effect_count].iter().flatten() {
+        for (conflict_index, conflict) in facts.effects[..facts.effect_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+        {
+            let sibling_origin = facts
+                .direct_expression_loan_fact(conflict_index)
+                .is_some_and(|sibling| {
+                    sibling.borrower == loan.borrower
+                        && sibling.generation_event == loan.generation_event
+                });
             let conflicts_with_loan = match loan.kind {
                 RuntimePlaceEffectKind::SharedBorrow => {
                     conflict.kind == RuntimePlaceEffectKind::MutableBorrow
@@ -10131,8 +10304,9 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 | RuntimePlaceEffectKind::ReadModifyWrite => false,
             };
             if conflict.event == issue.event
+                || sibling_origin
                 || !conflicts_with_loan
-                || !runtime_ownership_event_precedes(facts, issue, *conflict)
+                || !runtime_ownership_event_precedes(facts, issue, conflict)
                 || !runtime_loan_may_borrow_path(facts, loan, conflict.path, 0).ok_or(
                     CodegenError {
                         kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
@@ -10149,7 +10323,7 @@ fn validate_runtime_bounded_direct_loan_liveness(
                     .any(|effect| {
                         effect.path == borrower_path
                             && runtime_effect_reaches_specific_loan_use(
-                                facts, loan, *conflict, *effect,
+                                facts, loan, conflict, *effect,
                             )
                     });
             if used_after_conflict {
@@ -10286,6 +10460,8 @@ fn preanalyze_runtime_body_declarations<
     }
     if facts.current_ownership_expression_path != RuntimeOwnershipExpressionPath::ROOT
         || facts.current_conditional_expression.is_some()
+        || facts.pending_loan_generation_borrower.is_some()
+        || facts.current_loan_generation_borrower.is_some()
     {
         return Err(CodegenError {
             kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
@@ -16514,9 +16690,10 @@ impl<
         {
             return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
         }
-        for effect in self.body_facts.effects[..self.body_facts.effect_count]
+        for (effect_index, effect) in self.body_facts.effects[..self.body_facts.effect_count]
             .iter()
-            .flatten()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
         {
             let path = self
                 .body_facts
@@ -16536,6 +16713,11 @@ impl<
                         .body_facts
                         .expression_program_point_is_valid(effect.location, point)
                 })
+                || (effect.loan_generation_borrower.is_some()
+                    && self
+                        .body_facts
+                        .direct_expression_loan_fact(effect_index)
+                        .is_none())
                 || !self.body_facts.ownership_location_is_valid(effect.location)
                 || (self.body_facts.control_flow_complete
                     && effect.location != RuntimeOwnershipEventLocation::EmissionExpansion
@@ -27461,6 +27643,45 @@ mod tests {
             &mut facts,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn runtime_expression_conditional_reference_generations_follow_cfg_paths() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = if choose { &mut *first } else { &mut *second }; let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *second; parent = if choose { &mut *first } else { &mut *second }; let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, outer: bool, inner: bool) -> u16 { let parent: &mut u16 = if outer { if inner { &mut *first } else { &mut *second } } else { &mut *third }; let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = if choose { &mut *second } else { &mut *third }; let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; parent = if choose { &mut *second } else { &mut *third }; let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = if choose { &mut *first; &mut *second } else { &mut *first; &mut *third }; let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+        ] {
+            analyze(source).unwrap();
+        }
     }
 
     #[test]
