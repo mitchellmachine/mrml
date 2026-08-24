@@ -194,22 +194,35 @@ current authenticated manifest-signing root. This prevents one Lamport key from
 being authorized for a second statement or a different artifact role. The
 check is local key-lifecycle enforcement, not proof that external backups were
 destroyed or independently controlled.
-Release-state compare-and-store now binds all 88 authenticated predecessor
-bytes, closing same-floor current-root substitution. A separate 136-byte
+Release-state compare-and-store now binds all 152 authenticated predecessor
+bytes, closing same-floor current-root and installed-manifest substitution. A separate 200-byte
 two-slot journal writes and verifies the inactive successor before advancing
 its authenticated monotonic counter, then reloads the selected state. Corrupt
 slots, stale predecessors, failed writes, pre-commit failures, uncertain
 committed advances, read failure, and sequence exhaustion fail closed in
 deterministic tests. Its unsafe backend still requires fixed owner-provisioned
 objects and real power-loss-atomic behavior. The UEFI adapter now admits a
-separate counter and two exact 136-byte full-write objects by complete public
+separate counter and two exact 200-byte full-write objects by complete public
 area and recomputed Name, consumes fresh exact-operation policy sessions,
 read-verifies writes, checks exact counter succession, and rejects index alias
 with the recovery journal when both layouts are checked together. Deterministic
 tests exercise these properties; no provisioning, reboot, physical power-loss,
 or rollback-resistance evidence exists.
-The firmware submission boundary is explicitly bounded at 192 command bytes,
-large enough for the 171-byte release write without permitting unbounded input.
+The authenticated state includes the exact installed-manifest digest, allowing
+later boots to reconstruct the committed release authority without replaying
+the consumed one-time transition. The firmware submission boundary is bounded
+at 256 command bytes, large enough for the 235-byte release write without
+permitting unbounded input.
+
+When configured, the UEFI loader derives both kernel and service authority from
+one authenticated release. An installed-manifest digest permits repeat boot
+without reusing the consumed transition key; a different manifest must verify
+as a new transition under the current root. Publication occurs only after both
+signed containers and PE images pass exact-release admission, and before PCR 11
+extension so the journal's read/write PCR policy remains coherent. Complete
+release and recovery layouts must be index-disjoint. Required mode rejects an
+absent or partial release configuration; optional development mode still uses
+the legacy independent embedded roots.
 
 The UEFI TPM parser can now validate the exact public identity of a planned
 owner-policy recovery layout: one monotonic counter and two full-write ordinary

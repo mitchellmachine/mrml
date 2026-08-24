@@ -1988,7 +1988,22 @@ underlying per-kind version-floor roots. Its artifact and executable admission
 methods require the signed artifact version to equal the manifest release and
 the requested kind to match before PE parsing. This prevents a valid artifact
 from an adjacent release being spliced through a minimum-version check. The
-current UEFI loader has not yet integrated manifest loading or monotonic commit.
+With a complete compiled release-journal configuration, the UEFI loader now
+loads the exact manifest and distinguishes repeat admission of its authenticated
+installed digest from a new signed root transition. Kernel and service
+executables are admitted through the resulting single `VerifiedRelease`; a new
+transition is committed after both signatures and PE formats pass but before
+PCR 11 extension, keeping the journal's read and publication policy coherent.
+Later boot preparation failure retries through the installed receipt.
+Required mode fails closed without the configuration, while optional mode keeps
+the legacy independent-root path for development.
+The loader expects `\EFI\MRML\RELEASE.MANIFEST`; a new transition additionally
+requires `RELEASE.PUBLIC` and `RELEASE.SIG`. Its six all-or-none build fields
+are `MRML_RELEASE_COUNTER_NV_INDEX_HEX`, `MRML_RELEASE_SLOT0_NV_INDEX_HEX`,
+`MRML_RELEASE_SLOT1_NV_INDEX_HEX`, `MRML_RELEASE_POLICY_DIGEST_HEX`,
+`MRML_RELEASE_PCR_DIGEST_HEX`, and `MRML_RELEASE_PCR_SELECT_HEX`.
+`MRML_REQUIRE_RELEASE_MANIFEST=1` forbids fallback. If recovery journal fields
+are also present, every release and recovery NV index must be disjoint.
 The manifest codec now rejects duplicate key roles before encoding: its next
 manifest root and five kind-specific roots are pairwise distinct. After the
 current manifest signature is authenticated, transition independently rejects
@@ -1996,15 +2011,18 @@ that current root appearing in any next role. These checks prevent repository
 code from authorizing a one-time Lamport key for multiple statements; they do
 not attest external key deletion or independent human custody.
 
-The canonical 88-byte release bootstrap state now has its own backend-neutral
+The canonical 152-byte release bootstrap state now has its own backend-neutral
 authenticated journal. It is deliberately distinct from the 64-byte storage-
-authority recovery state. Each 136-byte slot contains a release-state-specific
+authority recovery state. Each 200-byte slot contains a release-state-specific
 magic, exact journal sequence, complete state, and SHA3-256 digest. Publication
 writes the inactive slot before advancing one monotonic counter and verifies
 the newly selected state afterward. The store's CAS now compares the complete
-predecessor, so a different current root at the same minimum release conflicts.
+predecessor, so a different current root or installed-manifest digest at the
+same minimum release conflicts. The installed-manifest digest reconstructs the
+exact committed release on repeat boots without replaying the one-time root
+transition; genesis intentionally carries no installed receipt.
 The UEFI command layer now separately admits one release counter and two exact
-136-byte full-write NV objects by complete public area and recomputed Name. The
+200-byte full-write NV objects by complete public area and recomputed Name. The
 adapter uses fresh exact-operation owner-policy sessions, verifies full writes,
 checks exact counter succession, and exposes a gate rejecting index alias with
 the 112-byte recovery journal. Deterministic unit/simulation tests cover the
@@ -2312,8 +2330,8 @@ only and contribute no source code to MRML.
 
 ## Verification gates
 
-Verified release state has a canonical 88-byte encoding containing the current
-root digest and minimum accepted release. The kernel advances it only through
+Verified release state has a canonical 152-byte encoding containing the current
+root digest, minimum accepted release, and exact installed-manifest digest. The kernel advances it only through
 an authenticated monotonic-store compare-and-store operation, so concurrent or
 stale updates fail instead of overwriting newer trust state. A conforming
 platform backend must use TPM NV or an equivalent authenticated, power-loss

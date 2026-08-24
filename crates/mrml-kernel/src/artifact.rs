@@ -338,9 +338,10 @@ impl ReleaseManifest {
 pub struct BootstrapState {
     current_root_digest: [u8; 64],
     minimum_release: u64,
+    installed_manifest_digest: [u8; 64],
 }
 
-pub const BOOTSTRAP_STATE_BYTES: usize = 88;
+pub const BOOTSTRAP_STATE_BYTES: usize = 152;
 
 /// Backend contract for TPM NV or an equivalently authenticated monotonic
 /// store. Implementations must authenticate reads and make compare-and-store
@@ -363,6 +364,7 @@ impl BootstrapState {
         Self {
             current_root_digest,
             minimum_release,
+            installed_manifest_digest: [0; 64],
         }
     }
 
@@ -396,8 +398,27 @@ impl BootstrapState {
             Self {
                 current_root_digest: manifest.next_root_digest,
                 minimum_release,
+                installed_manifest_digest: Sha3_512::digest(encoded),
             },
         ))
+    }
+
+    /// Reconstructs exact artifact authority for the already committed release
+    /// without replaying its one-time manifest-key transition.
+    pub fn admit_installed_release(
+        &self,
+        encoded: &[u8],
+    ) -> Result<VerifiedRelease, ArtifactError> {
+        if self.installed_manifest_digest.iter().all(|byte| *byte == 0)
+            || !constant_time_equal(&self.installed_manifest_digest, &Sha3_512::digest(encoded))
+        {
+            return Err(ArtifactError::UnauthenticatedBootstrapState);
+        }
+        let manifest = ReleaseManifest::decode(encoded)?;
+        if manifest.release.checked_add(1) != Some(self.minimum_release) {
+            return Err(ArtifactError::ReleaseMismatch);
+        }
+        Ok(VerifiedRelease { manifest })
     }
 
     pub const fn minimum_release(&self) -> u64 {
@@ -409,6 +430,7 @@ impl BootstrapState {
         output[..16].copy_from_slice(b"MRML-BOOTSTATE1\0");
         output[16..24].copy_from_slice(&self.minimum_release.to_le_bytes());
         output[24..88].copy_from_slice(&self.current_root_digest);
+        output[88..152].copy_from_slice(&self.installed_manifest_digest);
         output
     }
 
@@ -426,6 +448,7 @@ impl BootstrapState {
         Ok(Self {
             current_root_digest: input[24..88].try_into().unwrap(),
             minimum_release,
+            installed_manifest_digest: input[88..152].try_into().unwrap(),
         })
     }
 
@@ -605,6 +628,20 @@ mod tests {
         assert_eq!(release.release(), 7);
         assert_eq!(next.minimum_release(), 8);
         assert_eq!(
+            next.admit_installed_release(&manifest).unwrap().release(),
+            7
+        );
+        let mut substituted_manifest = manifest;
+        substituted_manifest[24] ^= 1;
+        assert_eq!(
+            next.admit_installed_release(&substituted_manifest).err(),
+            Some(ArtifactError::UnauthenticatedBootstrapState)
+        );
+        assert_eq!(
+            state.admit_installed_release(&manifest).err(),
+            Some(ArtifactError::UnauthenticatedBootstrapState)
+        );
+        assert_eq!(
             next.verify_release(&manifest, &public, &signature).err(),
             Some(ArtifactError::RollbackDetected)
         );
@@ -616,6 +653,14 @@ mod tests {
         let committed =
             BootstrapState::verify_and_commit(&mut store, &manifest, &public, &signature).unwrap();
         assert_eq!(committed.release(), 7);
+        assert_eq!(
+            BootstrapState::decode_authenticated(&store.state)
+                .unwrap()
+                .admit_installed_release(&manifest)
+                .unwrap()
+                .release(),
+            7
+        );
         assert_eq!(
             BootstrapState::decode_authenticated(&store.state)
                 .unwrap()

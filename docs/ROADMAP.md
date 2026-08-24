@@ -1339,9 +1339,9 @@ can count as trusted consent.
 1. Implement a TPM NV or equivalent authenticated, monotonic, power-loss-atomic
    release-state backend.
    **PARTIALLY IMPLEMENTED:** release `BootstrapState` compare-and-store now
-   requires the complete authenticated 88-byte predecessor rather than only its
+   requires the complete authenticated 152-byte predecessor rather than only its
    minimum-release scalar. A dedicated backend-neutral two-slot journal uses
-   136-byte records containing an independent magic, exact sequence, complete
+   200-byte records containing an independent magic, exact sequence, complete
    state, and SHA3-256 digest. It writes the inactive successor before one exact
    monotonic counter advance and reloads the selected result. Deterministic
    tests cover same-floor root substitution, write and pre-commit failure,
@@ -1350,17 +1350,20 @@ can count as trusted consent.
    Clippy; Arch Linux/WSL2 passes all 452 kernel and 121 storage tests; the
    optimized native UEFI loader links. The Windows full storage run passes 118
    tests while three known large tests overflow the Windows test-process stack.
-   A distinct UEFI TPM layout/transport adapter now admits one exact counter and
-   two exact 136-byte full-write slots by complete public area and recomputed
-   Name. It reuses the one-use exact-operation owner-policy session mechanism,
+   The state now also authenticates the installed manifest digest, so repeat
+   boots can recover the exact committed artifact authority without replaying a
+   one-time root transition. A distinct UEFI TPM layout/transport adapter now
+   admits one exact counter and two exact 200-byte full-write slots by complete
+   public area and recomputed Name. It reuses the one-use exact-operation
+   owner-policy session mechanism,
    read-verifies writes, checks exact counter succession, and provides an
    explicit cross-journal index-alias rejection gate. Arch Linux/WSL2 passes all
-   22 UEFI library tests, including hostile exact-size/alias admission and a
-   composed 136-byte publication simulation. This is not TPM provisioning,
+   23 UEFI library tests, including hostile exact-size/alias admission and a
+   composed 200-byte publication simulation. This is not TPM provisioning,
    reboot, physical power-loss, or rollback-resistance evidence.
-   The native UEFI submission wrapper is now bounded at 192 bytes rather than
+   The native UEFI submission wrapper is now bounded at 256 bytes rather than
    the previous 128-byte limit, so it can represent the 147-byte recovery and
-   171-byte release full-slot write commands.
+   235-byte release full-slot write commands.
 2. Bind measured boot to the exact coherent signed artifact set.
    **PARTIALLY IMPLEMENTED:** after independently extending the authenticated
    kernel and service payloads into PCR 11, the UEFI loader now extends one
@@ -1369,7 +1372,9 @@ can count as trusted consent.
    digests, exact length, and zero reserved bytes. The measured-boot handoff bit
    is set only when all three extensions succeed; focused tests reject missing
    identity and verify every canonical field. This records the exact pair the
-   current loader selected, but does not yet enforce one release manifest or
+   current loader selected. With a complete compiled release-journal
+   configuration, it now loads one exact manifest and enforces it for the
+   kernel and service, but it does not yet include
    include the planned VM image, CUDA bundle, launch policy, configuration root,
    or compiler/runtime artifacts. No TPM-backed execution or remote-attestation
    evidence is claimed. The implemented `VerifiedRelease` foundation now also
@@ -1377,11 +1382,20 @@ can count as trusted consent.
    artifact/executable admission instead: requested kind and signed artifact
    version must equal the authenticated manifest release before signature or PE
    interpretation can succeed. Focused tests reject substitution from both an
-   older and a newer release. The UEFI loader does not yet load or commit this
-   manifest, so coherent-set boot admission remains partial. Verification on
-   2026-08-24 passed all 5 artifact tests, all 3 signer tests, and strict scoped
-   Clippy on Windows gnullvm; all 452 kernel tests on Arch Linux/WSL2; and an
-   optimized native UEFI loader build. A preceding 451-test Windows full run
+   older and a newer release. The UEFI loader now distinguishes an already
+   installed manifest receipt from a new signed transition, admits both
+   executables through the resulting `VerifiedRelease`, and publishes a new
+   transition after both signatures and PE formats pass but before PCR 11
+   extension, keeping the journal read/write PCR recipe coherent. Later boot
+   preparation failure can retry through the installed receipt. Required mode
+   rejects absent configuration; optional mode retains the legacy independent-
+   root path. Coherent-set boot admission remains partial because the other
+   manifest artifact kinds and physical reboot/power-loss behavior are not yet
+   integrated. Verification on 2026-08-24 passed all 5 artifact tests, all 5
+   release-journal tests, all 23 UEFI library tests, strict kernel/storage/UEFI
+   library Clippy on Windows and Arch Linux/WSL2, strict native UEFI-target
+   loader Clippy on Windows, all 452 kernel and 121 storage tests on Arch
+   Linux/WSL2, and an optimized native UEFI loader build. A preceding 451-test Windows full run
    passed 450 tests; the known deep delegation-capacity test again overflowed
    the Windows test-process stack independently of this artifact code. As the
    next manifest-admission

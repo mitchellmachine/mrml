@@ -3,7 +3,7 @@ use core::cell::RefCell;
 use mrml_crypto::Sha3_256;
 use mrml_kernel::{BOOTSTRAP_STATE_BYTES, MonotonicStateStore};
 
-pub const RELEASE_STATE_JOURNAL_SLOT_BYTES: usize = 136;
+pub const RELEASE_STATE_JOURNAL_SLOT_BYTES: usize = 200;
 const JOURNAL_MAGIC: [u8; 8] = *b"MRLSTJ01";
 const JOURNAL_DIGEST_OFFSET: usize = 16 + BOOTSTRAP_STATE_BYTES;
 
@@ -38,7 +38,7 @@ pub unsafe trait ReleaseStateJournalBackend {
 }
 
 /// Two-slot journal whose authenticated monotonic counter is the sole
-/// publication point for one canonical 88-byte release bootstrap state.
+/// publication point for one canonical 152-byte release bootstrap state.
 pub struct AuthenticatedReleaseStateJournal<B> {
     backend: RefCell<B>,
 }

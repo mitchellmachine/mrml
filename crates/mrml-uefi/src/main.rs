@@ -3,11 +3,13 @@
 
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
+use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, FramebufferInfo, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
-    MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MemoryKind, MemoryRegion, PeImage, PhysAddr,
-    PixelFormat, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch,
-    SignedArtifact, TrustRoot,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootstrapState, FramebufferInfo, MAX_HANDOFF_BYTES,
+    MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MemoryKind,
+    MemoryRegion, MonotonicStateStore, PeImage, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
+    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
+    TrustRoot, VerifiedRelease,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
@@ -20,8 +22,9 @@ use mrml_storage::{
     decode_canonical_authority_recovery_state,
 };
 use mrml_uefi::tpm::{
-    NvCounterError, RecoveryJournalConfiguration, TpmNonceSource, TpmTransport, enforce_version,
-    open_recovery_journal,
+    NvCounterError, PcrReleaseStateJournal, RecoveryJournalConfiguration,
+    ReleaseStateJournalConfiguration, TpmNonceSource, TpmTransport, enforce_version,
+    open_recovery_journal, open_release_state_journal, verify_distinct_journal_layouts,
 };
 use mrml_uefi::*;
 
@@ -59,6 +62,17 @@ const KERNEL_PATH: &[u16] = &[
 const SERVICE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 83, 69, 82, 86, 73, 67, 69, 46, 83, 73, 71, 78, 69, 68,
     0,
+];
+const RELEASE_MANIFEST_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 82, 69, 76, 69, 65, 83, 69, 46, 77, 65, 78, 73, 70, 69,
+    83, 84, 0,
+];
+const RELEASE_PUBLIC_KEY_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 82, 69, 76, 69, 65, 83, 69, 46, 80, 85, 66, 76, 73, 67,
+    0,
+];
+const RELEASE_SIGNATURE_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 82, 69, 76, 69, 65, 83, 69, 46, 83, 73, 71, 0,
 ];
 const SERVICE_STACK_PAGES: usize = 16;
 const SERVICE_TABLE_PAGES: usize = 64;
@@ -102,7 +116,15 @@ struct FirmwareRng {
     protocol: *mut RngProtocol,
 }
 
-const MAX_TPM_COMMAND_BYTES: usize = 192;
+struct PreparedRelease {
+    journal: PcrReleaseStateJournal<FirmwareTpm, FirmwareRng>,
+    verified: VerifiedRelease,
+    expected: [u8; BOOTSTRAP_STATE_BYTES],
+    replacement: [u8; BOOTSTRAP_STATE_BYTES],
+    transition: bool,
+}
+
+const MAX_TPM_COMMAND_BYTES: usize = 256;
 const _: () = assert!(MAX_TPM_COMMAND_BYTES >= 35 + mrml_storage::RELEASE_STATE_JOURNAL_SLOT_BYTES);
 
 impl TpmNonceSource for FirmwareRng {
@@ -318,6 +340,17 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     }
     paint(framebuffer, [0x80, 0x40, 0x00]);
 
+    let recovery_configuration = configured_recovery_journal()?;
+    let mut prepared_release = unsafe {
+        prepare_configured_release(
+            image,
+            services,
+            framebuffer,
+            rng_pointer.cast(),
+            recovery_configuration,
+        )
+    }?;
+
     let kernel_file = unsafe {
         load_file(
             image,
@@ -337,21 +370,25 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     let kernel_bytes = unsafe {
         core::slice::from_raw_parts(kernel_file.address as *const u8, kernel_file.length)
     };
-    let root_digest = embedded_kernel_root().ok_or(LOAD_ERROR)?;
-    let minimum_version = embedded_minimum_version().ok_or(LOAD_ERROR)?;
     let signed = SignedArtifact::decode(kernel_bytes).map_err(|_| LOAD_ERROR)?;
-    let verified = signed
-        .verify_executable(
-            &TrustRoot::new(ArtifactKind::Kernel, root_digest, minimum_version),
-            ArtifactKind::Kernel,
-        )
-        .map_err(|_| LOAD_ERROR)?;
+    let verified = if let Some(release) = prepared_release.as_ref() {
+        release
+            .verified
+            .verify_executable(&signed, ArtifactKind::Kernel)
+            .map_err(|_| LOAD_ERROR)?
+    } else {
+        signed
+            .verify_executable(
+                &TrustRoot::new(
+                    ArtifactKind::Kernel,
+                    embedded_kernel_root().ok_or(LOAD_ERROR)?,
+                    embedded_minimum_version().ok_or(LOAD_ERROR)?,
+                ),
+                ArtifactKind::Kernel,
+            )
+            .map_err(|_| LOAD_ERROR)?
+    };
     loader_trace(0xa1);
-    let kernel_measured =
-        measure_artifact(services, signed.payload(), b"MRML authenticated kernel PE")?;
-    if require_tpm_measurement() && !kernel_measured {
-        return Err(LOAD_ERROR);
-    }
     if verified.image().image_size() == 0 {
         return Err(LOAD_ERROR);
     }
@@ -391,17 +428,39 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         core::slice::from_raw_parts(service_file.address as *const u8, service_file.length)
     };
     let service_signed = SignedArtifact::decode(service_bytes).map_err(|_| LOAD_ERROR)?;
-    let service_verified = service_signed
-        .verify_executable(
-            &TrustRoot::new(
+    let service_verified = if let Some(release) = prepared_release.as_ref() {
+        release
+            .verified
+            .verify_executable(&service_signed, ArtifactKind::ServiceImage)
+            .map_err(|_| LOAD_ERROR)?
+    } else {
+        service_signed
+            .verify_executable(
+                &TrustRoot::new(
+                    ArtifactKind::ServiceImage,
+                    embedded_service_root().ok_or(LOAD_ERROR)?,
+                    embedded_service_minimum_version().ok_or(LOAD_ERROR)?,
+                ),
                 ArtifactKind::ServiceImage,
-                embedded_service_root().ok_or(LOAD_ERROR)?,
-                embedded_service_minimum_version().ok_or(LOAD_ERROR)?,
-            ),
-            ArtifactKind::ServiceImage,
-        )
-        .map_err(|_| LOAD_ERROR)?;
+            )
+            .map_err(|_| LOAD_ERROR)?
+    };
     loader_trace(0xa4);
+    if let Some(release) = prepared_release.as_mut() {
+        if release.transition {
+            release
+                .journal
+                .compare_and_store(&release.expected, &release.replacement)
+                .map_err(|_| LOAD_ERROR)?;
+        }
+        release.expected.fill(0);
+        release.replacement.fill(0);
+    }
+    let kernel_measured =
+        measure_artifact(services, signed.payload(), b"MRML authenticated kernel PE")?;
+    if require_tpm_measurement() && !kernel_measured {
+        return Err(LOAD_ERROR);
+    }
     let service_measured = measure_artifact(
         services,
         service_signed.payload(),
@@ -510,7 +569,8 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     if require_rollback_counter() && !rollback_protected {
         return Err(LOAD_ERROR);
     }
-    let recovery_state = admit_configured_recovery_journal(services, rng_pointer.cast())?;
+    let recovery_state =
+        admit_configured_recovery_journal(services, rng_pointer.cast(), recovery_configuration)?;
 
     loader_trace(0xa8);
     let (map_size, descriptor_size) = unsafe { exit_boot_services(image, services) }?;
@@ -722,11 +782,136 @@ fn configured_recovery_journal() -> Result<Option<RecoveryJournalConfiguration>,
     .map_err(|_| LOAD_ERROR)
 }
 
+fn configured_release_state_journal() -> Result<Option<ReleaseStateJournalConfiguration>, Status> {
+    ReleaseStateJournalConfiguration::parse_optional([
+        option_env!("MRML_RELEASE_COUNTER_NV_INDEX_HEX").map(str::as_bytes),
+        option_env!("MRML_RELEASE_SLOT0_NV_INDEX_HEX").map(str::as_bytes),
+        option_env!("MRML_RELEASE_SLOT1_NV_INDEX_HEX").map(str::as_bytes),
+        option_env!("MRML_RELEASE_POLICY_DIGEST_HEX").map(str::as_bytes),
+        option_env!("MRML_RELEASE_PCR_DIGEST_HEX").map(str::as_bytes),
+        option_env!("MRML_RELEASE_PCR_SELECT_HEX").map(str::as_bytes),
+    ])
+    .map_err(|_| LOAD_ERROR)
+}
+
+fn require_release_manifest() -> bool {
+    matches!(option_env!("MRML_REQUIRE_RELEASE_MANIFEST"), Some("1"))
+}
+
+unsafe fn prepare_configured_release(
+    image: Handle,
+    services: &BootServices,
+    framebuffer: Framebuffer,
+    rng: *mut RngProtocol,
+    recovery: Option<RecoveryJournalConfiguration>,
+) -> Result<Option<PreparedRelease>, Status> {
+    let Some(configuration) = configured_release_state_journal()? else {
+        return if require_release_manifest() {
+            Err(LOAD_ERROR)
+        } else {
+            Ok(None)
+        };
+    };
+    if rng.is_null() {
+        return Err(LOAD_ERROR);
+    }
+    let (layout, policy) = configuration.into_parts();
+    if let Some(recovery) = recovery {
+        let (recovery_layout, _) = recovery.into_parts();
+        verify_distinct_journal_layouts(recovery_layout, layout).map_err(|_| LOAD_ERROR)?;
+    }
+    let manifest_file = unsafe {
+        load_file(
+            image,
+            services,
+            framebuffer,
+            RELEASE_MANIFEST_PATH,
+            RELEASE_MANIFEST_BYTES,
+        )
+    }?;
+    if manifest_file.length != RELEASE_MANIFEST_BYTES {
+        return Err(LOAD_ERROR);
+    }
+    let manifest = unsafe {
+        core::slice::from_raw_parts(manifest_file.address as *const u8, manifest_file.length)
+    };
+
+    let mut protocol_pointer = core::ptr::null_mut();
+    check(unsafe {
+        (services.locate_protocol)(
+            &TCG2_PROTOCOL_GUID,
+            core::ptr::null_mut(),
+            &mut protocol_pointer,
+        )
+    })?;
+    let transport = FirmwareTpm {
+        protocol: protocol_pointer.cast(),
+    };
+    let nonce_source = FirmwareRng { protocol: rng };
+    let journal = open_release_state_journal(transport, nonce_source, layout, policy)
+        .map_err(|_| LOAD_ERROR)?;
+    let mut expected = [0; BOOTSTRAP_STATE_BYTES];
+    journal
+        .load_authenticated(&mut expected)
+        .map_err(|_| LOAD_ERROR)?;
+    let current = BootstrapState::decode_authenticated(&expected).map_err(|_| LOAD_ERROR)?;
+    if let Ok(verified) = current.admit_installed_release(manifest) {
+        return Ok(Some(PreparedRelease {
+            journal,
+            verified,
+            expected,
+            replacement: expected,
+            transition: false,
+        }));
+    }
+
+    let public_file = unsafe {
+        load_file(
+            image,
+            services,
+            framebuffer,
+            RELEASE_PUBLIC_KEY_PATH,
+            LAMPORT_PUBLIC_KEY_BYTES,
+        )
+    }?;
+    let signature_file = unsafe {
+        load_file(
+            image,
+            services,
+            framebuffer,
+            RELEASE_SIGNATURE_PATH,
+            LAMPORT_SIGNATURE_BYTES,
+        )
+    }?;
+    if public_file.length != LAMPORT_PUBLIC_KEY_BYTES
+        || signature_file.length != LAMPORT_SIGNATURE_BYTES
+    {
+        return Err(LOAD_ERROR);
+    }
+    let public = unsafe {
+        core::slice::from_raw_parts(public_file.address as *const u8, public_file.length)
+    };
+    let signature = unsafe {
+        core::slice::from_raw_parts(signature_file.address as *const u8, signature_file.length)
+    };
+    let (verified, next) = current
+        .verify_release(manifest, public, signature)
+        .map_err(|_| LOAD_ERROR)?;
+    Ok(Some(PreparedRelease {
+        journal,
+        verified,
+        expected,
+        replacement: next.encode(),
+        transition: true,
+    }))
+}
+
 fn admit_configured_recovery_journal(
     services: &BootServices,
     rng: *mut RngProtocol,
+    configuration: Option<RecoveryJournalConfiguration>,
 ) -> Result<Option<RecoveryStateMetadata>, Status> {
-    let Some(configuration) = configured_recovery_journal()? else {
+    let Some(configuration) = configuration else {
         return Ok(None);
     };
     if rng.is_null() {

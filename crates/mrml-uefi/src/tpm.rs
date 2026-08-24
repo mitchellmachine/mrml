@@ -121,6 +121,58 @@ pub struct RecoveryJournalConfiguration {
     policy: PcrPolicy,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReleaseStateJournalConfiguration {
+    layout: NvReleaseStateLayout,
+    policy: PcrPolicy,
+}
+
+impl ReleaseStateJournalConfiguration {
+    pub fn parse_optional(fields: [Option<&[u8]>; 6]) -> Result<Option<Self>, NvCounterError> {
+        match fields {
+            [None, None, None, None, None, None] => Ok(None),
+            [
+                Some(counter),
+                Some(slot_zero),
+                Some(slot_one),
+                Some(policy),
+                Some(pcr),
+                Some(select),
+            ] => Self::parse(counter, slot_zero, slot_one, policy, pcr, select).map(Some),
+            _ => Err(NvCounterError::InvalidIndex),
+        }
+    }
+
+    pub fn parse(
+        counter_index: &[u8],
+        slot_zero_index: &[u8],
+        slot_one_index: &[u8],
+        policy_digest: &[u8],
+        expected_pcr_digest: &[u8],
+        pcr_select: &[u8],
+    ) -> Result<Self, NvCounterError> {
+        let policy_digest = parse_hex_exact::<32>(policy_digest)?;
+        let layout = NvReleaseStateLayout::new(
+            parse_hex_u32(counter_index)?,
+            [
+                parse_hex_u32(slot_zero_index)?,
+                parse_hex_u32(slot_one_index)?,
+            ],
+            policy_digest,
+        )?;
+        let policy = PcrPolicy::new(
+            policy_digest,
+            parse_hex_exact::<32>(expected_pcr_digest)?,
+            parse_hex_exact::<3>(pcr_select)?,
+        )?;
+        Ok(Self { layout, policy })
+    }
+
+    pub const fn into_parts(self) -> (NvReleaseStateLayout, PcrPolicy) {
+        (self.layout, self.policy)
+    }
+}
+
 impl RecoveryJournalConfiguration {
     pub fn parse_optional(fields: [Option<&[u8]>; 6]) -> Result<Option<Self>, NvCounterError> {
         match fields {
@@ -928,7 +980,7 @@ fn policy_read<T: TpmTransport, const N: usize>(
     command[14..18].copy_from_slice(&index.to_be_bytes());
     encode_policy_authorization(&mut command[18..31], session)?;
     command[31..33].copy_from_slice(&(N as u16).to_be_bytes());
-    let mut response = [0; 192];
+    let mut response = [0; 256];
     let length = transport.submit(&command, &mut response)?;
     let parameters = parse_policy_response(&response[..length])?;
     if parameters.len() != N + 2
@@ -1591,6 +1643,43 @@ mod tests {
     }
 
     #[test]
+    fn release_configuration_requires_complete_distinct_fields() {
+        let policy = [b'6'; 64];
+        let pcr_digest = [b'7'; 64];
+        let configuration = ReleaseStateJournalConfiguration::parse(
+            b"01800020",
+            b"01800021",
+            b"01800022",
+            &policy,
+            &pcr_digest,
+            b"000800",
+        )
+        .unwrap();
+        assert_eq!(
+            configuration.into_parts(),
+            (
+                release_layout([0x66; 32]),
+                PcrPolicy::new([0x66; 32], [0x77; 32], [0, 8, 0]).unwrap(),
+            )
+        );
+        assert_eq!(
+            ReleaseStateJournalConfiguration::parse_optional([None; 6]),
+            Ok(None)
+        );
+        assert!(matches!(
+            ReleaseStateJournalConfiguration::parse_optional([
+                Some(&b"01800020"[..]),
+                Some(&b"01800021"[..]),
+                None,
+                Some(&policy),
+                Some(&pcr_digest),
+                Some(&b"000800"[..]),
+            ]),
+            Err(NvCounterError::InvalidIndex)
+        ));
+    }
+
+    #[test]
     fn admits_only_exact_policy_bound_recovery_layout() {
         let policy = [0x5a; 32];
         let mut transport = LayoutTransport {
@@ -1979,7 +2068,7 @@ mod tests {
     }
 
     #[test]
-    fn release_backend_publishes_exact_bootstrap_state_through_136_byte_objects() {
+    fn release_backend_publishes_exact_bootstrap_state_through_200_byte_objects() {
         let policy = [0x6d; 32];
         let original = BootstrapState::genesis([0x31; 64], 7).encode();
         let replacement = BootstrapState::genesis([0x52; 64], 8).encode();

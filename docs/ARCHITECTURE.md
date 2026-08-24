@@ -73,26 +73,40 @@ only when its kind-specific root matches and its signed version equals—not
 merely meets—the manifest release. Executable admission performs this exact
 release check before PE parsing. The per-kind minimum-version roots are no
 longer exposed from `VerifiedRelease`, closing the cross-release splice at this
-foundation; the UEFI loader has not yet consumed a release manifest.
+foundation.
+When a complete release-journal configuration is compiled in, the UEFI loader
+now loads the exact 408-byte manifest. It either reconstructs an already
+committed release from the authenticated installed-manifest digest or verifies
+a new one-time manifest transition. Kernel and service signatures and PE
+formats are then admitted through that one `VerifiedRelease`; a new transition
+is published after both exact executables pass signature and PE admission but
+before PCR 11 is extended, so the release journal's fixed PCR policy is coherent
+for both its read and publication operations. Later boot preparation failure is
+retryable through the installed-manifest receipt. A required-mode
+flag fails closed when the complete release configuration is absent. The legacy
+independent-root path remains available only when required mode is disabled.
 Release-manifest construction additionally requires the next manifest root and
 all five kind-specific artifact roots to be pairwise distinct. Authenticated
 transition rejects reuse of the current manifest-signing root in any next or
 artifact role. This preserves the one-statement lifetime of every Lamport key
 before a release can expose per-kind admission.
-The 88-byte release `BootstrapState` now has a semantically distinct two-slot
+The 152-byte release `BootstrapState` now has a semantically distinct two-slot
 journal foundation rather than reusing storage-authority recovery state. Each
-136-byte slot binds a dedicated magic, monotonic journal sequence, complete
+200-byte slot binds a dedicated magic, monotonic journal sequence, complete
 bootstrap state, and SHA3-256 digest. Compare-and-store now matches the complete
 authenticated predecessor, including its current root, instead of only the
 release floor; the inactive slot is written before one exact counter advance.
+The state also binds the SHA3-512 digest of the installed manifest. A committed
+release can therefore reconstruct exact artifact authority on later boots
+without replaying its one-time root transition; genesis has no such receipt.
 The UEFI TPM command layer now has a distinct release-state layout and adapter:
-one exact counter and two exact 136-byte full-write slots, with recomputed TPM
+one exact counter and two exact 200-byte full-write slots, with recomputed TPM
 Names, shared owner-policy admission, fresh operation-bound sessions, verified
 writes, exact counter succession, and an explicit cross-journal index-alias
 check. This is unit/simulation evidence for the adapter, not provisioning,
 reboot, physical power-loss, or rollback-resistance evidence.
-The firmware TPM wrapper accepts a bounded 192-byte command, which covers the
-171-byte full release-slot write; its former 128-byte ceiling could not carry
+The firmware TPM wrapper accepts a bounded 256-byte command, which covers the
+235-byte full release-slot write; its former 128-byte ceiling could not carry
 either journal's full-write command.
 
 **EXPERIMENTAL:** signed QEMU/UEFI, nested KVM, and WHP runs; Windows VBS enclave
