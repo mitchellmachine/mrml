@@ -3826,6 +3826,13 @@ fn rustc_conditional_array_return_reads_reach_native_objects() {
 }
 
 #[test]
+fn rustc_sequence_wrapped_array_return_reads_reach_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: usize, second: usize, prefix: usize, suffix: usize, bias: bool) -> [usize; 2] { if bias { return { prefix; [first, second] }; } { suffix; [second, first] } }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_range_derived_fat_reference_initializer_reads_reach_native_objects() {
     let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &[usize], start: usize, end: usize, left: usize) -> usize { let local = [10usize, 20usize, 30usize, 40usize]; let from_local: &[usize] = &local[start..end]; let from_input: &[usize] = &input[left..]; from_local.len() + from_input.len() }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

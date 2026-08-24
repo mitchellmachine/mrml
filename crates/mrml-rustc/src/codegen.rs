@@ -3907,6 +3907,178 @@ fn preanalyze_runtime_expression_statement_reads<
     preanalyze_runtime_expression_reads(facts, locals, function, resolver, &tree, statement.span)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn preanalyze_runtime_return_array_element_reads<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
+    id: crate::ExprId,
+    index: usize,
+    depth: usize,
+    expression_span: Span,
+) -> Result<(), CodegenError> {
+    if depth == 64 {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::Lowering(IrErrorKind::NestingLimitExceeded),
+            span: expression_span,
+        });
+    }
+    let expression = tree.expression(id).ok_or(CodegenError {
+        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+        span: expression_span,
+    })?;
+    match expression.kind {
+        ExprKind::DefaultValue => Ok(()),
+        ExprKind::Identifier(name) => push_read(
+            facts,
+            locals,
+            function,
+            RuntimeReadPlace {
+                name,
+                span: expression.span,
+                projections: RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
+            },
+            expression_span,
+        ),
+        ExprKind::Array {
+            elements,
+            element_count,
+        } => {
+            let element = elements
+                .get(index)
+                .filter(|_| index < element_count)
+                .and_then(|element| *element)
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                    span: expression_span,
+                })?;
+            preanalyze_runtime_expression_at_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                element,
+                expression_span,
+            )
+        }
+        ExprKind::ArrayRepeat { element, count } => {
+            if index >= count {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::RuntimeTypeMismatch,
+                    span: expression_span,
+                });
+            }
+            preanalyze_runtime_expression_at_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                element,
+                expression_span,
+            )
+        }
+        ExprKind::IntegerToBytes { base, .. } => preanalyze_runtime_expression_at_reads(
+            facts,
+            locals,
+            function,
+            resolver,
+            tree,
+            base,
+            expression_span,
+        ),
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        }
+        | ExprKind::LoopBreakIf {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            preanalyze_runtime_expression_at_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                condition,
+                expression_span,
+            )?;
+            preanalyze_runtime_return_array_element_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                then_branch,
+                index,
+                depth + 1,
+                expression_span,
+            )?;
+            preanalyze_runtime_return_array_element_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                else_branch,
+                index,
+                depth + 1,
+                expression_span,
+            )
+        }
+        ExprKind::InlineConst { operand }
+        | ExprKind::LoopBreak { operand }
+        | ExprKind::Return { operand } => preanalyze_runtime_return_array_element_reads(
+            facts,
+            locals,
+            function,
+            resolver,
+            tree,
+            operand,
+            index,
+            depth + 1,
+            expression_span,
+        ),
+        ExprKind::Sequence { first, then } => {
+            preanalyze_runtime_expression_at_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                first,
+                expression_span,
+            )?;
+            preanalyze_runtime_return_array_element_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                then,
+                index,
+                depth + 1,
+                expression_span,
+            )
+        }
+        _ => Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: expression_span,
+        }),
+    }
+}
+
 fn preanalyze_runtime_source_expression_reads<
     'source,
     R: ConstantResolver,
@@ -3969,97 +4141,29 @@ fn preanalyze_runtime_source_expression_reads<
         ) => repeat == count,
         _ => false,
     };
-    let conditional_array_literals = match (
-        ty,
-        tree.expression(tree.root())
-            .map(|expression| expression.kind),
-    ) {
-        (
-            RuntimeExpressionType::Array { count, .. },
-            Some(
-                ExprKind::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                }
-                | ExprKind::LoopBreakIf {
-                    condition,
-                    then_branch,
-                    else_branch,
-                },
-            ),
-        ) => match (
-            tree.expression(then_branch)
+    let per_element_array = if let RuntimeExpressionType::Array { count, .. } = ty {
+        !matches!(
+            tree.expression(tree.root())
                 .map(|expression| expression.kind),
-            tree.expression(else_branch)
-                .map(|expression| expression.kind),
-        ) {
-            (
-                Some(ExprKind::Array {
-                    elements: then_elements,
-                    element_count: then_count,
-                }),
-                Some(ExprKind::Array {
-                    elements: else_elements,
-                    element_count: else_count,
-                }),
-            ) if then_count == count
-                && else_count == count
-                && then_elements[..then_count].iter().all(Option::is_some)
-                && else_elements[..else_count].iter().all(Option::is_some) =>
-            {
-                Some((condition, then_elements, else_elements, count))
-            }
-            _ => None,
-        },
-        _ => None,
+            Some(ExprKind::Call { .. } | ExprKind::ArrayRepeat { .. })
+        ) && (0..count)
+            .all(|index| runtime_array_element_preanalysis_supported(&tree, tree.root(), index, 0))
+    } else {
+        false
     };
-    if let Some((condition, then_elements, else_elements, count)) = conditional_array_literals {
+    if let RuntimeExpressionType::Array { count, .. } = ty
+        && per_element_array
+    {
         for index in 0..count {
-            let then_element = then_elements[index].ok_or(CodegenError {
-                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                span: expression_span,
-            })?;
-            let else_element = else_elements[index].ok_or(CodegenError {
-                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                span: expression_span,
-            })?;
-            for id in [condition, then_element, else_element] {
-                preanalyze_runtime_expression_at_reads(
-                    facts,
-                    locals,
-                    function,
-                    resolver,
-                    &tree,
-                    id,
-                    expression_span,
-                )?;
-            }
-        }
-        return Ok(());
-    }
-    if let (RuntimeExpressionType::Array { count, .. }, Some(ExprKind::Identifier(name))) = (
-        ty,
-        tree.expression(tree.root())
-            .map(|expression| expression.kind),
-    ) {
-        let span = tree
-            .expression(tree.root())
-            .ok_or(CodegenError {
-                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
-                span: expression_span,
-            })?
-            .span;
-        for _ in 0..count {
-            push_read(
+            preanalyze_runtime_return_array_element_reads(
                 facts,
                 locals,
                 function,
-                RuntimeReadPlace {
-                    name,
-                    span,
-                    projections: RuntimePlaceProjections::single(RuntimePlaceProjection::Index),
-                },
+                resolver,
+                &tree,
+                tree.root(),
+                index,
+                0,
                 expression_span,
             )?;
         }
@@ -21765,7 +21869,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_body_facts_skip_unmapped_packed_conditional_array_returns() {
+    fn runtime_body_facts_preanalyze_packed_conditional_identifiers_per_element() {
         let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(left: [u16; 3], right: [u16; 3], prefix: usize, bias: bool, choose: bool) -> [u16; 3] { prefix; if bias { return if choose { left } else { right }; } if choose { right } else { left } }";
         let module = Parser::new(source).parse_module::<1, 5>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -21785,8 +21889,56 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 0);
-        assert_eq!(facts.assignment_read_count, 2);
-        for (fact, parameter) in facts.assignment_reads[..2].iter().zip([2, 3]) {
+        assert_eq!(facts.assignment_read_count, 20);
+        for (index, (fact, parameter)) in facts.assignment_reads[..20]
+            .iter()
+            .zip([2, 3, 4, 0, 1, 4, 0, 1, 4, 0, 1, 4, 1, 0, 4, 1, 0, 4, 1, 0])
+            .enumerate()
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            let projected = index >= 2 && !matches!(index, 2 | 5 | 8 | 11 | 14 | 17);
+            assert_eq!(
+                fact.projections,
+                if projected {
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::Index)
+                } else {
+                    RuntimePlaceProjections::EMPTY
+                }
+            );
+        }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 5, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_repeat_sequence_prefixes_per_returned_array_element() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, prefix: usize, suffix: usize, bias: bool) -> [usize; 2] { if bias { return { prefix; [first, second] }; } { suffix; [second, first] } }";
+        let module = Parser::new(source).parse_module::<1, 5>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<5>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 5, 64>(
+            &function,
+            &resolver,
+            &body,
+            "[usize; 2]",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        assert_eq!(facts.assignment_read_count, 9);
+        for (fact, parameter) in facts.assignment_reads[..9]
+            .iter()
+            .zip([4, 2, 0, 2, 1, 3, 1, 3, 0])
+        {
             let fact = fact.unwrap();
             assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
             assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
