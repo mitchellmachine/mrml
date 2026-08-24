@@ -6913,7 +6913,8 @@ fn preanalyze_runtime_return_array_reads<
     }
 }
 
-fn preanalyze_runtime_source_expression_reads<
+#[allow(clippy::too_many_arguments)]
+fn preanalyze_runtime_source_expression_reads_with_expected_return<
     'source,
     R: ConstantResolver,
     const MAX_PARAMETERS: usize,
@@ -6926,6 +6927,7 @@ fn preanalyze_runtime_source_expression_reads<
     expression: &'source str,
     expression_span: Span,
     body_start: usize,
+    expected_return: bool,
 ) -> Result<(), CodegenError> {
     let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(expression)
         .parse()
@@ -7013,7 +7015,45 @@ fn preanalyze_runtime_source_expression_reads<
     if runtime_type_stack_slots(ty) != 1 && !fat_reference_supported {
         return Ok(());
     }
-    let context = if runtime_type_is_copy(ty) {
+    let direct_place = discover_runtime_read_place(&tree, tree.root())
+        .map_err(|kind| CodegenError {
+            kind,
+            span: translate_span(body_start, expression_span),
+        })?
+        .is_some();
+    let expected_reborrow = if expected_return
+        && (direct_place
+            || matches!(
+                tree.expression(tree.root())
+                    .map(|expression| expression.kind),
+                Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+            )) {
+        let expected = function
+            .return_type
+            .and_then(|return_type| runtime_type_from_text(return_type.text));
+        match (expected, ty) {
+            (
+                Some(RuntimeExpressionType::Reference {
+                    mutable: expected_mutable,
+                    ..
+                }),
+                RuntimeExpressionType::Reference {
+                    mutable: actual_mutable,
+                    ..
+                },
+            ) if !expected_mutable || actual_mutable => Some(if expected_mutable {
+                RuntimeReadEffectContext::MutableBorrow
+            } else {
+                RuntimeReadEffectContext::SharedBorrow
+            }),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let context = if let Some(context) = expected_reborrow {
+        context
+    } else if runtime_type_is_copy(ty) {
         RuntimeReadEffectContext::Value
     } else {
         RuntimeReadEffectContext::Move
@@ -7028,6 +7068,66 @@ fn preanalyze_runtime_source_expression_reads<
         context,
         None,
         expression_span,
+    )
+}
+
+fn preanalyze_runtime_source_expression_reads<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    expression: &'source str,
+    expression_span: Span,
+    body_start: usize,
+) -> Result<(), CodegenError> {
+    preanalyze_runtime_source_expression_reads_with_expected_return::<
+        R,
+        MAX_PARAMETERS,
+        MAX_EXPRESSION_NODES,
+    >(
+        facts,
+        locals,
+        function,
+        resolver,
+        expression,
+        expression_span,
+        body_start,
+        false,
+    )
+}
+
+fn preanalyze_runtime_return_expression_reads<
+    'source,
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    facts: &mut RuntimeBodyFacts<'source>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    expression: &'source str,
+    expression_span: Span,
+    body_start: usize,
+) -> Result<(), CodegenError> {
+    preanalyze_runtime_source_expression_reads_with_expected_return::<
+        R,
+        MAX_PARAMETERS,
+        MAX_EXPRESSION_NODES,
+    >(
+        facts,
+        locals,
+        function,
+        resolver,
+        expression,
+        expression_span,
+        body_start,
+        true,
     )
 }
 
@@ -7195,7 +7295,7 @@ fn preanalyze_runtime_conditional_actions<
                 )?;
             }
             crate::ConditionalAssignmentAction::Return(value) => {
-                preanalyze_runtime_source_expression_reads::<
+                preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -7789,7 +7889,7 @@ fn preanalyze_runtime_loop_declarations<
                         statement_index,
                         operation_index,
                     };
-                preanalyze_runtime_source_expression_reads::<
+                preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -7809,7 +7909,7 @@ fn preanalyze_runtime_loop_declarations<
                         statement_index,
                         operation_index,
                     };
-                preanalyze_runtime_source_expression_reads::<
+                preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -7967,7 +8067,7 @@ fn preanalyze_runtime_top_level_statement<
                     statement_index,
                     branch_index: 0,
                 };
-            preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            preanalyze_runtime_return_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                 facts,
                 &locals[..*local_count],
                 function,
@@ -8006,7 +8106,7 @@ fn preanalyze_runtime_top_level_statement<
                         statement_index,
                         branch_index,
                     };
-                preanalyze_runtime_source_expression_reads::<
+                preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -8023,7 +8123,7 @@ fn preanalyze_runtime_top_level_statement<
             if let Some(value) = conditional.else_value {
                 facts.current_ownership_event_location =
                     RuntimeOwnershipEventLocation::ConditionalReturnElseValue { statement_index };
-                preanalyze_runtime_source_expression_reads::<
+                preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -8045,7 +8145,7 @@ fn preanalyze_runtime_top_level_statement<
             })?;
             facts.current_ownership_event_location =
                 RuntimeOwnershipEventLocation::ReturnValue { statement_index };
-            preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+            preanalyze_runtime_return_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
                 facts,
                 &locals[..*local_count],
                 function,
@@ -10531,7 +10631,7 @@ fn preanalyze_runtime_body_declarations<
     }
     if !body.tail_diverges && !body.tail_expression.is_empty() {
         facts.current_ownership_event_location = RuntimeOwnershipEventLocation::Tail;
-        preanalyze_runtime_source_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+        preanalyze_runtime_return_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             facts,
             &locals[..local_count],
             function,
@@ -28357,7 +28457,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_place_effects_link_identity_call_arguments_to_returns() {
+    fn runtime_place_effects_reborrow_reference_values_at_return_coercion_sites() {
         let source = "fn value(input: &mut u16) -> &mut u16 { let returned: &mut u16 = identity(input); returned }";
         let module = Parser::new(source).parse_module::<1, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -28412,7 +28512,10 @@ mod tests {
             RuntimePlaceEffectKind::MutableBorrow
         );
         assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
-        assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Move);
+        assert_eq!(
+            facts.effects[1].unwrap().kind,
+            RuntimePlaceEffectKind::MutableBorrow
+        );
         assert_eq!(facts.effects[1].unwrap().path, RuntimeMovePathId(1));
 
         let assignment_access_count = facts.assignment_access_count;
@@ -28952,8 +29055,13 @@ mod tests {
                 .flatten()
                 .filter(|effect| effect.kind == RuntimePlaceEffectKind::Move)
                 .count(),
-            1
+            0
         );
+        assert!(facts.effects[..facts.effect_count]
+            .iter()
+            .flatten()
+            .any(|effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
+                && effect.location == RuntimeOwnershipEventLocation::Tail));
         assert!(
             facts.effects[..facts.effect_count]
                 .iter()
@@ -29021,7 +29129,7 @@ mod tests {
             facts.effects[..facts.effect_count]
                 .iter()
                 .flatten()
-                .any(|effect| effect.kind == RuntimePlaceEffectKind::Move
+                .any(|effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
                     && effect.expression_path
                         == RuntimeOwnershipExpressionPath {
                             else_bits: 0,
@@ -29169,7 +29277,7 @@ mod tests {
         );
         for (kind, expression_path) in [
             (
-                RuntimePlaceEffectKind::Move,
+                RuntimePlaceEffectKind::MutableBorrow,
                 RuntimeOwnershipExpressionPath {
                     else_bits: 0,
                     depth: 2,
@@ -29201,7 +29309,7 @@ mod tests {
             facts.effects[..facts.effect_count]
                 .iter()
                 .flatten()
-                .any(|effect| effect.kind == RuntimePlaceEffectKind::Move
+                .any(|effect| effect.kind == RuntimePlaceEffectKind::MutableBorrow
                     && effect.expression_conditional == Some(RuntimeConditionalExpressionId(1)))
         );
         assert!(

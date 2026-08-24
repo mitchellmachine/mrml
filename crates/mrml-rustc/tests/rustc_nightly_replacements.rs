@@ -4286,6 +4286,28 @@ fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
 }
 
 #[test]
+fn rustc_return_coercion_sites_reborrow_explicit_reference_places_like_the_oracle() {
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { let returned: &mut u16 = input; returned }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let returned: &mut u16 = input; if choose { return returned; } input }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+
+    let inferred_move = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let returned = input; if choose { return returned; } input }";
+    for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+        assert_eq!(
+            compile_wide(inferred_move, format),
+            Err(CompileErrorKind::Codegen(
+                CodegenErrorKind::RuntimeUseAfterMove
+            ))
+        );
+    }
+}
+
+#[test]
 fn rustc_identity_call_results_retain_argument_origins_like_the_oracle() {
     let rejected = [
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
