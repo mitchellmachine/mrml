@@ -3606,9 +3606,15 @@ KiB write and read through the shared fail-closed host runners, received vector
 protected acknowledgements, and proved the complete read-back page. The
 one-page backend was volatile and launcher-local. Verification reported
 `verify=16896us prepare=2391us execute=347us total=41039us`; timings are this
-controlled run only, not a performance claim. WHP signed-image use, nonzero
-resume, unbounded progress, persistence/durability, PCI, native boot, and
-physical hardware remain unverified.
+controlled run only, not a performance claim. A separate freshly generated
+one-time Lamport key signed the same exact compiled image for Windows WHP. That
+image crossed the same mapped configuration, common driver, native `OUT`, shared
+doorbell/acknowledgement runners, exact `SIGNAL` capability and vector-48
+allowlist, and complete 4 KiB comparison, reporting
+`verify=17518us prepare=4264us execute=217us total=25877us`. These timings are
+also one controlled run, not a performance claim. Hosted KVM/WHP remain subject
+to their hosts. Nonzero resume, unbounded progress, persistence/durability, PCI,
+native boot, and physical hardware remain unverified.
 
 This live probe also exposed a descriptor-transition defect before the first
 returning interrupt: loading the private GDT replaced the launcher's selectors
@@ -3632,7 +3638,10 @@ counter is revalidated; malformed exits or uncertain mutation fail the VM; and
 the driver retires no request before exact protected acknowledgement. Existing
 capability, revocation, rollback-resistance, accessibility, and evidence gates
 are unchanged. This agent review does not replace the required independent
-human dual review.
+human dual review. The WHP parity integration adds no new data collection,
+identity, persistence, attestation, accessibility surface, authority model, or
+parser; it uses the same hostile-input set and fail-closed common policy as the
+KVM path.
 
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,

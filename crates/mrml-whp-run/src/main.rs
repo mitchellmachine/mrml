@@ -5,15 +5,21 @@
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 use mrml_error::{Result, anyhow};
+#[cfg(target_os = "windows")]
 use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
 #[cfg(all(target_os = "windows", feature = "cuda"))]
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    ArtifactKind, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity,
-    GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
-    GpuVmmQueueBridge, ResourceCommand, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VmBackend, VmExit,
+    ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
+    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
+    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
+    IoDirection, IoPortPolicy, IoPortRule, ObjectId, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_ACK_PORT,
+    VIRTUAL_BLOCK_DOORBELL_PORT, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockMutationError,
+    VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockQueueLayout, VmBackend,
+    VmExit, VmTable, run_virtual_block_completion_ack_once, run_virtual_block_doorbell_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -79,6 +85,170 @@ const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
 const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
 #[cfg(target_os = "windows")]
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
+#[cfg(target_os = "windows")]
+const BLOCK_PROOF_PORT: u16 = 0x4d65;
+
+#[cfg(target_os = "windows")]
+struct DriverProbeBlock([u8; 4096]);
+
+#[cfg(target_os = "windows")]
+unsafe impl VirtualBlockBackend for DriverProbeBlock {
+    type Error = ();
+
+    fn read_blocks(
+        &mut self,
+        block: u64,
+        output: &mut [u8],
+    ) -> core::result::Result<(), Self::Error> {
+        if block != 0 || output.len() != self.0.len() {
+            return Err(());
+        }
+        output.copy_from_slice(&self.0);
+        Ok(())
+    }
+
+    fn write_blocks(
+        &mut self,
+        block: u64,
+        input: &[u8],
+    ) -> core::result::Result<(), VirtualBlockMutationError<Self::Error>> {
+        if block != 0 || input.len() != self.0.len() {
+            return Err(VirtualBlockMutationError::Rejected(()));
+        }
+        self.0.copy_from_slice(input);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> core::result::Result<(), VirtualBlockMutationError<Self::Error>> {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn block_configuration(
+    layout: VirtualBlockQueueLayout,
+) -> Result<mrml_kernel::VirtualBlockConfiguration> {
+    let mut device = VirtualBlockDevice::<1>::new(4096, 1, 0)
+        .map_err(|_| anyhow!("invalid block probe geometry"))?;
+    device
+        .negotiate(0)
+        .and_then(|_| device.activate(layout, 48))
+        .map_err(|_| anyhow!("invalid block probe configuration"))?;
+    device
+        .configuration()
+        .map_err(|_| anyhow!("block probe configuration is unavailable"))
+}
+
+#[cfg(target_os = "windows")]
+fn run_block_guest_driver_probe(
+    guest: &mut PreparedWhpGuest<'_>,
+    layout: VirtualBlockQueueLayout,
+) -> Result<()> {
+    let interrupt_object = ObjectId(0x301);
+    let mut capabilities = CapabilitySpace::<1>::new();
+    let interrupt_capability = capabilities
+        .insert(interrupt_object, Rights::SIGNAL)
+        .map_err(|_| anyhow!("failed to create block interrupt capability"))?;
+    let mut interrupt_policy = InterruptPolicy::deny_all();
+    interrupt_policy
+        .allow(48)
+        .map_err(|_| anyhow!("failed to allow block interrupt vector"))?;
+    let mut io_policy = IoPortPolicy::<2>::deny_all();
+    io_policy
+        .allow(
+            IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write)
+                .map_err(|_| anyhow!("invalid block doorbell policy"))?,
+        )
+        .and_then(|()| {
+            IoPortRule::new(VIRTUAL_BLOCK_COMPLETION_ACK_PORT, 4, IoDirection::Write)
+                .and_then(|rule| io_policy.allow(rule))
+        })
+        .map_err(|_| anyhow!("failed to install block I/O policy"))?;
+    let mut vms = VmTable::<1>::new();
+    let vm = vms
+        .create(8)
+        .map_err(|_| anyhow!("failed to create block VM state"))?;
+    vms.mark_loaded(vm)
+        .and_then(|()| vms.start(vm))
+        .map_err(|_| anyhow!("failed to start block VM policy state"))?;
+    let mut router = HypercallRouter::new(ObjectId(0x302), ObjectId(0x303), ObjectId(0x304));
+    let guest_memory = GuestMemory::<0>::new();
+    let mut device =
+        VirtualBlockDevice::<1>::new(4096, 1, 0).map_err(|_| anyhow!("invalid block device"))?;
+    device
+        .negotiate(0)
+        .and_then(|_| device.activate(layout, 48))
+        .map_err(|_| anyhow!("failed to activate block device"))?;
+    let mut bridge = VirtualBlockQueueBridge::<1>::new(layout)
+        .map_err(|_| anyhow!("failed to bind block queue bridge"))?;
+    let mut storage = DriverProbeBlock([0; 4096]);
+    let mut scratch = [0; 4096];
+
+    for operation in 0..2 {
+        let outcome = run_virtual_block_doorbell_once(
+            guest,
+            &mut storage,
+            0,
+            &mut vms,
+            vm,
+            &mut router,
+            &capabilities,
+            &guest_memory,
+            &io_policy,
+            &interrupt_policy,
+            interrupt_capability,
+            interrupt_object,
+            &mut device,
+            &mut bridge,
+            &mut scratch,
+        )
+        .map_err(|error| anyhow!("block doorbell {} failed: {:?}", operation + 1, error))?;
+        if !matches!(outcome, VirtualBlockProcessOutcome::Completed(_)) {
+            return Err(anyhow!(
+                "block operation {} was not completed",
+                operation + 1
+            ));
+        }
+        let acknowledgement = run_virtual_block_completion_ack_once(
+            guest,
+            0,
+            &mut vms,
+            vm,
+            &mut router,
+            &capabilities,
+            &guest_memory,
+            &io_policy,
+            &mut device,
+            &mut bridge,
+        )
+        .map_err(|error| {
+            anyhow!(
+                "block acknowledgement {} failed: {:?}",
+                operation + 1,
+                error
+            )
+        })?;
+        if acknowledgement != (operation + 1) as u64 {
+            return Err(anyhow!("block acknowledgement position mismatch"));
+        }
+    }
+    if storage.0 != [0x6d; 4096] {
+        return Err(anyhow!("block backend payload mismatch"));
+    }
+    let proof = VmBackend::run(guest, 0)
+        .map_err(|error| anyhow!("block proof execution failed: {:?}", error))?;
+    if proof
+        != (VmExit::Io {
+            port: BLOCK_PROOF_PORT,
+            size: 4,
+            write: true,
+            value: 2,
+        })
+    {
+        return Err(anyhow!("block common-driver proof mismatch: {:?}", proof));
+    }
+    Ok(())
+}
 
 #[cfg(target_os = "windows")]
 fn application_main() -> Result<()> {
@@ -110,6 +280,8 @@ fn application_main() -> Result<()> {
         || service_preemption_mode
         || smp_service_migration_mode;
     let timer_mode = arguments.len() == 5 && arguments[4] == "timer-probe";
+    let block_guest_driver_mode =
+        arguments.len() == 5 && arguments[4] == "block-guest-driver-probe";
     let preemption_mode = arguments.len() == 5 && arguments[4] == "preemption-probe";
     let vmx_root_mode = arguments.len() == 5 && arguments[4] == "vmx-root-probe";
     let smp_mode = arguments.len() == 5 && arguments[4] == "smp-probe";
@@ -120,6 +292,7 @@ fn application_main() -> Result<()> {
     if arguments.len() != 7
         && !service_artifact_mode
         && !timer_mode
+        && !block_guest_driver_mode
         && !preemption_mode
         && !vmx_root_mode
         && !smp_mode
@@ -128,7 +301,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-guest-driver-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[3]
@@ -193,6 +366,7 @@ fn application_main() -> Result<()> {
     };
     let cuda_bundle = if service_artifact_mode
         || timer_mode
+        || block_guest_driver_mode
         || preemption_mode
         || vmx_root_mode
         || smp_mode
@@ -261,10 +435,22 @@ fn application_main() -> Result<()> {
     .map_err(|_| anyhow!("invalid fixed WHP launch layout"))?;
     let queue = GpuSharedQueueLayout::new(COMMAND_BASE, COMPLETION_BASE, 1)
         .map_err(|_| anyhow!("invalid fixed GPU queue layout"))?;
+    let block_layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 1)
+        .map_err(|_| anyhow!("invalid fixed block queue layout"))?;
+    let block_configuration = block_configuration(block_layout)?;
     let system = WhpSystem::open()
         .map_err(|error| anyhow!("Windows Hypervisor Platform is unavailable: {:?}", error))?;
     let preparation_started = Instant::now();
-    let mut guest = if service_mode || block_service_mode || service_restart_request_mode {
+    let mut guest = if block_guest_driver_mode {
+        system.prepare_kernel_block_guest(
+            &executable,
+            handoff.as_slice(),
+            layout,
+            block_layout,
+            VirtualBlockConfigurationPage::new(0x0060_4000, block_configuration)
+                .map_err(|_| anyhow!("invalid block configuration page"))?,
+        )
+    } else if service_mode || block_service_mode || service_restart_request_mode {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)
     } else if service_preemption_mode {
         system.prepare_preemption_kernel(&executable, handoff.as_slice(), layout)
@@ -389,6 +575,17 @@ fn application_main() -> Result<()> {
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
+    if block_guest_driver_mode {
+        run_block_guest_driver_probe(&mut guest, block_layout)?;
+        println!(
+            "verified signed compiled common block guest driver under WHP: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
+    }
     let exit = if hosted_smp {
         let (bootstrap, application) = guest
             .run_smp()

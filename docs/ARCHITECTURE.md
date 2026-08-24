@@ -697,10 +697,9 @@ rediscovery requires a canonical configuration at the exact successor
 generation and four zero queue counters, and failure preserves the old terminal
 state. Removal and exhaustion remain permanently terminal. Arbitrary nonzero-
 queue resume, mapped signed-guest consumption of this state, unbounded progress,
-and PCI discovery remain pending. A freshly one-time-signed compiled KVM image
-now discovers this common state from the mapped configuration page and uses it
-for one exact write/read cycle over a volatile one-page backend. WHP signed-image
-use remains pending.
+and PCI discovery remain pending. Freshly one-time-signed compiled KVM and WHP
+images now discover this common state from the mapped configuration page and use
+it for one exact write/read cycle over a volatile one-page backend.
 A backend-neutral unsafe guest queue-transport contract now composes those
 transactions with canonical queue addresses and exact configured I/O tuples.
 Request publication copies the exact slot, release-publishes its producer, and
@@ -717,10 +716,10 @@ volatile counter access, release/acquire fencing, exact 32-bit port output, and
 fail-stop verification that protected acknowledgement is visible before local
 retirement. Its unsafe constructor requires live identity mappings and the same
 configured device. The controlled port model is unit/simulation evidence; the
-native `OUT` path is now live-executed by a freshly one-time-signed compiled KVM
-image through the shared fail-closed dispatcher and exact `SIGNAL`-capability
-interrupt. This is KVM controlled-probe evidence only; WHP, native boot,
-durability, PCI, and physical hardware remain unverified.
+native `OUT` path is now live-executed by freshly one-time-signed compiled KVM
+and WHP images through the same shared fail-closed dispatcher and exact
+`SIGNAL`-capability interrupt. This is hosted controlled-probe evidence only;
+native boot, durability, PCI, and physical hardware remain unverified.
 **PLANNED:** guest
 console, complete block integration, network, input, graphics, and sound
 devices; PCI transport; and any required compatibility emulation. No

@@ -1639,3 +1639,12 @@ fail-stop post-acknowledgement counter check. These are standard defensive
 virtual-device implementation techniques. No patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
+
+# 2026-08-24 — WHP common block guest-driver parity
+
+**Result: NOT_TRIGGERED.** The change conventionally connects the existing WHP
+guest-memory and execution backend to the same bounded shared-ring driver,
+scalar I/O dispatcher, capability-authorized interrupt path, and volatile test
+backend already exercised under KVM. No new protocol, authority mechanism, or
+patent-candidate mechanism was identified. This agent review does not replace
+the required independent human dual review.
