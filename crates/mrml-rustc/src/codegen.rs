@@ -3124,6 +3124,18 @@ fn preanalyze_runtime_expression_at_reads<
                                 )?;
                             }
                         }
+                    } else if let expected @ RuntimeExpressionType::Tuple { .. } = expected {
+                        recurse_tuple_value(
+                            facts,
+                            locals,
+                            function,
+                            resolver,
+                            tree,
+                            argument,
+                            expected,
+                            depth + 1,
+                            assignment_span,
+                        )?;
                     } else if let RuntimeExpressionType::Array { count, .. } = expected
                         && let Some(ExprKind::Sequence { first, then }) =
                             tree.expression(argument).map(|expression| expression.kind)
@@ -3524,6 +3536,285 @@ fn preanalyze_runtime_expression_at_reads<
                 kind: CodegenErrorKind::RuntimeExpressionUnsupported,
                 span: assignment_span,
             }),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recurse_tuple_value<
+        'source,
+        R: ConstantResolver,
+        const MAX_PARAMETERS: usize,
+        const MAX_EXPRESSION_NODES: usize,
+    >(
+        facts: &mut RuntimeBodyFacts<'source>,
+        locals: &[Option<RuntimeLocal<'source>>],
+        function: &Function<'source, MAX_PARAMETERS>,
+        resolver: &R,
+        tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
+        id: crate::ExprId,
+        expected: RuntimeExpressionType,
+        depth: usize,
+        assignment_span: Span,
+    ) -> Result<(), CodegenError> {
+        if depth == 64 {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::Lowering(IrErrorKind::NestingLimitExceeded),
+                span: assignment_span,
+            });
+        }
+        let RuntimeExpressionType::Tuple { element_count, .. } = expected else {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::RuntimeTypeMismatch,
+                span: assignment_span,
+            });
+        };
+        let expression = tree.expression(id).ok_or(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: assignment_span,
+        })?;
+        match expression.kind {
+            ExprKind::Call { .. } => recurse(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                id,
+                depth + 1,
+                assignment_span,
+            ),
+            ExprKind::InlineConst { operand } => recurse_tuple_value(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                operand,
+                expected,
+                depth + 1,
+                assignment_span,
+            ),
+            ExprKind::Sequence { first, then } => {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    first,
+                    depth + 1,
+                    assignment_span,
+                )?;
+                recurse_tuple_value(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    then,
+                    expected,
+                    depth + 1,
+                    assignment_span,
+                )
+            }
+            ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            }
+            | ExprKind::LoopBreakIf {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    condition,
+                    depth + 1,
+                    assignment_span,
+                )?;
+                for branch in [then_branch, else_branch] {
+                    recurse_tuple_value(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        branch,
+                        expected,
+                        depth + 1,
+                        assignment_span,
+                    )?;
+                }
+                Ok(())
+            }
+            ExprKind::Tuple {
+                elements,
+                element_count: actual_count,
+            } => {
+                if actual_count != element_count {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                        span: assignment_span,
+                    });
+                }
+                for element in &elements[..actual_count] {
+                    let element = element.ok_or(CodegenError {
+                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                        span: assignment_span,
+                    })?;
+                    recurse(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        element,
+                        depth + 1,
+                        assignment_span,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => {
+                for field in 0..element_count {
+                    recurse_tuple_field(
+                        facts,
+                        locals,
+                        function,
+                        resolver,
+                        tree,
+                        id,
+                        field,
+                        expected,
+                        depth + 1,
+                        assignment_span,
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recurse_tuple_field<
+        'source,
+        R: ConstantResolver,
+        const MAX_PARAMETERS: usize,
+        const MAX_EXPRESSION_NODES: usize,
+    >(
+        facts: &mut RuntimeBodyFacts<'source>,
+        locals: &[Option<RuntimeLocal<'source>>],
+        function: &Function<'source, MAX_PARAMETERS>,
+        resolver: &R,
+        tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
+        id: crate::ExprId,
+        field: usize,
+        expected: RuntimeExpressionType,
+        depth: usize,
+        assignment_span: Span,
+    ) -> Result<(), CodegenError> {
+        if depth == 64 {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::Lowering(IrErrorKind::NestingLimitExceeded),
+                span: assignment_span,
+            });
+        }
+        let expression = tree.expression(id).ok_or(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: assignment_span,
+        })?;
+        match expression.kind {
+            ExprKind::Tuple {
+                elements,
+                element_count,
+            } => {
+                let element = elements
+                    .get(field)
+                    .filter(|_| field < element_count)
+                    .and_then(|element| *element)
+                    .ok_or(CodegenError {
+                        kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                        span: assignment_span,
+                    })?;
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    element,
+                    depth + 1,
+                    assignment_span,
+                )
+            }
+            ExprKind::Identifier(name) => push_read(
+                facts,
+                locals,
+                function,
+                RuntimeReadPlace {
+                    name,
+                    span: expression.span,
+                    projections: RuntimePlaceProjections::single(
+                        RuntimePlaceProjection::TupleField(field),
+                    ),
+                },
+                assignment_span,
+            ),
+            ExprKind::Return { operand }
+            | ExprKind::LoopBreak { operand }
+            | ExprKind::Ascribe { operand, .. }
+            | ExprKind::InlineConst { operand } => recurse_tuple_field(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                operand,
+                field,
+                expected,
+                depth + 1,
+                assignment_span,
+            ),
+            ExprKind::Sequence { first, then } => {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    first,
+                    depth + 1,
+                    assignment_span,
+                )?;
+                recurse_tuple_field(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    then,
+                    field,
+                    expected,
+                    depth + 1,
+                    assignment_span,
+                )
+            }
+            _ => recurse_tuple_value(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                id,
+                expected,
+                depth + 1,
+                assignment_span,
+            ),
         }
     }
 
@@ -4835,18 +5126,30 @@ fn runtime_call_arguments_preanalysis_supported<
         {
             continue;
         }
-        if matches!(
-            expected,
-            RuntimeExpressionType::Array { .. } | RuntimeExpressionType::Tuple { .. }
-        ) && runtime_array_call_argument_preanalysis_supported(
-            function,
-            resolver,
-            locals,
-            tree,
-            *argument,
-            expected,
-            depth + 1,
-        )? {
+        if matches!(expected, RuntimeExpressionType::Array { .. })
+            && runtime_array_call_argument_preanalysis_supported(
+                function,
+                resolver,
+                locals,
+                tree,
+                *argument,
+                expected,
+                depth + 1,
+            )?
+        {
+            continue;
+        }
+        if matches!(expected, RuntimeExpressionType::Tuple { .. })
+            && runtime_tuple_value_preanalysis_supported(
+                function,
+                resolver,
+                locals,
+                tree,
+                *argument,
+                expected,
+                depth + 1,
+            )?
+        {
             continue;
         }
         if runtime_aggregate_call_argument_preanalysis_supported(
@@ -4860,6 +5163,173 @@ fn runtime_call_arguments_preanalysis_supported<
         return Ok(false);
     }
     Ok(true)
+}
+
+fn runtime_tuple_value_preanalysis_supported<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'_>>],
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    expected: RuntimeExpressionType,
+    depth: usize,
+) -> Result<bool, CodegenErrorKind> {
+    if depth == 64 {
+        return Ok(false);
+    }
+    let RuntimeExpressionType::Tuple { element_count, .. } = expected else {
+        return Ok(false);
+    };
+    match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Call { .. }) => runtime_call_arguments_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            id,
+            depth + 1,
+        ),
+        Some(ExprKind::InlineConst { operand }) => runtime_tuple_value_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            operand,
+            expected,
+            depth + 1,
+        ),
+        Some(ExprKind::Sequence { then, .. }) => runtime_tuple_value_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then,
+            expected,
+            depth + 1,
+        ),
+        Some(
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            }
+            | ExprKind::LoopBreakIf {
+                then_branch,
+                else_branch,
+                ..
+            },
+        ) => Ok(runtime_tuple_value_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then_branch,
+            expected,
+            depth + 1,
+        )? && runtime_tuple_value_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            else_branch,
+            expected,
+            depth + 1,
+        )?),
+        Some(ExprKind::Tuple {
+            elements,
+            element_count: actual_count,
+        }) => {
+            Ok(actual_count == element_count
+                && elements[..actual_count].iter().all(Option::is_some))
+        }
+        Some(ExprKind::Identifier(_)) => Ok(true),
+        Some(ExprKind::Return { .. } | ExprKind::LoopBreak { .. } | ExprKind::Ascribe { .. }) => {
+            for field in 0..element_count {
+                if !runtime_tuple_field_preanalysis_supported(
+                    function,
+                    resolver,
+                    locals,
+                    tree,
+                    id,
+                    field,
+                    expected,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn runtime_tuple_field_preanalysis_supported<
+    R: ConstantResolver,
+    const MAX_PARAMETERS: usize,
+    const MAX_NODES: usize,
+>(
+    function: &Function<'_, MAX_PARAMETERS>,
+    resolver: &R,
+    locals: &[Option<RuntimeLocal<'_>>],
+    tree: &crate::ExpressionTree<'_, MAX_NODES>,
+    id: crate::ExprId,
+    field: usize,
+    expected: RuntimeExpressionType,
+    depth: usize,
+) -> Result<bool, CodegenErrorKind> {
+    if depth == 64 {
+        return Ok(false);
+    }
+    match tree.expression(id).map(|expression| expression.kind) {
+        Some(ExprKind::Tuple {
+            elements,
+            element_count,
+        }) => Ok(field < element_count && elements.get(field).is_some_and(Option::is_some)),
+        Some(ExprKind::Identifier(_)) => Ok(true),
+        Some(
+            ExprKind::Return { operand }
+            | ExprKind::LoopBreak { operand }
+            | ExprKind::Ascribe { operand, .. }
+            | ExprKind::InlineConst { operand },
+        ) => runtime_tuple_field_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            operand,
+            field,
+            expected,
+            depth + 1,
+        ),
+        Some(ExprKind::Sequence { then, .. }) => runtime_tuple_field_preanalysis_supported(
+            function,
+            resolver,
+            locals,
+            tree,
+            then,
+            field,
+            expected,
+            depth + 1,
+        ),
+        Some(ExprKind::Call { .. } | ExprKind::If { .. } | ExprKind::LoopBreakIf { .. }) => {
+            runtime_tuple_value_preanalysis_supported(
+                function,
+                resolver,
+                locals,
+                tree,
+                id,
+                expected,
+                depth + 1,
+            )
+        }
+        _ => Ok(false),
+    }
 }
 
 fn runtime_array_call_argument_preanalysis_supported<
@@ -20968,6 +21438,45 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 16384, 6, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_mirror_tuple_loop_break_field_materialization() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(first: usize, second: usize, prefix: usize, bias: usize) -> usize { let wrapped = consume_tuple(loop { break { prefix; make_tuple(first, second) }; }, bias); wrapped }";
+        let module = Parser::new(source).parse_module::<1, 5>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<5>().unwrap();
+        let resolver = TupleCallResolver;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let count = preanalyze_runtime_body_declarations::<_, 5, 64>(
+            &function,
+            &resolver,
+            &body,
+            "usize",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(facts.assignment_read_count, 8);
+        for (fact, parameter) in facts.assignment_reads[..7]
+            .iter()
+            .zip([2, 0, 1, 2, 0, 1, 3])
+        {
+            let fact = fact.unwrap();
+            assert_eq!(fact.base, RuntimePlaceIdentity::Parameter(parameter));
+            assert_eq!(fact.projections, RuntimePlaceProjections::EMPTY);
+        }
+        let tail = facts.assignment_reads[7].unwrap();
+        assert_eq!(tail.base, RuntimePlaceIdentity::Local(RuntimeLocalId(0)));
+        assert_eq!(tail.projections, RuntimePlaceProjections::EMPTY);
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 16384, 5, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
