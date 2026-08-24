@@ -113,6 +113,28 @@ pub struct ServiceRecovery {
     pub next: ScheduleOutcome,
 }
 
+/// A one-use, supervisor-created restart decision. Untrusted requests select
+/// only the service and capability; trusted kernel code supplies the launch
+/// context, priority, and observed time before host reprovisioning begins.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ServiceRestartPlan {
+    service: ServiceId,
+    object: ObjectId,
+    priority: Priority,
+    context: UserContext,
+    now: u64,
+}
+
+impl ServiceRestartPlan {
+    pub const fn service(&self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn object(&self) -> ObjectId {
+        self.object
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceRecoveryError<E> {
     Retirement(ServiceError),
@@ -466,7 +488,24 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         fresh_context: UserContext,
         now: u64,
     ) -> Result<ServiceId, ServiceError> {
-        let slot = service.slot as usize;
+        let plan =
+            self.prepare_restart_at(service, management, control, priority, fresh_context, now)?;
+        self.commit_restart(plan, runtime)
+    }
+
+    /// Authorizes and snapshots a restart without mutating lifecycle state.
+    /// The returned plan can cross a trusted host-reprovisioning boundary; the
+    /// commit path revalidates every lifecycle and generation condition.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_restart_at<const MANAGEMENT_CAPS: usize>(
+        &self,
+        service: ServiceId,
+        management: &CapabilitySpace<MANAGEMENT_CAPS>,
+        control: Capability,
+        priority: Priority,
+        fresh_context: UserContext,
+        now: u64,
+    ) -> Result<ServiceRestartPlan, ServiceError> {
         let entry = self.slot(service)?;
         if entry.state == ServiceState::Running || entry.task.is_some() {
             return Err(ServiceError::StillRunning);
@@ -490,13 +529,36 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
                 eligible_at: entry.next_restart_tick,
             });
         }
+        Ok(ServiceRestartPlan {
+            service,
+            object: entry.object,
+            priority,
+            context: fresh_context,
+            now,
+        })
+    }
+
+    /// Consumes an authorized plan only after trusted reprovisioning. Reuse,
+    /// generation drift, new cleanup state, backoff drift, and policy changes
+    /// all fail before a task is created or supervisor state is changed.
+    pub fn commit_restart<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        plan: ServiceRestartPlan,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+    ) -> Result<ServiceId, ServiceError> {
+        let service = plan.service;
+        let slot = service.slot as usize;
+        let entry = self.restartable_entry(service, plan.now)?;
+        if entry.object != plan.object {
+            return Err(ServiceError::InvalidObject);
+        }
         let generation = entry
             .generation
             .checked_add(1)
             .filter(|generation| *generation != 0)
             .ok_or(ServiceError::GenerationExhausted)?;
         let task = runtime
-            .create(priority, fresh_context)
+            .create(plan.priority, plan.context)
             .map_err(ServiceError::Runtime)?;
         self.slots[slot].generation = generation;
         self.slots[slot].task = Some(task);
@@ -506,6 +568,29 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
             slot: slot as u32,
             generation,
         })
+    }
+
+    fn restartable_entry(
+        &self,
+        service: ServiceId,
+        now: u64,
+    ) -> Result<&ServiceSlot, ServiceError> {
+        let entry = self.slot(service)?;
+        if entry.state == ServiceState::Running || entry.task.is_some() {
+            return Err(ServiceError::StillRunning);
+        }
+        if entry.cleanup.is_some() {
+            return Err(ServiceError::CleanupRequired);
+        }
+        if entry.completed_restarts >= entry.restart_policy.maximum_restarts {
+            return Err(ServiceError::RestartLimit);
+        }
+        if now < entry.next_restart_tick {
+            return Err(ServiceError::RestartBackoff {
+                eligible_at: entry.next_restart_tick,
+            });
+        }
+        Ok(entry)
     }
 
     fn restart_deadline(&self, slot: usize, now: u64) -> Result<u64, ServiceError> {
@@ -785,6 +870,97 @@ mod tests {
             ),
             Err(ServiceError::RestartLimit)
         );
+    }
+
+    #[test]
+    fn prepared_restart_revalidates_after_reprovisioning_boundary() {
+        let object = ObjectId(0x81);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+        complete(&mut supervisor, retirement.cleanup);
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        let fresh = context(0x30_0000, 0x50_0000);
+        let plan = supervisor
+            .prepare_restart_at(
+                service,
+                &management,
+                control,
+                Priority::RESPONSIVE,
+                fresh,
+                0,
+            )
+            .unwrap();
+        assert_eq!(plan.service(), service);
+        assert_eq!(plan.object(), object);
+
+        let replacement = supervisor.commit_restart(plan, &mut runtime).unwrap();
+        assert_ne!(replacement, service);
+        assert_eq!(
+            runtime.context(supervisor.task(replacement).unwrap().unwrap()),
+            Ok(&fresh)
+        );
+        assert_eq!(
+            supervisor.prepare_restart_at(
+                service,
+                &management,
+                control,
+                Priority::RESPONSIVE,
+                fresh,
+                0,
+            ),
+            Err(ServiceError::InvalidService)
+        );
+    }
+
+    #[test]
+    fn prepared_restart_does_not_bypass_cleanup_or_object_binding() {
+        let object = ObjectId(0x82);
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(object, task).unwrap();
+        let retirement = supervisor.exit_current(&mut runtime).unwrap();
+        let mut management = CapabilitySpace::<1>::new();
+        let control = management.insert(object, Rights::CONTROL).unwrap();
+        assert_eq!(
+            supervisor.prepare_restart_at(
+                service,
+                &management,
+                control,
+                Priority::NORMAL,
+                context(0x30_0000, 0x50_0000),
+                0,
+            ),
+            Err(ServiceError::CleanupRequired)
+        );
+        complete(&mut supervisor, retirement.cleanup);
+        let mut plan = supervisor
+            .prepare_restart_at(
+                service,
+                &management,
+                control,
+                Priority::NORMAL,
+                context(0x30_0000, 0x50_0000),
+                0,
+            )
+            .unwrap();
+        plan.object = ObjectId(0x83);
+        assert_eq!(
+            supervisor.commit_restart(plan, &mut runtime),
+            Err(ServiceError::InvalidObject)
+        );
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Exited));
+        assert!(runtime.current().is_none());
     }
 
     #[test]

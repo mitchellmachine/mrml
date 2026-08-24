@@ -1290,3 +1290,18 @@ adds no novel IPC, capability-transfer, service-query, or response technique.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record request/response IPC
 with least-authority capability transfer.
+
+## 2026-08-24 — split-phase trusted service restart planning
+
+MRML source: `crates/mrml-kernel/src/service_lifecycle.rs`,
+`crates/mrml-kernel/src/syscall.rs`, and
+`crates/mrml-config/src/lib.rs`.
+
+The kernel conventionally separates authorization and validation from commit so
+a trusted host may reprovision resources between them, then repeats lifecycle,
+generation, object, budget, and timing checks before task creation. The syscall
+record carries no launch context or clock. This adds no novel restart,
+capability, transaction, or host-coordination technique.
+
+Patent review: `NOT_TRIGGERED` — conventional split-phase validation with
+commit-time revalidation and replay rejection.

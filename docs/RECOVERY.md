@@ -187,6 +187,13 @@ explicitly and downgrade the status rather than guessing.
   detail-free response. Fresh signed KVM and WHP runs exercised that exchange in
   both generations. It neither mutates lifecycle state nor persists policy, and
   it does not implement restart-message dispatch or trusted reprovisioning.
+  Restart request bytes now reserve their former time field as canonical zero,
+  and syscall operation 10 admits only capability and opaque service identity.
+  The kernel image denies that operation until a trusted reprovision plan is
+  staged. Restart planning is non-mutating and commit revalidates the exact
+  generation, object, cleanup completion, backoff, budget, and one-use plan
+  after the host boundary. This is a prerequisite, not evidence that CPL3
+  restart dispatch or host reprovisioning is complete.
   Fixed-capacity directory state supports capability-authorized lookup,
   enumeration, create, rename, remove, and cross-directory file moves. Its
   object-ID allocator is now canonical, COW-persistent, transaction-bound, and

@@ -929,6 +929,12 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         .ok(),
                 );
             }
+            SyscallRequest::RestartService { .. } => {
+                // A userspace request carries neither launch context nor time.
+                // Until an exact trusted reprovision plan is staged, restart
+                // remains unavailable rather than falling back to request data.
+                frame.complete_service_restart(None);
+            }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
                     if pending_buffer(to).is_none() {

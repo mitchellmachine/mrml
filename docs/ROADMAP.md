@@ -175,6 +175,15 @@ authority; unrelated domains continue.
    detail-free response. Fresh signed KVM and WHP probes repeat that exchange in
    both generations. Restart-message dispatch through trusted host
    reprovisioning remains pending.
+   The restart wire record can no longer carry a clock value; bytes 40--47 are
+   canonical zero and dispatch receives time only from trusted kernel state.
+   Syscall operation 10 now decodes only an exact generational capability and
+   service token, rejects every other register, and returns only a replacement
+   generation or detail-free denial. The live image always denies it until an
+   exact trusted reprovision plan exists. Split-phase restart planning now
+   authorizes CONTROL and snapshots trusted priority/context/time without
+   mutation, then revalidates generation, object, cleanup, backoff, budget, and
+   one-use state after the reprovisioning boundary before task creation.
    Message dispatch now takes authority only from kernel-derived receiver-space
    capabilities, rejects missing/extra/payload-forged authority, and composes
    authorized restart with existing cleanup, backoff, limit, and trusted fresh-

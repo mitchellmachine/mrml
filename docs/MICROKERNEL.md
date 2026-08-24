@@ -3467,6 +3467,24 @@ total=46730us` and WHP `verify=18771us prepare=4102us execute=835us
 total=27424us`. This proves the hosted canonical query envelope, not authorized
 restart, persistent supervision policy, host-resistant isolation, or bare metal.
 
+The next restart prerequisite removes the last request-controlled clock input.
+Bytes 40--47 of every supervision request are now canonical zero, and the
+in-process adapter receives observed time separately from trusted kernel code.
+Syscall operation 10 accepts only a nonzero generational capability and service
+token; RDX, R10, R8, and R9 must all be zero. Its result is either one opaque
+replacement generation or a detail-free denial. The service-probe image denies
+every operation-10 call until a matching trusted reprovision plan is available;
+there is no fallback context. `ServiceSupervisor` now prepares a non-mutating,
+one-use plan after exact CONTROL, cleanup, budget, backoff, and service checks.
+Trusted code may cross the host reprovisioning boundary, after which commit
+revalidates exact service generation, object, lifecycle state, cleanup, budget,
+backoff, and plan identity before task creation. Replay sees the retired
+generation and fails. This is the fail-closed restart substrate, not successful
+CPL3 restart-message or host-reprovisioning evidence. Fresh signed regression
+runs of the existing query/lifecycle path reported KVM `verify=21728us
+prepare=2851us execute=1414us total=49244us` and WHP `verify=18696us
+prepare=3778us execute=906us total=27136us`; operation 10 was not exercised.
+
 For this query increment, the `DIGITAL-RIGHTS REVIEW` found no new collection,
 retention, correlation, remote disclosure, DRM or publisher veto,
 owner-attestation restriction, accessibility exclusion, AI authority, or
@@ -3477,8 +3495,12 @@ generation, response fields, and every reserved register as hostile. Missing,
 extra, payload-forged, stale, guessed, mismatched, attenuated, or malformed
 authority fails without state or distinguishing detail; restart is rejected at
 the userspace boundary. Only an exact live receiver-space READ capability for
-the exact live service reaches the query. The operation accepts no restart
-context and cannot mutate lifecycle state. This agent review does not replace
+the exact live service reaches the query. Restart planning adds no user-selected
+clock or execution context, persists nothing, and creates no publisher or remote
+authority. Operation 10 rejects all unstaged requests, and plan commit treats
+generation, object, cleanup, backoff, budget, context binding, runtime capacity,
+and replay as hostile state. The query operation accepts no restart context and
+cannot mutate lifecycle state. This agent review does not replace
 the constitution's independent human dual review.
 
 Fresh one-time Lamport-signed runs on 2026-08-24 additionally completed exact
@@ -3500,8 +3522,8 @@ cargo +nightly test -q -p mrml-kernel -p mrml-config -p mrml-kvm --release --no-
 cargo +nightly clippy -q -p mrml-kernel -p mrml-config -p mrml-kvm -p mrml-kvm-run --release --no-default-features --no-deps -- -D warnings
 ```
 
-Windows passed 17 configuration, 333 kernel, and 19 WHP tests with one ignored;
-Linux passed 17 configuration, 333 kernel, and 16 KVM tests with one ignored.
+Windows passed 17 configuration, 337 kernel, and 19 WHP tests with one ignored;
+Linux passed 17 configuration, 337 kernel, and 16 KVM tests with one ignored.
 All listed strict clippy invocations passed.
 
 Patent review: `NOT_TRIGGERED` — conventional fixed-record protocol parsing,

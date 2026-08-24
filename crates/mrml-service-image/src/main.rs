@@ -401,7 +401,6 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         request_id: supervision_request_id,
         service: ServiceId::from_token(supervised_service),
         capability: Capability::from_token(0),
-        now: 0,
     }
     .encode(&mut supervision_request)
     .unwrap_or_else(|_| halt());

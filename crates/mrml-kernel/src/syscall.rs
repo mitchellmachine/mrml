@@ -171,6 +171,14 @@ impl UserCallFrame {
         self.r8 = 0;
         self.r9 = 0;
     }
+
+    pub fn complete_service_restart(&mut self, replacement: Option<crate::ServiceId>) {
+        self.rax = u64::from(replacement.is_none());
+        self.rdx = replacement.map_or(0, crate::ServiceId::token);
+        self.r10 = 0;
+        self.r8 = 0;
+        self.r9 = 0;
+    }
 }
 
 const fn user_address(address: u64) -> bool {
@@ -220,6 +228,10 @@ pub enum SyscallRequest {
         length: u32,
     },
     QueryService {
+        capability: Capability,
+        service: crate::ServiceId,
+    },
+    RestartService {
         capability: Capability,
         service: crate::ServiceId,
     },
@@ -391,6 +403,21 @@ impl SyscallRequest {
                     service: crate::ServiceId::from_token(rsi),
                 })
             }
+            10 => {
+                if rdi == 0 || rdi >> 32 == 0 {
+                    return Err(SyscallError::InvalidCapability);
+                }
+                if rsi == 0 || rsi >> 32 == 0 {
+                    return Err(SyscallError::InvalidObject);
+                }
+                if rdx | r10 | r8 | r9 != 0 {
+                    return Err(SyscallError::ReservedArgument);
+                }
+                Ok(Self::RestartService {
+                    capability: Capability::from_token(rdi),
+                    service: crate::ServiceId::from_token(rsi),
+                })
+            }
             _ => Err(SyscallError::UnknownOperation),
         }
     }
@@ -405,7 +432,8 @@ impl SyscallRequest {
             | Self::AuthorizeCapability { .. }
             | Self::ReadSharedBuffer { .. }
             | Self::WriteSharedBuffer { .. }
-            | Self::QueryService { .. } => &[],
+            | Self::QueryService { .. }
+            | Self::RestartService { .. } => &[],
             Self::SendInline {
                 payload, length, ..
             } => &payload[..usize::from(*length)],
@@ -751,6 +779,51 @@ mod tests {
             (0, 3, 0, 0, 0)
         );
         frame.complete_service_state(None);
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (1, 0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn service_restart_request_carries_no_context_or_time() {
+        let capability = (11u64 << 32) | 2;
+        let service = (12u64 << 32) | 1;
+        assert_eq!(
+            SyscallRequest::decode(10, capability, service, 0, 0, 0, 0),
+            Ok(SyscallRequest::RestartService {
+                capability: Capability::from_token(capability),
+                service: crate::ServiceId::from_token(service),
+            })
+        );
+        for reserved in [2, 3, 4, 5] {
+            let mut registers = [0; 4];
+            registers[reserved - 2] = 1;
+            assert_eq!(
+                SyscallRequest::decode(
+                    10,
+                    capability,
+                    service,
+                    registers[0],
+                    registers[1],
+                    registers[2],
+                    registers[3],
+                ),
+                Err(SyscallError::ReservedArgument)
+            );
+        }
+    }
+
+    #[test]
+    fn service_restart_completion_returns_only_fresh_generation() {
+        let replacement = crate::ServiceId::from_token((13u64 << 32) | 4);
+        let mut frame = valid_yield_frame();
+        frame.complete_service_restart(Some(replacement));
+        assert_eq!(
+            (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
+            (0, replacement.token(), 0, 0, 0)
+        );
+        frame.complete_service_restart(None);
         assert_eq!(
             (frame.rax, frame.rdx, frame.r10, frame.r8, frame.r9),
             (1, 0, 0, 0, 0)

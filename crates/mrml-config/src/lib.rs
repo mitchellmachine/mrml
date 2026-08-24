@@ -1400,13 +1400,11 @@ pub struct SupervisionRequest {
     pub request_id: u64,
     pub service: ServiceId,
     pub capability: Capability,
-    pub now: u64,
 }
 
 impl SupervisionRequest {
     pub fn encode(self, output: &mut [u8; SUPERVISION_REQUEST_BYTES]) -> Result<(), ConfigError> {
-        if self.request_id == 0 || (self.operation == SupervisionOperation::Query && self.now != 0)
-        {
+        if self.request_id == 0 {
             return Err(ConfigError::NonCanonical);
         }
         *output = [0; SUPERVISION_REQUEST_BYTES];
@@ -1416,8 +1414,7 @@ impl SupervisionRequest {
         write_u16(output, 8, SUPERVISION_REQUEST_BYTES as u16)?;
         write_u64(output, 16, self.request_id)?;
         write_u64(output, 24, self.service.token())?;
-        write_u64(output, 32, self.capability.token())?;
-        write_u64(output, 40, self.now)
+        write_u64(output, 32, self.capability.token())
     }
 
     pub fn decode(input: &[u8]) -> Result<Self, ConfigError> {
@@ -1427,6 +1424,7 @@ impl SupervisionRequest {
         if input[..4] != SUPERVISION_REQUEST_MAGIC
             || read_u16(input, 8)? as usize != input.len()
             || input[10..16].iter().any(|byte| *byte != 0)
+            || input[40..48].iter().any(|byte| *byte != 0)
         {
             return Err(ConfigError::NonCanonical);
         }
@@ -1439,8 +1437,7 @@ impl SupervisionRequest {
             _ => return Err(ConfigError::InvalidProtocol),
         };
         let request_id = read_u64(input, 16)?;
-        let now = read_u64(input, 40)?;
-        if request_id == 0 || (operation == SupervisionOperation::Query && now != 0) {
+        if request_id == 0 {
             return Err(ConfigError::NonCanonical);
         }
         Ok(Self {
@@ -1448,7 +1445,6 @@ impl SupervisionRequest {
             request_id,
             service: ServiceId::from_token(read_u64(input, 24)?),
             capability: Capability::from_token(read_u64(input, 32)?),
-            now,
         })
     }
 
@@ -1594,6 +1590,7 @@ pub fn dispatch_supervision_message<
     message: &Message,
     priority: Priority,
     fresh_context: UserContext,
+    now: u64,
     output: &mut [u8; SUPERVISION_RESPONSE_BYTES],
 ) -> Result<(), ConfigError> {
     let request = SupervisionRequest::decode_message(message)?;
@@ -1615,7 +1612,7 @@ pub fn dispatch_supervision_message<
             runtime,
             priority,
             fresh_context,
-            request.now,
+            now,
         ) {
             Ok(replacement) => (ResponseStatus::Ok, replacement, SupervisionState::Running),
             Err(_) => (
@@ -2068,7 +2065,6 @@ mod tests {
             request_id: 4,
             service: ServiceId::from_token((3u64 << 32) | 2),
             capability: root,
-            now: 99,
         };
         let mut wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode(&mut wire).unwrap();
@@ -2080,6 +2076,12 @@ mod tests {
         );
         wire[4..6].copy_from_slice(&SYSTEM_PROTOCOL_VERSION.to_le_bytes());
         wire[12] = 1;
+        assert_eq!(
+            SupervisionRequest::decode(&wire),
+            Err(ConfigError::NonCanonical)
+        );
+        wire[12] = 0;
+        wire[40..48].copy_from_slice(&99u64.to_le_bytes());
         assert_eq!(
             SupervisionRequest::decode(&wire),
             Err(ConfigError::NonCanonical)
@@ -2141,7 +2143,6 @@ mod tests {
             request_id: 31,
             service: retired_service,
             capability: control,
-            now: 0,
         };
         let mut request_wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode_message(&mut request_wire).unwrap();
@@ -2156,6 +2157,7 @@ mod tests {
             &message,
             Priority::RESPONSIVE,
             fresh,
+            0,
             &mut response_wire,
         )
         .unwrap();
@@ -2211,7 +2213,6 @@ mod tests {
             request_id: 52,
             service,
             capability: Capability::from_token(0),
-            now: 0,
         };
         let mut wire = [0; SUPERVISION_REQUEST_BYTES];
         request.encode(&mut wire).unwrap();
@@ -2276,7 +2277,6 @@ mod tests {
             request_id: 53,
             service: ServiceId::from_token((3u64 << 32) | 1),
             capability: Capability::from_token(0),
-            now: 9,
         }
         .encode(&mut wire)
         .unwrap();

@@ -676,7 +676,13 @@ one sender-derived READ capability; the userspace service rejects missing,
 extra, or payload-forged authority, invokes the syscall, and returns only a
 fixed detail-free response. It cannot restart a service or supply execution
 context. Restart-message dispatch and trusted host reprovisioning remain
-pending. The bounded CPL3 request-buffer ABI decodes fixed payload/capability-
+pending. Restart request bytes no longer contain time, launch address, stack, or
+priority. Operation 10 admits only capability plus service identity and remains
+detail-free denied in the live image until trusted code stages a matching
+reprovision plan. Planning and commit are split around that boundary: commit
+rechecks the exact service generation, object, completed cleanup, policy budget,
+backoff, and plan freshness before creating a task. The bounded CPL3 request-
+buffer ABI decodes fixed payload/capability-
 buffer descriptors and validates every active user leaf before a directional
 copy. The signed service
 probe now executes real `mrml-config` schema admission and atomic commit
