@@ -2177,6 +2177,7 @@ enum RuntimePlaceEffectKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeReadEffectContext {
     Value,
+    Move,
     SharedBorrow,
     MutableBorrow,
     Unclassified,
@@ -2490,11 +2491,25 @@ impl<'source> RuntimeBodyFacts<'source> {
                     RuntimeReadEffectContext::Value if runtime_type_is_copy(path_ty) => {
                         RuntimePlaceEffectKind::Copy
                     }
+                    RuntimeReadEffectContext::Move
+                        if !runtime_type_is_copy(path_ty)
+                            && self
+                                .move_paths
+                                .get(path.0)
+                                .and_then(|path| *path)
+                                .is_some_and(|path| {
+                                    path.projections == RuntimePlaceProjections::EMPTY
+                                }) =>
+                    {
+                        RuntimePlaceEffectKind::Move
+                    }
                     RuntimeReadEffectContext::SharedBorrow => RuntimePlaceEffectKind::SharedBorrow,
                     RuntimeReadEffectContext::MutableBorrow => {
                         RuntimePlaceEffectKind::MutableBorrow
                     }
-                    RuntimeReadEffectContext::Value | RuntimeReadEffectContext::Unclassified => {
+                    RuntimeReadEffectContext::Value
+                    | RuntimeReadEffectContext::Move
+                    | RuntimeReadEffectContext::Unclassified => {
                         return None;
                     }
                 };
@@ -3281,6 +3296,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
     resolver: &R,
     tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
     root: crate::ExprId,
+    root_context: RuntimeReadEffectContext,
     tuple_expected: Option<RuntimeExpressionType>,
     expression_span: Span,
 ) -> Result<(), CodegenError> {
@@ -3297,6 +3313,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
         resolver: &R,
         tree: &crate::ExpressionTree<'source, MAX_EXPRESSION_NODES>,
         id: crate::ExprId,
+        context: RuntimeReadEffectContext,
         depth: usize,
         assignment_span: Span,
     ) -> Result<(), CodegenError> {
@@ -3311,18 +3328,28 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             span: assignment_span,
         })?;
         if let ExprKind::Sequence { first, then } = expression.kind {
-            for operand in [first, then] {
-                recurse(
-                    facts,
-                    locals,
-                    function,
-                    resolver,
-                    tree,
-                    operand,
-                    depth + 1,
-                    assignment_span,
-                )?;
-            }
+            recurse(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                first,
+                RuntimeReadEffectContext::Value,
+                depth + 1,
+                assignment_span,
+            )?;
+            recurse(
+                facts,
+                locals,
+                function,
+                resolver,
+                tree,
+                then,
+                context,
+                depth + 1,
+                assignment_span,
+            )?;
             return Ok(());
         }
         if let ExprKind::Index { base, index } = expression.kind {
@@ -3347,6 +3374,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         resolver,
                         tree,
                         base,
+                        RuntimeReadEffectContext::Unclassified,
                         depth + 1,
                         assignment_span,
                     )?;
@@ -3357,6 +3385,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         resolver,
                         tree,
                         index,
+                        RuntimeReadEffectContext::Value,
                         depth + 1,
                         assignment_span,
                     )?;
@@ -3427,6 +3456,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         resolver,
                         tree,
                         index,
+                        RuntimeReadEffectContext::Value,
                         depth + 1,
                         assignment_span,
                     )?;
@@ -3439,14 +3469,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             kind,
             span: assignment_span,
         })? {
-            push_read(
-                facts,
-                locals,
-                function,
-                place,
-                RuntimeReadEffectContext::Value,
-                assignment_span,
-            )?;
+            push_read(facts, locals, function, place, context, assignment_span)?;
             if let ExprKind::Index { index, .. } = expression.kind {
                 recurse(
                     facts,
@@ -3455,6 +3478,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     index,
+                    RuntimeReadEffectContext::Value,
                     depth + 1,
                     assignment_span,
                 )?;
@@ -3471,9 +3495,30 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     $operand,
+                    context,
                     depth + 1,
                     assignment_span,
                 )
+            };
+        }
+        macro_rules! visit_as {
+            ($operand:expr, $context:expr) => {
+                recurse(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    tree,
+                    $operand,
+                    $context,
+                    depth + 1,
+                    assignment_span,
+                )
+            };
+        }
+        macro_rules! visit_value {
+            ($operand:expr) => {
+                visit_as!($operand, RuntimeReadEffectContext::Value)
             };
         }
         match expression.kind {
@@ -3552,9 +3597,9 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 assignment_span,
                             )?;
                         } else {
-                            visit!(base)?;
+                            visit_as!(base, borrow_context)?;
                         }
-                        visit!(index)?;
+                        visit_value!(index)?;
                     }
                     Some(ExprKind::Unary {
                         operator: crate::UnaryOperator::Dereference,
@@ -3583,17 +3628,17 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 assignment_span,
                             )?;
                         } else {
-                            visit!(reference)?;
+                            visit_as!(reference, borrow_context)?;
                         }
                     }
                     Some(ExprKind::RangeIndex {
                         base, start, end, ..
                     }) => {
                         if let Some(start) = start {
-                            visit!(start)?;
+                            visit_value!(start)?;
                         }
                         if let Some(end) = end {
-                            visit!(end)?;
+                            visit_value!(end)?;
                         }
                         let base_type = runtime_expression_type_with_locals(
                             function,
@@ -3633,7 +3678,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 assignment_span,
                             )?;
                         } else {
-                            visit!(base)?;
+                            visit_as!(base, borrow_context)?;
                         }
                     }
                     _ => {}
@@ -3645,8 +3690,8 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 visit!(then)?;
             }
             ExprKind::Binary { left, right, .. } => {
-                visit!(left)?;
-                visit!(right)?;
+                visit_value!(left)?;
+                visit_value!(right)?;
             }
             ExprKind::If {
                 condition,
@@ -3658,7 +3703,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 then_branch,
                 else_branch,
             } => {
-                visit!(condition)?;
+                visit_value!(condition)?;
                 visit!(then_branch)?;
                 visit!(else_branch)?;
             }
@@ -3667,7 +3712,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 element_count,
             } => {
                 for element in elements[..element_count].iter().flatten() {
-                    visit!(*element)?;
+                    visit_value!(*element)?;
                 }
             }
             ExprKind::Tuple {
@@ -3675,10 +3720,10 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 element_count,
             } => {
                 for element in elements[..element_count].iter().flatten() {
-                    visit!(*element)?;
+                    visit_value!(*element)?;
                 }
             }
-            ExprKind::ArrayRepeat { element, .. } => visit!(element)?,
+            ExprKind::ArrayRepeat { element, .. } => visit_value!(element)?,
             ExprKind::Call {
                 callee,
                 arguments,
@@ -3748,7 +3793,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         match tree.expression(then).map(|expression| expression.kind) {
                             Some(ExprKind::DefaultValue) => {
                                 for _ in 0..count {
-                                    visit!(first)?;
+                                    visit_value!(first)?;
                                 }
                             }
                             Some(ExprKind::Identifier(name)) => {
@@ -3782,8 +3827,8 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 element_count,
                             }) if element_count == count => {
                                 for element in elements[..element_count].iter().flatten() {
-                                    visit!(first)?;
-                                    visit!(*element)?;
+                                    visit_value!(first)?;
+                                    visit_value!(*element)?;
                                 }
                             }
                             Some(ExprKind::ArrayRepeat {
@@ -3791,8 +3836,8 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                 count: repeat,
                             }) if repeat == count => {
                                 for _ in 0..count {
-                                    visit!(first)?;
-                                    visit!(element)?;
+                                    visit_value!(first)?;
+                                    visit_value!(element)?;
                                 }
                             }
                             Some(
@@ -3847,7 +3892,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                             span: assignment_span,
                                         })?,
                                     ] {
-                                        visit!(operand)?;
+                                        visit_value!(operand)?;
                                     }
                                 }
                             }
@@ -3901,7 +3946,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                                     span: assignment_span,
                                 })?,
                             ] {
-                                visit!(operand)?;
+                                visit_value!(operand)?;
                             }
                         }
                     } else if matches!(
@@ -3948,7 +3993,12 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             )?;
                         }
                     } else {
-                        visit!(argument)?;
+                        let argument_context = if runtime_type_is_copy(expected) {
+                            RuntimeReadEffectContext::Value
+                        } else {
+                            RuntimeReadEffectContext::Move
+                        };
+                        visit_as!(argument, argument_context)?;
                     }
                 }
             }
@@ -4000,6 +4050,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                 resolver,
                 tree,
                 id,
+                RuntimeReadEffectContext::Value,
                 depth + 1,
                 assignment_span,
             ),
@@ -4022,6 +4073,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     first,
+                    RuntimeReadEffectContext::Value,
                     depth + 1,
                     assignment_span,
                 )?;
@@ -4054,6 +4106,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     condition,
+                    RuntimeReadEffectContext::Value,
                     depth + 1,
                     assignment_span,
                 )?;
@@ -4094,6 +4147,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         resolver,
                         tree,
                         element,
+                        RuntimeReadEffectContext::Value,
                         depth + 1,
                         assignment_span,
                     )?;
@@ -4168,6 +4222,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     element,
+                    RuntimeReadEffectContext::Value,
                     depth + 1,
                     assignment_span,
                 )
@@ -4209,6 +4264,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                     resolver,
                     tree,
                     first,
+                    RuntimeReadEffectContext::Value,
                     depth + 1,
                     assignment_span,
                 )?;
@@ -4259,6 +4315,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
             resolver,
             tree,
             root,
+            root_context,
             0,
             expression_span,
         )
@@ -4286,6 +4343,7 @@ fn preanalyze_runtime_expression_at_reads<
         resolver,
         tree,
         root,
+        RuntimeReadEffectContext::Value,
         None,
         expression_span,
     )
@@ -4872,6 +4930,7 @@ fn preanalyze_runtime_source_expression_reads<
                 resolver,
                 &tree,
                 tree.root(),
+                RuntimeReadEffectContext::Value,
                 Some(expected),
                 expression_span,
             )?;
@@ -4895,7 +4954,22 @@ fn preanalyze_runtime_source_expression_reads<
     if runtime_type_stack_slots(ty) != 1 && !fat_reference_supported {
         return Ok(());
     }
-    preanalyze_runtime_expression_reads(facts, locals, function, resolver, &tree, expression_span)
+    let context = if runtime_type_is_copy(ty) {
+        RuntimeReadEffectContext::Value
+    } else {
+        RuntimeReadEffectContext::Move
+    };
+    preanalyze_runtime_expression_at_reads_with_tuple(
+        facts,
+        locals,
+        function,
+        resolver,
+        &tree,
+        tree.root(),
+        context,
+        None,
+        expression_span,
+    )
 }
 
 fn preanalyze_runtime_assignment_access<
@@ -21944,6 +22018,41 @@ mod tests {
 
     struct TupleCallResolver;
 
+    struct MutableReferenceCallResolver;
+
+    impl ConstantResolver for MutableReferenceCallResolver {
+        fn resolve(&self, _: &str) -> Option<u128> {
+            None
+        }
+
+        fn resolve_runtime_call<const MAX_PARAMETERS: usize>(
+            &self,
+            name: &str,
+            argument_count: usize,
+        ) -> Option<RuntimeCallTarget<'_, MAX_PARAMETERS>> {
+            if name != "identity" || argument_count != 1 || MAX_PARAMETERS == 0 {
+                return None;
+            }
+            let reference = ScalarType::Reference {
+                target: crate::PointerPointee::Integer(crate::IntegerType::U16),
+                mutable: true,
+            };
+            let mut parameters = [None; MAX_PARAMETERS];
+            parameters[0] = Some(RuntimeCallParameter {
+                name: "value",
+                ty: reference,
+            });
+            Some(RuntimeCallTarget {
+                name: "identity",
+                parameters,
+                parameter_count: 1,
+                return_type: reference,
+                return_type_name: "&mut u16",
+                body_expression: "value",
+            })
+        }
+    }
+
     impl ConstantResolver for TupleCallResolver {
         fn resolve(&self, _: &str) -> Option<u128> {
             None
@@ -22962,6 +23071,72 @@ mod tests {
         emitter.body_facts.effects[2] = Some(RuntimePlaceEffectFact {
             path: RuntimeMovePathId(MAX_RUNTIME_MOVE_PATH_FACTS),
             ..valid_borrow
+        });
+        assert_eq!(
+            emitter.validate_runtime_place_facts().unwrap_err().kind,
+            CodegenErrorKind::InvalidRuntimePlaceFacts
+        );
+    }
+
+    #[test]
+    fn runtime_place_effects_move_non_copy_call_arguments_and_returns() {
+        let source = "fn value(input: &mut u16) -> &mut u16 { let returned: &mut u16 = identity(input); returned }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let local_count = preanalyze_runtime_body_declarations::<_, 4, 16>(
+            &function,
+            &MutableReferenceCallResolver,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        assert_eq!(local_count, 1);
+        assert_eq!(facts.effect_count, 2);
+        assert_eq!(facts.effects[0].unwrap().kind, RuntimePlaceEffectKind::Move);
+        assert_eq!(facts.effects[0].unwrap().path, RuntimeMovePathId(0));
+        assert_eq!(facts.effects[1].unwrap().kind, RuntimePlaceEffectKind::Move);
+        assert_eq!(facts.effects[1].unwrap().path, RuntimeMovePathId(1));
+
+        let assignment_access_count = facts.assignment_access_count;
+        let assignment_read_count = facts.assignment_read_count;
+        let emitter = RuntimeEmitter::<_, 64, 4> {
+            bytes: [0; 64],
+            length: 0,
+            trap_patches: [0; 64],
+            trap_count: 0,
+            function: &function,
+            resolver: &MutableReferenceCallResolver,
+            abi: X86_64Abi::SystemV,
+            width: runtime_width("u16").unwrap(),
+            overflow_checks: true,
+            uses_sret: false,
+            saved_parameter_slots: 1,
+            locals: [None; 4],
+            saved_locals: 0,
+            body_facts: &mut facts,
+            preanalyzed_local_count: local_count,
+            preanalyzed_local_cursor: local_count,
+            preanalyzed_assignment_access_cursor: assignment_access_count,
+            preanalyzed_assignment_read_cursor: assignment_read_count,
+            evaluation_depth: 0,
+            runtime_call_depth: 0,
+            runtime_call_names: [None; 8],
+            runtime_call_local_floor: None,
+        };
+        emitter.validate_runtime_place_facts().unwrap();
+
+        let valid_move = emitter.body_facts.effects[1].unwrap();
+        emitter.body_facts.effects[1] = Some(RuntimePlaceEffectFact {
+            path: RuntimeMovePathId(0),
+            kind: RuntimePlaceEffectKind::Copy,
+            ..valid_move
         });
         assert_eq!(
             emitter.validate_runtime_place_facts().unwrap_err().kind,

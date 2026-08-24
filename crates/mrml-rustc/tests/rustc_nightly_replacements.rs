@@ -3973,6 +3973,13 @@ fn rustc_contextual_shared_mutable_and_reborrow_effects_reach_native_objects() {
 }
 
 #[test]
+fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
+    let source = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 2; *returned }";
+    assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+}
+
+#[test]
 fn rustc_wildcard_let_initializers_reach_native_objects() {
     let sources = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u64, divisor: u64) -> u64 { let _: u64 = input + 1; let _: [u64; 2] = [input, input + 2]; let _: u64 = 84 / divisor; input + 2 }",
