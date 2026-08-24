@@ -4191,12 +4191,25 @@ fn preanalyze_runtime_local_binding<
         || matches!(direct_sequence_aggregate, Some((_, None, _)))
         || simple_fat_reference
     {
-        preanalyze_runtime_expression_reads(
+        let direct_identifier = matches!(
+            tree.expression(tree.root())
+                .map(|expression| expression.kind),
+            Some(ExprKind::Identifier(_))
+        );
+        let context = if runtime_type_is_copy(ty) || direct_identifier {
+            RuntimeReadEffectContext::Value
+        } else {
+            RuntimeReadEffectContext::Move
+        };
+        preanalyze_runtime_expression_at_reads_with_tuple(
             facts,
             &locals[..*local_count],
             function,
             resolver,
             &tree,
+            tree.root(),
+            context,
+            None,
             local.initializer_span,
         )?;
     } else if (runtime_type_is_array(ty) || runtime_type_is_tuple(ty))
@@ -8451,15 +8464,82 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
     Ok(())
 }
 
+fn runtime_expression_initializedness_is_supported(facts: &RuntimeBodyFacts<'_>) -> bool {
+    if facts.conditional_expression_count == 0 {
+        return true;
+    }
+    let mut has_incoming = [false; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS];
+    let mut has_outgoing = [false; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS];
+    for edge in facts.expression_control_flow_edges[..facts.expression_control_flow_edge_count]
+        .iter()
+        .flatten()
+    {
+        if edge.from.0 >= facts.expression_program_point_count
+            || edge.to.0 >= facts.expression_program_point_count
+        {
+            return false;
+        }
+        let Some(from) = facts.expression_program_points[edge.from.0] else {
+            return false;
+        };
+        let Some(to) = facts.expression_program_points[edge.to.0] else {
+            return false;
+        };
+        if from.location != to.location {
+            return false;
+        }
+        has_outgoing[edge.from.0] = true;
+        has_incoming[edge.to.0] = true;
+    }
+    for conditional in facts.conditional_expressions[..facts.conditional_expression_count]
+        .iter()
+        .flatten()
+        .filter(|conditional| conditional.parent.is_none())
+    {
+        let mut roots = 0usize;
+        let mut sinks = 0usize;
+        for point in facts.expression_program_points[..facts.expression_program_point_count]
+            .iter()
+            .flatten()
+            .filter(|point| point.location == conditional.location)
+        {
+            roots += usize::from(!has_incoming[point.id.0]);
+            sinks += usize::from(!has_outgoing[point.id.0]);
+        }
+        if roots != 1 || sinks != 1 {
+            return false;
+        }
+        if facts.initializations[..facts.initialization_count]
+            .iter()
+            .flatten()
+            .any(|fact| fact.location == conditional.location && fact.expression_point.is_none())
+            || facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|fact| {
+                    fact.location == conditional.location && fact.expression_point.is_none()
+                })
+        {
+            return false;
+        }
+    }
+    true
+}
+
 fn validate_runtime_initializedness(
     facts: &RuntimeBodyFacts<'_>,
     fallback_span: Span,
 ) -> Result<(), CodegenError> {
-    if !facts.control_flow_complete
-        || !facts.ownership_events_single_path
-        || facts.basic_block_count == 0
-    {
+    if !facts.control_flow_complete || facts.basic_block_count == 0 {
         return Ok(());
+    }
+    if !facts.ownership_events_single_path
+        && !runtime_expression_initializedness_is_supported(facts)
+    {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: fallback_span,
+        });
     }
 
     fn set_path_state(
@@ -8514,9 +8594,63 @@ fn validate_runtime_initializedness(
         Ok(())
     }
 
-    fn apply_events(
+    fn apply_effect(
         facts: &RuntimeBodyFacts<'_>,
-        point: RuntimeOwnershipControlPoint,
+        effect: RuntimePlaceEffectFact,
+        initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS],
+        check_reads: bool,
+    ) -> Result<(), CodegenError> {
+        if effect.path.0 >= facts.move_path_count {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: effect.span,
+            });
+        }
+        let is_initialized = initialized[effect.path.0 / 64] & (1u64 << (effect.path.0 % 64)) != 0;
+        if check_reads
+            && matches!(
+                effect.kind,
+                RuntimePlaceEffectKind::Copy
+                    | RuntimePlaceEffectKind::Move
+                    | RuntimePlaceEffectKind::SharedBorrow
+                    | RuntimePlaceEffectKind::MutableBorrow
+                    | RuntimePlaceEffectKind::ReadModifyWrite
+            )
+            && !is_initialized
+        {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::RuntimeUseAfterMove,
+                span: effect.span,
+            });
+        }
+        match effect.kind {
+            RuntimePlaceEffectKind::Move => {
+                set_path_state(facts, initialized, effect.path, false).map_err(|kind| {
+                    CodegenError {
+                        kind,
+                        span: effect.span,
+                    }
+                })?;
+            }
+            RuntimePlaceEffectKind::Write => {
+                set_path_state(facts, initialized, effect.path, true).map_err(|kind| {
+                    CodegenError {
+                        kind,
+                        span: effect.span,
+                    }
+                })?;
+            }
+            RuntimePlaceEffectKind::Copy
+            | RuntimePlaceEffectKind::SharedBorrow
+            | RuntimePlaceEffectKind::MutableBorrow
+            | RuntimePlaceEffectKind::ReadModifyWrite => {}
+        }
+        Ok(())
+    }
+
+    fn apply_expression_point_events(
+        facts: &RuntimeBodyFacts<'_>,
+        point: RuntimeExpressionProgramPointId,
         initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS],
         check_reads: bool,
         fallback_span: Span,
@@ -8530,7 +8664,7 @@ fn validate_runtime_initializedness(
                 .and_then(|fact| *fact)
                 .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event));
             if let Some(initialization) = initialization {
-                if facts.ownership_control_point(initialization.location) == Some(point) {
+                if initialization.expression_point == Some(point) {
                     set_path_state(facts, initialized, initialization.path, true).map_err(
                         |kind| CodegenError {
                             kind,
@@ -8550,52 +8684,287 @@ fn validate_runtime_initializedness(
                     kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
                     span: fallback_span,
                 })?;
-            if facts.ownership_control_point(effect.location) == Some(point) {
-                if effect.path.0 >= facts.move_path_count {
+            if effect.expression_point == Some(point) {
+                apply_effect(facts, effect, initialized, check_reads)?;
+            }
+            effect_index += 1;
+        }
+        if initialization_index != facts.initialization_count || effect_index != facts.effect_count
+        {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: fallback_span,
+            });
+        }
+        Ok(())
+    }
+
+    fn apply_expression_location(
+        facts: &RuntimeBodyFacts<'_>,
+        location: RuntimeOwnershipEventLocation,
+        initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS],
+        check_reads: bool,
+        fallback_span: Span,
+    ) -> Result<(), CodegenError> {
+        #[allow(clippy::too_many_arguments)]
+        fn walk(
+            facts: &RuntimeBodyFacts<'_>,
+            location: RuntimeOwnershipEventLocation,
+            start: RuntimeExpressionProgramPointId,
+            stop: Option<RuntimeExpressionProgramPointId>,
+            mut state: [u64; RUNTIME_INITIALIZED_STATE_WORDS],
+            check_reads: bool,
+            fallback_span: Span,
+            point_count: usize,
+            processed: &mut usize,
+            depth: usize,
+        ) -> Result<([u64; RUNTIME_INITIALIZED_STATE_WORDS], bool), CodegenError> {
+            if depth >= 64 {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                    span: fallback_span,
+                });
+            }
+            let mut current = start;
+            loop {
+                if Some(current) == stop {
+                    return Ok((state, true));
+                }
+                *processed = processed.checked_add(1).ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                    span: fallback_span,
+                })?;
+                if *processed > point_count {
                     return Err(CodegenError {
-                        kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                        span: effect.span,
+                        kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                        span: fallback_span,
                     });
                 }
-                let is_initialized =
-                    initialized[effect.path.0 / 64] & (1u64 << (effect.path.0 % 64)) != 0;
-                if check_reads
-                    && matches!(
-                        effect.kind,
-                        RuntimePlaceEffectKind::Copy
-                            | RuntimePlaceEffectKind::Move
-                            | RuntimePlaceEffectKind::SharedBorrow
-                            | RuntimePlaceEffectKind::MutableBorrow
-                            | RuntimePlaceEffectKind::ReadModifyWrite
-                    )
-                    && !is_initialized
+                let point = facts
+                    .expression_program_points
+                    .get(current.0)
+                    .and_then(|point| *point)
+                    .filter(|point| point.location == location)
+                    .ok_or(CodegenError {
+                        kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                        span: fallback_span,
+                    })?;
+                apply_expression_point_events(
+                    facts,
+                    current,
+                    &mut state,
+                    check_reads,
+                    fallback_span,
+                )?;
+                if let RuntimeExpressionProgramPointKind::Condition(conditional_id) = point.kind {
+                    let conditional = facts
+                        .conditional_expressions
+                        .get(conditional_id.0)
+                        .and_then(|conditional| *conditional)
+                        .filter(|conditional| conditional.location == location)
+                        .ok_or(CodegenError {
+                            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                            span: fallback_span,
+                        })?;
+                    let (then_state, then_reached_join) = walk(
+                        facts,
+                        location,
+                        conditional.then_branch,
+                        Some(conditional.join),
+                        state,
+                        check_reads,
+                        fallback_span,
+                        point_count,
+                        processed,
+                        depth + 1,
+                    )?;
+                    let (mut else_state, else_reached_join) = walk(
+                        facts,
+                        location,
+                        conditional.else_branch,
+                        Some(conditional.join),
+                        state,
+                        check_reads,
+                        fallback_span,
+                        point_count,
+                        processed,
+                        depth + 1,
+                    )?;
+                    if !then_reached_join || !else_reached_join {
+                        return Err(CodegenError {
+                            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                            span: fallback_span,
+                        });
+                    }
+                    for (target, source) in else_state.iter_mut().zip(then_state) {
+                        *target &= source;
+                    }
+                    state = else_state;
+                    current = conditional.join;
+                    continue;
+                }
+                let mut next = None;
+                for edge in facts.expression_control_flow_edges
+                    [..facts.expression_control_flow_edge_count]
+                    .iter()
+                    .flatten()
+                    .filter(|edge| edge.from == current)
                 {
-                    return Err(CodegenError {
-                        kind: CodegenErrorKind::RuntimeUseAfterMove,
-                        span: effect.span,
-                    });
+                    if next.replace(edge.to).is_some() {
+                        return Err(CodegenError {
+                            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                            span: fallback_span,
+                        });
+                    }
                 }
-                match effect.kind {
-                    RuntimePlaceEffectKind::Move => {
-                        set_path_state(facts, initialized, effect.path, false).map_err(|kind| {
-                            CodegenError {
+                let Some(successor) = next else {
+                    return Ok((state, false));
+                };
+                current = successor;
+            }
+        }
+
+        let mut point_count = 0usize;
+        let mut root = None;
+        for point in facts.expression_program_points[..facts.expression_program_point_count]
+            .iter()
+            .flatten()
+            .filter(|point| point.location == location)
+        {
+            point_count += 1;
+            let has_incoming = facts.expression_control_flow_edges
+                [..facts.expression_control_flow_edge_count]
+                .iter()
+                .flatten()
+                .any(|edge| edge.to == point.id);
+            if !has_incoming && root.replace(point.id).is_some() {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                    span: fallback_span,
+                });
+            }
+        }
+        let root = root.ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+            span: fallback_span,
+        })?;
+        let mut processed = 0usize;
+        let (result, reached_stop) = walk(
+            facts,
+            location,
+            root,
+            None,
+            *initialized,
+            check_reads,
+            fallback_span,
+            point_count,
+            &mut processed,
+            0,
+        )?;
+        if reached_stop {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                span: fallback_span,
+            });
+        }
+        if processed != point_count {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimeControlFlowFacts,
+                span: fallback_span,
+            });
+        }
+        *initialized = result;
+        Ok(())
+    }
+
+    fn apply_events(
+        facts: &RuntimeBodyFacts<'_>,
+        point: RuntimeOwnershipControlPoint,
+        initialized: &mut [u64; RUNTIME_INITIALIZED_STATE_WORDS],
+        check_reads: bool,
+        fallback_span: Span,
+    ) -> Result<(), CodegenError> {
+        let mut initialization_index = 0usize;
+        let mut effect_index = 0usize;
+        let mut processed_expression_points = [false; MAX_RUNTIME_EXPRESSION_PROGRAM_POINT_FACTS];
+        for expected_event in 0..facts.ownership_event_count {
+            let initialization = facts
+                .initializations
+                .get(initialization_index)
+                .and_then(|fact| *fact)
+                .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event));
+            if let Some(initialization) = initialization {
+                if facts.ownership_control_point(initialization.location) == Some(point) {
+                    if !facts.ownership_events_single_path
+                        && initialization
+                            .expression_point
+                            .is_some_and(|expression_point| {
+                                !processed_expression_points[expression_point.0]
+                            })
+                    {
+                        apply_expression_location(
+                            facts,
+                            initialization.location,
+                            initialized,
+                            check_reads,
+                            fallback_span,
+                        )?;
+                        for expression_point in facts.expression_program_points
+                            [..facts.expression_program_point_count]
+                            .iter()
+                            .flatten()
+                            .filter(|expression_point| {
+                                expression_point.location == initialization.location
+                            })
+                        {
+                            processed_expression_points[expression_point.id.0] = true;
+                        }
+                    } else if facts.ownership_events_single_path
+                        || initialization.expression_point.is_none()
+                    {
+                        set_path_state(facts, initialized, initialization.path, true).map_err(
+                            |kind| CodegenError {
                                 kind,
-                                span: effect.span,
-                            }
-                        })?;
+                                span: initialization.span.unwrap_or(fallback_span),
+                            },
+                        )?;
                     }
-                    RuntimePlaceEffectKind::Write => {
-                        set_path_state(facts, initialized, effect.path, true).map_err(|kind| {
-                            CodegenError {
-                                kind,
-                                span: effect.span,
-                            }
-                        })?;
+                }
+                initialization_index += 1;
+                continue;
+            }
+            let effect = facts
+                .effects
+                .get(effect_index)
+                .and_then(|fact| *fact)
+                .filter(|fact| fact.event == RuntimeOwnershipEventId(expected_event))
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: fallback_span,
+                })?;
+            if facts.ownership_control_point(effect.location) == Some(point) {
+                if !facts.ownership_events_single_path
+                    && effect.expression_point.is_some_and(|expression_point| {
+                        !processed_expression_points[expression_point.0]
+                    })
+                {
+                    apply_expression_location(
+                        facts,
+                        effect.location,
+                        initialized,
+                        check_reads,
+                        fallback_span,
+                    )?;
+                    for expression_point in facts.expression_program_points
+                        [..facts.expression_program_point_count]
+                        .iter()
+                        .flatten()
+                        .filter(|expression_point| expression_point.location == effect.location)
+                    {
+                        processed_expression_points[expression_point.id.0] = true;
                     }
-                    RuntimePlaceEffectKind::Copy
-                    | RuntimePlaceEffectKind::SharedBorrow
-                    | RuntimePlaceEffectKind::MutableBorrow
-                    | RuntimePlaceEffectKind::ReadModifyWrite => {}
+                } else if facts.ownership_events_single_path || effect.expression_point.is_none() {
+                    apply_effect(facts, effect, initialized, check_reads)?;
                 }
             }
             effect_index += 1;
@@ -25888,6 +26257,62 @@ mod tests {
             result.unwrap_err().kind,
             CodegenErrorKind::RuntimeUseAfterMove
         );
+    }
+
+    #[test]
+    fn runtime_expression_initializedness_intersects_conditional_arms() {
+        let rejected = "fn value(input: &mut u16, choose: bool) -> &mut u16 { let moved: &mut u16 = if choose { input } else { &mut *input }; input }";
+        let module = Parser::new(rejected).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        let result = preanalyze_runtime_body_declarations::<_, 4, 24>(
+            &function,
+            &NoConstants,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        );
+        assert!(runtime_expression_initializedness_is_supported(&facts));
+        assert_eq!(
+            result.unwrap_err().kind,
+            CodegenErrorKind::RuntimeUseAfterMove
+        );
+        let edge = facts.expression_control_flow_edges[0].unwrap();
+        let target = facts.expression_program_points[edge.to.0].unwrap();
+        facts.expression_program_points[edge.to.0] = Some(RuntimeExpressionProgramPointFact {
+            location: RuntimeOwnershipEventLocation::Tail,
+            ..target
+        });
+        assert!(!runtime_expression_initializedness_is_supported(&facts));
+        assert_eq!(
+            validate_runtime_initializedness(&facts, function.body_expression_span)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeExpressionUnsupported
+        );
+
+        let retained = "fn value(input: &mut u16, choose: bool) -> &mut u16 { let selected: &mut u16 = if choose { &mut *input } else { &mut *input }; input }";
+        let module = Parser::new(retained).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "&mut u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        assert!(!facts.ownership_events_single_path);
+        assert!(runtime_expression_initializedness_is_supported(&facts));
     }
 
     #[test]
