@@ -4340,6 +4340,33 @@ fn rustc_conditional_return_call_results_retain_argument_origins_like_the_oracle
 }
 
 #[test]
+fn rustc_local_alias_call_results_retain_argument_origins_like_the_oracle() {
+    let rejected = [
+        "fn forward(value: &mut u16) -> &mut u16 { let alias: &mut u16 = value; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+        "fn forward(value: &mut u16) -> &mut u16 { let alias: &mut u16 = value; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "fn forward(value: &mut u16) -> &mut u16 { let alias: &mut u16 = value; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+        "fn forward(value: &mut u16) -> &mut u16 { let alias: &mut u16 = value; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_single_block_identity_calls_reject_competing_reborrows_and_accept_writes() {
     let rejected = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let first: &mut u16 = identity(input); let second: &mut u16 = identity(input); *first + *second }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {

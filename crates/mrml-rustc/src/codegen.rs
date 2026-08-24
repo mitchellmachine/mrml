@@ -10924,10 +10924,18 @@ fn runtime_call_arguments_preanalysis_supported<
 fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
     target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
 ) -> Option<usize> {
-    fn compatible_parameter<const MAX_PARAMETERS: usize>(
+    fn compatible_name<const MAX_PARAMETERS: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
         name: &str,
+        local_names: &[Option<&str>; MAX_PARAMETERS],
+        local_origins: &[Option<usize>; MAX_PARAMETERS],
+        local_count: usize,
     ) -> Option<usize> {
+        for index in (0..local_count).rev() {
+            if local_names[index] == Some(name) {
+                return local_origins[index];
+            }
+        }
         let RuntimeExpressionType::Reference {
             target: result_target,
             mutable: result_mutable,
@@ -10959,12 +10967,15 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         id: crate::ExprId,
         depth: usize,
+        local_names: &[Option<&str>; MAX_PARAMETERS],
+        local_origins: &[Option<usize>; MAX_PARAMETERS],
+        local_count: usize,
     ) -> Option<usize> {
         if depth == 64 {
             return None;
         }
         if let Some(place) = discover_runtime_read_place(tree, id).ok().flatten() {
-            return compatible_parameter(target, place.name);
+            return compatible_name(target, place.name, local_names, local_origins, local_count);
         }
         match tree.expression(id)?.kind {
             ExprKind::Unary {
@@ -10974,8 +10985,24 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             | ExprKind::Ascribe { operand, .. }
             | ExprKind::InlineConst { operand }
             | ExprKind::Return { operand }
-            | ExprKind::LoopBreak { operand } => recurse(target, tree, operand, depth + 1),
-            ExprKind::Sequence { then, .. } => recurse(target, tree, then, depth + 1),
+            | ExprKind::LoopBreak { operand } => recurse(
+                target,
+                tree,
+                operand,
+                depth + 1,
+                local_names,
+                local_origins,
+                local_count,
+            ),
+            ExprKind::Sequence { then, .. } => recurse(
+                target,
+                tree,
+                then,
+                depth + 1,
+                local_names,
+                local_origins,
+                local_count,
+            ),
             ExprKind::If {
                 then_branch,
                 else_branch,
@@ -10986,8 +11013,24 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 else_branch,
                 ..
             } => {
-                let then_origin = recurse(target, tree, then_branch, depth + 1)?;
-                let else_origin = recurse(target, tree, else_branch, depth + 1)?;
+                let then_origin = recurse(
+                    target,
+                    tree,
+                    then_branch,
+                    depth + 1,
+                    local_names,
+                    local_origins,
+                    local_count,
+                )?;
+                let else_origin = recurse(
+                    target,
+                    tree,
+                    else_branch,
+                    depth + 1,
+                    local_names,
+                    local_origins,
+                    local_count,
+                )?;
                 (then_origin == else_origin).then_some(then_origin)
             }
             _ => None,
@@ -10998,6 +11041,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
             .ok()?;
     let mut origin = None;
+    let mut local_names = [None; MAX_PARAMETERS];
+    let mut local_origins = [None; MAX_PARAMETERS];
+    let mut local_count = 0usize;
     let mut merge = |candidate: usize| -> Option<()> {
         if origin.is_some_and(|existing| existing != candidate) {
             return None;
@@ -11013,7 +11059,15 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     .get(index)
                     .and_then(|value| *value)?;
                 let tree = value.parse_value::<MAX_NODES>().ok()?;
-                merge(recurse(target, &tree, tree.root(), 0)?)?;
+                merge(recurse(
+                    target,
+                    &tree,
+                    tree.root(),
+                    0,
+                    &local_names,
+                    &local_origins,
+                    local_count,
+                )?)?;
             }
             crate::BodyStatement::ConditionalReturnElse(index) => {
                 let values = body
@@ -11022,20 +11076,59 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     .and_then(|value| *value)?;
                 for branch in values.branches().iter().flatten() {
                     let tree = branch.parse_value::<MAX_NODES>().ok()?;
-                    merge(recurse(target, &tree, tree.root(), 0)?)?;
+                    merge(recurse(
+                        target,
+                        &tree,
+                        tree.root(),
+                        0,
+                        &local_names,
+                        &local_origins,
+                        local_count,
+                    )?)?;
                 }
                 if let Some(value) = values.else_value {
                     let tree = value.parse_value::<MAX_NODES>().ok()?;
-                    merge(recurse(target, &tree, tree.root(), 0)?)?;
+                    merge(recurse(
+                        target,
+                        &tree,
+                        tree.root(),
+                        0,
+                        &local_names,
+                        &local_origins,
+                        local_count,
+                    )?)?;
                 }
             }
             crate::BodyStatement::Return(index) => {
                 let value = body.returns().get(index).and_then(|value| *value)?;
                 let tree = value.parse_value::<MAX_NODES>().ok()?;
-                merge(recurse(target, &tree, tree.root(), 0)?)?;
+                merge(recurse(
+                    target,
+                    &tree,
+                    tree.root(),
+                    0,
+                    &local_names,
+                    &local_origins,
+                    local_count,
+                )?)?;
             }
-            crate::BodyStatement::Local(_)
-            | crate::BodyStatement::Assignment(_)
+            crate::BodyStatement::Local(index) => {
+                let local = body.locals().get(index).and_then(|local| *local)?;
+                let tree = local.parse_initializer::<MAX_NODES>().ok()?;
+                let local_origin = recurse(
+                    target,
+                    &tree,
+                    tree.root(),
+                    0,
+                    &local_names,
+                    &local_origins,
+                    local_count,
+                );
+                *local_names.get_mut(local_count)? = Some(local.name);
+                *local_origins.get_mut(local_count)? = local_origin;
+                local_count += 1;
+            }
+            crate::BodyStatement::Assignment(_)
             | crate::BodyStatement::ConditionalAssignment(_)
             | crate::BodyStatement::Expression(_)
             | crate::BodyStatement::Loop(_) => return None,
@@ -11043,7 +11136,15 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
     }
     if !body.tail_diverges && !body.tail_expression.is_empty() {
         let tree = body.parse_tail::<MAX_NODES>().ok()?;
-        merge(recurse(target, &tree, tree.root(), 0)?)?;
+        merge(recurse(
+            target,
+            &tree,
+            tree.root(),
+            0,
+            &local_names,
+            &local_origins,
+            local_count,
+        )?)?;
     }
     origin
 }
@@ -26119,6 +26220,20 @@ mod tests {
                         body_expression: "value",
                     })
                 }
+                ("forward", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "forward",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "let alias: &mut u16 = value; alias",
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -28282,6 +28397,58 @@ mod tests {
         ] {
             analyze(source).unwrap();
         }
+    }
+
+    #[test]
+    fn runtime_local_alias_call_results_retain_argument_origins() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+        ] {
+            analyze(source).unwrap();
+        }
+
+        let forward = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("forward", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(forward),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: "let value: u16 = 1; value",
+                ..forward
+            }),
+            None
+        );
     }
 
     #[test]
