@@ -1422,6 +1422,14 @@ can count as trusted consent.
    artifact collisions. This enforces in-repository Lamport key separation but
    cannot prove external one-time-key backup destruction or human key custody.
 3. Add rollback, stale-update, corruption, interrupted-write, and recovery tests.
+   **PARTIALLY IMPLEMENTED:** deterministic kernel/storage/TPM simulations cover
+   manifest replay and adjacent-release substitution, same-floor root conflict,
+   corrupt and stale slots, failed inactive writes, pre-commit failure,
+   committed-but-uncertain counter advance, read failure, sequence exhaustion,
+   incomplete boot-artifact admission, publication conflict and retry, installed-
+   manifest reconstruction, and repeat boot without republishing. These are unit
+   and simulation results; provisioned-TPM reboot, torn-write, power-cut, and
+   accessible owner-recovery exercises remain pending.
 4. Establish reproducible builds, independently controlled release keys,
    Secure Boot integration, recovery, and key rotation.
 5. Bind inspectable system-generation metadata to the exact kernel, compositor,
