@@ -578,6 +578,13 @@ Backend and interrupt capabilities are preflighted and revoked before the block
 attachment resets and PCI generation advances with BAR/decode cleared. Recover
 this only as destroyed-VM cleanup evidence; in-place BAR unmapping, hotplug,
 durable backend recovery, and production native cleanup remain pending.
+Host-side simulation separately covers reset while one completion is published
+but unacknowledged and another request remains in flight. Recovery of the
+successor requires new block and PCI generations, a fresh bridge, and a fresh
+attachment. Never recover the prior BAR acknowledgement, ticket, request,
+attachment, or bridge into that successor. This is unit/simulation evidence,
+not hosted pending-I/O reset, live unmap/hotplug, durable recovery, QEMU, or
+physical evidence.
 
 For every future device, recover and update its classification, exact feature
 bits, queue/ring encoding, lifecycle/reset rules, interrupt model, QEMU

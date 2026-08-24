@@ -4444,6 +4444,45 @@ BAR probing/masking, generational reset invalidation, and transactional
 configuration writes; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The next block/PCI lifecycle composition test exercises reset while generation
+1 contains both a completion already published into guest memory with its
+notification latched and a separate in-flight request. Exact cleanup resets the
+old attachment and invalidates one request before PCI generation advance. A
+fresh bridge and attachment then bind block and PCI generation 2. The old BAR
+acknowledgement fails attachment validation before successor mutation; the old
+ticket fails as stale; the old encoded request fails its generation check; and
+a fresh generation-2 request remains admissible. The focused test and all 71
+`virtual_block` plus 28 `virtual_pci` tests passed in Windows nightly gnullvm
+release mode and Arch Linux/WSL release mode. Strict scoped kernel Clippy also
+passed on both. The exact commands were `cargo
++nightly-x86_64-pc-windows-gnullvm test -p mrml-kernel --release
+--no-default-features pci_block_reset_with_pending_state`, the same command
+with `virtual_block` and `virtual_pci` filters, `cargo
++nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kernel --release
+--no-default-features --lib --no-deps -- -D warnings -A
+clippy::result_unit_err`, and the equivalent Arch commands with
+`CARGO_TARGET_DIR=target/pci-reset-pending-kvm` and the default Arch toolchain.
+This is unit/simulation evidence only; no hosted pending-I/O reset, live native
+unmapping/hotplug, durable backend, QEMU, nested-virtualization, bare-metal,
+physical-device, accessibility-device, or user evidence is claimed.
+
+The pending-reset `DIGITAL-RIGHTS REVIEW` found no identity collection,
+retention, disclosure, attestation mandate, DRM, publisher control,
+accessibility restriction, AI authority, persistence, or durable owner-state
+change. Backend access remains an exact independently revocable capability;
+reset creates no ambient authority. The `HOSTILE SECURITY REVIEW` treats the
+old attachment, BAR address, MMIO acknowledgement, completion, notification,
+ticket, encoded request, bridge, and every generation as hostile. Attachment
+validation precedes acknowledgement mutation; reset invalidates transient
+state; a successor requires fresh generational bindings; and stale ticket and
+request checks are independent. Existing rollback-resistance, accessibility,
+evidence, owner-sovereignty, data-minimization, anti-DRM, owner-controlled-
+attestation, third-party-accessibility, AI-containment, anti-persistence, and
+dual-review gates remain unchanged. Patent review is `NOT_TRIGGERED`: this is
+conventional testing of the existing MRML-native generational reset contract,
+not a new compatibility or device mechanism. Planned patent-triggered work
+remains gated by independent human dual review.
+
 The next shared-policy increment adds `VirtualPciConfigurationRouter`, a fixed
 eight-slot table above the unattached Type-0 core. `VirtualPciLocation` validates
 the architectural 5-bit device and 3-bit function bounds while retaining exact

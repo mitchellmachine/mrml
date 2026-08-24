@@ -6536,6 +6536,141 @@ mod tests {
     }
 
     #[test]
+    fn pci_block_reset_with_pending_state_rejects_every_stale_successor_action() {
+        let location = crate::VirtualPciLocation::new(0, 0, 4, 0).unwrap();
+        let mut router = crate::VirtualPciConfigurationRouter::new();
+        let pci_id = router.attach(location, block_pci_function(1)).unwrap();
+        let mut device = active_mmio::<2>();
+        let mut old_bridge = VirtualBlockQueueBridge::<2>::new(layout::<2>()).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(
+                ObjectId(0x30a),
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
+        let authority =
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x30a), 0, 64).unwrap();
+        let mut old_attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            &device,
+            &old_bridge,
+            authority,
+        )
+        .unwrap();
+        router.write(location, 16, 4, 0x20_0000).unwrap();
+        let old_window = router
+            .describe_attachment(pci_id)
+            .unwrap()
+            .resources()
+            .mmio_window()
+            .unwrap();
+        let mut window_backend = RecordingBlockPciWindowBackend {
+            map_result: Ok(()),
+            unmap_result: Ok(()),
+            maps: 0,
+            unmaps: 0,
+            last: None,
+        };
+        {
+            let mut mapper =
+                VirtualBlockPciMemoryMapper::new(&mut old_attachment, &device, &mut window_backend);
+            router
+                .write_with_mapper(
+                    location,
+                    4,
+                    2,
+                    crate::PCI_COMMAND_MEMORY_SPACE as u32,
+                    &mut mapper,
+                )
+                .unwrap();
+        }
+
+        let completed_request = VirtualBlockRequest::write(1, 1, 0, 1, 0x4000, 4096);
+        let pending_request = VirtualBlockRequest::read(1, 2, 1, 1, 0x5000, 4096);
+        let completed = device.admit(&encoded(completed_request)).unwrap();
+        let pending = device.admit(&encoded(pending_request)).unwrap();
+        let stale_completion = device
+            .complete(completed.ticket(), VirtualBlockCompletionStatus::Ok, 4096)
+            .unwrap();
+        let mut old_memory = MockVmm::new();
+        old_bridge
+            .publish_completion(&mut old_memory, stale_completion)
+            .unwrap();
+        device.latch_completion_interrupt().unwrap();
+
+        let mut resource_revoker = RecordingBlockPciRevoker {
+            fail: false,
+            last: None,
+        };
+        {
+            let mut revoker = VirtualBlockPciFunctionRevoker::new(
+                &mut old_attachment,
+                &mut device,
+                &mut resource_revoker,
+                VirtualBlockPciCleanupMode::Reset,
+            );
+            assert_eq!(router.reset_with_revoker(pci_id, &mut revoker), Ok(2));
+        }
+        assert_eq!(old_attachment.invalidated_requests(), 1);
+        assert_eq!(
+            old_attachment.state(),
+            VirtualBlockPciAttachmentState::Reset
+        );
+        assert_eq!(device.pending_interrupt_vector(), None);
+
+        device.negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH).unwrap();
+        device.activate(layout::<2>(), 48).unwrap();
+        let successor_bridge = VirtualBlockQueueBridge::<2>::new(layout::<2>()).unwrap();
+        let successor_attachment = VirtualBlockPciAttachment::new(
+            router.describe_attachment(pci_id).unwrap(),
+            &device,
+            &successor_bridge,
+            authority,
+        )
+        .unwrap();
+        assert_eq!(successor_attachment.block_generation(), 2);
+        assert_eq!(successor_attachment.pci().function_generation(), 2);
+
+        let stale_ack = ExitDisposition::Mmio {
+            guest_address: u64::from(old_window.address())
+                + u64::from(VIRTUAL_BLOCK_MMIO_COMPLETION_ACK_OFFSET),
+            size: 4,
+            write: true,
+            value: u64::from(VIRTUAL_BLOCK_COMPLETION_ACK_VALUE),
+        };
+        assert_eq!(
+            process_virtual_block_mmio_completion_ack(
+                stale_ack,
+                &old_attachment,
+                &mut device,
+                &mut old_bridge,
+                &mut old_memory,
+            ),
+            Err(VirtualBlockCompletionAckError::InvalidExit)
+        );
+        assert_eq!(device.state(), VirtualBlockDeviceState::Active);
+        assert!(!successor_bridge.is_poisoned());
+        assert_eq!(
+            device.complete(pending.ticket(), VirtualBlockCompletionStatus::Ok, 4096),
+            Err(VirtualBlockError::StaleTicket)
+        );
+        assert_eq!(
+            device.admit(&encoded(pending_request)),
+            Err(VirtualBlockError::StaleGeneration)
+        );
+        assert!(
+            device
+                .admit(&encoded(VirtualBlockRequest::read(
+                    2, 3, 0, 1, 0x6000, 4096,
+                )))
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn pci_block_detach_removes_device_only_after_exact_resource_cleanup() {
         let location = crate::VirtualPciLocation::new(0, 0, 5, 0).unwrap();
         let mut router = crate::VirtualPciConfigurationRouter::new();

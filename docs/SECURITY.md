@@ -405,6 +405,15 @@ and interrupt authority. Common block reset and attachment invalidation precede
 PCI generation advance and BAR/decode clearing. This does not claim live TLB-
 safe dynamic unmapping; that path remains fail-closed and unavailable.
 
+Reset-with-pending simulation now composes a published unacknowledged
+completion, latched notification, and separate in-flight request. Reset
+invalidates the old attachment and ticket and advances both device identities;
+reactivation creates a fresh bridge and attachment. The old BAR acknowledgement
+is rejected by attachment validation before it can touch successor device or
+queue state, and stale ticket/request generations are independently rejected.
+This proves bounded common-state isolation only, not native TLB invalidation,
+hosted pending-I/O reset, durable recovery, or device cleanup.
+
 A VirtIO-GPU-compatible presentation device does not replace or implicitly
 authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
 are distinct capabilities. The MRML-specific compute path retains exact signed

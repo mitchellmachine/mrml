@@ -219,6 +219,16 @@ acknowledgement. It is not production block I/O or evidence for durability,
 native PCI interrupt routing, MSI/MSI-X, DMA, VirtIO, QEMU comparison,
 production PCI identity, physical devices, or host-resistant isolation.
 
+**PARTIALLY IMPLEMENTED for reset-with-pending acceptance:** a host-side
+simulation holds one published, unacknowledged completion plus one in-flight
+request across the reset boundary. Reset clears the old notification and
+invalidates the request, attachment, mapping identity, and device generation.
+Only a fresh bridge and attachment bind the successor generations; replay of
+the old BAR acknowledgement, ticket, or request reaches no successor state,
+while a fresh successor request is accepted. Hosted pending-I/O reset, live
+native unmapping/hotplug, durable backend recovery, QEMU differential testing,
+and physical-device evidence remain pending.
+
 Legacy completion delivery also re-reads the exact live routed function state.
 Conventional PCI interrupt-disable masks injection without clearing the pending
 device notification; delivery resumes only after that same attachment

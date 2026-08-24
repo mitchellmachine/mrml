@@ -720,6 +720,14 @@ and attachment-generation exhaustion fail without ambiguous routing or partial
 removal. Reset and detach expose no cleanup-free router API. BDF and attachment
 identity remain data; mutable access to trusted VMM
 policy, not knowledge of either value, supplies authority.
+Host-side simulation now composes reset with both classes of unretired block
+state: one completion already published with its notification latched and one
+request still in flight. Reset invalidates the old attachment and in-flight
+ticket before a fresh bridge and attachment bind block and PCI generation 2.
+The old BAR acknowledgement, ticket, request generation, attachment, and bridge
+cannot mutate or poison that successor, while a fresh generation-2 request is
+admitted. This is not hosted pending-I/O reset, live BAR unmapping, hotplug,
+durable recovery, QEMU comparison, or physical-device evidence.
 Memory-decode command transitions now require a separate unsafe native mapper.
 Enable maps the exact attachment/function generation and assigned BAR window
 before publishing the command bit; disable proves that same native window

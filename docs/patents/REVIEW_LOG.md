@@ -2117,3 +2117,14 @@ interface, JavaScript/WebAssembly runtime, media mechanism, production PCI
 identity, MSI/MSI-X, DMA protocol, or new authority model. The previously
 recorded planned scopes remain `TRIGGERED`; this agent review does not replace
 independent human dual review.
+
+# 2026-08-24 — MRML-native block pending-reset isolation test
+
+**Result: NOT_TRIGGERED.** The change conventionally composes and tests the
+existing MRML-native generational reset, attachment, queue, completion, and
+stale-request rules while request and completion state are pending. It adds no
+VirtIO compatibility, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, media mechanism, production
+PCI identity, DMA protocol, or new authority model. The previously recorded
+planned scopes remain `TRIGGERED`; this agent review does not replace the
+required independent human dual review.
