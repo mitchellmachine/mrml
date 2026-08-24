@@ -2252,8 +2252,13 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut guest,
                 &mut storage,
-                block_capability,
-                block_object,
+                mrml_kernel::VirtualBlockBackendAuthority::new(
+                    block_capability,
+                    block_object,
+                    0,
+                    1,
+                )
+                .unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -2311,8 +2316,13 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut guest,
                 &mut storage,
-                block_capability,
-                block_object,
+                mrml_kernel::VirtualBlockBackendAuthority::new(
+                    block_capability,
+                    block_object,
+                    0,
+                    1,
+                )
+                .unwrap(),
                 0,
                 &mut vms,
                 vm,

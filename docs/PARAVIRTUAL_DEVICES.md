@@ -173,9 +173,13 @@ BlockCapability {
 block runners now require a live generational capability for one trusted-policy-
 selected backend object and reauthorize `READ`, `WRITE`, or `FLUSH` before each
 corresponding backend operation. Wrong-object, attenuated, stale, and revoked
-authority reaches no backend. KVM and WHP use the same wrapper. Optional bounded-
-region capability enforcement remains pending, so the complete `BLOCK`
-acceptance scenario is not yet satisfied.
+authority reaches no backend. KVM and WHP use the same wrapper. A checked policy
+descriptor now binds a nonempty backend start/count to the capability: guest
+block zero translates to that start, cross-boundary or malformed transfers reach
+no backend, and the exposed count must equal advertised device geometry before
+vCPU entry. Nonzero translation and denial are simulation-tested; hosted probes
+currently exercise an exact full-backend region. A production backend and the
+complete `BLOCK` acceptance scenario remain pending.
 
 Sector, offset, and length are checked request data. They cannot select another
 object. Bounded-region capabilities may expose a whole disk, partition, image,

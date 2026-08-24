@@ -232,8 +232,13 @@ fn run_block_guest_driver_probe<'system>(
             let outcome = run_virtual_block_transaction_once(
                 &mut guest,
                 &mut storage,
-                block_capability,
-                block_object,
+                mrml_kernel::VirtualBlockBackendAuthority::new(
+                    block_capability,
+                    block_object,
+                    0,
+                    2,
+                )
+                .map_err(|_| anyhow!("invalid block backend authority"))?,
                 0,
                 &mut vms,
                 vm,
@@ -334,8 +339,13 @@ fn run_block_guest_driver_probe<'system>(
             let acknowledgement = run_virtual_block_transaction_once(
                 &mut guest,
                 &mut storage,
-                block_capability,
-                block_object,
+                mrml_kernel::VirtualBlockBackendAuthority::new(
+                    block_capability,
+                    block_object,
+                    0,
+                    2,
+                )
+                .map_err(|_| anyhow!("invalid block backend authority"))?,
                 0,
                 &mut vms,
                 vm,

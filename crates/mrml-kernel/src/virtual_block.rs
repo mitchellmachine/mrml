@@ -2283,7 +2283,65 @@ pub unsafe trait VirtualBlockBackend {
 pub enum VirtualBlockCapabilityError<E> {
     Capability(CapabilityError),
     ObjectMismatch,
+    InvalidRange,
     Backend(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualBlockAuthorityError {
+    InvalidRange,
+    GeometryMismatch,
+}
+
+/// Trusted-policy selection of one exact block object and one exposed region.
+/// This descriptor is data, not authority: every operation still requires the
+/// live capability. Guest block zero maps to `backend_first_block`; guest
+/// requests cannot address outside `exposed_block_count`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VirtualBlockBackendAuthority {
+    capability: Capability,
+    object: ObjectId,
+    backend_first_block: u64,
+    exposed_block_count: u64,
+}
+
+impl VirtualBlockBackendAuthority {
+    pub fn new(
+        capability: Capability,
+        object: ObjectId,
+        backend_first_block: u64,
+        exposed_block_count: u64,
+    ) -> Result<Self, VirtualBlockAuthorityError> {
+        if exposed_block_count == 0
+            || backend_first_block
+                .checked_add(exposed_block_count)
+                .is_none()
+        {
+            return Err(VirtualBlockAuthorityError::InvalidRange);
+        }
+        Ok(Self {
+            capability,
+            object,
+            backend_first_block,
+            exposed_block_count,
+        })
+    }
+
+    pub const fn capability(self) -> Capability {
+        self.capability
+    }
+
+    pub const fn object(self) -> ObjectId {
+        self.object
+    }
+
+    pub const fn backend_first_block(self) -> u64 {
+        self.backend_first_block
+    }
+
+    pub const fn exposed_block_count(self) -> u64 {
+        self.exposed_block_count
+    }
 }
 
 /// Revalidates one exact backend capability for every block operation.
@@ -2294,22 +2352,22 @@ pub enum VirtualBlockCapabilityError<E> {
 pub struct CapabilitySelectedVirtualBlockBackend<'a, D, const C: usize> {
     backend: &'a mut D,
     capabilities: &'a CapabilitySpace<C>,
-    capability: Capability,
-    object: ObjectId,
+    authority: VirtualBlockBackendAuthority,
+    block_size: u32,
 }
 
 impl<'a, D, const C: usize> CapabilitySelectedVirtualBlockBackend<'a, D, C> {
     pub fn new(
         backend: &'a mut D,
         capabilities: &'a CapabilitySpace<C>,
-        capability: Capability,
-        object: ObjectId,
+        authority: VirtualBlockBackendAuthority,
+        block_size: u32,
     ) -> Self {
         Self {
             backend,
             capabilities,
-            capability,
-            object,
+            authority,
+            block_size,
         }
     }
 
@@ -2319,12 +2377,43 @@ impl<'a, D, const C: usize> CapabilitySelectedVirtualBlockBackend<'a, D, C> {
     {
         let object = self
             .capabilities
-            .authorize(self.capability, right)
+            .authorize(self.authority.capability, right)
             .map_err(VirtualBlockCapabilityError::Capability)?;
-        if object != self.object {
+        if object != self.authority.object {
             return Err(VirtualBlockCapabilityError::ObjectMismatch);
         }
         Ok(())
+    }
+
+    fn translate(
+        &self,
+        right: Rights,
+        block: u64,
+        bytes: usize,
+    ) -> Result<u64, VirtualBlockCapabilityError<D::Error>>
+    where
+        D: VirtualBlockBackend,
+    {
+        self.authorize(right)?;
+        let block_size = usize::try_from(self.block_size)
+            .ok()
+            .filter(|block_size| *block_size != 0)
+            .ok_or(VirtualBlockCapabilityError::InvalidRange)?;
+        if bytes == 0 || !bytes.is_multiple_of(block_size) {
+            return Err(VirtualBlockCapabilityError::InvalidRange);
+        }
+        let count = u64::try_from(bytes / block_size)
+            .map_err(|_| VirtualBlockCapabilityError::InvalidRange)?;
+        let end = block
+            .checked_add(count)
+            .ok_or(VirtualBlockCapabilityError::InvalidRange)?;
+        if end > self.authority.exposed_block_count {
+            return Err(VirtualBlockCapabilityError::InvalidRange);
+        }
+        self.authority
+            .backend_first_block
+            .checked_add(block)
+            .ok_or(VirtualBlockCapabilityError::InvalidRange)
     }
 }
 
@@ -2334,7 +2423,7 @@ unsafe impl<D: VirtualBlockBackend, const C: usize> VirtualBlockBackend
     type Error = VirtualBlockCapabilityError<D::Error>;
 
     fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
-        self.authorize(Rights::READ)?;
+        let block = self.translate(Rights::READ, block, output.len())?;
         self.backend
             .read_blocks(block, output)
             .map_err(VirtualBlockCapabilityError::Backend)
@@ -2345,7 +2434,8 @@ unsafe impl<D: VirtualBlockBackend, const C: usize> VirtualBlockBackend
         block: u64,
         input: &[u8],
     ) -> Result<(), VirtualBlockMutationError<Self::Error>> {
-        self.authorize(Rights::WRITE)
+        let block = self
+            .translate(Rights::WRITE, block, input.len())
             .map_err(VirtualBlockMutationError::Rejected)?;
         self.backend
             .write_blocks(block, input)
@@ -2458,6 +2548,7 @@ pub type VirtualBlockCompletionAckRunResult<M> = Result<u64, VirtualBlockComplet
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum VirtualBlockRunError<M, D> {
+    Authority(VirtualBlockAuthorityError),
     Exit(VmRunError<M>),
     Doorbell(VirtualBlockDoorbellError<M, D>),
     Interrupt(VirtualBlockInterruptError<M>),
@@ -2474,6 +2565,7 @@ pub enum VirtualBlockTransactionOutcome<E> {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum VirtualBlockTransactionRunError<M, D> {
+    Authority(VirtualBlockAuthorityError),
     Exit(VmRunError<M>),
     InvalidExit,
     Doorbell(VirtualBlockDoorbellError<M, D>),
@@ -3319,8 +3411,7 @@ pub fn run_virtual_block_doorbell_once<
 >(
     memory: &mut M,
     block_backend: &mut D,
-    block_capability: Capability,
-    block_object: ObjectId,
+    block_authority: VirtualBlockBackendAuthority,
     vcpu: u32,
     vms: &mut VmTable<V>,
     vm: VmId,
@@ -3339,6 +3430,12 @@ where
     M: VirtualBlockVmmMemory,
     D: VirtualBlockBackend,
 {
+    if block_authority.exposed_block_count() != device.block_count() {
+        let _ = vms.fail(vm);
+        return Err(VirtualBlockRunError::Authority(
+            VirtualBlockAuthorityError::GeometryMismatch,
+        ));
+    }
     if device.pending_interrupt_vector().is_some() {
         inject_virtual_block_interrupt(
             device,
@@ -3371,8 +3468,8 @@ where
     let mut selected_backend = CapabilitySelectedVirtualBlockBackend::new(
         block_backend,
         capabilities,
-        block_capability,
-        block_object,
+        block_authority,
+        device.block_size(),
     );
     let outcome = process_virtual_block_doorbell(
         disposition,
@@ -3470,8 +3567,7 @@ pub fn run_virtual_block_transaction_once<
 >(
     memory: &mut M,
     block_backend: &mut D,
-    block_capability: Capability,
-    block_object: ObjectId,
+    block_authority: VirtualBlockBackendAuthority,
     vcpu: u32,
     vms: &mut VmTable<V>,
     vm: VmId,
@@ -3490,6 +3586,12 @@ where
     M: VirtualBlockVmmMemory,
     D: VirtualBlockBackend,
 {
+    if block_authority.exposed_block_count() != device.block_count() {
+        let _ = vms.fail(vm);
+        return Err(VirtualBlockTransactionRunError::Authority(
+            VirtualBlockAuthorityError::GeometryMismatch,
+        ));
+    }
     if device.pending_interrupt_vector().is_some() {
         inject_virtual_block_interrupt(
             device,
@@ -3532,8 +3634,8 @@ where
         let mut selected_backend = CapabilitySelectedVirtualBlockBackend::new(
             block_backend,
             capabilities,
-            block_capability,
-            block_object,
+            block_authority,
+            device.block_size(),
         );
         let outcome = process_virtual_block_doorbell(
             disposition,
@@ -5200,8 +5302,8 @@ mod tests {
         let mut selected = CapabilitySelectedVirtualBlockBackend::new(
             &mut read_backend,
             &read_space,
-            read_capability,
-            object,
+            VirtualBlockBackendAuthority::new(read_capability, object, 0, 4).unwrap(),
+            4096,
         );
         assert_eq!(selected.read_blocks(0, &mut output), Ok(()));
         assert!(output.iter().all(|byte| *byte == 0x5a));
@@ -5232,8 +5334,8 @@ mod tests {
         let mut selected = CapabilitySelectedVirtualBlockBackend::new(
             &mut write_backend,
             &write_space,
-            write_capability,
-            object,
+            VirtualBlockBackendAuthority::new(write_capability, object, 0, 4).unwrap(),
+            4096,
         );
         assert!(matches!(
             selected.read_blocks(0, &mut output),
@@ -5263,8 +5365,8 @@ mod tests {
         let mut selected = CapabilitySelectedVirtualBlockBackend::new(
             &mut flush_backend,
             &flush_space,
-            flush_capability,
-            object,
+            VirtualBlockBackendAuthority::new(flush_capability, object, 0, 4).unwrap(),
+            4096,
         );
         assert!(matches!(
             selected.read_blocks(0, &mut output),
@@ -5301,8 +5403,8 @@ mod tests {
         let mut selected = CapabilitySelectedVirtualBlockBackend::new(
             &mut wrong_backend,
             &wrong_space,
-            wrong_capability,
-            object,
+            VirtualBlockBackendAuthority::new(wrong_capability, object, 0, 4).unwrap(),
+            4096,
         );
         assert_eq!(
             selected.read_blocks(0, &mut output),
@@ -5318,8 +5420,8 @@ mod tests {
         let mut selected = CapabilitySelectedVirtualBlockBackend::new(
             &mut revoked_backend,
             &revoked_space,
-            revoked_capability,
-            object,
+            VirtualBlockBackendAuthority::new(revoked_capability, object, 0, 4).unwrap(),
+            4096,
         );
         assert_eq!(
             selected.read_blocks(0, &mut output),
@@ -5329,6 +5431,69 @@ mod tests {
         );
         assert_eq!(revoked_backend.reads, 0);
         assert!(output.iter().all(|byte| *byte == 0xa5));
+    }
+
+    #[test]
+    fn block_authority_rejects_empty_and_overflowing_backend_regions() {
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(ObjectId(0x300), crate::Rights::READ)
+            .unwrap();
+        assert_eq!(
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x300), 0, 0),
+            Err(VirtualBlockAuthorityError::InvalidRange)
+        );
+        assert_eq!(
+            VirtualBlockBackendAuthority::new(capability, ObjectId(0x300), u64::MAX, 1),
+            Err(VirtualBlockAuthorityError::InvalidRange)
+        );
+    }
+
+    #[test]
+    fn capability_selected_backend_translates_and_bounds_the_exposed_region() {
+        let object = ObjectId(0x300);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let capability = capabilities
+            .insert(object, crate::Rights::READ.union(crate::Rights::WRITE))
+            .unwrap();
+        let authority = VirtualBlockBackendAuthority::new(capability, object, 1, 2).unwrap();
+        assert_eq!(authority.capability(), capability);
+        assert_eq!(authority.object(), object);
+        assert_eq!(authority.backend_first_block(), 1);
+        assert_eq!(authority.exposed_block_count(), 2);
+
+        let mut backend = MockBlock::new();
+        backend.bytes[2 * 4096..3 * 4096].fill(0x5a);
+        let mut selected = CapabilitySelectedVirtualBlockBackend::new(
+            &mut backend,
+            &capabilities,
+            authority,
+            4096,
+        );
+        assert_eq!(selected.write_blocks(0, &[0x65; 4096]), Ok(()));
+        let mut output = [0; 4096];
+        assert_eq!(selected.read_blocks(1, &mut output), Ok(()));
+        assert!(output.iter().all(|byte| *byte == 0x5a));
+        assert!(matches!(
+            selected.read_blocks(2, &mut output),
+            Err(VirtualBlockCapabilityError::InvalidRange)
+        ));
+        let mut oversized = [0xa5; 8192];
+        assert!(matches!(
+            selected.read_blocks(1, &mut oversized),
+            Err(VirtualBlockCapabilityError::InvalidRange)
+        ));
+        assert!(matches!(
+            selected.write_blocks(0, &[0x11; 4095]),
+            Err(VirtualBlockMutationError::Rejected(
+                VirtualBlockCapabilityError::InvalidRange
+            ))
+        ));
+        assert_eq!((backend.reads, backend.writes), (1, 1));
+        assert!(backend.bytes[..4096].iter().all(|byte| *byte == 0));
+        assert!(backend.bytes[4096..8192].iter().all(|byte| *byte == 0x65));
+        assert!(backend.bytes[8192..12288].iter().all(|byte| *byte == 0x5a));
+        assert!(backend.bytes[12288..].iter().all(|byte| *byte == 0));
     }
 
     #[test]
@@ -6048,8 +6213,8 @@ mod tests {
                 run_virtual_block_doorbell_once(
                     &mut vmm,
                     &mut backend,
-                    block_capability,
-                    block_object,
+                    VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64)
+                        .unwrap(),
                     0,
                     &mut vms,
                     vm,
@@ -6140,8 +6305,7 @@ mod tests {
             run_virtual_block_transaction_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -6172,8 +6336,7 @@ mod tests {
             run_virtual_block_transaction_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -6228,8 +6391,7 @@ mod tests {
             run_virtual_block_transaction_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -6251,6 +6413,66 @@ mod tests {
         assert!(scratch.iter().all(|byte| *byte == 0xa5));
         assert_eq!(bridge.request_consumed, 0);
         assert_eq!(bridge.completion_consumed, 0);
+    }
+
+    #[test]
+    fn transaction_runner_rejects_backend_region_geometry_before_vcpu_entry() {
+        let block_object = ObjectId(0x300);
+        let interrupt_object = ObjectId(0x310);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let block_capability = capabilities
+            .insert(
+                block_object,
+                crate::Rights::READ
+                    .union(crate::Rights::WRITE)
+                    .union(crate::Rights::FLUSH),
+            )
+            .unwrap();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, crate::Rights::SIGNAL)
+            .unwrap();
+        let mut interrupts = InterruptPolicy::deny_all();
+        interrupts.allow(48).unwrap();
+        let (mut vms, vm) = runner_vm();
+        let mut router = HypercallRouter::new(ObjectId(0x311), ObjectId(0x312), ObjectId(0x313));
+        let guest_memory = GuestMemory::<0>::new();
+        let io = block_transaction_io_policy();
+        let mut device = active::<1>();
+        let mut bridge = VirtualBlockQueueBridge::<1>::new(layout::<1>()).unwrap();
+        let mut vmm = MockVmm::new();
+        let expected_exit = VmExit::Halted;
+        vmm.next_exit = Some(expected_exit);
+        let mut backend = MockBlock::new();
+        let mut scratch = [0xa5; 4096];
+
+        assert_eq!(
+            run_virtual_block_transaction_once(
+                &mut vmm,
+                &mut backend,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 1, 63).unwrap(),
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io,
+                &interrupts,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Err(VirtualBlockTransactionRunError::Authority(
+                VirtualBlockAuthorityError::GeometryMismatch
+            ))
+        );
+        assert_eq!(vmm.next_exit, Some(expected_exit));
+        assert_eq!(vms.state(vm), Ok(crate::VmState::Failed));
+        assert_eq!((backend.reads, backend.writes, backend.flushes), (0, 0, 0));
+        assert_eq!(bridge.request_consumed, 0);
+        assert!(scratch.iter().all(|byte| *byte == 0xa5));
     }
 
     #[test]
@@ -6296,8 +6518,7 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -6358,8 +6579,7 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -6426,8 +6646,7 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,
@@ -6492,8 +6711,7 @@ mod tests {
             run_virtual_block_doorbell_once(
                 &mut vmm,
                 &mut backend,
-                block_capability,
-                block_object,
+                VirtualBlockBackendAuthority::new(block_capability, block_object, 0, 64).unwrap(),
                 0,
                 &mut vms,
                 vm,

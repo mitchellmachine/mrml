@@ -368,8 +368,12 @@ explicitly and downgrade the status rather than guessing.
   capability projection and independently require `READ`, `WRITE`, or `FLUSH`
   for the corresponding operation. Wrong-object, attenuated, stale, and revoked
   authority reaches no backend. Fresh matching signed KVM and WHP probes cover
-  this path. Optional bounded-region authority, production block I/O, physical
-  durability, and hardware evidence remain absent.
+  this path. The projection now also binds a checked backend start/count,
+  translates guest-relative blocks, rejects cross-boundary access before I/O,
+  and requires exact advertised geometry before vCPU entry. Nonzero translation
+  is simulation-tested; the hosted probes use the full volatile two-block
+  region. Production block I/O, physical durability, and hardware evidence
+  remain absent.
   Prepared KVM and WHP guests attach the same validated request and guest-read-
   only completion ranges transactionally; ordinary completion writes fail while
   the device-memory path can publish. Dedicated initial-launch builders also

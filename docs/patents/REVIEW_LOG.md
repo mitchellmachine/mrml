@@ -1948,3 +1948,15 @@ compatibility protocol, host-share mechanism, accessibility device, browser
 semantic interface, JavaScript/WebAssembly runtime, media mechanism, authority
 model, or other patent-candidate mechanism. This agent review does not replace
 the required independent human dual review.
+
+# 2026-08-24 — Capability-bound virtual-block backend regions
+
+**Result: NOT_TRIGGERED.** The change conventionally binds an existing exact
+block capability to a checked nonempty backend start/count, translates
+guest-relative block indices, rejects malformed or cross-boundary transfers
+before backend I/O, and verifies exposed count against advertised device
+geometry before vCPU entry. It introduces no new device or compatibility
+protocol, host-share mechanism, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, media mechanism, authority model, or
+other patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.

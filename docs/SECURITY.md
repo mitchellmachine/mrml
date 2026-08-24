@@ -305,9 +305,11 @@ The MRML-native block runner now reauthorizes one live exact-object capability
 with the operation-specific `READ`, `WRITE`, or `FLUSH` right before backend
 access. Block numbers, lengths, queue records, transport identity, and the
 separate interrupt capability cannot select that object. Wrong-object,
-attenuated, stale, or revoked authority performs no backend I/O. Bounded-region
-authority remains unimplemented and no production or physical block backend is
-claimed.
+attenuated, stale, or revoked authority performs no backend I/O. A nonempty,
+nonoverflowing backend start/count now binds guest-relative block translation;
+cross-boundary and malformed transfers fail before backend access, and exposed
+count must match advertised device geometry before vCPU entry. No production or
+physical block backend is claimed.
 
 PCI identity and configuration data never authorize mappings, interrupts, DMA,
 or device use. Configuration offsets, widths, command bits, BAR probes, BAR

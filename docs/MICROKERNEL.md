@@ -5734,6 +5734,63 @@ authorization around the existing MRML-native block backend. No VirtIO,
 host-share, accessibility-device, browser-semantic, JavaScript/Wasm, or media
 mechanism from the recorded triggered scope is implemented.
 
+### Capability-bound virtual-block backend regions
+
+`VirtualBlockBackendAuthority` now binds the exact live capability/object pair
+to a trusted-policy-selected nonempty `backend_first_block` and
+`exposed_block_count`. Construction rejects zero length and end overflow. Guest
+block zero translates to the selected backend start; complete byte length must
+be a nonzero multiple of device block size, checked request end must remain
+inside the exposed count, and translated arithmetic must not overflow. These
+checks occur after capability authorization but before the unsafe backend call,
+so malformed or cross-boundary requests disclose no backend data and perform no
+I/O. Before any vCPU entry, both common runners additionally require exposed
+count to equal the active device's advertised block count. Geometry mismatch
+fails the VM without consuming its pending exit or touching queue, scratch, or
+backend state.
+
+Focused simulation tests cover empty and overflowing descriptors, nonzero
+translation, first/last exposed blocks, a request beginning at the end, a
+multi-block boundary crossing, non-block-aligned byte length, untouched blocks
+outside the region, and pre-entry device-geometry mismatch. Hosted launchers use
+the same common descriptor with the exact full two-block volatile backend.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run -p mrml-whp -p mrml-whp-run --release --no-default-features
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run -p mrml-whp -p mrml-whp-run --all-targets --no-default-features --no-deps -- -D warnings
+CARGO_TARGET_DIR=target/block-region-linux cargo +nightly test -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run --release --no-default-features
+CARGO_TARGET_DIR=target/block-region-linux cargo +nightly clippy -q -p mrml-kernel -p mrml-kernel-bench -p mrml-kvm -p mrml-kvm-run --all-targets --no-default-features --no-deps -- -D warnings
+```
+
+Windows passed 423 kernel, 7 KVM, 4 KVM-runner, 21 WHP, and 5 WHP-runner tests;
+14 benchmark tests and one WHP hardware test were ignored. Arch Linux under
+WSL2 passed 423 kernel, 18 KVM, and 6 KVM-runner tests; 13 benchmark tests and
+one KVM hardware test were ignored. Both strict all-target Clippy gates passed.
+The matching signed 32-operation workload passed under WHP
+(`verify=17577us prepare=3784us execute=4976us total=30246us`) and `/dev/kvm`
+(`verify=17057us prepare=2140us execute=82143us total=121945us`). This is hosted
+VMM evidence over an exact full volatile region. Nonzero translation remains
+simulation evidence; no persistent, physical-device, durability, or
+host-resistant claim is made.
+
+The `DIGITAL-RIGHTS REVIEW` found no collection, retention, correlation,
+disclosure, attestation, DRM, publisher/vendor authority, accessibility
+restriction, AI authority, or persistent owner-state change. Exact region
+projection further limits delegated storage authority. The `HOSTILE SECURITY
+REVIEW` treats capability/object binding, region start/count, block size, guest
+block/count, byte length, every arithmetic result, advertised geometry,
+revocation, and backend outcome as hostile. Construction, authorization,
+translation, and complete-range checks precede backend access; geometry mismatch
+precedes vCPU entry; outside blocks remain untouched; and mutation uncertainty
+retains the prior fail-stop semantics. This agent review does not replace the
+constitution's independent human dual review.
+
+Patent review: `NOT_TRIGGERED` — conventional checked subrange translation and
+capability-bounded block dispatch. No triggered compatibility, host-share,
+accessibility-device, browser, JavaScript/Wasm, or media mechanism is introduced.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered
