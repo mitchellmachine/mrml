@@ -137,9 +137,11 @@ explicitly and downgrade the status rather than guessing.
   The operation exposes its exact service-side buffer access shape, and kernel
   IPC now accepts zero transferred capabilities or exactly one live receiver
   capability with the exact nonzero rights required for that shape. Existing
-  shared-memory binding resolution still performs the later mapping/object/
-  liveness check. No isolated service process or block-specific receive and
-  shared-mapping wiring,
+  shared-memory binding resolution is now composed into that gate and rechecks
+  the exact object, VM/task, mapping generation, access, host range, writability,
+  and non-executable state before returning only the opaque host resource
+  handle. No isolated service process or block-specific receive, binding
+  selection, and mapped-slice wiring,
   concrete hosted or physical device backend, persistent allocation/free engine,
   complete COW tree, snapshot, or physical crash evidence exists yet.
   Fixed-capacity directory state supports capability-authorized lookup,

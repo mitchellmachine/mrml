@@ -328,8 +328,12 @@ authority; unrelated domains continue.
    the service reads, writes, or uses no bulk buffer. Kernel IPC can validate
    zero capabilities or exactly one live receiver capability with the exact
    required nonzero rights; over-privileged, insufficient, missing, multiple,
-   stale, and revoked transfers fail before object identity is returned. An
-   isolated service process, block-specific receive/syscall and shared-mapping
+   stale, and revoked transfers fail before object identity is returned. The
+   same gate now resolves one exact shared binding and revalidates object,
+   VM/task, mapping generation, access mode, host range, writability, and
+   non-executable state before returning only an opaque host resource handle. An
+   isolated service process, block-specific receive/syscall, binding selection,
+   and mapped-slice
    wiring, concrete hosted/physical backend, and
    physical durability evidence remain pending.
    Bounded file reads are now implemented. Exact file `READ` authority is
@@ -434,7 +438,7 @@ authority; unrelated domains continue.
    create publication recovery and surviving-parent post-fail-stop child
    reconciliation are implemented in memory. Reboot-time capability
    checkpoint/reconstruction, the isolated block-service process and block-
-   specific kernel receive/shared-mapping integration, a concrete hosted/physical device backend, and physical
+   specific receive/buffer-use integration, a concrete hosted/physical device backend, and physical
    power-loss evidence remain pending. The bounded block-service core and exact-block
    metadata publication/recovery and file-data adapters are implemented as
    described above.

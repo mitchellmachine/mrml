@@ -2965,12 +2965,20 @@ Generic kernel `Message` reception can require no capabilities or exactly one
 already-transferred receiver capability with an exact nonzero rights set. The
 check re-resolves the opaque generational token in the receiver capability
 space; only then does it return the capability and object identity needed by the
-existing exact shared-memory binding resolver. A service-read buffer is intended
+existing exact shared-memory binding resolver. That resolver is now composed
+into `Message::resolve_single_shared_buffer`: required rights must equal the
+endpoint's access mode, then the binding must match the exact object, VM/task,
+mapping generation, access, host physical range, and page count while remaining
+live, writable when requested, and non-executable. Success returns only the
+already-authorized capability/object, binding identity, and opaque host resource
+handle—not a guest or host address. A service-read buffer is intended
 to retain exactly `MAP|READ`; a service-write buffer exactly
 `MAP|READ|WRITE`, matching current non-executable shared-binding semantics.
 Missing, multiple, insufficient, excessive, stale, and revoked capabilities all
-fail before object identity or mapping resolution. The block-specific receive
-loop, binding selection, mapped-slice construction, and syscall path remain
+fail before object identity or mapping resolution; wrong object, VM/task,
+mapping, access, resource range, or executable state fails before the handle is
+returned. The block-specific receive loop, binding selection, mapped-slice
+construction, and syscall path remain
 pending, so this is kernel transfer authorization rather than end-to-end service
 execution.
 
@@ -3092,11 +3100,14 @@ exact nonzero receiver rights, generational reauthorization on every use, no
 object-identity return before authorization, and subsequent exact shared-binding
 resolution. Capability attenuation cannot become amplification, while excess
 rights are rejected rather than silently accepted.
+Shared-buffer review additionally requires the declared access to equal the
+endpoint access, exact object and endpoint identity, live mapping generation,
+unchanged host range/page count, non-executable state, and no raw-address return.
 This agent review does not
 replace independent human implementer, reviewer, adversary, or physical-device
 review.
 
-Ninety-five focused storage tests and 310 focused kernel tests plus strict
+Ninety-five focused storage tests and 311 focused kernel tests plus strict
 crate-local clippy pass on Windows gnullvm and Arch Linux under WSL2. An isolated
 block-service process and block-specific receive/shared-mapping integration, a
 concrete hosted/physical device backend,
@@ -3111,7 +3122,7 @@ cargo +nightly test -q -p mrml-storage --release --no-default-features
 cargo +nightly clippy -q -p mrml-storage --release --no-default-features --no-deps -- -D warnings
 ```
 
-Both storage unit-test runs pass 95 tests, both kernel runs pass 310 tests, and
+Both storage unit-test runs pass 95 tests, both kernel runs pass 311 tests, and
 all four strict crate-local clippy invocations pass.
 These are unit tests and simulation of metadata/authority, exact-block adapter,
 and kernel capability-transfer state, not

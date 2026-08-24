@@ -1070,6 +1070,18 @@ authorization technique.
 
 Patent review: `NOT_TRIGGERED` — conventional exact capability authorization.
 
+## 2026-08-23 — received capability to shared-binding resolution
+
+MRML source: `crates/mrml-kernel/src/{ipc,shared_memory}.rs`.
+
+The kernel conventionally composes exact receiver-capability authorization with
+an exact live shared-memory binding check and returns an opaque resource handle
+only after object, endpoint, access, mapping generation, and range agreement.
+This adds no novel IPC, capability, shared-memory, mapping, or resource-handle
+technique.
+
+Patent review: `NOT_TRIGGERED` — conventional authorized mapping resolution.
+
 ## 2026-08-23 — canonical empty child creation images
 
 MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and

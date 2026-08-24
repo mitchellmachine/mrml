@@ -27,7 +27,7 @@ pub enum SharedAccess {
 }
 
 impl SharedAccess {
-    const fn rights(self) -> Rights {
+    pub(crate) const fn rights(self) -> Rights {
         match self {
             Self::ReadOnly => Rights::MAP.union(Rights::READ),
             Self::ReadWrite => Rights::MAP.union(Rights::READ).union(Rights::WRITE),
@@ -69,6 +69,10 @@ impl SharedEndpoint {
             mapping,
             access,
         }
+    }
+
+    pub(crate) const fn access(self) -> SharedAccess {
+        self.access
     }
 }
 
@@ -613,8 +617,8 @@ mod tests {
     use super::*;
     use crate::arch::x86_64::{TrapDisposition, UserContext};
     use crate::{
-        GuestRegion, KernelScheduler, PhysAddr, Priority, ScheduleOutcome, ServiceSupervisor,
-        TaskRuntime, VmBackend, VmExit, VmTable,
+        GuestRegion, KernelScheduler, Message, PhysAddr, Priority, ScheduleOutcome,
+        ServiceSupervisor, TaskRuntime, VmBackend, VmExit, VmTable,
     };
 
     struct CleanupBackend {
@@ -738,6 +742,104 @@ mod tests {
                 SharedEndpoint::new(vm, mapping, SharedAccess::ReadOnly),
             ),
             Err(SharedBindingError::StaleMapping)
+        );
+    }
+
+    #[test]
+    fn received_capability_resolves_only_the_exact_live_shared_binding() {
+        let vm = vm();
+        let (mut memory, mapping) = mapped();
+        let source_rights = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::CONTROL)
+            .union(Rights::DELEGATE);
+        let buffer_rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let mut source = CapabilitySpace::<1>::new();
+        let root = source.insert(OBJECT, source_rights).unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        let host = HostResourceHandle::new(123).unwrap();
+        let endpoint = SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite);
+        let binding = bindings
+            .bind(&source, root, &memory, endpoint, host)
+            .unwrap();
+        let mut receiver = CapabilitySpace::<3>::new();
+        let message = Message::transfer(
+            b"block-read",
+            &[(root, buffer_rights)],
+            &source,
+            &mut receiver,
+        )
+        .unwrap();
+        let resolved = message
+            .resolve_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+            )
+            .unwrap();
+        assert_eq!(resolved.authority().object(), OBJECT);
+        assert_eq!(resolved.binding(), binding);
+        assert_eq!(resolved.handle(), host);
+        assert_eq!(
+            message.resolve_single_shared_buffer(
+                &receiver,
+                Rights::MAP.union(Rights::READ),
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+            ),
+            Err(crate::IpcSharedBufferError::AccessMismatch)
+        );
+
+        let wrong = receiver.insert(ObjectId(18), buffer_rights).unwrap();
+        let wrong_message = Message::new(b"wrong", &[wrong]).unwrap();
+        assert_eq!(
+            wrong_message.resolve_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+            ),
+            Err(crate::IpcSharedBufferError::Binding(
+                SharedBindingError::WrongObject
+            ))
+        );
+
+        memory.unmap(mapping).unwrap();
+        assert_eq!(
+            message.resolve_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+            ),
+            Err(crate::IpcSharedBufferError::Binding(
+                SharedBindingError::StaleMapping
+            ))
+        );
+        let transferred = message.capabilities().next().unwrap();
+        receiver.revoke(transferred).unwrap();
+        assert_eq!(
+            message.resolve_single_shared_buffer(
+                &receiver,
+                buffer_rights,
+                &bindings,
+                binding,
+                &memory,
+                endpoint,
+            ),
+            Err(crate::IpcSharedBufferError::Ipc(
+                crate::IpcError::Unauthorized
+            ))
         );
     }
 

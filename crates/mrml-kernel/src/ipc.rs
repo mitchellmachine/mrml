@@ -1,4 +1,7 @@
-use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
+use crate::{
+    Capability, CapabilityError, CapabilitySpace, GuestMemory, HostResourceHandle, ObjectId,
+    Rights, SharedBindingError, SharedBindingId, SharedEndpoint, SharedMemoryBindings,
+};
 
 pub const MAX_INLINE_PAYLOAD: usize = 4096;
 pub const MAX_CAPABILITIES: usize = 8;
@@ -36,6 +39,34 @@ pub struct Message {
 pub struct AuthorizedIpcCapability {
     capability: Capability,
     object: ObjectId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorizedSharedIpcBuffer {
+    authority: AuthorizedIpcCapability,
+    binding: SharedBindingId,
+    handle: HostResourceHandle,
+}
+
+impl AuthorizedSharedIpcBuffer {
+    pub const fn authority(self) -> AuthorizedIpcCapability {
+        self.authority
+    }
+
+    pub const fn binding(self) -> SharedBindingId {
+        self.binding
+    }
+
+    pub const fn handle(self) -> HostResourceHandle {
+        self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IpcSharedBufferError {
+    Ipc(IpcError),
+    AccessMismatch,
+    Binding(SharedBindingError),
 }
 
 impl AuthorizedIpcCapability {
@@ -138,6 +169,44 @@ impl Message {
         let capability = self.capabilities[0].ok_or(IpcError::CapabilityShape)?;
         let object = receiver_space.authorize_exact(capability, required)?;
         Ok(AuthorizedIpcCapability { capability, object })
+    }
+
+    /// Resolves the one exact transferred capability against one exact live
+    /// shared-memory endpoint and returns only its opaque host resource handle.
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_single_shared_buffer<
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+    >(
+        &self,
+        receiver_space: &CapabilitySpace<CAPS>,
+        required: Rights,
+        bindings: &SharedMemoryBindings<BINDINGS>,
+        binding: SharedBindingId,
+        memory: &GuestMemory<MAPPINGS>,
+        endpoint: SharedEndpoint,
+    ) -> Result<AuthorizedSharedIpcBuffer, IpcSharedBufferError> {
+        if required != endpoint.access().rights() {
+            return Err(IpcSharedBufferError::AccessMismatch);
+        }
+        let authority = self
+            .authorize_single_capability(receiver_space, required)
+            .map_err(IpcSharedBufferError::Ipc)?;
+        let handle = bindings
+            .resolve(
+                binding,
+                receiver_space,
+                authority.capability(),
+                memory,
+                endpoint,
+            )
+            .map_err(IpcSharedBufferError::Binding)?;
+        Ok(AuthorizedSharedIpcBuffer {
+            authority,
+            binding,
+            handle,
+        })
     }
 
     /// Encodes without allocation. Tokens only have meaning in a

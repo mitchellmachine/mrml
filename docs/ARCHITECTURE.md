@@ -276,8 +276,12 @@ service-side buffer access shape. The kernel IPC receiver can require zero
 transferred capabilities or exactly one live capability with an exact nonzero
 rights set; it rejects missing, multiple, attenuated-too-far, over-privileged,
 stale, or revoked transfers before returning object identity. Existing shared-
-memory binding resolution remains the next exact mapping gate. There is not yet an isolated service
-process, block-specific syscall/receive-loop and shared-mapping wiring, or physical device
+memory resolution is now composed into the same receiver gate: the exact
+binding, object, VM/task, mapping generation, access mode, host range,
+writability, and non-executable state must agree before only the opaque host
+resource handle is returned. There is not yet an isolated service process,
+block-specific syscall/receive-loop, service binding selection/mapped-slice
+construction, or physical device
 implementation, persistent allocation/free engine, complete COW tree, or
 concrete native block I/O. Bounded in-memory directory state now requires exact
 per-operation directory authority for lookup, enumeration, creation, rename,
@@ -434,7 +438,7 @@ successors now stage exact canonical directory and entry images, bind both
 images to a directory transaction participant, and expose the new immutable
 state only after its one-use publication receipt is consumed. The exact-block
 metadata and file-data adapters plus the bounded block-service core are
-implemented, but the isolated service process and block-specific kernel receive/mapping wiring, physical
+implemented, but the isolated service process and block-specific receive/buffer-use wiring, physical
 device backend, snapshots, physical power-loss testing, and persistent anti-rollback state
 remain unimplemented. The EFI
 System Partition and UEFI Simple File System remain appropriate FAT32 interoperability
