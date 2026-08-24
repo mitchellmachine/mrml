@@ -653,14 +653,18 @@ exit accounting, common I/O dispatch, exact doorbell handling, one queue
 transaction, and capability-authorized notification delivery. It delivers an
 already pending notification before another vCPU entry and fails the VM on any
 runner-stage error. Both prepared native guest types satisfy its memory
-contract, but no signed guest executes this path yet; the composition evidence
-remains shared-policy simulation.
+contract. Controlled signed KVM and WHP probes now emit the exact native
+doorbell, execute one host-seeded write request through the common runner,
+publish its completion, and inject the authorized notification. This is hosted
+controlled-probe evidence; the guest does not yet produce queue entries or
+provide a reusable block driver.
 Prepared KVM and WHP guests now implement the common virtual-block memory
 contract and transactionally attach the validated request/completion ranges.
 Native request memory is guest-writable, while completion memory rejects the
 ordinary guest-write path and remains writable by the isolated device path.
-Controlled live tests cover both backends, but no guest executes this protocol
-yet.
+Controlled live tests cover both backends. The signed doorbell probe exercises
+the attached queues through the common runner, but host code still seeds the
+request and payload.
 
 Networking proceeds from capability-bound network objects and a basic native
 service to packet buffers/rings, a basic backend path, firewall integration,

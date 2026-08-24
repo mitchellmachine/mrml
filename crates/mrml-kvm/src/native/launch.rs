@@ -1366,8 +1366,13 @@ mod tests {
         lamport_public_key, lamport_sign,
     };
     use mrml_kernel::{
-        ArtifactKind, SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact,
-        TrustRoot, artifact_statement,
+        ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
+        IoPortPolicy, IoPortRule, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
+        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VIRTUAL_BLOCK_COMPLETION_BYTES,
+        VIRTUAL_BLOCK_DOORBELL_PORT, VirtualBlockBackend, VirtualBlockCompletion,
+        VirtualBlockCompletionStatus, VirtualBlockDevice, VirtualBlockMutationError,
+        VirtualBlockProcessOutcome, VirtualBlockQueueBridge, VirtualBlockRequest, VmTable,
+        artifact_statement, run_virtual_block_doorbell_once,
     };
 
     fn framebuffer_pe() -> [u8; 1024] {
@@ -1403,6 +1408,14 @@ mod tests {
         pe
     }
 
+    fn doorbell_pe() -> [u8; 1024] {
+        let mut pe = framebuffer_pe();
+        // mov dx, 0x4d42; mov eax, 1; out dx, eax; hlt
+        pe[0x200..0x20b].copy_from_slice(&[0x66, 0xba, 0x42, 0x4d, 0xb8, 1, 0, 0, 0, 0xef, 0xf4]);
+        pe[0x20b..0x211].fill(0);
+        pe
+    }
+
     fn valid_handoff() -> [u8; 240] {
         let mut encoded = [0u8; 240];
         encoded[..16].copy_from_slice(b"MRML-HANDOFF-v1\0");
@@ -1430,8 +1443,7 @@ mod tests {
         encoded
     }
 
-    fn signed_pe() -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
-        let payload = framebuffer_pe();
+    fn signed_payload(payload: [u8; 1024]) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
         let mut private = [0u8; LAMPORT_PRIVATE_KEY_BYTES];
         for (index, byte) in private.iter_mut().enumerate() {
             *byte = (index as u64).wrapping_mul(61).wrapping_add(17) as u8;
@@ -1454,6 +1466,40 @@ mod tests {
         encoded[signature_at..payload_at].copy_from_slice(&signature);
         encoded[payload_at..].copy_from_slice(&payload);
         encoded
+    }
+
+    fn signed_pe() -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
+        signed_payload(framebuffer_pe())
+    }
+
+    struct ProbeBlock([u8; 4096]);
+
+    unsafe impl VirtualBlockBackend for ProbeBlock {
+        type Error = ();
+
+        fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+            if block != 0 || output.len() != self.0.len() {
+                return Err(());
+            }
+            output.copy_from_slice(&self.0);
+            Ok(())
+        }
+
+        fn write_blocks(
+            &mut self,
+            block: u64,
+            input: &[u8],
+        ) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+            if block != 0 || input.len() != self.0.len() {
+                return Err(VirtualBlockMutationError::Rejected(()));
+            }
+            self.0.copy_from_slice(input);
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), VirtualBlockMutationError<Self::Error>> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -1617,5 +1663,111 @@ mod tests {
         let mut pixel = [0u8; 4];
         VmBackend::read_guest(&guest, 0xa0000, &mut pixel).unwrap();
         assert_eq!(pixel, [0x57, 0xc8, 0xff, 0x00]);
+    }
+
+    #[test]
+    fn live_signed_guest_runs_one_virtual_block_doorbell_transaction() {
+        let system = match KvmSystem::open() {
+            Ok(system) => system,
+            Err(KvmError::SystemCall) => return,
+            Err(error) => panic!("available KVM failed validation: {error:?}"),
+        };
+        let encoded = signed_payload(doorbell_pe());
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let public_end = public_at + LAMPORT_PUBLIC_KEY_BYTES;
+        let root = TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&encoded[public_at..public_end]),
+            1,
+        );
+        let signed = SignedArtifact::decode(&encoded).unwrap();
+        let executable = signed
+            .verify_executable(&root, ArtifactKind::VmImage)
+            .unwrap();
+        let launch = KvmLaunchLayout::new(
+            0x10_0000,
+            16,
+            0x20_0000,
+            0xffff_8001_4000_0000,
+            0x30_0000,
+            0xffff_8001_5000_0000,
+            0x40_0000,
+            0xffff_8001_6000_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            false,
+        )
+        .unwrap();
+        let gpu = GpuSharedQueueLayout::new(0x50_0000, 0x50_2000, 64).unwrap();
+        let layout = VirtualBlockQueueLayout::new(0x60_0000, 0x60_2000, 64).unwrap();
+        let mut guest = system
+            .prepare_kernel_gpu_guest::<9>(0, &executable, &valid_handoff(), launch, gpu)
+            .unwrap()
+            .attach_virtual_block_queue_memory(layout)
+            .unwrap();
+
+        let payload_address = 0x40_0000;
+        VmBackend::write_guest(&mut guest, payload_address, &[0x6d; 4096]).unwrap();
+        let mut request = [0; 64];
+        VirtualBlockRequest::write(1, 1, 0, 1, payload_address, 4096).encode(&mut request);
+        VmBackend::write_guest(&mut guest, layout.request_base() + 128, &request).unwrap();
+        VmBackend::write_guest(&mut guest, layout.request_base(), &1u64.to_le_bytes()).unwrap();
+
+        let interrupt_object = ObjectId(0x201);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let interrupt_capability = capabilities
+            .insert(interrupt_object, Rights::SIGNAL)
+            .unwrap();
+        let mut interrupt_policy = InterruptPolicy::deny_all();
+        interrupt_policy.allow(48).unwrap();
+        let mut io_policy = IoPortPolicy::<1>::deny_all();
+        io_policy
+            .allow(IoPortRule::new(VIRTUAL_BLOCK_DOORBELL_PORT, 4, IoDirection::Write).unwrap())
+            .unwrap();
+        let mut vms = VmTable::<1>::new();
+        let vm = vms.create(4).unwrap();
+        vms.mark_loaded(vm).unwrap();
+        vms.start(vm).unwrap();
+        let mut router = HypercallRouter::new(ObjectId(0x202), ObjectId(0x203), ObjectId(0x204));
+        let guest_memory = GuestMemory::<0>::new();
+        let mut device = VirtualBlockDevice::<64>::new(4096, 1, 0).unwrap();
+        device.negotiate(0).unwrap();
+        device.activate(layout, 48).unwrap();
+        let mut bridge = VirtualBlockQueueBridge::<64>::new(layout).unwrap();
+        let mut storage = ProbeBlock([0; 4096]);
+        let mut scratch = [0; 4096];
+
+        assert!(matches!(
+            run_virtual_block_doorbell_once(
+                &mut guest,
+                &mut storage,
+                0,
+                &mut vms,
+                vm,
+                &mut router,
+                &capabilities,
+                &guest_memory,
+                &io_policy,
+                &interrupt_policy,
+                interrupt_capability,
+                interrupt_object,
+                &mut device,
+                &mut bridge,
+                &mut scratch,
+            ),
+            Ok(VirtualBlockProcessOutcome::Completed(_))
+        ));
+        assert_eq!(storage.0, [0x6d; 4096]);
+        let mut encoded_completion = [0; VIRTUAL_BLOCK_COMPLETION_BYTES];
+        VmBackend::read_guest(
+            &guest,
+            layout.completion_base() + 128,
+            &mut encoded_completion,
+        )
+        .unwrap();
+        let completion = VirtualBlockCompletion::decode(&encoded_completion).unwrap();
+        assert_eq!(completion.request_id(), 1);
+        assert_eq!(completion.status(), VirtualBlockCompletionStatus::Ok);
+        assert_eq!(completion.transferred(), 4096);
+        assert_eq!(device.pending_interrupt_vector(), None);
     }
 }

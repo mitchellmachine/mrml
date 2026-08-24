@@ -357,10 +357,13 @@ explicitly and downgrade the status rather than guessing.
   pending delivery precedes another vCPU entry and any stage error fails the VM.
   No concrete hosted/physical backend, signed guest driver, or durability
   evidence exists yet.
-  Prepared KVM and WHP guests do now attach the same validated request and
-  guest-read-only completion ranges transactionally; ordinary completion writes
-  fail while the device-memory path can publish. This is controlled hosted
-  queue-memory evidence, not a running virtual-block device. A
+  Prepared KVM and WHP guests attach the same validated request and guest-read-
+  only completion ranges transactionally; ordinary completion writes fail while
+  the device-memory path can publish. Controlled signed probes now emit the
+  exact native doorbell and complete one host-seeded write through the common
+  runner on each backend. This is hosted controlled-probe evidence, not a guest
+  block driver, concrete device backend, durability result, or physical-device
+  result. A
   canonical fixed-capacity allocation index now supplies exact object-generation
   ownership for physically ordered file-data and object-metadata ranges and
   rejects cross-object overlap and reserved blocks. Its canonical block-aligned

@@ -3345,8 +3345,9 @@ boundary. If a completion notification is already pending, delivery is
 attempted before entering the vCPU again. Every exit, doorbell, transaction, or
 interrupt error fails the VM; failed interruption retains the device latch, so
 the guest is never resumed after uncertain delivery. Both prepared KVM and WHP
-guests implement the runner's memory contract, but no signed guest driver yet
-executes this path.
+guests implement the runner's memory contract. Controlled signed probes now
+execute this doorbell path, while host test code still seeds the request and
+payload; no guest queue producer or reusable block driver exists yet.
 
 Recorded verification on 2026-08-24: Windows gnullvm and Arch Linux under WSL2
 each pass all 365 `mrml-kernel` release tests and scoped strict Clippy. The 28
@@ -3413,6 +3414,39 @@ capacity, native mapping results, directionality, ordinary guest writes, and
 partial attachment as hostile; validation and consuming construction prevent a
 partially attached guest from being resumed through this API. This agent review
 does not replace the required independent human dual review.
+
+The signed native doorbell probe replaces indirect composition evidence with one
+controlled end-to-end hosted path on each backend. Its verified VM image executes
+`out dx, eax` with the exact MRML port and value. Host test code preloads one
+canonical write request and its page payload into already validated guest
+memory; the backend-neutral runner decodes and accounts the native exit, applies
+the deny-by-default I/O rule, revalidates the doorbell, copies the exact page to
+a volatile in-process backend, publishes and decodes the bound completion, and
+injects the separately authorized vector. The probe intentionally stops after
+this transaction. It is not a guest queue producer, reusable guest driver,
+concrete hosted storage service, or PCI transport.
+
+Recorded verification on 2026-08-24: Windows gnullvm passes 20 active `mrml-whp`
+release tests with one manual mapping benchmark ignored, including the live WHP
+signed-doorbell transaction. Arch Linux under WSL2 passes 17 active `mrml-kvm`
+release tests with one manual benchmark ignored, including the equivalent live
+`/dev/kvm` transaction. Strict Clippy passes for both native packages on their
+host platforms; the opposite-platform ABI suites pass six KVM tests on Windows
+and ten WHP tests on Linux. This is controlled hosted-hypervisor evidence only.
+It does not prove protection from the host, durability, power-loss behavior,
+PCI behavior, a guest driver, bare metal, or physical-device operation.
+
+The native-doorbell `DIGITAL-RIGHTS REVIEW` found no collection, tracking,
+retention, identity expansion, DRM, attestation, remote disclosure, vendor
+preference, accessibility restriction, or persistent owner-state change. The
+signed image proves only exact test-image admission and is not owner-external
+attestation. The `HOSTILE SECURITY REVIEW` treats artifact admission, native
+exit decoding, every scalar field, queue counters and records, payload ranges,
+backend effects, completion publication, capability/object binding, vector
+policy, and injection as hostile; the common runner fails the VM on every
+uncertain stage. Existing capability, revocation, rollback-resistance,
+accessibility, and evidence gates remain unchanged. This agent review does not
+replace the required independent human dual review.
 
 Operations 7 and 8 are decoded, have a generic executor, and are wired into the
 service-probe kernel image. They describe service reads from and writes to one

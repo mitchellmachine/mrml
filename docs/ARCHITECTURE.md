@@ -639,7 +639,10 @@ the common deny-by-default I/O dispatcher, exact doorbell validation, one queue
 transaction, and capability-authorized completion interruption. A notification
 already pending is delivered before another vCPU entry, and any runner-stage
 error fails the VM. It has no concrete hosted or physical block backend, PCI
-transport, or guest driver yet.
+transport, or guest driver yet. Controlled signed KVM and WHP probes now emit
+the exact native doorbell into this runner, complete one host-seeded write
+request, publish its completion, and inject the authorized notification. The
+probes do not implement guest queue production or a reusable block driver.
 Prepared KVM and WHP guests can now transactionally attach the same validated
 request/completion layout as disjoint native ranges: requests are guest-
 writable, completions are guest-read-only, and the dedicated virtual-block path

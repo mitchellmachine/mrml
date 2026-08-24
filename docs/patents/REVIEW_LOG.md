@@ -1396,6 +1396,16 @@ defensive virtual-device techniques. No patent-candidate mechanism was
 identified. This agent review does not replace the required independent human
 dual review.
 
+# 2026-08-24 — Signed native virtual-block doorbell probe
+
+**Result: NOT_TRIGGERED.** The change conventionally uses a signed minimal guest
+image to emit one scalar I/O doorbell and verifies an existing bounded virtual-
+device transaction against KVM and WHP. Host-seeded queue data, a volatile test
+backend, completion decoding, and authorized interrupt injection are standard
+controlled integration-test techniques. No patent-candidate mechanism was
+identified. This agent review does not replace the required independent human
+dual review.
+
 # 2026-08-24 — Backend-neutral virtual-block runner transaction
 
 **Result: NOT_TRIGGERED.** The change conventionally composes one native backend
