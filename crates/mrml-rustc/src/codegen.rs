@@ -3818,6 +3818,11 @@ impl<'source> RuntimeBodyFacts<'source> {
                                     | RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
                                         ..
                                     }
+                                    | RuntimeOwnershipEventLocation::LoopOperation { .. }
+                                    | RuntimeOwnershipEventLocation::LoopConditionalAction {
+                                        ..
+                                    }
+                                    | RuntimeOwnershipEventLocation::NestedLoopAction { .. }
                             ) || effect.expression_conditional.is_some())
                         })
                 })
@@ -3863,6 +3868,9 @@ impl<'source> RuntimeBodyFacts<'source> {
             generation.location,
             RuntimeOwnershipEventLocation::TopLevelStatement(_)
                 | RuntimeOwnershipEventLocation::ConditionalAssignmentAction { .. }
+                | RuntimeOwnershipEventLocation::LoopOperation { .. }
+                | RuntimeOwnershipEventLocation::LoopConditionalAction { .. }
+                | RuntimeOwnershipEventLocation::NestedLoopAction { .. }
         ) || generation.expression_conditional.is_some()
         {
             return None;
@@ -27370,6 +27378,89 @@ mod tests {
             .kind,
             CodegenErrorKind::RuntimeBorrowConflict
         );
+    }
+
+    #[test]
+    fn runtime_loop_exit_reference_generations_follow_cfg_paths() {
+        let rejected = "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; while choose { parent = &mut *second; break; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
+        let module = Parser::new(rejected).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let accepted = "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut parent: &mut u16 = &mut *first; loop { parent = &mut *second; break; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
+        let module = Parser::new(accepted).parse_module::<1, 8>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let repeated_rejected = "fn value(first: &mut u16, second: &mut u16, limit: u16) -> u16 { let mut parent: &mut u16 = &mut *first; let mut index: u16 = 0; while index < limit { parent = &mut *second; index += 1; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
+        let module = Parser::new(repeated_rejected)
+            .parse_module::<1, 8>()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        assert_eq!(
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+
+        let repeated_accepted = "fn value(first: &mut u16, second: &mut u16, stop: bool) -> u16 { let mut parent: &mut u16 = &mut *first; loop { parent = &mut *second; if stop { break; } } let changed: &mut u16 = &mut *first; *changed += 1; *parent }";
+        let module = Parser::new(repeated_accepted)
+            .parse_module::<1, 8>()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<8>().unwrap();
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 8, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u16",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
     }
 
     #[test]

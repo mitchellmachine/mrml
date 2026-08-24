@@ -4144,6 +4144,33 @@ fn rustc_conditional_reference_generation_joins_match_the_oracle() {
 }
 
 #[test]
+fn rustc_loop_carried_reference_generations_match_the_oracle() {
+    let rejected = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; while choose { parent = &mut *second; break; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, limit: u16) -> u16 { let mut parent: &mut u16 = &mut *first; let mut index: u16 = 0; while index < limit { parent = &mut *second; index += 1; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16) -> u16 { let mut parent: &mut u16 = &mut *first; loop { parent = &mut *second; break; } let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, stop: bool) -> u16 { let mut parent: &mut u16 = &mut *first; loop { parent = &mut *second; if stop { break; } } let changed: &mut u16 = &mut *first; *changed += 1; *parent }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_non_copy_call_argument_and_return_moves_reach_native_objects() {
     let source = "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 2; *returned }";
     assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
