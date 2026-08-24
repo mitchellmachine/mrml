@@ -1906,3 +1906,12 @@ or removal, preserves configuration on cleanup failure, and advances lifetime
 state only after confirmed cleanup. It introduces no device protocol, assigned
 identity, native adapter, new authority model, or patent-candidate mechanism.
 This agent review does not replace the required independent human dual review.
+
+# 2026-08-24 — Transactional PCI BAR memory-decode lifecycle
+
+**Result: NOT_TRIGGERED.** The change conventionally maps an exact assigned BAR
+before enabling memory decode, unmaps it before disabling decode, preserves
+configuration on native failure, and denies mapping when no explicit adapter is
+provided. It introduces no assigned identity, native adapter, device protocol,
+new authority model, or patent-candidate mechanism. This agent review does not
+replace the required independent human dual review.

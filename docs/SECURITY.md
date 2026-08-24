@@ -314,6 +314,13 @@ cleanup failure preserves configuration and cannot report lifecycle success.
 An assigned generational BAR window remains part of cleanup identity even after
 memory decode is disabled; clearing the command bit cannot hide residual native
 state from reset or detach cleanup.
+Memory-decode enable requires confirmed native mapping of the exact attachment,
+function generation, assigned address, and size before the command bit changes.
+Disable requires confirmed unmapping before the bit clears. A rejected operation
+means no native mutation; uncertain includes partial or unprovable state. Both
+preserve configuration, and uncertainty requires quarantine/fail-stop. Default
+configuration routing denies decode transitions unless an explicitly authorized
+unsafe mapper is supplied. BAR assignment alone still creates no mapping.
 Configuration routing additionally requires one exact bounded BDF match.
 Attachment requires reset, unassigned, non-probing state. Duplicate
 registrations, absent functions, table exhaustion, stale attachment generations,

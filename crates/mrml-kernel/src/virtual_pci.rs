@@ -31,6 +31,8 @@ pub enum VirtualPciError {
     FunctionNotPresent,
     StaleAttachment,
     InvalidTransport,
+    NativeResourceRejected,
+    NativeResourceUncertain,
 }
 
 /// Exact segment/bus/device/function location. This identifies a routed
@@ -136,6 +138,52 @@ pub unsafe trait VirtualPciFunctionRevoker {
         &mut self,
         resources: VirtualPciAttachedResources,
     ) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VirtualPciNativeResourceError {
+    /// The operation made no native-state change.
+    Rejected,
+    /// Native state may have changed partially or cannot be proven.
+    Uncertain,
+}
+
+/// Native BAR mapping boundary for one exact attached function generation.
+///
+/// # Safety
+///
+/// `map_window` may succeed only when the complete assigned window is mapped
+/// with the intended device semantics. `unmap_window` may succeed only when no
+/// native mapping for that exact window remains usable. Partial or unknown
+/// state must return `Uncertain`; callers must then quarantine or fail the VM.
+pub unsafe trait VirtualPciMemoryMapper {
+    fn map_window(
+        &mut self,
+        resources: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+
+    fn unmap_window(
+        &mut self,
+        resources: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+}
+
+struct DenyVirtualPciMemoryMapper;
+
+unsafe impl VirtualPciMemoryMapper for DenyVirtualPciMemoryMapper {
+    fn map_window(
+        &mut self,
+        _resources: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError> {
+        Err(VirtualPciNativeResourceError::Rejected)
+    }
+
+    fn unmap_window(
+        &mut self,
+        _resources: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError> {
+        Err(VirtualPciNativeResourceError::Uncertain)
+    }
 }
 
 impl VirtualPciAttachmentId {
@@ -378,6 +426,25 @@ impl VirtualPciConfigurationMechanismOne {
         write: bool,
         value: u32,
     ) -> Result<VirtualPciIoOutcome, VirtualPciError> {
+        self.access_with_mapper(
+            router,
+            port,
+            size,
+            write,
+            value,
+            &mut DenyVirtualPciMemoryMapper,
+        )
+    }
+
+    pub fn access_with_mapper<M: VirtualPciMemoryMapper>(
+        &mut self,
+        router: &mut VirtualPciConfigurationRouter,
+        port: u16,
+        size: u8,
+        write: bool,
+        value: u32,
+        mapper: &mut M,
+    ) -> Result<VirtualPciIoOutcome, VirtualPciError> {
         if port == PCI_CONFIGURATION_ADDRESS_PORT {
             if size != 4 {
                 return Err(VirtualPciError::InvalidTransport);
@@ -409,7 +476,7 @@ impl VirtualPciConfigurationMechanismOne {
             });
         };
         if write {
-            match router.write(location, register, size, value) {
+            match router.write_with_mapper(location, register, size, value, mapper) {
                 Ok(outcome) => Ok(VirtualPciIoOutcome::Write(outcome)),
                 Err(VirtualPciError::FunctionNotPresent) => Ok(VirtualPciIoOutcome::AbsentWrite),
                 Err(error) => Err(error),
@@ -465,6 +532,43 @@ pub fn run_pci_configuration_once<B, const V: usize, const C: usize, const M: us
 where
     B: crate::IoReadCompleter,
 {
+    run_pci_configuration_once_with_mapper(
+        backend,
+        vcpu,
+        vms,
+        vm,
+        hypercalls,
+        capabilities,
+        memory,
+        transport,
+        router,
+        &mut DenyVirtualPciMemoryMapper,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_pci_configuration_once_with_mapper<
+    B,
+    P,
+    const V: usize,
+    const C: usize,
+    const M: usize,
+>(
+    backend: &mut B,
+    vcpu: u32,
+    vms: &mut crate::VmTable<V>,
+    vm: crate::VmId,
+    hypercalls: &mut crate::HypercallRouter,
+    capabilities: &crate::CapabilitySpace<C>,
+    memory: &crate::GuestMemory<M>,
+    transport: &mut VirtualPciConfigurationMechanismOne,
+    router: &mut VirtualPciConfigurationRouter,
+    mapper: &mut P,
+) -> Result<VirtualPciIoOutcome, VirtualPciRunError<B::Error>>
+where
+    B: crate::IoReadCompleter,
+    P: VirtualPciMemoryMapper,
+{
     let policy =
         VirtualPciConfigurationMechanismOne::io_policy().map_err(VirtualPciRunError::Policy)?;
     let disposition = crate::run_vm_once(
@@ -489,7 +593,7 @@ where
         return Err(VirtualPciRunError::InvalidExit);
     };
     let outcome = transport
-        .access(router, port, size, write, value)
+        .access_with_mapper(router, port, size, write, value, mapper)
         .map_err(|error| {
             let _ = vms.fail(vm);
             VirtualPciRunError::Transport(error)
@@ -573,7 +677,79 @@ impl VirtualPciConfigurationRouter {
         size: u8,
         value: u32,
     ) -> Result<VirtualPciWriteOutcome, VirtualPciError> {
-        self.function_at_mut(location)?.write(offset, size, value)
+        self.write_with_mapper(
+            location,
+            offset,
+            size,
+            value,
+            &mut DenyVirtualPciMemoryMapper,
+        )
+    }
+
+    pub fn write_with_mapper<M: VirtualPciMemoryMapper>(
+        &mut self,
+        location: VirtualPciLocation,
+        offset: u16,
+        size: u8,
+        value: u32,
+        mapper: &mut M,
+    ) -> Result<VirtualPciWriteOutcome, VirtualPciError> {
+        let slot = self
+            .slots
+            .iter()
+            .position(|entry| {
+                entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.location == location)
+            })
+            .ok_or(VirtualPciError::FunctionNotPresent)?;
+        if (offset, size) != (4, 2) {
+            return self.slots[slot]
+                .as_mut()
+                .ok_or(VirtualPciError::FunctionNotPresent)?
+                .function
+                .write(offset, size, value);
+        }
+
+        let command = value as u16;
+        if command & !PCI_COMMAND_SUPPORTED != 0 {
+            return Err(VirtualPciError::UnsupportedCommand);
+        }
+        let entry = self.slots[slot]
+            .as_ref()
+            .ok_or(VirtualPciError::FunctionNotPresent)?;
+        if command & PCI_COMMAND_MEMORY_SPACE != 0 && entry.function.bar0.address == 0 {
+            return Err(VirtualPciError::InvalidState);
+        }
+        let old_decode = entry.function.command & PCI_COMMAND_MEMORY_SPACE != 0;
+        let new_decode = command & PCI_COMMAND_MEMORY_SPACE != 0;
+        if old_decode != new_decode {
+            let resources = VirtualPciAttachedResources {
+                attachment: VirtualPciAttachmentId {
+                    slot: slot as u8,
+                    generation: self.generations[slot],
+                },
+                location,
+                function_generation: entry.function.generation,
+                mmio_window: entry.function.assigned_mmio_window(),
+            };
+            let result = if new_decode {
+                mapper.map_window(resources)
+            } else {
+                mapper.unmap_window(resources)
+            };
+            result.map_err(|error| match error {
+                VirtualPciNativeResourceError::Rejected => VirtualPciError::NativeResourceRejected,
+                VirtualPciNativeResourceError::Uncertain => {
+                    VirtualPciError::NativeResourceUncertain
+                }
+            })?;
+        }
+        self.slots[slot]
+            .as_mut()
+            .ok_or(VirtualPciError::FunctionNotPresent)?
+            .function
+            .write(offset, size, value)
     }
 
     pub fn reset_with_revoker<R: VirtualPciFunctionRevoker>(
@@ -653,18 +829,6 @@ impl VirtualPciConfigurationRouter {
             .flatten()
             .find(|entry| entry.location == location)
             .map(|entry| &entry.function)
-            .ok_or(VirtualPciError::FunctionNotPresent)
-    }
-
-    fn function_at_mut(
-        &mut self,
-        location: VirtualPciLocation,
-    ) -> Result<&mut VirtualPciType0Function, VirtualPciError> {
-        self.slots
-            .iter_mut()
-            .flatten()
-            .find(|entry| entry.location == location)
-            .map(|entry| &mut entry.function)
             .ok_or(VirtualPciError::FunctionNotPresent)
     }
 
@@ -862,6 +1026,36 @@ mod tests {
             self.calls += 1;
             self.last = Some(resources);
             if self.fail { Err(()) } else { Ok(()) }
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingMapper {
+        map_error: Option<VirtualPciNativeResourceError>,
+        unmap_error: Option<VirtualPciNativeResourceError>,
+        map_calls: usize,
+        unmap_calls: usize,
+        last_map: Option<VirtualPciAttachedResources>,
+        last_unmap: Option<VirtualPciAttachedResources>,
+    }
+
+    unsafe impl VirtualPciMemoryMapper for RecordingMapper {
+        fn map_window(
+            &mut self,
+            resources: VirtualPciAttachedResources,
+        ) -> Result<(), VirtualPciNativeResourceError> {
+            self.map_calls += 1;
+            self.last_map = Some(resources);
+            self.map_error.map_or(Ok(()), Err)
+        }
+
+        fn unmap_window(
+            &mut self,
+            resources: VirtualPciAttachedResources,
+        ) -> Result<(), VirtualPciNativeResourceError> {
+            self.unmap_calls += 1;
+            self.last_unmap = Some(resources);
+            self.unmap_error.map_or(Ok(()), Err)
         }
     }
 
@@ -1110,8 +1304,15 @@ mod tests {
         let routed = location(1);
         let old = router.attach(routed, function(1)).unwrap();
         router.write(routed, 16, 4, 0x2000_0000).unwrap();
+        let mut mapper = RecordingMapper::default();
         router
-            .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut mapper,
+            )
             .unwrap();
         assert!(matches!(
             router.detach_with_revoker(old, &mut revoker),
@@ -1150,8 +1351,15 @@ mod tests {
         let routed = location(2);
         let id = router.attach(routed, function(7)).unwrap();
         router.write(routed, 16, 4, 0x2345_6000).unwrap();
+        let mut mapper = RecordingMapper::default();
         router
-            .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut mapper,
+            )
             .unwrap();
         let window = router
             .attachment(id)
@@ -1186,8 +1394,15 @@ mod tests {
         let mut successful = VirtualPciConfigurationRouter::new();
         let successful_id = successful.attach(routed, function(7)).unwrap();
         successful.write(routed, 16, 4, 0x2345_6000).unwrap();
+        let mut successful_mapper = RecordingMapper::default();
         successful
-            .write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE))
+            .write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut successful_mapper,
+            )
             .unwrap();
         let successful_window = successful
             .attachment(successful_id)
@@ -1211,6 +1426,108 @@ mod tests {
                 .validate_mmio_window(successful_window),
             Err(VirtualPciError::StaleGeneration)
         );
+    }
+
+    #[test]
+    fn memory_decode_enable_requires_exact_confirmed_native_mapping() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = location(5);
+        let id = router.attach(routed, function(11)).unwrap();
+        router.write(routed, 16, 4, 0x4567_8000).unwrap();
+        assert_eq!(
+            router.write(routed, 4, 2, u32::from(PCI_COMMAND_MEMORY_SPACE)),
+            Err(VirtualPciError::NativeResourceRejected)
+        );
+        assert_eq!(router.read(routed, 4, 2), Ok(0));
+
+        let mut rejected = RecordingMapper {
+            map_error: Some(VirtualPciNativeResourceError::Uncertain),
+            ..RecordingMapper::default()
+        };
+        assert_eq!(
+            router.write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut rejected,
+            ),
+            Err(VirtualPciError::NativeResourceUncertain)
+        );
+        assert_eq!(router.read(routed, 4, 2), Ok(0));
+        let resources = rejected.last_map.unwrap();
+        assert_eq!(resources.attachment(), id);
+        assert_eq!(resources.location(), routed);
+        assert_eq!(resources.function_generation(), 1);
+        assert_eq!(resources.mmio_window().unwrap().address(), 0x4567_8000);
+
+        let mut successful = VirtualPciConfigurationRouter::new();
+        let successful_id = successful.attach(routed, function(11)).unwrap();
+        successful.write(routed, 16, 4, 0x4567_8000).unwrap();
+        let mut mapper = RecordingMapper::default();
+        assert_eq!(
+            successful.write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut mapper,
+            ),
+            Ok(VirtualPciWriteOutcome::Command(PCI_COMMAND_MEMORY_SPACE))
+        );
+        assert_eq!(mapper.map_calls, 1);
+        assert_eq!(mapper.last_map.unwrap().attachment(), successful_id);
+        assert_eq!(successful.read(routed, 4, 2), Ok(2));
+    }
+
+    #[test]
+    fn memory_decode_disable_requires_confirmed_unmapping_before_command_clear() {
+        let routed = location(6);
+        let mut router = VirtualPciConfigurationRouter::new();
+        router.attach(routed, function(12)).unwrap();
+        router.write(routed, 16, 4, 0x5678_9000).unwrap();
+        let mut mapper = RecordingMapper::default();
+        router
+            .write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut mapper,
+            )
+            .unwrap();
+        mapper.unmap_error = Some(VirtualPciNativeResourceError::Uncertain);
+        assert_eq!(
+            router.write_with_mapper(routed, 4, 2, 0, &mut mapper),
+            Err(VirtualPciError::NativeResourceUncertain)
+        );
+        assert_eq!(router.read(routed, 4, 2), Ok(2));
+        assert_eq!(mapper.unmap_calls, 1);
+        assert_eq!(
+            mapper.last_unmap.unwrap().mmio_window().unwrap().address(),
+            0x5678_9000
+        );
+
+        let mut successful = VirtualPciConfigurationRouter::new();
+        successful.attach(routed, function(12)).unwrap();
+        successful.write(routed, 16, 4, 0x5678_9000).unwrap();
+        let mut successful_mapper = RecordingMapper::default();
+        successful
+            .write_with_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut successful_mapper,
+            )
+            .unwrap();
+        assert_eq!(
+            successful.write_with_mapper(routed, 4, 2, 0, &mut successful_mapper),
+            Ok(VirtualPciWriteOutcome::Command(0))
+        );
+        assert_eq!(successful_mapper.unmap_calls, 1);
+        assert_eq!(successful.read(routed, 4, 2), Ok(0));
+        assert_eq!(successful.read(routed, 16, 4), Ok(0x5678_9000));
     }
 
     #[test]
@@ -1394,13 +1711,15 @@ mod tests {
                 selector(0, 1, 0, 4),
             )
             .unwrap();
+        let mut mapper = RecordingMapper::default();
         assert_eq!(
-            transport.access(
+            transport.access_with_mapper(
                 &mut router,
                 PCI_CONFIGURATION_DATA_PORT,
                 2,
                 true,
-                u32::from(PCI_COMMAND_MEMORY_SPACE)
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut mapper,
             ),
             Ok(VirtualPciIoOutcome::Write(VirtualPciWriteOutcome::Command(
                 PCI_COMMAND_MEMORY_SPACE
@@ -1642,6 +1961,101 @@ mod tests {
         );
         assert_eq!(transport.address(), selected);
         assert_eq!(backend.completion, None);
+    }
+
+    #[test]
+    fn common_runner_memory_decode_write_is_bound_to_native_mapping() {
+        let routed = VirtualPciLocation::new(0, 0, 1, 0).unwrap();
+        let mut router = VirtualPciConfigurationRouter::new();
+        router.attach(routed, function(13)).unwrap();
+        router.write(routed, 16, 4, 0x6789_a000).unwrap();
+        let mut transport = VirtualPciConfigurationMechanismOne::new();
+        transport
+            .access(
+                &mut router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 1, 0, 4),
+            )
+            .unwrap();
+        let mut backend = RunBackend {
+            exit: crate::VmExit::Io {
+                port: PCI_CONFIGURATION_DATA_PORT,
+                size: 2,
+                write: true,
+                value: u32::from(PCI_COMMAND_MEMORY_SPACE),
+            },
+            completion: None,
+            fail_completion: false,
+        };
+        let mut mapper = RecordingMapper::default();
+        let (mut vms, vm) = running_vm();
+        assert_eq!(
+            run_pci_configuration_once_with_mapper(
+                &mut backend,
+                0,
+                &mut vms,
+                vm,
+                &mut crate::HypercallRouter::new(
+                    crate::ObjectId(1),
+                    crate::ObjectId(2),
+                    crate::ObjectId(3),
+                ),
+                &crate::CapabilitySpace::<0>::new(),
+                &crate::GuestMemory::<0>::new(),
+                &mut transport,
+                &mut router,
+                &mut mapper,
+            ),
+            Ok(VirtualPciIoOutcome::Write(VirtualPciWriteOutcome::Command(
+                PCI_COMMAND_MEMORY_SPACE
+            )))
+        );
+        assert_eq!(mapper.map_calls, 1);
+        assert_eq!(router.read(routed, 4, 2), Ok(2));
+
+        let mut rejected_router = VirtualPciConfigurationRouter::new();
+        rejected_router.attach(routed, function(13)).unwrap();
+        rejected_router.write(routed, 16, 4, 0x6789_a000).unwrap();
+        let mut rejected_transport = VirtualPciConfigurationMechanismOne::new();
+        rejected_transport
+            .access(
+                &mut rejected_router,
+                PCI_CONFIGURATION_ADDRESS_PORT,
+                4,
+                true,
+                selector(0, 1, 0, 4),
+            )
+            .unwrap();
+        let mut rejected_mapper = RecordingMapper {
+            map_error: Some(VirtualPciNativeResourceError::Rejected),
+            ..RecordingMapper::default()
+        };
+        let (mut rejected_vms, rejected_vm) = running_vm();
+        assert_eq!(
+            run_pci_configuration_once_with_mapper(
+                &mut backend,
+                0,
+                &mut rejected_vms,
+                rejected_vm,
+                &mut crate::HypercallRouter::new(
+                    crate::ObjectId(1),
+                    crate::ObjectId(2),
+                    crate::ObjectId(3),
+                ),
+                &crate::CapabilitySpace::<0>::new(),
+                &crate::GuestMemory::<0>::new(),
+                &mut rejected_transport,
+                &mut rejected_router,
+                &mut rejected_mapper,
+            ),
+            Err(VirtualPciRunError::Transport(
+                VirtualPciError::NativeResourceRejected
+            ))
+        );
+        assert_eq!(rejected_router.read(routed, 4, 2), Ok(0));
+        assert_eq!(rejected_vms.state(rejected_vm), Ok(crate::VmState::Failed));
     }
 
     #[test]

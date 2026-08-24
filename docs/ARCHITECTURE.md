@@ -707,6 +707,14 @@ and attachment-generation exhaustion fail without ambiguous routing or partial
 removal. Reset and detach expose no cleanup-free router API. BDF and attachment
 identity remain data; mutable access to trusted VMM
 policy, not knowledge of either value, supplies authority.
+Memory-decode command transitions now require a separate unsafe native mapper.
+Enable maps the exact attachment/function generation and assigned BAR window
+before publishing the command bit; disable proves that same native window
+unusable before clearing it. Rejected or uncertain native state preserves the
+command. The default router, transport, and common-runner paths use a deny
+mapper, so a present function cannot silently enable decode; an explicitly
+authorized mapper-aware runner is required. BAR assignment remains routing data
+and invokes no mapper by itself.
 A separate conventional Configuration Mechanism #1 state machine now decodes
 canonical `0xCF8` selector and `0xCFC` data-port accesses into that router. It
 derives an exact eight-rule deny-by-default scalar-I/O policy, rejects selector

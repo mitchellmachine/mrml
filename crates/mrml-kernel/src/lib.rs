@@ -177,8 +177,10 @@ pub use virtual_pci::{
     PCI_TYPE0_CONFIGURATION_BYTES, VirtualPciAttachedResources, VirtualPciAttachmentId,
     VirtualPciConfigurationMechanismOne, VirtualPciConfigurationRouter, VirtualPciError,
     VirtualPciFunctionRevoker, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
-    VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciResetError, VirtualPciRunError,
+    VirtualPciMemoryBar, VirtualPciMemoryMapper, VirtualPciMmioWindow,
+    VirtualPciNativeResourceError, VirtualPciResetError, VirtualPciRunError,
     VirtualPciType0Function, VirtualPciWriteOutcome, run_pci_configuration_once,
+    run_pci_configuration_once_with_mapper,
 };
 pub use vm::{
     GuestAccess, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES,

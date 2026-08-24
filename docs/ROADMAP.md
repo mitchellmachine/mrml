@@ -876,6 +876,17 @@ invalidation, quarantine-preserving reset/detach failures, independent success,
 and no cleanup call after preflight failure. Native KVM/WHP revoker adapters
 remain pending until a concrete function has separately authorized native
 resources.
+Memory-decode command writes are now transactionally coupled to native BAR
+state. `VirtualPciMemoryMapper` is an unsafe exact-generation boundary: enable
+must map the complete assigned window before the command bit publishes, while
+disable must make that exact mapping unusable before the bit clears. Rejected or
+uncertain native results preserve configuration; uncertainty requires VM
+quarantine/failure. Default router/transport/common-runner entry points use a
+deny mapper, and the explicit mapper-aware runner is required for a present
+function. Tests cover exact mapping/unmapping identity, deny-by-default enable,
+failure preservation, independent successful transitions, mapper-free BAR
+assignment, and common-runner VM failure on mapping rejection. Native KVM/WHP
+BAR mapper adapters and an authorized concrete function remain pending.
 
 The common driver now has an unsafe backend-neutral guest queue-transport
 boundary. It derives every header and slot address from the canonical

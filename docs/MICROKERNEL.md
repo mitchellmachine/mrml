@@ -4875,6 +4875,74 @@ Patent review: `NOT_TRIGGERED` — conventional revoke-before-reset/removal
 composition with exact generational resource identity; see
 [`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
+The next attached-lifecycle increment couples the PCI memory-decode command bit
+to native BAR mapping state. The unsafe `VirtualPciMemoryMapper` receives the
+same exact attachment ID, BDF, function generation, and assigned generational
+MMIO window used by reset/removal cleanup. `map_window` may succeed only after
+the complete intended mapping exists; `unmap_window` may succeed only after the
+exact mapping is unusable. `Rejected` promises no native mutation, while
+`Uncertain` covers partial or unprovable state and requires quarantine/fail-stop.
+
+`write_with_mapper` fully preflights the command width, supported bits, BAR
+assignment, old/new decode state, and cleanup identity. A disabled-to-enabled
+transition maps before publishing the command; enabled-to-disabled unmaps before
+clearing it. Native failure preserves the command and BAR. BAR probing or
+assignment while decode is off remains configuration data and calls no mapper.
+Interrupt-disable-only changes do not remap. The ordinary router and Mechanism
+#1 paths now use a built-in deny mapper, so they cannot enable decode for a
+present function. `access_with_mapper` and
+`run_pci_configuration_once_with_mapper` are the explicit authorized
+composition paths. A mapping rejection crossing the common runner fails the VM.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+Recorded verification on 2026-08-24: Windows gnullvm passed all 418 release
+kernel tests and strict scoped kernel/WHP/WHP-run Clippy. Three focused additions
+prove deny-by-default enable, exact generational mapping identity, rejected and
+uncertain enable preservation, independent successful enable, exact unmapping
+identity, uncertain disable preservation, independent successful disable, BAR
+retention after decode clear, and common-runner VM failure on mapping rejection.
+Arch Linux under WSL2 passed the same 418 kernel tests and strict scoped
+kernel/KVM/KVM-run Clippy with isolated
+`CARGO_TARGET_DIR=target/pci-bar-lifecycle`. This is unit and compile/lint
+evidence for a backend-neutral contract. The previously one-time-signed absent-
+function probe also reran successfully through the new default-deny common
+runner: KVM reported `verify=17374us prepare=2295us execute=55718us
+total=97419us`, and WHP reported `verify=17983us prepare=3976us execute=2502us
+total=28454us`. Those hosted controlled regressions exercise absence/read
+transport only, not a native KVM/WHP BAR
+adapter, attached function, assigned identity, live mapping, signed runtime,
+bare-metal, or physical-hardware claim.
+
+The BAR-lifecycle `DIGITAL-RIGHTS REVIEW` found no collection, retention,
+correlation, disclosure, attestation, DRM, vendor or publisher preference,
+first-party bypass, accessibility restriction, AI authority, persistence, or
+lock-in. BAR and generation values are bounded local routing data and never
+authority. The `HOSTILE SECURITY REVIEW` treats attachment identity, BDF,
+function generation, BAR address/size, command width/bits, old/new decode state,
+mapper result, partial mapping, stale mapping, retry, and common-runner failure
+as hostile. Complete preflight precedes native action; mapping precedes enable;
+confirmed unmapping precedes disable; failure preserves configuration; default
+routing denies transitions; uncertainty quarantines the VM. Existing
+capability, revocation, rollback-resistance, accessibility, evidence, owner-
+sovereignty, data-minimization, anti-DRM, owner-controlled-attestation, third-
+party-accessibility, AI-containment, and anti-persistence gates remain
+unchanged. This agent review does not replace independent human implementer,
+reviewer, adversary, accessibility, or hardware review.
+
+Patent review: `NOT_TRIGGERED` — conventional map-before-enable and unmap-before-
+disable composition for a generational PCI BAR; see
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 The guest-state `DIGITAL-RIGHTS REVIEW` found no identity, collection,
 retention, correlation, attestation, DRM, disclosure, vendor preference,
 accessibility restriction, or persistent owner-state change. The `HOSTILE
