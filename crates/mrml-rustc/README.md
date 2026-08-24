@@ -2944,9 +2944,9 @@ argument is a one-slot scalar, another supported fat reference, a direct
 identifier-backed array or tuple, an array literal or single-evaluation repeat,
 an array accepted by the bounded recursive element planner, or a supported
 literal/conditional/wrapped tuple. The array planner covers identifiers,
-contextual defaults, literals, repeats, integer-to-byte arrays, conditionals,
-transparent return/break/inline-const wrappers, and nested sequences. Sequence
-prefixes remain
+contextual defaults, literals, repeats, integer-to-byte arrays, direct and
+wrapped array-producing calls, conditionals, transparent return/break/inline-
+const wrappers, and nested sequences. Sequence prefixes remain
 ahead of those arguments. Identifier-backed arrays plan one `Index` read per
 element and tuples plan numbered `TupleField` reads. Direct conditional arrays
 plan condition, then element, and else element separately for every index.
@@ -2954,9 +2954,11 @@ Supported sequence-wrapped arrays plan their prefix before every materialized
 element, including nested branch prefixes and conditions; identifier elements
 retain exact `Index` reads and defaults add no false place read. Direct root
 repeats retain their separate single-evaluation rule. Integer-to-byte arrays
-repeat their scalar base reads once for each emitted byte. Array-producing calls
-and other unsupported aggregate call arguments remain later work because their
-specialized materializers require separate facts.
+repeat their scalar base reads once for each emitted byte. Direct array-producing
+calls plan their arguments once, while calls under per-element wrappers repeat
+their complete argument schedule for every index. Unsupported tuple and
+aggregate-leaf call arguments remain later work because their specialized
+materializers require separate facts.
 Direct identifier, range-derived, and recursively conditional fat-reference
 explicit returns and final tails now plan their condition, endpoint, and base
 reads in exact emission order. Call-derived and unsupported wrapped return
@@ -3169,6 +3171,14 @@ WSL, plus warnings-denied Clippy on both hosts. Its adversarial unit test proves
 endian output bytes, followed by the scalar bias argument. Its original
 replacement emits both COFF and ELF64 objects through the same inlined byte-
 slice helper call.
+
+The array-producing call-argument milestone passed all 622 compiler and driver
+tests on Windows gnullvm and all 622 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Its adversarial unit test proves 33
+facts: one complete direct inner-call argument list, then three repetitions of a
+wrapped prefix, condition, and both inner-call argument lists, followed by the
+outer tuple and scalar arguments. Its original replacement emits both COFF and
+ELF64 objects through the same direct and wrapped array-returning helpers.
 
 The assignment root-read milestone passed all 572 compiler and driver tests on
 Windows gnullvm and all 572 in release mode on native Arch Linux WSL, plus

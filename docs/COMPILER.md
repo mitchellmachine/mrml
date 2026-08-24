@@ -234,9 +234,9 @@ reference, a direct identifier-backed array or tuple, an array literal or
 single-evaluation repeat, a direct conditional array with literal branches, a
 an array accepted by the bounded recursive element planner, or a supported
 literal/conditional/wrapped tuple. The array planner covers identifiers,
-contextual defaults, literals, repeats, integer-to-byte arrays, conditionals,
-transparent return/break/inline-const wrappers, and nested sequences in the
-emitter's per-index order.
+contextual defaults, literals, repeats, integer-to-byte arrays, direct and
+wrapped array-producing calls, conditionals, transparent return/break/inline-
+const wrappers, and nested sequences in the emitter's per-index order.
 Prefix expressions and call arguments are reserved left-to-right before
 inlined-helper emission; identifier-backed arrays reserve one `Index` read per
 element and tuples reserve numbered `TupleField` reads. Direct conditional
@@ -245,8 +245,9 @@ sequence-wrapped arrays additionally repeat the prefix before every materialized
 element; identifier tails then retain one exact `Index` read per element, while
 default tails correctly add no element-place read. Conditions and nested branch
 prefixes are likewise repeated for each index. Direct root repeats preserve
-their distinct single-evaluation rule. Array-producing calls and other
-unsupported aggregate call arguments remain
+their distinct single-evaluation rule. Direct array-producing calls are planned
+once, while calls reached through per-element wrappers are planned once per
+materialized index. Unsupported tuple and aggregate-leaf call arguments remain
 emission-time work because their specialized materializers need separate
 traversal facts.
 Supported direct identifier, range-derived, and recursively conditional fat-
