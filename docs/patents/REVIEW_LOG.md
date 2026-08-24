@@ -2032,3 +2032,15 @@ invalidation mechanism, optimization, authority model, device or compatibility
 protocol, host-share mechanism, accessibility interface, browser semantic
 interface, JavaScript/WebAssembly runtime, or media mechanism. This agent review
 does not replace the required independent human dual review.
+
+# 2026-08-24 — Local shared-loan liveness validation
+
+**Result: NOT_TRIGGERED.** The compiler conventionally records uses of direct
+shared-reference borrowers in its existing bounded place-effect table and
+rejects an exact mutable borrow followed by a later borrower use in the same
+validated control segment or immediate exit edge. It adds no new arena,
+optimization, authority model, device or compatibility protocol, host-share
+mechanism, accessibility interface, browser semantic interface,
+JavaScript/WebAssembly runtime, media mechanism, or other patent-candidate
+mechanism. This agent review does not replace the required independent human
+dual review.

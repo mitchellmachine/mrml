@@ -3298,3 +3298,14 @@ There was no prior MRML compiler baseline. A release-mode one-function smoke
 compile, including process startup and filesystem I/O, took 22.050 ms on the
 Windows development host and 0.005 seconds under Arch Linux WSL2. These are
 single observations, not throughput benchmarks or regression thresholds.
+
+The direct shared-loan liveness milestone passed all 699 compiler and driver
+tests on Windows gnullvm and all 699 in release mode on native Arch Linux WSL,
+plus warnings-denied Clippy on both hosts. Both workspace gates used rustc
+`1.100.0-nightly` commit `fb6531d550e0075b9eb9a51464f404805eec87d9`
+dated 2026-08-23; differential observations remain tied to immutable oracle
+commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The implementation records
+shared-reference borrower uses and rejects an exact mutable borrow followed by
+a later use in the same validated control segment or its immediate exit. It
+does not claim cross-block liveness, mutable-loan invalidation, regions, or a
+complete borrow checker. The hygiene scan remained empty.
