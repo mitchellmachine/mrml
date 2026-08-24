@@ -513,8 +513,16 @@ point. A typed variant retains each candidate's exact validated file states
 separately through redundant-root selection and exposes only the object,
 generation, length, and extent map belonging to the chosen graph. These states
 are integrity evidence, not capabilities, owner approval, or authenticated
-anti-rollback evidence. Stable authority/configuration recovery does not yet
-require this typed selection, so end-to-end root/file binding remains pending.
+anti-rollback evidence. Selected stable-authority recovery entry points now
+require this typed file selection and match its volume/root generation to the
+owner-approved admission before reading or consuming the one-use proof. Fresh
+reconstructed authority also retains that authenticated root provenance. A
+selected configuration-recovery constructor likewise derives the exact file
+generation from its reachable selection and rejects a volume/root mismatch
+against the temporary authenticated authority before reading configuration.
+Lower-level mechanism constructors retain their documented trusted-caller
+contracts; boot recovery must use the selected variants for typed end-to-end
+root/file binding.
 Simulation rejects a checksum-valid newer superblock whose referenced
 allocation generation was not published and explicitly falls back to the fully
 validated adjacent root; an indeterminate read of the newer candidate aborts

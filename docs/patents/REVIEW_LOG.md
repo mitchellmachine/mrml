@@ -2311,3 +2311,17 @@ transport, host-share protocol, accessibility device, browser semantic
 interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
 this agent review does not replace independent human dual review.
+
+# 2026-08-24 — Owner-approved reachable-file recovery binding
+
+**Result: NOT_TRIGGERED.** The change conventionally compares a selected
+reachable file's volume/root generation with the existing owner-approved
+recovery admission before stable authority reconstruction and retains that
+provenance in fresh in-memory authority state. Selected configuration recovery
+also compares its independently selected file root with that authenticated
+authority before reading. The selections remain data and all reads remain
+separately capability-authorized. It adds no compatibility
+transport, host-share protocol, accessibility device, browser semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. Existing planned scopes remain `TRIGGERED`;
+this agent review does not replace independent human dual review.

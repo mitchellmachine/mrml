@@ -20,6 +20,36 @@ pub struct RecoveredReachableState<const E: usize, const O: usize> {
     file_count: usize,
 }
 
+/// Borrowed, non-authorizing proof that one exact file state was present in the
+/// integrity-validated graph selected by redundant-root recovery.
+#[derive(Clone, Copy)]
+pub struct ReachableFileSelection<'a, const E: usize> {
+    selected: RecoveredSuperblock,
+    file: &'a FileState<E>,
+}
+
+impl<'a, const E: usize> ReachableFileSelection<'a, E> {
+    pub const fn volume(&self) -> crate::VolumeId {
+        self.selected.superblock.volume()
+    }
+
+    pub const fn root_generation(&self) -> u64 {
+        self.selected.superblock.generation()
+    }
+
+    pub const fn object(&self) -> StorageObjectId {
+        self.file.object()
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.file.generation()
+    }
+
+    pub const fn file_state(self) -> &'a FileState<E> {
+        self.file
+    }
+}
+
 impl<const E: usize, const O: usize> RecoveredReachableState<E, O> {
     pub const fn selected(&self) -> RecoveredSuperblock {
         self.selected
@@ -30,6 +60,13 @@ impl<const E: usize, const O: usize> RecoveredReachableState<E, O> {
             .iter()
             .flatten()
             .find(|file| file.object() == object)
+    }
+
+    pub fn select_file(&self, object: StorageObjectId) -> Option<ReachableFileSelection<'_, E>> {
+        self.file(object).map(|file| ReachableFileSelection {
+            selected: self.selected,
+            file,
+        })
     }
 
     pub const fn file_count(&self) -> usize {
@@ -631,9 +668,12 @@ fn select_pair<E>(
 mod tests {
     use super::*;
     use crate::{
-        AllocationKind, AllocationRecord, DirectoryEntry, DirectoryImage, DirectoryMetadata,
-        ExtentImage, ExtentRecord, FileMetadata, MetadataPointer, SUPERBLOCK_BYTES, StorageName,
-        StorageObjectId, VolumeId,
+        AllocationKind, AllocationRecord, AuthenticatedAuthorityRecoveryState,
+        AuthorityCheckpointError, AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard,
+        AuthorityStorageError, DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage,
+        ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer,
+        OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName,
+        StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRights, VolumeId,
     };
 
     fn volume() -> VolumeId {
@@ -996,6 +1036,79 @@ mod tests {
                 .file(StorageObjectId::new(volume(), 8).unwrap())
                 .is_none()
         );
+        let selection = recovered
+            .select_file(StorageObjectId::new(volume(), 7).unwrap())
+            .unwrap();
+        assert_eq!(selection.volume(), volume());
+        assert_eq!(selection.root_generation(), 5);
+        assert_eq!(
+            selection.object(),
+            StorageObjectId::new(volume(), 7).unwrap()
+        );
+        assert_eq!(selection.generation(), 3);
+    }
+
+    #[test]
+    fn selected_authority_recovery_rejects_root_mismatch_before_file_read() {
+        struct NoRead;
+        unsafe impl FileReadBackend for NoRead {
+            type Error = ();
+
+            fn read_verified_extent(
+                &mut self,
+                _record: crate::ExtentRecord,
+                _byte_offset: u64,
+                _output: &mut [u8],
+            ) -> Result<(), Self::Error> {
+                panic!("root mismatch must fail before file I/O")
+            }
+        }
+
+        let (candidate, backend) = reachable_backend(true, false);
+        let mut scratch = [0; 4096];
+        let reachable = recover_reachable_state::<_, 8, 1, 1, 2>(
+            header(),
+            &encoded(candidate),
+            &[0; SUPERBLOCK_BYTES],
+            backend,
+            &mut scratch,
+        )
+        .unwrap();
+        let selection = reachable
+            .select_file(StorageObjectId::new(volume(), 7).unwrap())
+            .unwrap();
+        let principal = StoragePrincipal::new(1).unwrap();
+        let mut bootstrap = StorageAuthorityTable::<1>::new();
+        let handle = bootstrap
+            .insert(
+                selection.object(),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal,
+            )
+            .unwrap();
+        let admission =
+            unsafe { OwnerApprovedAuthorityCheckpoint::new(2, volume(), 6, 2, [0; 32]) };
+        let mut issuer = AuthorityCheckpointProofIssuer::new(admission);
+        let state = unsafe { AuthenticatedAuthorityRecoveryState::new(1, 1) };
+        let mut guard = AuthorityRecoveryGuard::from_authenticated_state(state);
+        let mut input = [0; 256];
+
+        assert!(matches!(
+            crate::recover_selected_stable_authorities::<1, 1, 1, _>(
+                selection,
+                &bootstrap,
+                handle,
+                principal,
+                &mut guard,
+                &mut issuer,
+                &mut input,
+                &mut NoRead,
+            ),
+            Err(AuthorityStorageError::Checkpoint(
+                AuthorityCheckpointError::AuthenticationMismatch
+            ))
+        ));
     }
 
     #[test]

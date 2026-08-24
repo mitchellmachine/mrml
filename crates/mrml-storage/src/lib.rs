@@ -45,8 +45,10 @@ pub use authority_checkpoint::{
     CommittedRecoveredStorageAuthorities, OwnerApprovedAuthorityCheckpoint,
     PreparedStableAuthorities, RecoveredStorageAuthorities, StableAuthorities,
     StorageRecoveryGrant, authority_checkpoint_digest, encode_authority_checkpoint,
-    prepare_stable_authorities, recover_stable_authorities, recover_stable_authorities_and_commit,
-    recover_validate_and_commit_stable_authorities,
+    prepare_stable_authorities, recover_selected_stable_authorities,
+    recover_selected_stable_authorities_and_commit,
+    recover_selected_validate_and_commit_stable_authorities, recover_stable_authorities,
+    recover_stable_authorities_and_commit, recover_validate_and_commit_stable_authorities,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{
@@ -99,9 +101,10 @@ pub use object_id_allocator::{
     ObjectIdAllocatorUpdateError, ObjectIdAllocatorWriteBackend, PreparedObjectIdReservation,
 };
 pub use recovery::{
-    CandidateValidationError, CowRecoveryValidator, ReachableRecoveryValidator,
-    RecoveredReachableState, RecoveredSuperblock, RecoveryError, RecoveryMetadataBackend,
-    recover_reachable_state, recover_reachable_superblock, recover_superblock,
+    CandidateValidationError, CowRecoveryValidator, ReachableFileSelection,
+    ReachableRecoveryValidator, RecoveredReachableState, RecoveredSuperblock, RecoveryError,
+    RecoveryMetadataBackend, recover_reachable_state, recover_reachable_superblock,
+    recover_superblock,
 };
 pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,

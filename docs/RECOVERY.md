@@ -312,10 +312,17 @@ explicitly and downgrade the status rather than guessing.
   Reachable-root recovery now also has a typed result that retains only the
   exact file states validated under the selected candidate, keeping primary and
   secondary snapshots separate through selection. This is checksummed
-  reachability/integrity evidence only. The stable authority and configuration
-  entry points do not yet require that result, so their documented trusted
-  caller obligation to supply the authenticated-recovery-selected generation
-  remains in force and typed end-to-end enforcement is pending.
+  reachability/integrity evidence only. Selected stable-authority recovery
+  entry points now require that file selection, compare its selected
+  volume/root generation with the owner-approved admission before reading, and
+  retain the authenticated root provenance with reconstructed authority.
+  A selected configuration validator also derives its generation from its file
+  selection and compares that selection's volume/root with temporary
+  authenticated authority before reading. Lower-level recovery remains
+  available as mechanism with its documented trusted-caller obligation; boot
+  recovery must use the selected variants. This closes the typed in-memory
+  root/file substitution gate, but does not provide reboot, TPM, nonvolatile,
+  or physical power-loss evidence.
   Service registration can now be planned against one exact vacant supervisor
   slot and generation during dependent validation without mutation. After the
   monotonic store advances, only the committed recovered-authority wrapper and

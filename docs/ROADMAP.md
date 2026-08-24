@@ -547,9 +547,16 @@ authority; unrelated domains continue.
    until root selection and exposes only the selected graph's exact file
    objects, generations, lengths, and extent maps. Focused simulation verifies
    selected-file lookup and absence without treating this integrity result as
-   authority or anti-rollback authentication. Authority-checkpoint and
-   configuration recovery still need to consume this typed selection before
-   the end-to-end root/file substitution gate is complete. A controlled
+   authority or anti-rollback authentication. New stable-authority recovery
+   entry points require the selected file and reject a selected volume/root
+   generation that differs from the unsafe owner-approved admission before any
+   read or proof consumption. Reconstructed authority retains that authenticated
+   root provenance. The selected configuration validator derives its file
+   generation from a second reachable selection and compares that selection's
+   volume/root against the temporary authenticated authority before any file
+   read. Lower-level mechanism APIs retain explicit trusted-caller contracts;
+   the typed selected path closes the in-memory root/file substitution gate. A
+   controlled
    interrupted-publication simulation presents a checksum-valid
    newer superblock whose allocation image remains bound to the prior generation:
    complete validation proves the newer candidate invalid and explicitly falls

@@ -20,8 +20,9 @@ use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
     CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata, FileReadBackend, FileReadError,
     FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
-    RecoveredStorageAuthorities, StorageAuthorityTable, StorageBlockDevice, StorageHandle,
-    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    ReachableFileSelection, RecoveredStorageAuthorities, StorageAuthorityTable, StorageBlockDevice,
+    StorageHandle, StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    VolumeId,
 };
 
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
@@ -907,6 +908,7 @@ impl<const SETTINGS: usize, const AUDIT: usize> RecoveredStableConfiguration<SET
 pub enum StableConfigurationRecoveryError<E> {
     Storage(ConfigurationStorageError<E>),
     MissingFileAuthority,
+    RootSelectionMismatch,
     Policy(PersistedRestartPolicyError),
 }
 
@@ -926,6 +928,8 @@ pub struct StableConfigurationRecoveryValidator<
     file_handle_index: usize,
     principal: StoragePrincipal,
     expected_file_generation: u64,
+    selected_volume: Option<VolumeId>,
+    selected_root_generation: u64,
     capabilities: &'a A,
     root_capability: Capability,
     policy_capability: Capability,
@@ -963,6 +967,38 @@ impl<
             file_handle_index,
             principal,
             expected_file_generation,
+            selected_volume: None,
+            selected_root_generation: 0,
+            capabilities,
+            root_capability,
+            policy_capability,
+            policy_setting,
+            expected_service,
+            input,
+            backend,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_selected(
+        selection: ReachableFileSelection<'a, EXTENTS>,
+        file_handle_index: usize,
+        principal: StoragePrincipal,
+        capabilities: &'a A,
+        root_capability: Capability,
+        policy_capability: Capability,
+        policy_setting: SettingId,
+        expected_service: ObjectId,
+        input: &'a mut [u8],
+        backend: &'a mut B,
+    ) -> Self {
+        Self {
+            file_state: selection.file_state(),
+            file_handle_index,
+            principal,
+            expected_file_generation: selection.generation(),
+            selected_volume: Some(selection.volume()),
+            selected_root_generation: selection.root_generation(),
             capabilities,
             root_capability,
             policy_capability,
@@ -994,6 +1030,14 @@ unsafe impl<
         &mut self,
         recovered: &RecoveredStorageAuthorities<GRANTS>,
     ) -> Result<Self::Output, Self::Error> {
+        if !recovery_root_matches(
+            self.selected_volume,
+            self.selected_root_generation,
+            recovered.volume(),
+            recovered.root_generation(),
+        ) {
+            return Err(StableConfigurationRecoveryError::RootSelectionMismatch);
+        }
         let file = recovered
             .handle(self.file_handle_index)
             .ok_or(StableConfigurationRecoveryError::MissingFileAuthority)?;
@@ -1028,6 +1072,17 @@ unsafe impl<
             policy,
         })
     }
+}
+
+fn recovery_root_matches(
+    selected_volume: Option<VolumeId>,
+    selected_generation: u64,
+    recovered_volume: VolumeId,
+    recovered_generation: u64,
+) -> bool {
+    selected_volume.is_none_or(|volume| {
+        volume == recovered_volume && selected_generation == recovered_generation
+    })
 }
 
 /// Recovered configuration plus a non-mutating, exact-slot service
@@ -3668,6 +3723,16 @@ mod tests {
 
     fn stable_volume() -> VolumeId {
         VolumeId::new([0x51; 16]).unwrap()
+    }
+
+    #[test]
+    fn selected_configuration_root_requires_exact_authenticated_provenance() {
+        let selected = stable_volume();
+        let other = VolumeId::new([0x52; 16]).unwrap();
+        assert!(recovery_root_matches(Some(selected), 9, selected, 9));
+        assert!(!recovery_root_matches(Some(selected), 9, other, 9));
+        assert!(!recovery_root_matches(Some(selected), 9, selected, 8));
+        assert!(recovery_root_matches(None, 0, other, 8));
     }
 
     fn stable_header() -> VolumeHeader {

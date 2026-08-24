@@ -1,8 +1,9 @@
 use crate::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
-    FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityError,
-    StorageAuthorityTable, StorageHandle, StorageObjectId, StorageObjectKind, StoragePrincipal,
-    StorageRights, StorageTransaction, TransactionError, TransactionReceipt, VolumeId,
+    FileWriteError, MetadataPointer, PreparedFileWrite, ReachableFileSelection,
+    StorageAuthorityError, StorageAuthorityTable, StorageHandle, StorageObjectId,
+    StorageObjectKind, StoragePrincipal, StorageRights, StorageTransaction, TransactionError,
+    TransactionReceipt, VolumeId,
 };
 use core::array;
 use mrml_crypto::Sha3_256;
@@ -253,6 +254,22 @@ impl AuthorityCheckpointProofIssuer {
         }
         Ok(())
     }
+
+    fn preflight_selection<const E: usize>(
+        &self,
+        selection: ReachableFileSelection<'_, E>,
+    ) -> Result<(), AuthorityCheckpointError> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or(AuthorityCheckpointError::ProofAlreadyIssued)?;
+        if selection.volume() != admission.volume
+            || selection.root_generation() != admission.root_generation
+        {
+            return Err(AuthorityCheckpointError::AuthenticationMismatch);
+        }
+        Ok(())
+    }
 }
 
 /// Exact authenticated recovery authorization. Checkpoint bytes and their
@@ -271,6 +288,8 @@ pub struct RecoveredStorageAuthorities<const N: usize> {
     handles: [Option<StorageHandle>; N],
     count: usize,
     epoch: u64,
+    volume: VolumeId,
+    root_generation: u64,
 }
 
 /// Fresh authority released only after its authenticated monotonic recovery
@@ -384,6 +403,14 @@ impl<const N: usize> RecoveredStorageAuthorities<N> {
         self.epoch
     }
 
+    pub const fn volume(&self) -> VolumeId {
+        self.volume
+    }
+
+    pub const fn root_generation(&self) -> u64 {
+        self.root_generation
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -415,6 +442,14 @@ impl<const N: usize> CommittedRecoveredStorageAuthorities<N> {
 
     pub const fn epoch(&self) -> u64 {
         self.recovered.epoch()
+    }
+
+    pub const fn volume(&self) -> VolumeId {
+        self.recovered.volume()
+    }
+
+    pub const fn root_generation(&self) -> u64 {
+        self.recovered.root_generation()
     }
 
     pub fn into_parts(
@@ -503,6 +538,8 @@ impl AuthorityRecoveryGuard {
             handles,
             count: decoded.count,
             epoch: decoded.epoch,
+            volume: decoded.volume,
+            root_generation: decoded.root_generation,
         })
     }
 }
@@ -717,6 +754,40 @@ pub fn recover_stable_authorities<
     result
 }
 
+/// Stable authority recovery bound to a file state retained from the exact
+/// reachable root authenticated by the owner-approved admission.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_selected_stable_authorities<
+    const GRANTS: usize,
+    const EXTENTS: usize,
+    const BOOTSTRAP_AUTHORITIES: usize,
+    B: FileReadBackend,
+>(
+    selection: ReachableFileSelection<'_, EXTENTS>,
+    bootstrap_authority: &StorageAuthorityTable<BOOTSTRAP_AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    guard: &mut AuthorityRecoveryGuard,
+    issuer: &mut AuthorityCheckpointProofIssuer,
+    input: &mut [u8],
+    backend: &mut B,
+) -> Result<RecoveredStorageAuthorities<GRANTS>, AuthorityStorageError<B::Error>> {
+    issuer
+        .preflight_selection(selection)
+        .map_err(AuthorityStorageError::Checkpoint)?;
+    recover_stable_authorities(
+        selection.file_state(),
+        bootstrap_authority,
+        file,
+        principal,
+        selection.generation(),
+        guard,
+        issuer,
+        input,
+        backend,
+    )
+}
+
 /// Recovers durable grants only after loading authenticated rollback state and
 /// atomically advancing it to the accepted checkpoint. Reconstructed handles
 /// are not released if the monotonic store reports conflict or uncertainty.
@@ -771,6 +842,42 @@ pub fn recover_stable_authorities_and_commit<
         .compare_and_store(expected_epoch, expected_handle_generation, &replacement)
         .map_err(AuthorityRecoveryCommitError::State)?;
     Ok(CommittedRecoveredStorageAuthorities { recovered })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn recover_selected_stable_authorities_and_commit<
+    const GRANTS: usize,
+    const EXTENTS: usize,
+    const BOOTSTRAP_AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: AuthorityRecoveryStateStore,
+>(
+    selection: ReachableFileSelection<'_, EXTENTS>,
+    bootstrap_authority: &StorageAuthorityTable<BOOTSTRAP_AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    issuer: &mut AuthorityCheckpointProofIssuer,
+    input: &mut [u8],
+    backend: &mut B,
+    state_store: &mut S,
+) -> Result<
+    CommittedRecoveredStorageAuthorities<GRANTS>,
+    AuthorityRecoveryCommitError<B::Error, S::Error>,
+> {
+    issuer
+        .preflight_selection(selection)
+        .map_err(AuthorityRecoveryCommitError::Checkpoint)?;
+    recover_stable_authorities_and_commit(
+        selection.file_state(),
+        bootstrap_authority,
+        file,
+        principal,
+        selection.generation(),
+        issuer,
+        input,
+        backend,
+        state_store,
+    )
 }
 
 /// Reconstructs authority into private temporary state, validates dependent
@@ -834,6 +941,42 @@ pub fn recover_validate_and_commit_stable_authorities<
         CommittedRecoveredStorageAuthorities { recovered },
         validated,
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn recover_selected_validate_and_commit_stable_authorities<
+    const GRANTS: usize,
+    const EXTENTS: usize,
+    const BOOTSTRAP_AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: AuthorityRecoveryStateStore,
+    V: AuthorityRecoveryValidator<GRANTS>,
+>(
+    selection: ReachableFileSelection<'_, EXTENTS>,
+    bootstrap_authority: &StorageAuthorityTable<BOOTSTRAP_AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    issuer: &mut AuthorityCheckpointProofIssuer,
+    input: &mut [u8],
+    backend: &mut B,
+    state_store: &mut S,
+    validator: &mut V,
+) -> AuthorityRecoveryValidationResult<GRANTS, V::Output, B::Error, S::Error, V::Error> {
+    issuer
+        .preflight_selection(selection)
+        .map_err(AuthorityRecoveryValidationError::Checkpoint)?;
+    recover_validate_and_commit_stable_authorities(
+        selection.file_state(),
+        bootstrap_authority,
+        file,
+        principal,
+        selection.generation(),
+        issuer,
+        input,
+        backend,
+        state_store,
+        validator,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1765,6 +1908,8 @@ mod tests {
         let recovered = guard
             .recover::<4>(&encoded, proof(&encoded, 9, 14, 20))
             .unwrap();
+        assert_eq!(recovered.volume(), volume());
+        assert_eq!(recovered.root_generation(), 14);
         let (mut table, handles, count, epoch) = recovered.into_parts();
         assert_eq!((count, epoch, guard.accepted_epoch()), (3, 9, 9));
         assert_eq!(guard.accepted_handle_generation(), 20);
