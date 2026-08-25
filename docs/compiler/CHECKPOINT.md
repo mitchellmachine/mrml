@@ -621,6 +621,16 @@ probe, 10 conformance tests, and 335 replacement tests: 777 compiler tests per
 host. Generic impls, where-clauses, projections, cycles, and source integration
 remain unsupported.
 
+The bounded trait-answer milestone represents the exact per-candidate bindings
+instead of discarding them. One matching concrete header now returns its stable
+implementation identity and an eight-slot canonical-variable substitution;
+multiple matching inference answers remain ambiguous, mismatches return no
+solution, and repeated variables still require equal concrete types. Windows
+gnullvm and native Arch Linux WSL each pass 432 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 778 compiler
+tests per host. Generic impls, where-clauses, projections, recursive goals,
+answer composition, and source integration remain unsupported.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

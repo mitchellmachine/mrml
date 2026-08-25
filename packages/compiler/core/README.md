@@ -3846,6 +3846,17 @@ compiler tests per host. This is not generic unification, where-clause solving,
 projection normalization, recursive goal handling, specialization, complete
 coherence, or source-level trait support.
 
+The bounded trait-answer milestone retains the fixed bindings produced while
+matching an exact header. A unique answer contains the stable implementation ID
+and an eight-slot canonical-variable substitution; a one-variable query can
+therefore return its concrete binding. Two matching concrete headers still
+produce ambiguity, mismatches produce no solution, and repeated variables must
+bind equally. Windows gnullvm and native Arch Linux WSL each pass 432 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 778 compiler tests per host. The result is not generic unification,
+where-clause solving, projection normalization, recursive goal handling, answer
+composition, specialization, complete coherence, or source-level trait support.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

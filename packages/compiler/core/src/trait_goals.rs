@@ -192,8 +192,25 @@ impl TraitImplementationHeader {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitGoalAnswer {
+    pub implementation_id: TraitImplementationId,
+    bindings: [Option<TraitTypeId>; MAX_CANONICAL_TRAIT_VARIABLES],
+    binding_count: usize,
+}
+
+impl TraitGoalAnswer {
+    pub fn bindings(&self) -> &[Option<TraitTypeId>] {
+        &self.bindings[..self.binding_count]
+    }
+
+    pub fn binding(&self, variable: u8) -> Option<TraitTypeId> {
+        self.bindings.get(variable as usize).copied().flatten()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TraitGoalSolution {
-    Unique(TraitImplementationId),
+    Unique(TraitGoalAnswer),
     Ambiguous,
     NoSolution,
 }
@@ -247,22 +264,22 @@ impl TraitImplementationDatabase {
 
     pub fn solve(&self, goal: CanonicalImplementedTraitGoal) -> TraitGoalSolution {
         let mut selected = None;
-        let mut unresolved = matches!(goal.self_type, CanonicalTraitGoalType::BoundVariable(_));
-        for argument in goal.arguments().iter().flatten() {
-            unresolved |= matches!(argument, CanonicalTraitGoalType::BoundVariable(_));
-        }
         for implementation in self.implementations[..self.implementation_count]
             .iter()
             .flatten()
             .copied()
         {
-            if !implementation_matches_goal(implementation, goal) {
+            let Some(bindings) = implementation_matches_goal(implementation, goal) else {
                 continue;
-            }
-            if selected.is_some() || unresolved {
+            };
+            if selected.is_some() {
                 return TraitGoalSolution::Ambiguous;
             }
-            selected = Some(implementation.id);
+            selected = Some(TraitGoalAnswer {
+                implementation_id: implementation.id,
+                bindings,
+                binding_count: goal.variable_count,
+            });
         }
         selected.map_or(TraitGoalSolution::NoSolution, TraitGoalSolution::Unique)
     }
@@ -271,23 +288,25 @@ impl TraitImplementationDatabase {
 fn implementation_matches_goal(
     implementation: TraitImplementationHeader,
     goal: CanonicalImplementedTraitGoal,
-) -> bool {
+) -> Option<[Option<TraitTypeId>; MAX_CANONICAL_TRAIT_VARIABLES]> {
     let mut bindings = [None; MAX_CANONICAL_TRAIT_VARIABLES];
     if implementation.trait_id != goal.trait_id
         || implementation.argument_count != goal.argument_count
         || !canonical_type_matches_concrete(goal.self_type, implementation.self_type, &mut bindings)
     {
-        return false;
+        return None;
     }
-    goal.arguments()
-        .iter()
-        .zip(implementation.arguments())
-        .all(|(goal, implementation)| {
-            goal.zip(*implementation)
-                .is_some_and(|(goal, implementation)| {
-                    canonical_type_matches_concrete(goal, implementation, &mut bindings)
-                })
-        })
+    let matches =
+        goal.arguments()
+            .iter()
+            .zip(implementation.arguments())
+            .all(|(goal, implementation)| {
+                goal.zip(*implementation)
+                    .is_some_and(|(goal, implementation)| {
+                        canonical_type_matches_concrete(goal, implementation, &mut bindings)
+                    })
+            });
+    matches.then_some(bindings)
 }
 
 fn canonical_type_matches_concrete(
@@ -501,7 +520,11 @@ mod tests {
 
         assert_eq!(
             database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
-            TraitGoalSolution::Unique(TraitImplementationId::new(12))
+            TraitGoalSolution::Unique(TraitGoalAnswer {
+                implementation_id: TraitImplementationId::new(12),
+                bindings: [None; MAX_CANONICAL_TRAIT_VARIABLES],
+                binding_count: 0,
+            })
         );
     }
 
@@ -528,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_matching_inference_goals_ambiguous_without_constraints() {
+    fn returns_one_bounded_inference_answer() {
         let mut database = TraitImplementationDatabase::EMPTY;
         database
             .insert(TraitImplementationHeader::new(
@@ -537,6 +560,41 @@ mod tests {
                 TraitTypeId::new(3),
             ))
             .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(2),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(99)),
+        );
+        assert_eq!(
+            database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
+            TraitGoalSolution::Unique(TraitGoalAnswer {
+                implementation_id: TraitImplementationId::new(1),
+                bindings: [
+                    Some(TraitTypeId::new(3)),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+                binding_count: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn reports_ambiguity_for_multiple_inference_answers() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        for (implementation, self_type) in [(1, 3), (2, 4)] {
+            database
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(implementation),
+                    TraitId::new(2),
+                    TraitTypeId::new(self_type),
+                ))
+                .unwrap();
+        }
         let goal = ImplementedTraitGoal::new(
             TraitId::new(2),
             TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(99)),
