@@ -37,7 +37,7 @@ members = [
     "crates/mrml-whp-run",
     "crates/mrml-json",
     "crates/mrml-zim",
-    "crates/mrml-zstd",
+    "packages/libraries/zstd",
     "crates/mrml-wikipedia",
     "packages/libraries/tokenizer",
     "crates/mrml-trainer",

@@ -132,6 +132,10 @@ leaf at a time before group moves; `mrml-tokenizer` is now the third migrated
 leaf with its trainer edge retained. See
 [build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
 
+`mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
+source path now resolve to `packages/libraries/zstd` without changing codec
+behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,
