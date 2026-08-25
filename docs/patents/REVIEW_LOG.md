@@ -4,6 +4,15 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Native VMM reset-vector firmware entry
+
+Patent review: **TRIGGERED** under the existing VMM and firmware reviews. The
+WHP and KVM backends now share the conventional x86 reset placement and execute
+an exact bounded firmware mapping until the first strictly
+decoded exit. Live controlled stubs establish backend reset-vector execution;
+they do not implement OVMF devices, UEFI services, package boot, attestation, or
+physical firmware. No patent clearance or non-infringement conclusion is made.
+
 ## 2026-08-25 — Native VMM exact SystemRelease binding
 
 Patent review: **TRIGGERED** under the existing canonical package/release and

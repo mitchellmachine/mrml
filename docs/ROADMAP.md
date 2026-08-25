@@ -29,12 +29,16 @@ UEFI/NVMe/power-cut work is a later, separately evidenced gate.
 derived GPT/FAT image completed its exact authenticated 20-byte trace through
 QEMU/EDK2 with TCG and WHPX on Windows and QEMU/KVM under Arch Linux/WSL2 on
 2026-08-25. The bounded gate accepts only explicit `tcg`, `whpx`, or `kvm`
-accelerators and reports the selected backend. Native MRML WHP/KVM runners still
-launch verified package payloads directly rather than executing OVMF, but their
+accelerators and reports the selected backend. Native MRML WHP/KVM runners now
+execute bounded controlled firmware stubs from the architectural reset vector
+and produced matching decoded I/O proof on both backends. WHP enforces RX
+firmware and RW/NX low RAM at its GPA boundary; KVM's memory-slot API enforces
+guest-read-only firmware but cannot encode NX. They still launch verified package payloads directly
+rather than executing OVMF, but their
 release-bound boot form now authenticates the identical `SYSTEM.RELEASE` and
 exact kernel-package version/digest carried by that image. Fresh WHP and nested-
 KVM runs reached the authenticated marker from that shared pair. Native-runner
-firmware integration and physical UEFI evidence remain **PLANNED**.
+OVMF/device/boot-media integration and physical UEFI evidence remain **PLANNED**.
 
 The independently serviced component lane is **PLANNED** in
 [packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md) and follows,

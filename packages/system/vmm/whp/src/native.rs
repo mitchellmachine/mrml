@@ -12,6 +12,9 @@ use crate::{GuestRange, MapPermissions, WHP_EXIT_CONTEXT_BYTES, WhpError, decode
 mod launch;
 pub use launch::{PreparedWhpGuest, WhpLaunchLayout, WhpPageWalk, WhpServiceEraser};
 
+const FIRMWARE_TOP: u64 = 0x1_0000_0000;
+const FIRMWARE_RAM_BYTES: u64 = 64 * 1024 * 1024;
+
 type Handle = *mut c_void;
 type Hresult = i32;
 type GetCapability = unsafe extern "system" fn(u32, *mut c_void, u32, *mut u32) -> Hresult;
@@ -114,6 +117,32 @@ pub struct WhpSystem {
 }
 
 impl WhpSystem {
+    /// Prepares one x86 bootstrap processor at the architectural reset vector.
+    /// The exact firmware image is mapped read/execute at the top of the 32-bit
+    /// physical address space; ordinary low RAM remains non-executable.
+    pub fn prepare_firmware_probe(
+        &self,
+        firmware: &[u8],
+    ) -> Result<PreparedWhpFirmware<'_>, WhpError> {
+        let layout = FirmwareProbeLayout::new(firmware.len()).ok_or(WhpError::InvalidMapping)?;
+        let mut partition = self.prepare_partition_with_breakpoint_exit(false)?;
+        partition.map_zeroed(GuestRange::new(
+            0,
+            FIRMWARE_RAM_BYTES,
+            MapPermissions::read_write(),
+        )?)?;
+        partition.map_initialized(
+            GuestRange::new(
+                layout.firmware_base,
+                layout.firmware_bytes,
+                MapPermissions::read_execute(),
+            )?,
+            firmware,
+        )?;
+        partition.configure_reset_vector()?;
+        Ok(PreparedWhpFirmware { partition, layout })
+    }
+
     pub fn open() -> Result<Self, WhpError> {
         let module = unsafe { LoadLibraryW(wide_name().as_ptr()) };
         if module.is_null() {
@@ -379,6 +408,36 @@ impl WhpVcpuRunner {
 }
 
 impl PreparedWhpPartition<'_> {
+    fn configure_reset_vector(&mut self) -> Result<(), WhpError> {
+        let names = [REG_RIP, REG_RFLAGS, REG_CS, REG_CR0, REG_EFER];
+        let values = [
+            RegisterValue::scalar(0xfff0),
+            RegisterValue::scalar(2),
+            RegisterValue::reset_code_segment(),
+            RegisterValue::scalar(0x6000_0010),
+            RegisterValue::scalar(0),
+        ];
+        check(unsafe {
+            (self.api.set_registers)(
+                self.partition.as_ptr(),
+                0,
+                names.as_ptr(),
+                names.len() as u32,
+                values.as_ptr(),
+            )
+        })?;
+        let observed = self.read_registers(names)?;
+        if observed[0] != values[0]
+            || observed[1].low & 2 == 0
+            || observed[2] != values[2]
+            || observed[3].low != values[3].low
+            || observed[4].low != 0
+        {
+            return Err(WhpError::InvalidRegisterState);
+        }
+        Ok(())
+    }
+
     pub(crate) fn reload_exact_page_table_root(&mut self, expected: u64) -> Result<(), WhpError> {
         const CR4_PCIDE: u64 = 1 << 17;
         self.ensure_mapping_coherent()?;
@@ -1263,11 +1322,64 @@ impl RegisterValue {
         }
     }
 
+    const fn reset_code_segment() -> Self {
+        // Base=0xffff0000, Limit=0xffff, Selector=0xf000, present 16-bit code.
+        Self {
+            low: 0xffff_0000,
+            high: 0xffff | (0xf000_u64 << 32) | (0x009b_u64 << 48),
+        }
+    }
+
     const fn table(base: u64, limit: u16) -> Self {
         Self {
             low: (limit as u64) << 48,
             high: base,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FirmwareProbeLayout {
+    firmware_base: u64,
+    firmware_bytes: u64,
+    reset_vector: u64,
+}
+
+impl FirmwareProbeLayout {
+    pub const fn new(bytes: usize) -> Option<Self> {
+        if bytes == 0 || bytes > 16 * 1024 * 1024 || bytes % PAGE_SIZE as usize != 0 {
+            return None;
+        }
+        let firmware_bytes = bytes as u64;
+        Some(Self {
+            firmware_base: FIRMWARE_TOP - firmware_bytes,
+            firmware_bytes,
+            reset_vector: FIRMWARE_TOP - 16,
+        })
+    }
+
+    pub const fn firmware_base(self) -> u64 {
+        self.firmware_base
+    }
+    pub const fn firmware_bytes(self) -> u64 {
+        self.firmware_bytes
+    }
+    pub const fn reset_vector(self) -> u64 {
+        self.reset_vector
+    }
+}
+
+pub struct PreparedWhpFirmware<'system> {
+    partition: PreparedWhpPartition<'system>,
+    layout: FirmwareProbeLayout,
+}
+
+impl PreparedWhpFirmware<'_> {
+    pub const fn layout(&self) -> FirmwareProbeLayout {
+        self.layout
+    }
+    pub fn run(&mut self) -> Result<VmExit, WhpError> {
+        self.partition.run()
     }
 }
 impl Drop for OwnedMapping {
@@ -1331,6 +1443,43 @@ mod tests {
         assert_eq!(code.low, 0);
         assert_eq!(code.high, 0xa09b_0008_ffff_ffff);
         assert_eq!(core::mem::size_of::<InterruptControl>(), 16);
+    }
+
+    #[test]
+    fn firmware_probe_layout_and_reset_segment_are_exact() {
+        assert_eq!(FirmwareProbeLayout::new(0), None);
+        assert_eq!(FirmwareProbeLayout::new(4097), None);
+        assert_eq!(FirmwareProbeLayout::new(16 * 1024 * 1024 + 4096), None);
+        let layout = FirmwareProbeLayout::new(4 * 1024 * 1024).unwrap();
+        assert_eq!(layout.firmware_base(), 0xffc0_0000);
+        assert_eq!(
+            layout.firmware_base() + layout.firmware_bytes(),
+            FIRMWARE_TOP
+        );
+        assert_eq!(layout.reset_vector(), 0xffff_fff0);
+        let reset = RegisterValue::reset_code_segment();
+        assert_eq!(reset.low, 0xffff_0000);
+        assert_eq!(reset.high, 0x009b_f000_0000_ffff);
+    }
+
+    #[test]
+    fn live_firmware_reset_vector_executes_when_whp_is_available() {
+        let system = WhpSystem::open().unwrap();
+        if !system.hypervisor_present().unwrap() {
+            return;
+        }
+        let mut firmware = [0u8; 4096];
+        firmware[4080..4085].copy_from_slice(&[0xb0, 0x5a, 0xe6, 0xe9, 0xf4]);
+        let mut guest = system.prepare_firmware_probe(&firmware).unwrap();
+        assert_eq!(
+            guest.run().unwrap(),
+            VmExit::Io {
+                port: 0xe9,
+                size: 1,
+                write: true,
+                value: 0x5a
+            }
+        );
     }
 
     #[test]

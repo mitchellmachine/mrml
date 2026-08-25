@@ -2350,7 +2350,18 @@ read/write/execute fault type rather than inventing an MMIO width. Unknown or
 unfaithfully representable exits fail closed. The public native object is
 `PreparedWhpPartition`; raw partitions and partially initialized vCPUs cannot
 escape construction, and its lifetime is tied to the loaded DLL so resolved
-function pointers cannot outlive their code. Hardened x64 register setup now
+function pointers cannot outlive their code. Both native VMM crates now also
+expose a bounded firmware-entry probe: 64 MiB of low RAM and one exact page-
+aligned firmware image of at most 16 MiB are mapped below 4 GiB, and the
+bootstrap processor starts at architectural
+`F000:FFF0`. Controlled 4 KiB stubs executed that reset vector and returned the
+same decoded port-I/O proof under live WHP and nested KVM on 2026-08-25. This is
+reset-vector execution evidence only; OVMF, UEFI services, boot media, and
+package-derived firmware boot remain unimplemented in the native runners.
+WHP uses RW/NX low RAM and RX firmware at its GPA boundary. KVM makes firmware
+guest-read-only, but its memory-slot API cannot encode NX; no equivalent KVM
+second-level execute-permission claim is made.
+Hardened x64 register setup now
 validates canonical entry/stack/handoff addresses, aligned CR3, Microsoft ABI
 stack alignment, and bounded handoff length. It installs explicit long-mode,
 PAE, supervisor write-protect, NX, RFLAGS, code/data segments, and RCX/RDX

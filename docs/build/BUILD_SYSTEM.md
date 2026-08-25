@@ -430,11 +430,20 @@ and terminal halt under nested KVM and WHP on 2026-08-25. WHP's ordinary `boot`
 preparation deliberately omits emulated xAPIC
 state so the terminal HLT remains observable; specialized timer/SMP/device
 probes retain their existing APIC policy. The native runners do not currently
-execute OVMF or consume the GPT/FAT boot image. Therefore shared package
-admission, native execution, and QEMU/EDK2 over WHPX are implemented and
-live-tested. QEMU/EDK2 over KVM has independently completed the same package-
-image trace. Native-runner firmware integration remains **PLANNED**. Do not call
-the native direct-launch probes firmware boots.
+execute OVMF or consume the GPT/FAT boot image. They now have a bounded
+firmware-entry primitive which maps 64 MiB of low RAM and one exact page-aligned
+firmware image immediately below 4 GiB, programs `F000:FFF0`, and
+returns the first strictly decoded backend exit. Live controlled 4 KiB firmware
+stubs produced the same port-I/O proof on WHP and nested KVM on 2026-08-25.
+This proves native reset-vector execution, not UEFI services or package boot.
+WHP applies second-level RW/NX low-RAM and RX firmware permissions; KVM makes the
+firmware slot guest-read-only, but its memory-slot API cannot express NX, so this
+probe does not claim equivalent second-level execute permission enforcement.
+Therefore shared package admission, native execution, and QEMU/EDK2 over WHPX
+are implemented and live-tested. QEMU/EDK2 over KVM has independently completed
+the same package-image trace. Native-runner OVMF/device/boot-media integration
+remains **PLANNED**. Do not call either the reset-vector probe or native direct-
+launch probe a firmware boot.
 
 ## Releases, images, install, and publication
 

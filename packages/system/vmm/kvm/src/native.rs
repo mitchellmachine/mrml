@@ -16,6 +16,9 @@ use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode
 mod launch;
 pub use launch::{KvmLaunchLayout, KvmPageWalk, KvmServiceEraser, PreparedKvmGuest};
 
+const FIRMWARE_TOP: u64 = 0x1_0000_0000;
+const FIRMWARE_RAM_BYTES: usize = 64 * 1024 * 1024;
+
 const O_RDWR: c_int = 2;
 const O_CLOEXEC: c_int = 0x80000;
 const PROT_READ: c_int = 1;
@@ -125,6 +128,22 @@ pub struct KvmSystem {
 }
 
 impl KvmSystem {
+    /// Prepares one x86 bootstrap processor at the architectural reset vector.
+    /// The caller supplies an exact, page-aligned firmware image which is mapped
+    /// guest-read-only at the top of the 32-bit physical address space. KVM's
+    /// memory-slot API does not express execute-only/NX permissions.
+    pub fn prepare_firmware_probe(&self, firmware: &[u8]) -> Result<PreparedKvmFirmware, KvmError> {
+        let layout = FirmwareProbeLayout::new(firmware.len()).ok_or(KvmError::InvalidMapping)?;
+        let mut backend = self.create_backend::<2>(0)?;
+        backend.map_memory(0, FIRMWARE_RAM_BYTES, false)?;
+        backend.map_memory(layout.firmware_base, firmware.len(), true)?;
+        backend
+            .memory
+            .write_service(layout.firmware_base, firmware)?;
+        backend.vcpu.configure_reset_vector()?;
+        Ok(PreparedKvmFirmware { backend, layout })
+    }
+
     fn virtual_cpuid(&self, apic_id: u32, cpus: u8) -> Result<KvmCpuidSet, KvmError> {
         let apic_id = u8::try_from(apic_id)
             .ok()
@@ -351,6 +370,22 @@ impl KvmRunCancellation {
 }
 
 impl KvmVcpu {
+    fn configure_reset_vector(&mut self) -> Result<(), KvmError> {
+        let mut special = KvmSpecialRegisters::zeroed();
+        if unsafe { ioctl(self.file.0, KVM_GET_SREGS, &mut special) } < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        special.cs = KvmSegment::reset_code();
+        if unsafe { ioctl(self.file.0, KVM_SET_SREGS, &special) } < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        let registers = KvmRegisters::initial(0xfff0, 0, 0, 0, 0, 0);
+        if unsafe { ioctl(self.file.0, KVM_SET_REGS, &registers) } < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        Ok(())
+    }
+
     fn reload_exact_page_table_root(&mut self, expected: u64) -> Result<(), KvmError> {
         const CR4_PCIDE: u64 = 1 << 17;
         if self.pending_io_read.is_some()
@@ -668,6 +703,24 @@ struct KvmSegment {
 }
 
 impl KvmSegment {
+    const fn reset_code() -> Self {
+        Self {
+            base: 0xffff_0000,
+            limit: 0xffff,
+            selector: 0xf000,
+            kind: 11,
+            present: 1,
+            dpl: 0,
+            default_operand: 0,
+            system: 1,
+            long: 0,
+            granularity: 0,
+            available: 0,
+            unusable: 0,
+            padding: 0,
+        }
+    }
+
     const fn code64() -> Self {
         Self {
             base: 0,
@@ -718,6 +771,54 @@ impl KvmSegment {
             unusable: 0,
             padding: 0,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FirmwareProbeLayout {
+    firmware_base: u64,
+    firmware_bytes: u64,
+    reset_vector: u64,
+}
+
+impl FirmwareProbeLayout {
+    pub const fn new(bytes: usize) -> Option<Self> {
+        if bytes == 0 || bytes > 16 * 1024 * 1024 || bytes % PAGE_SIZE as usize != 0 {
+            return None;
+        }
+        let firmware_bytes = bytes as u64;
+        Some(Self {
+            firmware_base: FIRMWARE_TOP - firmware_bytes,
+            firmware_bytes,
+            reset_vector: FIRMWARE_TOP - 16,
+        })
+    }
+
+    pub const fn firmware_base(self) -> u64 {
+        self.firmware_base
+    }
+    pub const fn firmware_bytes(self) -> u64 {
+        self.firmware_bytes
+    }
+    pub const fn reset_vector(self) -> u64 {
+        self.reset_vector
+    }
+}
+
+pub struct PreparedKvmFirmware {
+    backend: KvmBackend<2>,
+    layout: FirmwareProbeLayout,
+}
+
+impl PreparedKvmFirmware {
+    pub const fn layout(&self) -> FirmwareProbeLayout {
+        self.layout
+    }
+    pub fn run(&mut self) -> Result<VmExit, KvmError> {
+        self.backend.vcpu.run()
+    }
+    pub fn snapshot(&self) -> Result<KvmVcpuSnapshot, KvmError> {
+        self.backend.snapshot()
     }
 }
 
@@ -1666,6 +1767,48 @@ mod tests {
         assert_eq!(
             (code.present, code.long, code.system, code.default_operand),
             (1, 1, 1, 0)
+        );
+    }
+
+    #[test]
+    fn firmware_probe_layout_ends_at_reset_vector_window() {
+        assert_eq!(FirmwareProbeLayout::new(0), None);
+        assert_eq!(FirmwareProbeLayout::new(4097), None);
+        assert_eq!(FirmwareProbeLayout::new(16 * 1024 * 1024 + 4096), None);
+        let layout = FirmwareProbeLayout::new(4 * 1024 * 1024).unwrap();
+        assert_eq!(layout.firmware_base(), 0xffc0_0000);
+        assert_eq!(
+            layout.firmware_base() + layout.firmware_bytes(),
+            FIRMWARE_TOP
+        );
+        assert_eq!(layout.reset_vector(), 0xffff_fff0);
+        let reset = KvmSegment::reset_code();
+        assert_eq!(
+            (reset.selector, reset.base, reset.limit),
+            (0xf000, 0xffff_0000, 0xffff)
+        );
+        assert_eq!(
+            (reset.long, reset.default_operand, reset.granularity),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn live_firmware_reset_vector_executes_when_kvm_is_available() {
+        let Ok(system) = KvmSystem::open() else {
+            return;
+        };
+        let mut firmware = [0u8; 4096];
+        firmware[4080..4085].copy_from_slice(&[0xb0, 0x5a, 0xe6, 0xe9, 0xf4]);
+        let mut guest = system.prepare_firmware_probe(&firmware).unwrap();
+        assert_eq!(
+            guest.run().unwrap(),
+            VmExit::Io {
+                port: 0xe9,
+                size: 1,
+                write: true,
+                value: 0x5a
+            }
         );
     }
 
