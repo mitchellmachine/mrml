@@ -615,7 +615,7 @@ fn read_bounded_manifest(path: &Path, label: &str) -> Result<String, String> {
         .map_err(|error| format!("ManifestReadError {{ file: {label}, detail: {error} }}"))
 }
 
-fn load_manifest_declarations(root: &Path) -> Result<String, String> {
+fn load_manifest_declarations(root: &Path) -> Result<Vec<Vec<String>>, String> {
     let root_text = read_bounded_manifest(&root.join("mrml.toml"), "mrml.toml")?;
     let root_document = ManifestDocument::parse(root_text.as_bytes())
         .map_err(|error| manifest_error("mrml.toml", error))?;
@@ -629,7 +629,8 @@ fn load_manifest_declarations(root: &Path) -> Result<String, String> {
         return Err(format!("ComponentCountLimit {{ limit: {MAX_COMPONENTS} }}"));
     }
     let mut seen = BTreeSet::new();
-    let mut declarations = String::from("version|3\n");
+    let mut declarations = Vec::new();
+    let mut declaration_bytes = 0_usize;
     let mut interface_definitions = BTreeMap::new();
     let mut providers = Vec::new();
     let mut requirements = Vec::new();
@@ -715,17 +716,17 @@ fn load_manifest_declarations(root: &Path) -> Result<String, String> {
             ));
         }
         for declaration in v2_declarations(&document, member, &relative)? {
-            let next = declarations
-                .len()
-                .checked_add(declaration.len() + 1)
+            let record_bytes = declaration.iter().map(String::len).sum::<usize>();
+            let next = declaration_bytes
+                .checked_add(record_bytes)
                 .ok_or("WorkspaceSizeOverflow")?;
             if next as u64 > MAX_WORKSPACE_BYTES {
                 return Err(format!(
                     "WorkspaceSizeLimit {{ bytes: {next}, limit: {MAX_WORKSPACE_BYTES} }}"
                 ));
             }
-            declarations.push_str(&declaration);
-            declarations.push('\n');
+            declaration_bytes = next;
+            declarations.push(declaration);
         }
     }
     for (provider, interface, generation, fingerprint, _) in &providers {
@@ -812,7 +813,7 @@ fn v2_declarations(
     document: &ManifestDocument,
     member: &str,
     file: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<Vec<String>>, String> {
     let package = document
         .section("package")
         .map_err(|error| manifest_error(file, error))?;
@@ -891,14 +892,19 @@ fn v2_declarations(
             }
         }
     }
-    let mut declarations = vec![format!(
-        "component|{id}|{member}|{name}|{class}|{}|{default}|{}|{}|{}|{}",
+    let mut declarations = vec![vec![
+        "component".into(),
+        id.into(),
+        member.into(),
+        name.into(),
+        class.into(),
         targets.join(","),
+        default.to_string(),
         dependencies.join(","),
         features.join(","),
         outputs.join(","),
-        input_counts.structured()
-    )];
+        input_counts.structured(),
+    ]];
     let rust = document
         .section("rust")
         .map_err(|error| manifest_error(file, error))?;
@@ -947,30 +953,38 @@ fn v2_declarations(
         }
         externs.push(encoded);
     }
-    declarations.push(format!(
-        "rust-action|{id}|{}|{}|{}|{}",
+    declarations.push(vec![
+        "rust-action".into(),
+        id.into(),
         rust.string("crate_name")
-            .map_err(|error| manifest_error(file, error))?,
+            .map_err(|error| manifest_error(file, error))?
+            .into(),
         rust.string("crate_type")
-            .map_err(|error| manifest_error(file, error))?,
+            .map_err(|error| manifest_error(file, error))?
+            .into(),
         rust.string("source")
-            .map_err(|error| manifest_error(file, error))?,
-        externs.join(";")
-    ));
+            .map_err(|error| manifest_error(file, error))?
+            .into(),
+        externs.join(";"),
+    ]);
     for (section_name, record_name) in [("test", "rust-test"), ("benchmark", "rust-benchmark")] {
         for section in document.array_sections(section_name) {
-            declarations.push(format!(
-                "{record_name}|{id}|{}|{}|{}",
+            declarations.push(vec![
+                record_name.into(),
+                id.into(),
                 section
                     .string("name")
-                    .map_err(|error| manifest_error(file, error))?,
+                    .map_err(|error| manifest_error(file, error))?
+                    .into(),
                 section
                     .string("source")
-                    .map_err(|error| manifest_error(file, error))?,
+                    .map_err(|error| manifest_error(file, error))?
+                    .into(),
                 section
                     .boolean("self_extern")
                     .map_err(|error| manifest_error(file, error))?
-            ));
+                    .to_string(),
+            ]);
         }
     }
     for section in document.array_sections("example") {
@@ -981,32 +995,27 @@ fn v2_declarations(
             .optional_string("feature")
             .map_err(|error| manifest_error(file, error))?
             .unwrap_or("");
-        if targets.is_empty() && feature.is_empty() {
-            declarations.push(format!(
-                "rust-example|{id}|{}|{}",
-                section
-                    .string("name")
-                    .map_err(|error| manifest_error(file, error))?,
-                section
-                    .string("source")
-                    .map_err(|error| manifest_error(file, error))?
-            ));
-        } else {
-            declarations.push(format!(
-                "rust-example|{id}|{}|{}|{}|{feature}",
-                section
-                    .string("name")
-                    .map_err(|error| manifest_error(file, error))?,
-                section
-                    .string("source")
-                    .map_err(|error| manifest_error(file, error))?,
-                if targets.is_empty() {
-                    "*".into()
-                } else {
-                    targets.join(",")
-                }
-            ));
+        let mut record = vec![
+            "rust-example".into(),
+            id.into(),
+            section
+                .string("name")
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
+            section
+                .string("source")
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
+        ];
+        if !targets.is_empty() || !feature.is_empty() {
+            record.push(if targets.is_empty() {
+                "*".into()
+            } else {
+                targets.join(",")
+            });
+            record.push(feature.into());
         }
+        declarations.push(record);
     }
     for section in document.array_sections("binary") {
         let targets = section
@@ -1015,37 +1024,40 @@ fn v2_declarations(
         let feature = section
             .optional_string("feature")
             .map_err(|error| manifest_error(file, error))?;
-        let mut line = format!(
-            "rust-binary|{id}|{}|{}|{}|{}",
+        let mut record = vec![
+            "rust-binary".into(),
+            id.into(),
             section
                 .string("output")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("crate_name")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("source")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .boolean("self_extern")
                 .map_err(|error| manifest_error(file, error))?
-        );
+                .to_string(),
+        ];
         if !targets.is_empty() || feature.is_some() {
-            line.push('|');
-            let encoded_targets = targets.join(",");
-            line.push_str(if targets.is_empty() {
-                "*"
+            record.push(if targets.is_empty() {
+                "*".into()
             } else {
-                &encoded_targets
+                targets.join(",")
             });
-            line.push('|');
-            line.push_str(feature.unwrap_or(""));
+            record.push(feature.unwrap_or("").into());
         }
-        declarations.push(line);
+        declarations.push(record);
     }
     for section in document.array_sections("feature_set") {
-        declarations.push(format!(
-            "rust-feature-set|{id}|{}|{}",
+        declarations.push(vec![
+            "rust-feature-set".into(),
+            id.into(),
             section
                 .strings("targets")
                 .map_err(|error| manifest_error(file, error))?
@@ -1053,15 +1065,17 @@ fn v2_declarations(
             section
                 .optional_strings("features")
                 .map_err(|error| manifest_error(file, error))?
-                .join(",")
-        ));
+                .join(","),
+        ]);
     }
     for section in document.array_sections("feature_profile") {
-        declarations.push(format!(
-            "rust-feature-profile|{id}|{}|{}|{}",
+        declarations.push(vec![
+            "rust-feature-profile".into(),
+            id.into(),
             section
                 .string("name")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .strings("targets")
                 .map_err(|error| manifest_error(file, error))?
@@ -1069,28 +1083,33 @@ fn v2_declarations(
             section
                 .optional_strings("features")
                 .map_err(|error| manifest_error(file, error))?
-                .join(",")
-        ));
+                .join(","),
+        ]);
     }
     for section in document.array_sections("compile_env") {
-        declarations.push(format!(
-            "rust-compile-env|{id}|{}|{}|{}",
-            section
-                .string("name")
-                .map_err(|error| manifest_error(file, error))?,
-            section
-                .string("value")
-                .map_err(|error| manifest_error(file, error))?,
-            input_counts.compile_env
-        ));
-    }
-    for section in document.array_sections("absent_compile_env") {
-        declarations.push(format!(
-            "rust-compile-env-absent|{id}|{}",
+        declarations.push(vec![
+            "rust-compile-env".into(),
+            id.into(),
             section
                 .string("name")
                 .map_err(|error| manifest_error(file, error))?
-        ));
+                .into(),
+            section
+                .string("value")
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
+            input_counts.compile_env.to_string(),
+        ]);
+    }
+    for section in document.array_sections("absent_compile_env") {
+        declarations.push(vec![
+            "rust-compile-env-absent".into(),
+            id.into(),
+            section
+                .string("name")
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
+        ]);
     }
     for (name, record) in [
         ("host_build", "rust-host-builds"),
@@ -1098,75 +1117,90 @@ fn v2_declarations(
         ("host_test", "rust-host-tests"),
     ] {
         for section in document.array_sections(name) {
-            declarations.push(format!(
-                "{record}|{id}|{}",
+            declarations.push(vec![
+                record.into(),
+                id.into(),
                 section
                     .strings("targets")
                     .map_err(|error| manifest_error(file, error))?
-                    .join(",")
-            ));
+                    .join(","),
+            ]);
         }
     }
     if let Ok(policy) = document.section("test_policy") {
-        declarations.push(format!(
-            "rust-test-policy|{id}|{}",
+        declarations.push(vec![
+            "rust-test-policy".into(),
+            id.into(),
             policy
                 .integer("stack_bytes")
                 .map_err(|error| manifest_error(file, error))?
-        ));
+                .to_string(),
+        ]);
     }
     for section in document.array_sections("target_triple") {
-        declarations.push(format!(
-            "rust-target-triple|{id}|{}|{}",
+        declarations.push(vec![
+            "rust-target-triple".into(),
+            id.into(),
             section
                 .string("target")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("triple")
                 .map_err(|error| manifest_error(file, error))?
-        ));
+                .into(),
+        ]);
     }
     for section in document.array_sections("extern_profile") {
-        declarations.push(format!(
-            "rust-extern-profile|{id}|{}|{}|{}",
+        declarations.push(vec![
+            "rust-extern-profile".into(),
+            id.into(),
             section
                 .string("compile_name")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("consumer")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("provider")
                 .map_err(|error| manifest_error(file, error))?
-        ));
+                .into(),
+        ]);
     }
     for section in document.array_sections("generated") {
-        declarations.push(format!(
-            "rust-ptx|{id}|{}|{}|{}|{}|{}",
+        declarations.push(vec![
+            "rust-ptx".into(),
+            id.into(),
             section
                 .string("output")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("source")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("feature")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("compile_env")
-                .map_err(|error| manifest_error(file, error))?,
+                .map_err(|error| manifest_error(file, error))?
+                .into(),
             section
                 .string("default_arch")
                 .map_err(|error| manifest_error(file, error))?
-        ));
+                .into(),
+        ]);
     }
     Ok(declarations)
 }
 
 fn load_workspace() -> Result<Workspace, String> {
     let root = find_root()?;
-    let text = load_manifest_declarations(&root)?;
-    let mut version = None;
+    let declarations = load_manifest_declarations(&root)?;
     let mut components = Vec::new();
     let mut rust_actions = Vec::new();
     let mut rust_tests = Vec::new();
@@ -1184,14 +1218,9 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_feature_profiles = Vec::new();
     let mut rust_extern_profiles = Vec::new();
     let mut rust_target_triples = Vec::new();
-    for (index, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let fields: Vec<&str> = line.split('|').collect();
+    for (index, record) in declarations.iter().enumerate() {
+        let fields: Vec<&str> = record.iter().map(String::as_str).collect();
         match fields.as_slice() {
-            ["version", value] => version = Some(*value),
             [
                 "component",
                 id,
@@ -1434,9 +1463,6 @@ fn load_workspace() -> Result<Workspace, String> {
             }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
-    }
-    if version != Some("3") {
-        return Err("UnsupportedWorkspaceVersion".into());
     }
     if components.is_empty() {
         return Err("EmptyWorkspace".into());
