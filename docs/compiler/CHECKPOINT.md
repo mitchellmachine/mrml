@@ -917,3 +917,14 @@ rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" packages/compiler/core/src packag
 Format only the compiler packages, preserve unrelated worktree changes, stage
 overlapping documentation hunks interactively, fetch before pushing, never
 force-push, and update this checkpoint after every pushed compiler milestone.
+
+The inferred projection-equality milestone binds a bounded projection and
+expected term in one root inference universe. It proves exact, generic, and
+where-clause premises before instantiating the selected associated value, then
+merges concrete or symbolic results into the existing fixed constraint state.
+Nested generic projection templates reuse the 16-frame cycle/overflow guard.
+Windows gnullvm and native Arch Linux WSL each pass 503 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 849
+compiler tests per host. Projection-bearing type terms and premises, predicate
+conjunction composition, backtracking, caching, coinduction, and source syntax
+remain unsupported.

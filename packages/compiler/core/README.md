@@ -4119,6 +4119,18 @@ Environment layering, implied bounds, negative reasoning, projection predicates,
 backtracking, caching, coinduction, source syntax, and general mixed inference
 selection remain unsupported.
 
+The inferred projection-equality milestone binds a projection and expected type
+over the existing bounded existential universe. Exact or generic trait proof
+refines the root constraint state before the selected associated value is
+instantiated and unified with the expectation. Generic parameter values remain
+symbolic when appropriate, while nested projection templates reuse the fixed
+16-frame cycle and overflow guard. Windows gnullvm and native Arch Linux WSL
+each pass 503 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 849 compiler tests per host. Projection-
+bearing type terms and premises, predicate conjunction composition,
+backtracking, caching, coinduction, source syntax, and general normalization
+remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
