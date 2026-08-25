@@ -5,6 +5,7 @@ mod fse;
 mod huffman;
 mod kernel_transport;
 mod sequences;
+mod service_loop;
 
 use core::fmt;
 use mrml_interface_zstd_v3::{
@@ -14,6 +15,9 @@ use mrml_interface_zstd_v3::{
 use mrml_runtime::Vector;
 
 pub use kernel_transport::{ZstdKernelTransport, ZstdKernelTransportError};
+pub use service_loop::{
+    ReceivedZstdEnvelope, ZstdServiceLoop, ZstdServiceLoopError, ZstdServiceSyscalls,
+};
 
 pub const FRAME_MAGIC: u32 = 0xfd2f_b528;
 

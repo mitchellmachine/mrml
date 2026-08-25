@@ -55,8 +55,10 @@ Three new persistent deltas are documented before implementation:
   distinct VM/task bindings on Windows and Arch Linux. This is not a launched
   service or VMM invocation. A complete representative dual-placement service,
   Settings/shell projection of owner policy, VM construction, resource
-  projection, resolver-to-launch binding, reply delivery, and WHP/KVM runtime
-  transport remain **PLANNED**.
+  projection, resolver-to-launch binding, concrete service syscalls, and WHP/KVM
+  runtime transport remain **PLANNED**. A bounded userspace receive/reply loop
+  now exists behind a launch-bound unsafe runtime trait, but only mock-runtime
+  tests exercise it.
   The configuration service now provides a bounded typed persistence
   prerequisite for component placement preference and system isolation-mode
   selection, using exact setting/root capabilities and its authenticated
@@ -232,9 +234,11 @@ hosted endpoint adapter and one service-side kernel composition around the
 identical ABI-3 byte descriptors. The latter exercises a real `TaskRuntime`
 inbox and one attenuated read/write shared-buffer capability, with exact
 VM/task projection, private erased scratch, and bounded output. Windows and
-Arch Linux host suites pass. No MRML-target service process, syscall receive/
-reply loop, resolver-to-launch binding, supervision, CPU/RAM pool integration,
-WHP/KVM guest call, or physical isolation was exercised.
+Arch Linux host suites pass. A bounded userspace loop also receives one exact
+request/capability, sends one exact response through a launch-bound runtime
+trait, releases the leaf, and erases all buffers. No MRML-target service process,
+concrete syscall adapter, resolver-to-launch binding, supervision, CPU/RAM pool
+integration, WHP/KVM guest call, or physical isolation was exercised.
 
 Cross-compiler evidence is **PARTIALLY IMPLEMENTED** for one narrow descriptor
 identity projection. On both Windows gnullvm and Arch Linux, the canonical MRML

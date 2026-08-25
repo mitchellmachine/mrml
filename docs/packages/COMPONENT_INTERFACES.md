@@ -87,9 +87,13 @@ private scratch, writes only the exact successful output, and erases scratch on
 every path. Windows and Arch Linux hosted tests exercise delivery through the
 real bounded `TaskRuntime` inbox, capability transfer, distinct VM/task
 projections, revocation, wrong-task rejection, malformed input, and resource
-exhaustion. This is hosted kernel-policy evidence only: no MRML-target service
-binary, process syscall loop, VMM guest invocation, resolver-to-launch binding,
-reply transport, supervision integration, or WHP/KVM service parity is proved.
+exhaustion. A separate bounded userspace loop receives the same request and one
+capability through a narrow unsafe runtime trait, reads/writes only the declared
+ranges, sends the exact response to a launch-bound reply peer, releases the
+received leaf, and erases every caller-owned buffer. This is hosted kernel-
+policy and mock-runtime evidence only: no MRML-target service binary, concrete
+syscall adapter, VMM guest invocation, resolver-to-launch binding, supervision
+integration, or WHP/KVM service parity is proved.
 
 > Functionality historically embedded in a Rust binary may instead be supplied
 > by an independently signed and serviced MRML component through an explicit,

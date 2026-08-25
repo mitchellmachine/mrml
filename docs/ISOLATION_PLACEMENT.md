@@ -51,9 +51,11 @@ tests deliver the request through `TaskRuntime`, revalidate the exact VM/task
 binding, copy only bounded input/output through private erased scratch, and
 reject revocation, wrong-task substitution, malformed input, and insufficient
 scratch before output mutation. This is **PARTIALLY IMPLEMENTED** transport
-composition, not a launched native service or microVM: resolver-to-launch
-binding, process syscalls, reply delivery, supervision, and WHP/KVM invocation
-remain **PLANNED**.
+composition. A bounded userspace loop now receives that request/capability,
+performs the same private-copy operation, sends the exact response through a
+launch-bound runtime trait, releases the received leaf, and erases its buffers.
+It is not a launched native service or microVM: resolver-to-launch binding, a
+concrete syscall adapter, supervision, and WHP/KVM invocation remain **PLANNED**.
 
 The native configuration form now has its first real supervised launcher. It
 preflights one vacant supervisor slot before creating a task, publishes the task
