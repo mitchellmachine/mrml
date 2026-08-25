@@ -3086,15 +3086,20 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         .components
         .iter()
         .filter(|component| {
+            let target_matches = component.targets.contains(&target)
+                || component.rust_action.as_ref().is_some_and(|action| {
+                    (operation == "build" && action.host_build_targets.contains(&target))
+                        || (operation == "test" && action.host_test_targets.contains(&target))
+                });
             if let Some(value) = selected {
                 (component.id == value
                     || component.path == value
                     || component.cargo_package == value)
-                    && component.targets.contains(&target)
+                    && target_matches
             } else if all {
-                component.targets.contains(&target)
+                target_matches
             } else {
-                component.default && component.targets.contains(&target)
+                component.default && target_matches
             }
         })
         .collect();

@@ -19,6 +19,16 @@ filesystem, compositor, surface/buffer protocol, or desktop graphics stack. The
 mediated VGPU work below supplies experimental resource/compute mechanisms; it
 does not define GUI semantics or prove accelerated presentation.
 
+The kernel's adaptive-isolation foundation now includes a fixed-capacity launch
+admission table. It binds each prepared domain to an exact policy generation,
+eligibility class, and placement; commit requires matching native, microVM, or
+platform backend-ready evidence. In Total mode it rejects eligible native
+placement and active unsupported blockers, and a typed resource or transport
+failure cancels preparation without creating a native fallback. Five focused
+tests are included in the 482-test Windows hosted kernel suite. This mechanism
+does not create VMs, select providers, allocate resources, or provide the first
+dual-placement service, so Total MicroVM remains **PLANNED**.
+
 Likewise, QEMU `virtio-rng-pci` and debug-console devices in recorded boot
 commands belong to the external QEMU test machine. MRML does not currently
 implement or advertise a VirtIO device. The common VMM exit/interrupt mechanisms

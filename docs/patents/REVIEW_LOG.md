@@ -4,6 +4,19 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Bounded kernel isolation launch admission
+
+Patent review: **NOT_TRIGGERED** for this bounded record/commit mechanism. It
+stores caller-selected placement and eligibility, reserves a fixed slot,
+requires matching backend-ready evidence, rejects Total-mode downgrade, and
+reports typed failure. It does not instantiate a VM, choose a resource or
+provider, publish an application, classify workloads by thresholds, or provide
+transparent transport. Claim-focused screening considered adjacent mechanisms
+in US9921860B1, US8931037B2, and EP2587375A1; their status is not a design basis
+or a clearance conclusion. Actual VM construction, resource/provider selection,
+cross-placement transport, boot composition, and system-wide enforcement remain
+**TRIGGERED** under the adaptive-isolation entry below.
+
 ## 2026-08-25 — Artifact extensions, adaptive isolation, and storage/optical design
 
 Patent review: artifact filename conventions are **NOT_TRIGGERED** because names

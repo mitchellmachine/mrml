@@ -7,9 +7,13 @@ and service manifests explicitly record native singleton policies. The bounded
 resolver applies package defaults, owner requests, and total-mode requests; an
 unsupported total promotion is reported as an exception and launches nothing.
 The workspace model retains each validated policy and `mrml.lock` records its
-default, floor, ceiling, and supported set. MicroVM launch, persistent settings,
-boot overrides, eligibility metadata, and cross-placement runtime transport
-remain **PLANNED**.
+default, floor, ceiling, and supported set. The kernel now has a fixed-capacity
+launch-admission mechanism that records an exact policy generation, Total-mode
+eligibility class, requested placement, and matching backend-ready evidence. It
+rejects eligible native placement and active unsupported blockers in Total mode,
+and reports typed resource or transport unavailability without native fallback.
+It does not select providers, create a VM, allocate resources, persist policy,
+or implement boot/runtime transport. Those mechanisms remain **PLANNED**.
 
 ## One policy, several placements
 
@@ -246,8 +250,8 @@ secrets.
 
 Documentation is not implementation evidence. Implement bounded milestones:
 
-1. policy/object schema, validation, workspace retention, and lock output
-   (**PARTIALLY IMPLEMENTED**);
+1. policy/object schema, validation, workspace retention, lock output, and
+   bounded kernel launch admission/reporting (**PARTIALLY IMPLEMENTED**);
 2. one representative dual-placement service;
 3. one representative dual-placement GUI application;
 4. monitor placement visibility;

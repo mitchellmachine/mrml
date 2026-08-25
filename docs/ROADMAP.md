@@ -32,7 +32,10 @@ Three new persistent deltas are documented before implementation:
   policies are **IMPLEMENTED**. The
   resolver handles defaults, owner selection, total-mode promotion, and visible
   unsupported exceptions, and the workspace/lock retains each validated policy;
-  owner-setting persistence and runtime work remain **PLANNED**.
+  the kernel additionally records bounded generational launch admission and
+  rejects Total-mode native downgrades or active blockers. A representative
+  dual-placement service, owner-setting persistence, VM construction, resource
+  projection, and cross-placement runtime transport remain **PLANNED**.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.

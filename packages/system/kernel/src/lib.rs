@@ -19,6 +19,7 @@ mod grant;
 mod handoff;
 mod host_resource;
 mod ipc;
+mod isolation;
 mod memory;
 mod memory_resource;
 mod pe;
@@ -79,6 +80,12 @@ pub use ipc::{
     AuthorizedIpcCapability, AuthorizedSharedIpcBuffer, Endpoint, IpcError, IpcSharedBufferBackend,
     IpcSharedBufferError, IpcSharedBufferIoError, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD,
     MAX_WIRE_MESSAGE, Message, Receiver, WIRE_HEADER_LENGTH,
+};
+pub use isolation::{
+    HostSubstrateReason, IsolationAdmissionTable, IsolationLaunchError, IsolationLaunchEvidence,
+    IsolationLaunchRequest, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
+    PreparedIsolationLaunch, RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport,
+    UnavailableIsolationDomain,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,
