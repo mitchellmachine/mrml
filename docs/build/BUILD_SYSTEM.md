@@ -277,6 +277,12 @@ change still requires human review because equal counts do not establish equal
 commands, paths, libraries, or environment semantics. See
 [BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md).
 
+A deterministic unit-level mutation corpus applies stepped truncations and 512
+byte flips to a representative Manifest V2 document containing targets,
+features, dependencies, interfaces, artifacts, tests, and policy. Every accepted
+mutation must canonicalize and reparse identically. This exercises bounded parser
+and formatter behavior; it is not an exhaustive semantic-validator fuzzing claim.
+
 A canonical package-local `mrml.toml` binds package identity/version/class,
 profile/compiler mode, target slices, capability requests, dependencies/interfaces,
 and resources. It grants no authority. An exact lockfile binds dependency identity,

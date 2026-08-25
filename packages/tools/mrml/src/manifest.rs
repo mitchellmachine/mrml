@@ -342,4 +342,45 @@ mod tests {
         );
         assert!(Document::parse(format!("{VALID}\n[package]\n").as_bytes()).is_err());
     }
+
+    #[test]
+    fn bounded_mutation_corpus_preserves_parse_and_canonicalization_bounds() {
+        let corpus = concat!(
+            "[manifest]\nformat = \"mrml\"\nversion = 2\n\n",
+            "[package]\nid = \"org.mrml.zstd\"\nkind = \"library\"\n",
+            "name = \"mrml-zstd\"\nprofile = \"library\"\n\n",
+            "[[target]]\narch = \"x86_64\"\nenvironment = \"windows\"\n\n",
+            "[[feature]]\nname = \"runtime\"\n\n",
+            "[[dependency]]\nalias = \"mrml_runtime\"\n",
+            "package = \"org.mrml.runtime\"\nscope = \"compile\"\n",
+            "targets = [\"windows-x86_64\"]\n\n",
+            "[[provides]]\nfingerprint = \"abc123\"\n",
+            "interface = \"org.mrml.interface.compression.zstd\"\n",
+            "generation = 3\ntargets = [\"windows-x86_64\"]\n\n",
+            "[[artifact]]\ncrate_name = \"mrml_zstd\"\nkind = \"library\"\n",
+            "name = \"mrml_zstd\"\nsource = \"src/lib.rs\"\n\n",
+            "[[test]]\nname = \"round_trip\"\nsource = \"tests/round_trip.rs\"\n",
+            "execution = \"host\"\n\n",
+            "[policy]\nbuild_scripts = \"deny\"\nexternal_commands = \"deny\"\n",
+        )
+        .as_bytes();
+        for truncated in (0..corpus.len()).step_by(17) {
+            let _ = Document::parse(&corpus[..truncated]);
+        }
+        let mut state = 0x6d72_6d6c_7632_u64;
+        for _ in 0..512 {
+            state = state
+                .wrapping_mul(2_862_933_555_777_941_757)
+                .wrapping_add(3_037_000_493);
+            let mut mutated = corpus.to_vec();
+            let offset = (state as usize) % mutated.len();
+            mutated[offset] ^= 1 << ((state >> 40) & 7);
+            if let Ok(document) = Document::parse(&mutated) {
+                assert_eq!(
+                    Document::parse(document.canonical().as_bytes()),
+                    Ok(document)
+                );
+            }
+        }
+    }
 }
