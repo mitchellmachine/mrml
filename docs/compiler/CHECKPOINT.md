@@ -9,13 +9,15 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `9a950ae9`
-  (`build: move compiler core`)
+- Compiler checkpoint commit: `0350249c`
+  (`build: move compiler driver`)
 - Remote state when recorded: `origin/main` includes the behavior-preserving
-  compiler-core relocation to `compiler/core`, its exact driver/recovery/oracle/
-  review path updates, and Windows verification. The push from `c74b0799` to
-  `9a950ae9` was a verified fast-forward; no compiler semantics changed.
-- Preceding compiler commits: `885ba7b7` (`compiler: validate nested loop
+  compiler core/driver relocation to `compiler/core` and `compiler/driver`,
+  exact recovery/review path updates, and Windows verification. The driver push
+  from `3ed363de` to `0350249c` was a verified fast-forward; no compiler or
+  driver semantics changed.
+- Preceding compiler commits: `9a950ae9` (`build: move compiler core`),
+  `885ba7b7` (`compiler: validate nested loop
   returns`), `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -537,6 +539,12 @@ Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
 scan, `mrml doctor`, `mrml audit`, and `mrml build mrml-rustc` passed.
 The driver was not re-executed by this path-only checkpoint, and no new Linux
 evidence is claimed.
+
+At driver path checkpoint `0350249c`, the Windows gnullvm driver suite passed
+2 tests; driver formatting, warnings-denied Clippy, and the combined core/driver
+hygiene scan passed. `mrml doctor` and `mrml audit` passed. Direct
+`mrml build mrml-rustc-driver` selected MSVC and failed because `link.exe`
+was unavailable. No new Linux evidence is claimed.
 
 On 2026-08-25, ORACLE-0002 passed 767 tests on Windows gnullvm: 420 library
 tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
