@@ -1,0 +1,3 @@
+mrml.toml text eol=lf
+**/mrml.toml text eol=lf
+mrml.lock text eol=lf

@@ -82,7 +82,12 @@ jobs:
       - name: Build representative native component without Cargo
         shell: bash
         run: |
-          "${{ matrix.mrml }}" build org.mrml.library.math --target native
+          if ! output=$("${{ matrix.mrml }}" build org.mrml.library.math --target native 2>&1); then
+            summary=$(printf '%s' "$output" | tail -n 20 | tr '\n' ' ')
+            echo "::error title=MRML native build failed::$summary"
+            exit 1
+          fi
+          printf '%s\n' "$output"
 
       - name: Test through the MRML-native frontend
         shell: bash
