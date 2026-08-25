@@ -95,15 +95,15 @@ controlled revoker exact-matches attachment/function generation, BAR window,
 queue, block generation, backend range, and vector; preflights exact backend and
 interrupt capabilities; revokes both; resets the block device/attachment; and
 only then permits PCI generation advance with BAR/decode clear. This proves
-destroyed-execution cleanup. The controlled runners now first exact-remove and
-verify absence of the preinstalled non-global first-level BAR trap leaf from
-the stopped sole-vCPU guest. They retain a no-reentry quarantine until KVM/WHP
-exact-match and rewrite the prepared non-PCID CR3 and read it back. Any
-uncertain step keeps the quarantine permanent; success permits later entry and
-exact mapper cleanup. A fresh one-use-signed artifact emits a second bounded
-proof exit after withdrawal; both KVM and WHP resume the same guest and return
-that exact port/width/value before cleanup. This is not SMP shootdown,
-asynchronous unmapping, TLB-coherent hotplug, or production hotplug.
+destroyed-execution cleanup. Controlled sole-vCPU guests now return from launch
+with a bounded page-table path but no BAR leaf. The backend-aware configuration
+mapper installs and verifies the exact non-global leaf and reloads/read-backs
+the prepared non-PCID CR3 before decode publishes. Disable invokes the matching
+coherent withdrawal before decode and attachment mapping state clear. Any
+uncertain step keeps the quarantine permanent. The signed artifact exercises
+install, traffic, replacement reconstruction, withdrawal, and an exact bounded
+post-withdrawal proof on KVM and WHP. This is not SMP shootdown, asynchronous
+unmapping, TLB-coherent hotplug, or production hotplug.
 
 ## Capability projection into application microVMs
 

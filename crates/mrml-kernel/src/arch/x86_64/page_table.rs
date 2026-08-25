@@ -352,6 +352,26 @@ impl<S: PageTableStore> PageTableBuilder<S> {
         Ok(())
     }
 
+    /// Verifies every leaf still matches the exact expected frame and
+    /// permissions without changing page-table state.
+    pub fn verify_mapped(&self, expected: Mapping) -> Result<(), PageTableBuildError> {
+        for page in 0..expected.pages() {
+            let (virtual_address, physical_address) = mapping_page(expected, page)?;
+            let (table, index) = self.leaf_location(virtual_address)?;
+            let current = self.store.read(table, index)?;
+            if current & 1 == 0 {
+                return Err(PageTableBuildError::NotMapped);
+            }
+            let wanted = PageTableEntry::leaf(physical_address, expected.permissions())
+                .map_err(PageTableBuildError::Page)?
+                .bits();
+            if current & !LEAF_ACCESSED_DIRTY != wanted {
+                return Err(PageTableBuildError::MappingMismatch);
+            }
+        }
+        Ok(())
+    }
+
     fn leaf_location(
         &self,
         virtual_address: VirtAddr,
@@ -987,6 +1007,18 @@ mod tests {
         )
         .unwrap();
         builder.map(mapping).unwrap();
+        assert_eq!(builder.verify_mapped(mapping), Ok(()));
+        let substituted = Mapping::new(
+            mapping.virtual_start(),
+            PhysAddr::new(0x30_0000).unwrap(),
+            mapping.pages(),
+            mapping.permissions(),
+        )
+        .unwrap();
+        assert_eq!(
+            builder.verify_mapped(substituted),
+            Err(PageTableBuildError::MappingMismatch)
+        );
         assert_eq!(
             builder.verify_unmapped(mapping),
             Err(PageTableBuildError::AlreadyMapped)

@@ -100,6 +100,7 @@ pub struct PreparedWhpGuest<'system> {
     table_physical: u64,
     table_pages: u64,
     trapped_mmio: Option<u64>,
+    trapped_mmio_mapped: bool,
     trapped_mmio_retired: bool,
     service_entry: [Option<u64>; MAX_ISOLATED_SERVICES],
     service_root: [Option<PhysAddr>; MAX_ISOLATED_SERVICES],
@@ -176,6 +177,7 @@ impl<'system> PreparedWhpGuest<'system> {
     /// resumable live unmapping requires a separate TLB-coherent protocol.
     pub fn retire_trapped_mmio_before_destroy(&mut self, address: u64) -> Result<(), WhpError> {
         if self.trapped_mmio != Some(address)
+            || !self.trapped_mmio_mapped
             || self.trapped_mmio_retired
             || !address.is_multiple_of(PAGE_SIZE)
         {
@@ -201,6 +203,44 @@ impl<'system> PreparedWhpGuest<'system> {
             .unmap_exact(mapping)
             .and_then(|()| tables.verify_unmapped(mapping))
             .map_err(|_| WhpError::PageTable)?;
+        self.trapped_mmio_mapped = false;
+        Ok(())
+    }
+
+    /// Installs the exact configured non-global trap leaf and reloads the
+    /// stopped sole vCPU's exact CR3 before permitting entry.
+    pub fn install_trapped_mmio(&mut self, address: u64) -> Result<(), WhpError> {
+        if self.trapped_mmio != Some(address)
+            || self.trapped_mmio_mapped
+            || self.trapped_mmio_retired
+            || !address.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        let mapping = Mapping::new(
+            VirtAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+            PhysAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+            1,
+            PagePermissions::KERNEL_MMIO_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
+        self.trapped_mmio_retired = true;
+        {
+            let store = WhpPageTableStore::open_existing(
+                &mut self.partition,
+                self.table_physical,
+                self.table_pages,
+            )?;
+            let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+            tables
+                .map(mapping)
+                .and_then(|()| tables.verify_mapped(mapping))
+                .map_err(|_| WhpError::PageTable)?;
+        }
+        self.partition
+            .reload_exact_page_table_root(self.root.get())?;
+        self.trapped_mmio_mapped = true;
+        self.trapped_mmio_retired = false;
         Ok(())
     }
 
@@ -209,6 +249,7 @@ impl<'system> PreparedWhpGuest<'system> {
     /// the guest permanently quarantined.
     pub fn withdraw_trapped_mmio(&mut self, address: u64) -> Result<(), WhpError> {
         if self.trapped_mmio != Some(address)
+            || !self.trapped_mmio_mapped
             || self.trapped_mmio_retired
             || !address.is_multiple_of(PAGE_SIZE)
         {
@@ -236,7 +277,7 @@ impl<'system> PreparedWhpGuest<'system> {
         }
         self.partition
             .reload_exact_page_table_root(self.root.get())?;
-        self.trapped_mmio = None;
+        self.trapped_mmio_mapped = false;
         self.trapped_mmio_retired = false;
         Ok(())
     }
@@ -1299,6 +1340,35 @@ impl WhpSystem {
         )
     }
 
+    /// Prepares the bounded translation path, removes its exact MMIO leaf while
+    /// the guest is still non-runnable, and returns it for mapper installation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_kernel_block_dynamic_mmio_guest<'system>(
+        &'system self,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: WhpLaunchLayout,
+        queue: VirtualBlockQueueLayout,
+        configuration: VirtualBlockConfigurationPage,
+        resume: VirtualBlockResumePage,
+        mmio_address: u64,
+    ) -> Result<PreparedWhpGuest<'system>, WhpError> {
+        if !mmio_address.is_multiple_of(PAGE_SIZE) {
+            return Err(WhpError::InvalidMapping);
+        }
+        let mut guest = self.prepare_kernel_block_mmio_guest(
+            executable,
+            handoff,
+            layout,
+            queue,
+            configuration,
+            resume,
+            mmio_address,
+        )?;
+        guest.withdraw_trapped_mmio(mmio_address)?;
+        Ok(guest)
+    }
+
     /// Prepares two WHP virtual processors behind the emulated local APIC.
     /// The authenticated handoff must bind their MADT, trampoline, and stack
     /// arena as one indivisible boot contract.
@@ -1638,6 +1708,7 @@ impl WhpSystem {
                 .checked_sub(1)
                 .ok_or(WhpError::InvalidMapping)?,
             trapped_mmio,
+            trapped_mmio_mapped: trapped_mmio.is_some(),
             trapped_mmio_retired: false,
             service_entry: [None; MAX_ISOLATED_SERVICES],
             service_root: [None; MAX_ISOLATED_SERVICES],
@@ -2495,6 +2566,7 @@ mod tests {
             table_physical: 0,
             table_pages: 0,
             trapped_mmio: None,
+            trapped_mmio_mapped: false,
             trapped_mmio_retired: false,
             service_entry: [None; MAX_ISOLATED_SERVICES],
             service_root: [None; MAX_ISOLATED_SERVICES],

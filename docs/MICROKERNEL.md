@@ -6879,8 +6879,8 @@ does not set the x86 global bit.
 The native backend then accepts only one vCPU, no pending I/O-read or MMIO-write
 emulation, the exact prepared aligned CR3, and CR4.PCIDE clear. It rewrites the
 same CR3 through `KVM_SET_SREGS` or `WHvSetVirtualProcessorRegisters` and reads
-CR3/CR4 back before the prepared guest clears quarantine and consumes the
-one-use trapped-leaf identity. A wrong leaf and replay fail before mutation.
+CR3/CR4 back before the prepared guest clears quarantine and marks the exact
+leaf absent. A wrong leaf and replay fail before mutation.
 Any failure after quarantine publication leaves execution forbidden.
 
 Fresh controlled-probe results on 2026-08-24 were 132,780 us total under Arch
@@ -6921,6 +6921,65 @@ semantics, JavaScript/WebAssembly runtime, AI mechanism, or media mechanism.
 The planned scopes recorded as `TRIGGERED` in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
+
+### Decode-coupled native BAR mapper
+
+The PCI configuration runner now has a backend-aware mapper contract. It passes
+the same stopped backend that produced the exact configuration exit to the
+mapper after common exit-policy validation, without raw-pointer aliasing. The
+router still constructs the exact attachment/function generation and BAR
+window, and the block composition still derives its complete cleanup record
+before native mutation. Simulation-only mappers retain the original
+backend-independent contract; both paths use the same transactional command
+state machine.
+
+Controlled KVM/WHP PCI guests preallocate only the bounded intermediate-table
+path while non-runnable, remove the leaf, reload CR3, and return with the leaf
+verified absent. On memory-decode enable, the native block mapper exact-matches
+the cleanup record, installs and verifies the identity-mapped non-global MMIO
+leaf, and performs the checked sole-vCPU CR3 reload/read-back before the command
+bit or attachment mapping record publishes. Wrong-address and duplicate install
+attempts fail. Replacement reconstruction explicitly reinstalls the same exact
+leaf before the recovered guest runs. Decode disable invokes coherent exact
+withdrawal through the same router transaction before clearing command and
+attachment state; withdrawal replay fails.
+
+Controlled probes on 2026-08-24 reused the identical one-use-signed continuation
+artifact. Arch Linux/WSL2 KVM completed in 135,641 us (`verify=17439us`,
+`prepare=2229us`, `execute=91907us`); Windows WHP completed in 39,633 us
+(`verify=17696us`, `prepare=12006us`, `execute=5479us`). Both exercised dynamic
+install, five MRML-native block operations, replacement mapping reconstruction,
+transactional withdrawal, and the exact post-withdrawal continuation marker.
+This is controlled hosted sole-vCPU evidence, not SMP/asynchronous shootdown,
+production hotplug, durable-device, QEMU-differential, physical-device,
+bare-metal, or host-resistant evidence.
+
+Engineering Constitution complexity score: complexity impact `MODERATE`, TCB
+impact `NONE` for the hosted adapter, new parser `NO`, new authority model `NO`,
+new persistent state `NO`, external dependency `NO`, failure isolated `YES`,
+and existing-object reuse `YES`.
+
+DIGITAL-RIGHTS REVIEW: the mapper receives no ambient host path, identity-based
+privilege, publisher priority, DRM, attestation, telemetry, secret, AI, or
+accessibility authority. It can only install or withdraw the exact window
+already selected by capability-bound block/PCI policy. The MRML-native block
+transport remains authoritative; no compatibility transport was added.
+
+HOSTILE SECURITY REVIEW: the backend identity, stopped-vCPU state, attachment
+and function generations, BAR geometry, cleanup record, page-table root/path/
+leaf, mapping state, CR3/CR4, pending emulation, native API result, read-back,
+replacement state, and replay attempts are hostile. Exact preflight precedes
+mutation; quarantine precedes any page-table write; mapping publication follows
+verified install and coherence; command clearing follows verified withdrawal.
+Uncertainty cannot publish decode, clear mapping state, or resume the guest.
+
+Patent review: `NOT_TRIGGERED` — this composes conventional bounded page-table
+leaf installation/withdrawal, stopped-vCPU CR3 synchronization, and the existing
+MRML-specific PCI/block lifecycle. It adds no VirtIO compatibility, host-share
+protocol, accessibility device, browser semantics, JavaScript/WebAssembly
+runtime, AI mechanism, or media mechanism. Planned scopes recorded as
+`TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged;
+agent review does not replace independent human dual review.
 
 ## Milestones
 

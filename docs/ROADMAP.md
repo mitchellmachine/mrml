@@ -1083,9 +1083,9 @@ and no cleanup call after preflight failure. Controlled KVM/WHP destroyed-VM
 revokers now retire the exact native execution container, preflight the complete
 cleanup record and both capabilities, revoke backend and interrupt authority,
 reset the block attachment, and then allow PCI generation advance with BAR/
-decode clear. The controlled KVM/WHP path now also exact-matches, removes, and
-verifies absence of the preinstalled non-global first-level BAR trap leaf while
-the sole vCPU is stopped. It publishes a no-reentry quarantine before mutation,
+decode clear. The controlled KVM/WHP path exact-matches, removes, and verifies
+absence of its non-global first-level BAR trap leaf while the sole vCPU is
+stopped. It publishes a no-reentry quarantine before mutation,
 rejects pending emulation, a changed root, PCID, or a multi-vCPU backend,
 rewrites the exact CR3 through KVM/WHP, and reads it back before permitting
 later entry. Failure leaves the quarantine permanent. Controlled signed probes
@@ -1103,12 +1103,15 @@ quarantine/failure. Default router/transport/common-runner entry points use a
 deny mapper, and the explicit mapper-aware runner is required for a present
 function. Tests cover exact mapping/unmapping identity, deny-by-default enable,
 failure preservation, independent successful transitions, mapper-free BAR
-assignment, and common-runner VM failure on mapping rejection. The controlled
-signed KVM/WHP probes now provide narrow adapters for the exact preinstalled
-trap window and authorized test-only block function. The controlled adapter can
-now consume verified stopped-guest leaf retirement before clearing its mapping
-state. A production mapper that supports install plus TLB-coherent revocation
-and safe continuation remains pending.
+assignment, and common-runner VM failure on mapping rejection. A backend-aware
+variant now passes the same stopped backend that produced the configuration
+exit into the exact mapper without aliasing. The controlled KVM/WHP adapters
+begin with the BAR leaf absent, install and verify it plus reload/read back CR3
+before decode publishes, reconstruct it for replacement, and coherently
+withdraw it before decode clears. Wrong-leaf and replay attempts fail, and the
+signed guest proves traffic plus post-withdrawal continuation on both backends.
+This completes the sole-vCPU install/withdraw mapper prerequisite;
+SMP/asynchronous shootdown and production reset/remove revokers remain pending.
 The first authorized concrete-function policy slice now binds one routed PCI
 generation to an active MRML-native block generation, exact queue/vector, and
 capability-selected backend region. A block-specific mapper records only a

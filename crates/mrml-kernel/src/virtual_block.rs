@@ -2696,10 +2696,84 @@ pub unsafe trait VirtualBlockPciWindowBackend {
     ) -> Result<(), VirtualPciNativeResourceError>;
 }
 
+/// Native BAR mapping below an exact block/PCI attachment that mutates the
+/// same stopped VMM backend whose configuration exit is being retired.
+///
+/// # Safety
+///
+/// Success must establish or withdraw only the exact window in `record` and
+/// leave `guest` translation state coherent. Uncertainty must be reported as
+/// `Uncertain` and must leave the guest unable to resume.
+pub unsafe trait VirtualBlockPciGuestWindowBackend<B> {
+    fn map_block_window(
+        &mut self,
+        guest: &mut B,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+
+    fn unmap_block_window(
+        &mut self,
+        guest: &mut B,
+        record: VirtualBlockPciCleanupRecord,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+}
+
 pub struct VirtualBlockPciMemoryMapper<'a, M, const N: usize> {
     attachment: &'a mut VirtualBlockPciAttachment,
     device: &'a VirtualBlockDevice<N>,
     backend: &'a mut M,
+}
+
+pub struct VirtualBlockPciGuestMemoryMapper<'a, M, const N: usize> {
+    attachment: &'a mut VirtualBlockPciAttachment,
+    device: &'a VirtualBlockDevice<N>,
+    backend: &'a mut M,
+}
+
+impl<'a, M, const N: usize> VirtualBlockPciGuestMemoryMapper<'a, M, N> {
+    pub fn new(
+        attachment: &'a mut VirtualBlockPciAttachment,
+        device: &'a VirtualBlockDevice<N>,
+        backend: &'a mut M,
+    ) -> Self {
+        Self {
+            attachment,
+            device,
+            backend,
+        }
+    }
+}
+
+unsafe impl<B, M: VirtualBlockPciGuestWindowBackend<B>, const N: usize>
+    crate::VirtualPciBackendMemoryMapper<B> for VirtualBlockPciGuestMemoryMapper<'_, M, N>
+{
+    fn map_window(
+        &mut self,
+        guest: &mut B,
+        pci: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError> {
+        let record = self
+            .attachment
+            .window_record(pci, self.device, true)
+            .map_err(|_| VirtualPciNativeResourceError::Rejected)?;
+        self.backend.map_block_window(guest, record)?;
+        self.attachment.mapped_window = pci.mmio_window();
+        Ok(())
+    }
+
+    fn unmap_window(
+        &mut self,
+        guest: &mut B,
+        pci: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError> {
+        let record = self
+            .attachment
+            .window_record(pci, self.device, false)
+            .map_err(|_| VirtualPciNativeResourceError::Rejected)?;
+        self.backend.unmap_block_window(guest, record)?;
+        self.attachment.mapped_window = None;
+        Ok(())
+    }
 }
 
 impl<'a, M, const N: usize> VirtualBlockPciMemoryMapper<'a, M, N> {

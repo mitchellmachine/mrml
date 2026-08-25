@@ -194,6 +194,28 @@ pub unsafe trait VirtualPciMemoryMapper {
     ) -> Result<(), VirtualPciNativeResourceError>;
 }
 
+/// Native BAR mapping boundary that must mutate the same stopped backend whose
+/// configuration exit is being retired.
+///
+/// # Safety
+///
+/// The mapper has the obligations of [`VirtualPciMemoryMapper`] and may use
+/// `backend` only for the exact transition described by `resources`. Success
+/// must leave backend translation state coherent before decode is published.
+pub unsafe trait VirtualPciBackendMemoryMapper<B> {
+    fn map_window(
+        &mut self,
+        backend: &mut B,
+        resources: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+
+    fn unmap_window(
+        &mut self,
+        backend: &mut B,
+        resources: VirtualPciAttachedResources,
+    ) -> Result<(), VirtualPciNativeResourceError>;
+}
+
 struct DenyVirtualPciMemoryMapper;
 
 unsafe impl VirtualPciMemoryMapper for DenyVirtualPciMemoryMapper {
@@ -526,6 +548,64 @@ impl VirtualPciConfigurationMechanismOne {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn access_with_backend_mapper<B, M: VirtualPciBackendMemoryMapper<B>>(
+        &mut self,
+        backend: &mut B,
+        router: &mut VirtualPciConfigurationRouter,
+        port: u16,
+        size: u8,
+        write: bool,
+        value: u32,
+        mapper: &mut M,
+    ) -> Result<VirtualPciIoOutcome, VirtualPciError> {
+        if port == PCI_CONFIGURATION_ADDRESS_PORT {
+            if size != 4 {
+                return Err(VirtualPciError::InvalidTransport);
+            }
+            if write {
+                if value & 0x7f00_0003 != 0 {
+                    return Err(VirtualPciError::InvalidTransport);
+                }
+                self.address = value;
+            }
+            return Ok(VirtualPciIoOutcome::AddressRegister(self.address));
+        }
+        let port_offset = port
+            .checked_sub(PCI_CONFIGURATION_DATA_PORT)
+            .filter(|offset| *offset < 4)
+            .ok_or(VirtualPciError::InvalidTransport)?;
+        if !matches!(size, 1 | 2 | 4)
+            || !port_offset.is_multiple_of(u16::from(size))
+            || usize::from(port_offset) + usize::from(size) > 4
+        {
+            return Err(VirtualPciError::InvalidTransport);
+        }
+        let Some((location, register)) = self.selection(port_offset) else {
+            return Ok(if write {
+                VirtualPciIoOutcome::AbsentWrite
+            } else {
+                VirtualPciIoOutcome::AbsentRead(width_mask(size))
+            });
+        };
+        if write {
+            match router.write_with_backend_mapper(location, register, size, value, backend, mapper)
+            {
+                Ok(outcome) => Ok(VirtualPciIoOutcome::Write(outcome)),
+                Err(VirtualPciError::FunctionNotPresent) => Ok(VirtualPciIoOutcome::AbsentWrite),
+                Err(error) => Err(error),
+            }
+        } else {
+            match router.read(location, register, size) {
+                Ok(value) => Ok(VirtualPciIoOutcome::Read(value)),
+                Err(VirtualPciError::FunctionNotPresent) => {
+                    Ok(VirtualPciIoOutcome::AbsentRead(width_mask(size)))
+                }
+                Err(error) => Err(error),
+            }
+        }
+    }
+
     fn selection(&self, port_offset: u16) -> Option<(VirtualPciLocation, u16)> {
         if self.address & (1 << 31) == 0 {
             return None;
@@ -652,6 +732,78 @@ where
     Ok(outcome)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn run_pci_configuration_once_with_backend_mapper<
+    B,
+    P,
+    const V: usize,
+    const C: usize,
+    const M: usize,
+>(
+    backend: &mut B,
+    vcpu: u32,
+    vms: &mut crate::VmTable<V>,
+    vm: crate::VmId,
+    hypercalls: &mut crate::HypercallRouter,
+    capabilities: &crate::CapabilitySpace<C>,
+    memory: &crate::GuestMemory<M>,
+    transport: &mut VirtualPciConfigurationMechanismOne,
+    router: &mut VirtualPciConfigurationRouter,
+    mapper: &mut P,
+) -> Result<VirtualPciIoOutcome, VirtualPciRunError<B::Error>>
+where
+    B: crate::IoReadCompleter,
+    P: VirtualPciBackendMemoryMapper<B>,
+{
+    let policy =
+        VirtualPciConfigurationMechanismOne::io_policy().map_err(VirtualPciRunError::Policy)?;
+    let disposition = crate::run_vm_once(
+        backend,
+        vcpu,
+        vms,
+        vm,
+        hypercalls,
+        capabilities,
+        memory,
+        &policy,
+    )
+    .map_err(VirtualPciRunError::Exit)?;
+    let crate::ExitDisposition::Io {
+        port,
+        size,
+        write,
+        value,
+    } = disposition
+    else {
+        let _ = vms.fail(vm);
+        return Err(VirtualPciRunError::InvalidExit);
+    };
+    let outcome = transport
+        .access_with_backend_mapper(backend, router, port, size, write, value, mapper)
+        .map_err(|error| {
+            let _ = vms.fail(vm);
+            VirtualPciRunError::Transport(error)
+        })?;
+    if !write {
+        let read = match outcome {
+            VirtualPciIoOutcome::AddressRegister(value)
+            | VirtualPciIoOutcome::Read(value)
+            | VirtualPciIoOutcome::AbsentRead(value) => value,
+            VirtualPciIoOutcome::Write(_) | VirtualPciIoOutcome::AbsentWrite => {
+                let _ = vms.fail(vm);
+                return Err(VirtualPciRunError::InvalidExit);
+            }
+        };
+        backend
+            .complete_io_read(vcpu, port, size, read)
+            .map_err(|error| {
+                let _ = vms.fail(vm);
+                VirtualPciRunError::Completion(error)
+            })?;
+    }
+    Ok(outcome)
+}
+
 impl Default for VirtualPciConfigurationRouter {
     fn default() -> Self {
         Self::new()
@@ -745,6 +897,44 @@ impl VirtualPciConfigurationRouter {
         value: u32,
         mapper: &mut M,
     ) -> Result<VirtualPciWriteOutcome, VirtualPciError> {
+        self.write_with_transition(location, offset, size, value, |mapping, resources| {
+            if mapping {
+                mapper.map_window(resources)
+            } else {
+                mapper.unmap_window(resources)
+            }
+        })
+    }
+
+    pub fn write_with_backend_mapper<B, M: VirtualPciBackendMemoryMapper<B>>(
+        &mut self,
+        location: VirtualPciLocation,
+        offset: u16,
+        size: u8,
+        value: u32,
+        backend: &mut B,
+        mapper: &mut M,
+    ) -> Result<VirtualPciWriteOutcome, VirtualPciError> {
+        self.write_with_transition(location, offset, size, value, |mapping, resources| {
+            if mapping {
+                mapper.map_window(backend, resources)
+            } else {
+                mapper.unmap_window(backend, resources)
+            }
+        })
+    }
+
+    fn write_with_transition<F>(
+        &mut self,
+        location: VirtualPciLocation,
+        offset: u16,
+        size: u8,
+        value: u32,
+        transition: F,
+    ) -> Result<VirtualPciWriteOutcome, VirtualPciError>
+    where
+        F: FnOnce(bool, VirtualPciAttachedResources) -> Result<(), VirtualPciNativeResourceError>,
+    {
         let slot = self
             .slots
             .iter()
@@ -785,11 +975,7 @@ impl VirtualPciConfigurationRouter {
                 mmio_window: entry.function.assigned_mmio_window(),
                 command: entry.function.command(),
             };
-            let result = if new_decode {
-                mapper.map_window(resources)
-            } else {
-                mapper.unmap_window(resources)
-            };
+            let result = transition(new_decode, resources);
             result.map_err(|error| match error {
                 VirtualPciNativeResourceError::Rejected => VirtualPciError::NativeResourceRejected,
                 VirtualPciNativeResourceError::Uncertain => {
@@ -1113,6 +1299,51 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingBackendState {
+        mapped: bool,
+    }
+
+    #[derive(Default)]
+    struct RecordingBackendMapper {
+        fail: bool,
+        calls: usize,
+    }
+
+    unsafe impl VirtualPciBackendMemoryMapper<RecordingBackendState> for RecordingBackendMapper {
+        fn map_window(
+            &mut self,
+            backend: &mut RecordingBackendState,
+            _resources: VirtualPciAttachedResources,
+        ) -> Result<(), VirtualPciNativeResourceError> {
+            self.calls += 1;
+            if self.fail {
+                return Err(VirtualPciNativeResourceError::Uncertain);
+            }
+            if backend.mapped {
+                return Err(VirtualPciNativeResourceError::Rejected);
+            }
+            backend.mapped = true;
+            Ok(())
+        }
+
+        fn unmap_window(
+            &mut self,
+            backend: &mut RecordingBackendState,
+            _resources: VirtualPciAttachedResources,
+        ) -> Result<(), VirtualPciNativeResourceError> {
+            self.calls += 1;
+            if self.fail {
+                return Err(VirtualPciNativeResourceError::Uncertain);
+            }
+            if !backend.mapped {
+                return Err(VirtualPciNativeResourceError::Rejected);
+            }
+            backend.mapped = false;
+            Ok(())
+        }
+    }
+
     #[test]
     fn identity_rejects_absent_vendor_and_reserved_class_only() {
         for vendor in [0, u16::MAX] {
@@ -1306,6 +1537,58 @@ mod tests {
         );
         assert_eq!(router.read(first, 16, 4), Ok(0));
         assert_eq!(router.read(second, 16, 4), Ok(0));
+    }
+
+    #[test]
+    fn backend_mapper_couples_exact_native_state_to_decode_publication() {
+        let mut router = VirtualPciConfigurationRouter::new();
+        let routed = location(1);
+        router.attach(routed, function(1)).unwrap();
+        router.write(routed, 16, 4, 0x2000_0000).unwrap();
+        let mut backend = RecordingBackendState::default();
+        let mut mapper = RecordingBackendMapper {
+            fail: true,
+            calls: 0,
+        };
+        assert_eq!(
+            router.write_with_backend_mapper(
+                routed,
+                4,
+                2,
+                u32::from(PCI_COMMAND_MEMORY_SPACE),
+                &mut backend,
+                &mut mapper,
+            ),
+            Err(VirtualPciError::NativeResourceUncertain)
+        );
+        assert!(!backend.mapped);
+        assert_eq!(router.read(routed, 4, 2), Ok(0));
+        mapper.fail = false;
+        assert!(
+            router
+                .write_with_backend_mapper(
+                    routed,
+                    4,
+                    2,
+                    u32::from(PCI_COMMAND_MEMORY_SPACE),
+                    &mut backend,
+                    &mut mapper,
+                )
+                .is_ok()
+        );
+        assert!(backend.mapped);
+        assert_eq!(
+            router.read(routed, 4, 2),
+            Ok(u32::from(PCI_COMMAND_MEMORY_SPACE))
+        );
+        assert!(
+            router
+                .write_with_backend_mapper(routed, 4, 2, 0, &mut backend, &mut mapper,)
+                .is_ok()
+        );
+        assert!(!backend.mapped);
+        assert_eq!(router.read(routed, 4, 2), Ok(0));
+        assert_eq!(mapper.calls, 3);
     }
 
     #[test]

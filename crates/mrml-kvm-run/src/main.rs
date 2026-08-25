@@ -16,15 +16,15 @@ use mrml_kernel::{
     VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
     VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciMemoryMapper,
-    VirtualBlockPciResourceRevoker, VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
     VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
-    run_pci_configuration_once_with_mapper, run_virtual_block_mmio_transaction_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
     run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
@@ -189,9 +189,8 @@ impl LaunchMode {
 struct DriverProbeBlock([u8; 8192], usize);
 
 #[cfg(target_os = "linux")]
-struct PreinstalledPciMmioWindow {
+struct NativePciMmioWindow {
     mapped: bool,
-    retired: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -253,9 +252,10 @@ unsafe impl VirtualBlockPciResourceRevoker for DestroyedPciBlockResources<'_> {
 }
 
 #[cfg(target_os = "linux")]
-unsafe impl VirtualBlockPciWindowBackend for PreinstalledPciMmioWindow {
+unsafe impl VirtualBlockPciGuestWindowBackend<PreparedKvmGuest<16>> for NativePciMmioWindow {
     fn map_block_window(
         &mut self,
+        guest: &mut PreparedKvmGuest<16>,
         record: VirtualBlockPciCleanupRecord,
     ) -> core::result::Result<(), VirtualPciNativeResourceError> {
         let window = record
@@ -263,36 +263,31 @@ unsafe impl VirtualBlockPciWindowBackend for PreinstalledPciMmioWindow {
             .mmio_window()
             .ok_or(VirtualPciNativeResourceError::Rejected)?;
         if self.mapped
-            || self.retired
             || record.mapped_window().is_some()
             || u64::from(window.address()) != PCI_TEST_MMIO_BASE
             || u64::from(window.size()) != mrml_kernel::PAGE_SIZE
         {
             return Err(VirtualPciNativeResourceError::Rejected);
         }
+        guest
+            .install_trapped_mmio(PCI_TEST_MMIO_BASE)
+            .map_err(|_| VirtualPciNativeResourceError::Uncertain)?;
         self.mapped = true;
         Ok(())
     }
 
     fn unmap_block_window(
         &mut self,
+        guest: &mut PreparedKvmGuest<16>,
         record: VirtualBlockPciCleanupRecord,
     ) -> core::result::Result<(), VirtualPciNativeResourceError> {
-        if !self.mapped || !self.retired || record.mapped_window() != record.pci().mmio_window() {
+        if !self.mapped || record.mapped_window() != record.pci().mmio_window() {
             return Err(VirtualPciNativeResourceError::Rejected);
         }
+        guest
+            .withdraw_trapped_mmio(PCI_TEST_MMIO_BASE)
+            .map_err(|_| VirtualPciNativeResourceError::Uncertain)?;
         self.mapped = false;
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl PreinstalledPciMmioWindow {
-    fn confirm_retired(&mut self, address: u64) -> Result<()> {
-        if !self.mapped || self.retired || address != PCI_TEST_MMIO_BASE {
-            return Err(anyhow!("invalid retired KVM PCI MMIO window"));
-        }
-        self.retired = true;
         Ok(())
     }
 }
@@ -816,14 +811,17 @@ fn run_pci_configuration_probe(
             command_selector
         ));
     }
-    let mut window_backend = PreinstalledPciMmioWindow {
-        mapped: false,
-        retired: false,
-    };
+    let mut window_backend = NativePciMmioWindow { mapped: false };
+    if guest
+        .install_trapped_mmio(PCI_TEST_MMIO_BASE + mrml_kernel::PAGE_SIZE)
+        .is_ok()
+    {
+        return Err(anyhow!("KVM PCI MMIO install accepted a wrong leaf"));
+    }
     let command = {
         let mut mapper =
-            VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
-        run_pci_configuration_once_with_mapper(
+            VirtualBlockPciGuestMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+        run_pci_configuration_once_with_backend_mapper(
             &mut guest,
             0,
             &mut vms,
@@ -844,6 +842,9 @@ fn run_pci_configuration_probe(
         || !window_backend.mapped
     {
         return Err(anyhow!("KVM PCI memory enable mismatch: {:?}", command));
+    }
+    if guest.install_trapped_mmio(PCI_TEST_MMIO_BASE).is_ok() {
+        return Err(anyhow!("KVM PCI MMIO install accepted replay"));
     }
     let io = VirtualBlockTransport::MrmlSpecificPciMmio
         .io_policy()
@@ -905,9 +906,12 @@ fn run_pci_configuration_probe(
                 return Err(anyhow!("masked PCI completion was not retained exactly"));
             }
             let unmask = {
-                let mut mapper =
-                    VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
-                run_pci_configuration_once_with_mapper(
+                let mut mapper = VirtualBlockPciGuestMemoryMapper::new(
+                    &mut attachment,
+                    &device,
+                    &mut window_backend,
+                );
+                run_pci_configuration_once_with_backend_mapper(
                     &mut guest,
                     0,
                     &mut vms,
@@ -970,7 +974,7 @@ fn run_pci_configuration_probe(
     // and suspended until restoration completes.
     let lost_execution = unsafe { restart_image.confirm_execution_loss() };
     let mut replacement = system
-        .prepare_kernel_block_mmio_guest::<16>(
+        .prepare_kernel_block_dynamic_mmio_guest::<16>(
             0,
             executable,
             handoff,
@@ -982,6 +986,9 @@ fn run_pci_configuration_probe(
             PCI_TEST_MMIO_BASE,
         )
         .map_err(|error| anyhow!("replacement PCI block VM preparation failed: {:?}", error))?;
+    replacement
+        .install_trapped_mmio(PCI_TEST_MMIO_BASE)
+        .map_err(|error| anyhow!("replacement PCI BAR restoration failed: {:?}", error))?;
     bridge
         .restore_restart_image(&mut replacement, &device, lost_execution)
         .map_err(|error| anyhow!("replacement PCI block restoration failed: {:?}", error))?;
@@ -1078,9 +1085,19 @@ fn run_pci_configuration_probe(
     {
         return Err(anyhow!("KVM PCI MMIO withdrawal accepted a wrong leaf"));
     }
-    guest
-        .withdraw_trapped_mmio(PCI_TEST_MMIO_BASE)
-        .map_err(|error| anyhow!("failed to withdraw KVM PCI MMIO leaf: {:?}", error))?;
+    let disable = {
+        let mut mapper =
+            VirtualBlockPciGuestMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+        router
+            .write_with_backend_mapper(location, 4, 2, 0, &mut guest, &mut mapper)
+            .map_err(|_| anyhow!("failed to disable retired KVM PCI MMIO window"))?
+    };
+    if disable != mrml_kernel::VirtualPciWriteOutcome::Command(0)
+        || window_backend.mapped
+        || attachment.mapped_window().is_some()
+    {
+        return Err(anyhow!("KVM PCI MMIO withdrawal cleanup was incomplete"));
+    }
     println!("KVM_PCI_WITHDRAW coherent=1");
     if guest.withdraw_trapped_mmio(PCI_TEST_MMIO_BASE).is_ok() {
         return Err(anyhow!("KVM PCI MMIO withdrawal accepted replay"));
@@ -1101,20 +1118,6 @@ fn run_pci_configuration_probe(
         ));
     }
     println!("KVM_PCI_WITHDRAW continued=1");
-    window_backend.confirm_retired(PCI_TEST_MMIO_BASE)?;
-    let disable = {
-        let mut mapper =
-            VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
-        router
-            .write_with_mapper(location, 4, 2, 0, &mut mapper)
-            .map_err(|_| anyhow!("failed to disable retired KVM PCI MMIO window"))?
-    };
-    if disable != mrml_kernel::VirtualPciWriteOutcome::Command(0)
-        || window_backend.mapped
-        || attachment.mapped_window().is_some()
-    {
-        return Err(anyhow!("KVM PCI MMIO withdrawal cleanup was incomplete"));
-    }
     let expected_pci = router
         .describe_attachment(pci)
         .map_err(|_| anyhow!("PCI cleanup attachment disappeared"))?
@@ -1436,7 +1439,7 @@ fn application_main() -> Result<()> {
             )
             .map_err(|_| anyhow!("invalid block resume page"))?,
         ),
-        LaunchMode::PciConfigurationProbe => system.prepare_kernel_block_mmio_guest::<16>(
+        LaunchMode::PciConfigurationProbe => system.prepare_kernel_block_dynamic_mmio_guest::<16>(
             0,
             &executable,
             handoff.as_slice(),
@@ -1595,7 +1598,7 @@ fn application_main() -> Result<()> {
     if mode == LaunchMode::PciConfigurationProbe {
         run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, exact stopped-guest BAR-leaf withdrawal with checked CR3 reload and post-withdrawal continuation, and pending-I/O reset isolation under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, decode-coupled native BAR install/withdraw with checked CR3 reload and continuation, orderly VM replacement, and pending-I/O reset isolation under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

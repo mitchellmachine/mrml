@@ -937,9 +937,10 @@ revocation failure preserves configuration; uncertainty must quarantine or fail
 the VM. A controlled KVM/WHP adapter now succeeds only after the exact native
 VM/partition is destroyed: it exact-matches the complete cleanup record, revokes
 the backend and interrupt capabilities, resets the block attachment, and only
-then permits PCI generation advance with BAR/decode clear. Live dynamic unmap
-and production native revoker adapters remain absent; the mapping adapter still
-reports in-place unmapping as uncertain. MRML still has no assigned production PCI identity,
+then permits PCI generation advance with BAR/decode clear. Production reset/
+remove revokers remain absent. The controlled sole-vCPU mapper now supports
+in-place install and withdrawal, but SMP/asynchronous transitions remain
+unavailable. MRML still has no assigned production PCI identity,
 PCI capability list, MSI/MSI-X, multiple BARs, DMA, QEMU comparison, or
 PCI/VirtIO compatibility claim. A fixed-capacity backend-neutral configuration
 router now attaches at most eight of these generic functions to exact validated
@@ -962,15 +963,17 @@ admitted. The live runners stage the completion and request ownership in native
 guest memory after the signed workload, destroy the execution container, revoke
 the old exact backend/interrupt capabilities, and then perform the common reset;
 the separately latched-notification case remains focused simulation evidence.
-The controlled native path additionally removes and verifies absence of its
-exact preinstalled first-level BAR trap leaf while the sole vCPU is stopped.
-KVM and WHP then require the exact prepared CR3, reject pending emulation and
-PCID, rewrite that CR3 through the native backend, and read it back before
-lifting the no-reentry quarantine. MRML leaf construction never marks this
-mapping global. Any page-table or register uncertainty leaves the guest
-permanently quarantined. A fresh one-use-signed probe emits a second exact
-test-only proof only after withdrawal; both KVM and WHP resume the same guest
-and return that port/width/value before lifecycle cleanup.
+The controlled native path now prepares a bounded intermediate-table path while
+the guest is non-runnable and returns with the exact BAR leaf absent. A
+backend-aware mapper receives the same stopped guest that produced the command
+exit. Enable exact-matches the attachment cleanup record, installs and verifies
+the non-global leaf, reloads and reads back the exact non-PCID CR3, and only
+then publishes decode. Disable performs the exact coherent withdrawal before
+clearing decode and attachment mapping state. Wrong-leaf and replay attempts
+fail. Any page-table or register uncertainty leaves the guest permanently
+quarantined. The signed probe exercises install, block traffic, replacement
+mapping reconstruction, withdrawal, and post-withdrawal continuation on KVM
+and WHP.
 This is not asynchronous or SMP shootdown, hotplug, durable recovery, QEMU
 comparison, or physical-device evidence.
 Memory-decode command transitions now require a separate unsafe native mapper.
