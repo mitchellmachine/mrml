@@ -789,6 +789,16 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 819
 compiler tests per host. Nested projections, projection answer composition,
 specialization, and source associated-type syntax remain unsupported.
 
+The bounded nested-projection milestone lets a generic associated value contain
+a projection template over its implementation binder. Selection substitutes the
+template and recursively normalizes through either implementation family. A
+separate 16-frame visited stack reports exact projection cycles and acyclic
+overflow distinctly; invalid template parameters fail at admission. Windows
+gnullvm and native Arch Linux WSL each pass 476 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 822 compiler
+tests per host. Projection-bearing type arguments and premises, inference
+projections, coinduction, specialization, and source syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.

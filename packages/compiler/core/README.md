@@ -4039,6 +4039,17 @@ tests per host. Nested projections, projection answer composition,
 specialization, source associated-type syntax, and mixed inference selection
 remain unsupported.
 
+The bounded nested-projection milestone permits a generic associated value to
+hold a projection template over the same implementation binder. The selected
+substitution instantiates that goal and recursive normalization may cross exact
+or generic implementation families. A separate 16-frame visited stack reports
+exact projection cycles and acyclic overflow distinctly; invalid template
+parameters fail during admission. Windows gnullvm and native Arch Linux WSL each
+pass 476 library tests, one component-interface probe, 10 conformance tests, and
+335 replacement tests: 822 compiler tests per host. Projection-bearing type
+arguments and premises, inference projections, coinduction, specialization,
+source syntax, and mixed inference selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

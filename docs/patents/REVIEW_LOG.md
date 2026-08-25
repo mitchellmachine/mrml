@@ -4300,6 +4300,14 @@ It adds no new search strategy, specialization order, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
 
+# 2026-08-25 — Depth-bounded nested trait projections
+
+**Result: NOT_TRIGGERED.** This compiler-only increment instantiates a bounded
+projection template with an existing fixed-array substitution and recursively
+uses the existing projection selector under a fixed visited stack. It adds no
+new search strategy, specialization order, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Exact committed component-route binding
 
 **Result: NOT_TRIGGERED.** This increment retains existing domain, policy,

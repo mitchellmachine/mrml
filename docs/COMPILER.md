@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises. Exact and generic associated values normalize bounded concrete projections after implementation proof. A coherent 64-entry generic-implementation table rejects flat-head overlap, selects one stable implementation for concrete queries, and recursively proves its instantiated premises. Symmetric admission checks reject exact/generic overlap in either insertion order. There is no trait syntax, mixed inference/higher-ranked solving, nested projections, premise-aware coherence, specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises. Exact and generic associated values normalize bounded concrete projections after implementation proof; generic values may recursively project through a separate 16-frame visited stack. A coherent 64-entry generic-implementation table rejects flat-head overlap, selects one stable implementation for concrete queries, and recursively proves its instantiated premises. Symmetric admission checks reject exact/generic overlap in either insertion order. There is no trait syntax, mixed inference/higher-ranked solving, projection-bearing type terms or premises, premise-aware coherence, specialization, general answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -852,9 +852,18 @@ A unified concrete projection entry point now selects across exact and generic
 implementation families before reading either value table. Exact facts return
 their registered values directly; generic candidates must pass recursive premise
 proof before substitution. An absent implementation or value returns no
-solution, and any unchecked cross-family collision remains ambiguous. This is
-one bounded projection boundary, not nested projection normalization or answer
-composition.
+solution, and any unchecked cross-family collision remains ambiguous. The entry
+point is the common boundary used by the bounded nested normalization below; it
+does not provide general answer composition.
+
+Bounded nested projection templates allow a generic associated value to name a
+second concrete projection over the same implementation binder. The selected
+substitution instantiates the nested goal, which may cross into either exact or
+generic implementations. A separate 16-frame stack tracks exact `(goal,
+associated type)` identities; repeated projections return cycle and acyclic
+depth exhaustion returns overflow. Invalid bound parameters fail during value
+admission. This supports recursive value normalization, not projection-bearing
+type arguments, projection premises, inference projections, or coinduction.
 
 The higher-ranked prerequisite gives every rigid placeholder an explicit 16-bit
 universe plus a stable placeholder identity. A bound clause can instantiate its
