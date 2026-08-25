@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "tools/mrml",
     "crates/mrml-rustc",
     "crates/mrml-rustc-driver",
     "crates/mrml-kernel-image",
@@ -40,7 +41,7 @@ members = [
     "crates/mrml-wikipedia",
     "crates/mrml-tokenizer",
     "crates/mrml-trainer",
-    "crates/mrml-opus",
+    "crates/mrml-av1",
     "crates/mrml-opus",
 ]
 

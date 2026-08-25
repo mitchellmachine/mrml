@@ -1,13 +1,19 @@
 # MRML bootstrap build and packaging toolchain
 
-**Status: DESIGN GOAL / PLANNED.** Existing Cargo/upstream-Rust builds and
-experimental `mrml-rustc`, signing, UEFI, container, and receipt components keep
-their recorded statuses. The unified `mrml` frontend, canonical manifest,
-package/release/image builders, sandbox, and publisher are not implemented.
-Documentation is not `TESTED`, `MEASURED`, `AUDITED`, or `PROVEN` evidence.
+**Status: PARTIALLY IMPLEMENTED.** `tools/mrml` now parses the versioned root
+`MRML.workspace`, emits typed list/doctor/build/test results, uses a locked Cargo/
+upstream-rustc bridge, selects current-host WHP/KVM VMM adapters, builds an
+x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
+toolchain checks, and rejects unimplemented package/release/image/publish
+commands. Component moves, native dependency resolution, direct rustc, Linux
+execution evidence, package/release/image builders, sandboxing, and publication
+remain planned. See [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
 
 > Until `mrml-rustc` satisfies the defined production-readiness gate, the MRML
 > build tool MUST use upstream Rust tooling for production MRML artifacts.
+
+> Cargo is used only to bootstrap the first-party `mrml` build tool. Once
+> `mrml` exists, every normal repository component is built through `mrml`.
 
 ## Tool and stage boundaries
 
@@ -38,9 +44,13 @@ source -> mrml build -> pinned upstream rustc/Cargo initially -> linked artifact
   -> mrml image -> SystemImage / installation media
 ```
 
-Cargo may be an internal bootstrap driver (`cargo build --locked`) but does not
-define MRML runtime/package architecture. Removing Cargo, rustc, or LLVM is a
-future evidence-driven migration, never an OS-progress prerequisite. Compiler,
+Cargo is stage-zero plus a private transitional bridge invoked by `mrml`; it is
+not a second public build frontend. Clean checkout uses pinned Cargo/rustc only
+for `cargo build -p mrml`, after which normal build/test commands use `mrml` for
+kernel, VMM, bootloader, services, drivers, apps, libraries, compiler, tests,
+host tools, CUDA, packages, releases, and images as each graph node migrates.
+Removing the internal Cargo bridge, rustc, or LLVM is an evidence-driven
+migration, never an OS-progress prerequisite. Compiler,
 object, package, release, and image responsibilities may later be libraries or
 tools; avoid premature process/tool proliferation.
 
@@ -82,6 +92,16 @@ otherwise pin one exact dated nightly. Never auto-upgrade release toolchains.
 Upstream rustc does not make its native/unsafe toolchain memory-safe.
 
 ## Manifest, lockfile, profiles, and isolation
+
+`MRML.workspace` is the authoritative repository component inventory and target/
+profile graph. During migration its `cargo-package` field bridges exact upstream
+dependency compilation; Cargo package identity is not MRML identity. Every
+existing component is classified `MRML_NATIVE`, `HOST_WINDOWS_LINUX`, `COMPILER`,
+`UEFI`, `GPU`, `TEST`, `SHARED`, or `BOOTSTRAP_ONLY`. The generic `crates/`
+layout remains transitional and moves only after `mrml` graph/path parity is
+verified; new semantic component homes belong under `packages/`, with the
+bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
+location. Do not create empty speculative directories.
 
 A canonical manifest (filename provisional) binds package identity/version/class,
 profile/compiler mode, target slices, capability requests, dependencies/interfaces,
@@ -188,13 +208,23 @@ PowerShell-versus-Bash behavior as package meaning.
 
 ## Results, tests, and roadmap
 
+Supported hosts are Windows and Linux. Explicit target families are MRML native,
+Windows, Linux, UEFI, and CUDA; future native GPU, AArch64, and RISC-V64 do not
+become current support claims. Host and target are distinct. Target definitions
+select ABI, object format, linker/runtime assumptions, profiles, and adapters;
+Windows excludes KVM and selects WHP, Linux excludes WHP and selects KVM. CUDA
+is lazy compatibility/oracle tooling, never the native MRML GPU architecture or
+runtime authority.
+
 `mrml build` returns typed `BuildResult` package ID, profile, target, compiler,
 artifacts, warnings, and test status. `mrml test` orchestrates unit, integration,
 backend, VM, architecture, and profile tests without assuming native host
 execution. Human text is a view. Shell concepts such as `Build-Package`,
 `Get-BuildResult`, `New-SystemRelease`, and `Export-SystemImage` share APIs.
 
-Bootstrap order is manifest; locked pinned Cargo/rustc wrapper; profiles; EFI
+Bootstrap order is implemented tool and inventory; locked Cargo/rustc bridge;
+semantic source moves and path updates; profiles/targets; EFI/VMM/compiler graph;
+CUDA scaffold; package command; then
 export; package construction/verification; isolated signing; release/image;
 publication and typed shell results; sandbox/SBOM/provenance/cross-host evidence;
 experimental `mrml-rustc`; per-profile promotion; then reduction of external
@@ -209,6 +239,12 @@ twice cleanly, and identify nondeterministic inputs.
 
 This lane must not derail the OS foundation or redirect `mrml-rustc` from typed
 place/CFG/ownership/borrowing compiler priorities.
+
+Stage zero is pinned Cargo/rustc -> `mrml`. Normal build is `mrml` -> upstream
+rustc initially -> selected MRML/Windows/Linux/UEFI/CUDA graph. Future build is
+`mrml` -> profile-approved `mrml-rustc` -> native MRML/GPU targets. Official
+releases use `mrml` even while its private bridge invokes Cargo. Do not maintain
+meaningfully divergent Cargo and `mrml` release instructions.
 
 Digital-rights review: owner builds/keys remain viable; no official Store or
 compiler is mandatory; metadata does not authorize; first-party tools have no

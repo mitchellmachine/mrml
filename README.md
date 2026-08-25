@@ -270,8 +270,16 @@ remain unfinished.
 
 The planned first-party `mrml` build/package frontend and mandatory pinned-
 upstream-rustc bootstrap policy are specified in
-[docs/build/BUILD_SYSTEM.md](docs/build/BUILD_SYSTEM.md). It is not implemented;
-the commands below remain the current direct Cargo workflows.
+[docs/build/BUILD_SYSTEM.md](docs/build/BUILD_SYSTEM.md). Bootstrap once with the
+repository-pinned Windows/Linux Rust toolchain:
+
+```text
+cargo build -p mrml
+```
+
+Then use `mrml build`, `mrml test`, and target/component selectors for migrated
+repository work. Cargo remains an internal locked dependency bridge during this
+incremental migration; package/release/image commands are not implemented yet.
 
 MRML uses Rust 2024 and the nightly build toolchain configured in
 `rust-toolchain.toml`. That development toolchain is distinct from

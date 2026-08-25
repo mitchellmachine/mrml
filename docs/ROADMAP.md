@@ -111,6 +111,14 @@ manifest, pinned upstream orchestration, profiles, EFI export, packaging/signing
 release/image/publication, provenance, experimental `mrml-rustc`, then per-profile
 promotion. It cannot redirect this compiler lane or the foundational OS gate.
 
+**PARTIALLY IMPLEMENTED:** stage-zero `tools/mrml`, `MRML.workspace`, structured
+Cargo-bridge build/test dispatch, current-host VMM selection, UEFI routing, and
+CUDA target validation now exist. Follow
+[build/MIGRATION_INVENTORY.md](build/MIGRATION_INVENTORY.md): enrich graph edges,
+inventory build scripts/proc macros/native inputs, migrate semantic leaf packages,
+prove Windows/Linux parity, then remove generic `crates/` and the internal Cargo
+bridge incrementally. Package/release/image/publication remain planned.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

@@ -1,0 +1,11 @@
+[package]
+name = "mrml"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Stage-zero first-party MRML workspace build frontend"
+
+[[bin]]
+name = "mrml"
+path = "src/main.rs"

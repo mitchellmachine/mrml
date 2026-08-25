@@ -1,0 +1,75 @@
+# Universal build migration inventory
+
+**Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
+is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
+classified and reachable through the Cargo bridge. Source remains under
+`crates/` except stage-zero `tools/mrml`; no claim is made that semantic moves or
+Cargo bridge removal are complete.
+
+## Implemented first gate
+
+- dependency-free Rust `tools/mrml`, bootstrapped with pinned Cargo/rustc;
+- versioned native component inventory with distinct identity, path, Cargo bridge,
+  class, targets, and default selection;
+- Windows/Linux host recognition and MRML/Windows/Linux/UEFI/CUDA target families;
+- structured list, doctor, build, test, target/toolchain failure, and planned-
+  command results;
+- stage1 `mrml` selection, `mrml-rustc-driver`, current-host WHP/KVM selection,
+  x86-64 UEFI routing, and lazy CUDA/PTX routing;
+- duplicate `mrml-opus` root workspace member removed.
+
+`package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
+Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
+were not exercised by the Windows implementation environment.
+
+## Current semantic classes
+
+| Class | Current components/direction |
+| --- | --- |
+| `BOOTSTRAP_ONLY` | `tools/mrml`; Cargo stage zero, then self-build graph |
+| `COMPILER` | `mrml-rustc`, driver; future clear `compiler/` hierarchy |
+| `MRML_NATIVE` | kernel, service image, configuration, storage |
+| `UEFI` | kernel-image bootloader artifact; `mrml-uefi` is shared support |
+| `HOST_WINDOWS_LINUX` | CLI/server/tools/sign/Git/trainer and VMM launchers |
+| `GPU` | tensor/CUDA compatibility path; native GPU remains separate |
+| `TEST` | kernel benchmark |
+| `SHARED` | reusable crypto/runtime/protocol/media/model/platform libraries |
+
+The exact 42 entries live in `MRML.workspace`; this table must not become a
+second inventory.
+
+## Cargo-removal blockers
+
+- Every component still has Cargo dependency metadata and a path beneath
+  `crates/`; the root Cargo workspace still contains them so the bridge resolves
+  today’s exact graph.
+- `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current
+  build script. It must become an explicit structured build action.
+- Procedural-macro usage, native/FFI/system-library dependencies, environment
+  inputs, and external commands still require a generated audited inventory.
+- Direct-rustc graph construction needs target-aware resolved externs, features,
+  build order, lock/digest validation, and cycle diagnostics before Cargo can be
+  removed behind migrated nodes.
+- Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,
+  and CI together and verifying both Windows/WHP and Linux/KVM. The present task
+  intentionally establishes the graph before that high-churn move.
+
+## Next safe migration order
+
+1. Add dependency edges/features/output declarations to `MRML.workspace` and
+   validate them against Cargo metadata.
+2. Generate the build-script/proc-macro/native dependency inventory.
+3. Move one leaf library into `packages/libraries/`, update every reference, and
+   prove old and `mrml` builds agree.
+4. Expand by semantic groups: shared libraries, services, system, host tools;
+   keep compiler and bootstrap roots distinct.
+5. Prove Windows WHP and Linux KVM matrices, then remove generic `crates/` only
+   after repository-wide stale-path search returns none.
+6. Add direct-rustc nodes/native resolver, leaving Cargo required only for clean-
+   source stage-zero `mrml` bootstrap.
+
+Patent review: `NOT_TRIGGERED` for this incremental implementation—the parser,
+process orchestration, explicit graph inventory, target dispatch, and structured
+errors are conventional build-tool mechanisms. Package/cache/resolver mechanisms
+remain under the existing triggered review in
+[`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

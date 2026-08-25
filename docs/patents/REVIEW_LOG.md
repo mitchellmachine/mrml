@@ -14,6 +14,11 @@ image construction, content/build identity, authenticated provenance, parser
 reuse/differential checks, and publication. Review each exact mechanism and
 worldwide family before implementation; documentation grants no clearance.
 
+The incremental stage-zero implementation adds only a conventional line-oriented
+workspace inventory, subprocess orchestration, target selection, and structured
+results/errors. **Result for this implementation: NOT_TRIGGERED.** The future
+package/cache/resolver/provenance mechanisms retain the `TRIGGERED` result above.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

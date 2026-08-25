@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "mrml"
+version = "0.4.0"
+
+[[package]]
 name = "mrml-agent"
 version = "0.4.0"
 dependencies = [
@@ -14,6 +18,15 @@ dependencies = [
  "mrml-runtime",
  "mrml-terminal-style",
  "mrml-tools",
+]
+
+[[package]]
+name = "mrml-av1"
+version = "0.4.0"
+dependencies = [
+ "mrml-linux",
+ "mrml-runtime",
+ "mrml-windows",
 ]
 
 [[package]]
@@ -201,6 +214,7 @@ name = "mrml-service-image"
 version = "0.4.0"
 dependencies = [
  "mrml-config",
+ "mrml-crypto",
  "mrml-kernel",
  "mrml-storage",
 ]

@@ -110,10 +110,15 @@ explicitly and downgrade the status rather than guessing.
   exact code and focused evidence.
 
 - Build/package orchestration: `docs/build/BUILD_SYSTEM.md`. Recover the planned
-  `mrml` frontend, pinned upstream production bootstrap, explicit compiler modes
+  `mrml` frontend and `docs/build/MIGRATION_INVENTORY.md`; Cargo bootstraps it and
+  remains a private bridge, while normal component commands use `mrml`. Recover
+  explicit Windows/Linux hosts, MRML/Windows/Linux/UEFI/CUDA targets, VMM and
+  compiler graph integration, semantic `packages/` migration, explicit blockers,
+  pinned upstream production compilation, explicit compiler modes
   without fallback, profile-specific promotion, EFI export then bootloader
   packaging, distinct build/package/sign/release/image stages, isolated keys, and
-  typed results. Do not claim the frontend exists.
+  typed results. Do not claim the partial frontend implements its planned
+  package, release, image, publish, sandbox, or native resolver stages.
 
 - Package, Store, release/generation, bootloader distribution, system image,
   servicing, shell, disk administration, installer, and deployment direction:
