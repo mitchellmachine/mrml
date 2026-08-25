@@ -2,12 +2,12 @@
 
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
-classified and reachable through the Cargo bridge. Sixteen libraries—`mrml-math`,
+classified and reachable through the Cargo bridge. Seventeen libraries—`mrml-math`,
 `mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`,
 `mrml-json`, `mrml-wikipedia`, `mrml-opus`, `mrml-windows`,
 `mrml-linux`, `mrml-runtime`, `mrml-crypto`, `mrml-tls`, and
-`mrml-http`, `mrml-ssh`, and `mrml-error`—have moved under
-`packages/libraries/`,
+`mrml-http`, `mrml-ssh`, `mrml-error`, and `mrml-terminal-style`—have
+moved under `packages/libraries/`,
 and stage-zero lives at `tools/mrml`; other source remains under `crates/`.
 No claim is made that semantic moves or Cargo bridge removal are complete.
 
@@ -69,6 +69,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
 - `mrml-error` moved after JSON/runtime, with both dependency paths and all
   eleven inbound Cargo paths updated; its error schema and Cargo bridge remain
   unchanged.
+- `mrml-terminal-style` moved after its platform/runtime dependencies, with all
+  three dependency paths and five inbound Cargo paths updated; its terminal
+  behavior and Cargo bridge remain unchanged.
 
 The runtime move was checked on a Windows host:
 
@@ -148,6 +151,18 @@ The error-library move was checked on a Windows host:
 
 No Linux host or runtime execution was exercised by this move.
 
+The terminal-style move was checked on a Windows host:
+
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-terminal-style -- --check`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-terminal-style --all-targets --no-deps -- -D warnings`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-terminal-style`
+  — PASS, 3 tests;
+- `.\target\debug\mrml.exe build mrml-terminal-style` — PASS.
+
+No Linux host or runtime execution was exercised by this move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -170,7 +185,7 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the sixteen moved
+- Every component still has Cargo dependency metadata; all except the seventeen moved
   libraries and stage-zero remain beneath `crates/`. The root Cargo workspace
   still contains every component so the bridge resolves today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

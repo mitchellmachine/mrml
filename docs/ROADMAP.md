@@ -191,6 +191,10 @@ the semantic SSH home without changing protocol or signing behavior.
 edges are sibling semantic-package references and all eleven consumers resolve
 to its semantic home without changing error behavior.
 
+`mrml-terminal-style` is the seventeenth migrated library component; its
+platform/runtime edges are sibling semantic-package references and all five
+consumers resolve to its semantic home without changing terminal behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

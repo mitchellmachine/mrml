@@ -103,6 +103,11 @@ updates all eleven inbound Cargo paths without changing error behavior.
 **Result: NOT_TRIGGERED.** This is repository organization, not a new error-
 handling mechanism.
 
+The seventeenth semantic move relocates `mrml-terminal-style` after its
+platform/runtime dependencies and updates all five inbound Cargo paths without
+changing terminal behavior. **Result: NOT_TRIGGERED.** This is repository
+organization, not a new terminal mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
