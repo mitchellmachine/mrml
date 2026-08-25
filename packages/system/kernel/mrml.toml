@@ -1,0 +1,42 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.system.kernel"
+kind = "kernel"
+name = "mrml-kernel"
+profile = "kernel"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_kernel"
+
+[rust]
+crate_name = "mrml_kernel"
+crate_type = "lib"
+source = "packages/system/kernel/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[host_build]]
+targets = ["WINDOWS", "LINUX"]
+
+[[projected_build]]
+targets = ["UEFI"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 67108864

@@ -1,0 +1,96 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.machine"
+kind = "library"
+name = "mrml-machine"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "auto"
+
+[[feature]]
+name = "cuda"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "hipblas"
+
+[[feature]]
+name = "sycl"
+
+[[feature]]
+name = "vulkan"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-machine"
+
+[rust]
+crate_name = "mrml_machine_action"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_agent"
+compile_name = "mrml-agent"
+package = "org.mrml.library.agent"
+provider_profile = "auto"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+package = "org.mrml.library.error"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_json"
+compile_name = "mrml-json"
+package = "org.mrml.library.json"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tools"
+compile_name = "mrml-tools"
+package = "org.mrml.tool.host"
+scope = "compile"
+
+[[feature_set]]
+features = ["auto"]
+targets = ["WINDOWS", "LINUX"]
+
+[[compile_env]]
+name = "CARGO_PKG_VERSION"
+value = "0.0.1"
+
+[[binary]]
+crate_name = "mrml_machine"
+output = "mrml-machine"
+self_extern = false
+source = "packages/apps/machine/src/main.rs"
+
+[[build_input]]
+kind = "compile-env"
+line = 49
+path = "packages/apps/machine/src/main.rs"
+reason = "reviewed repository build input"

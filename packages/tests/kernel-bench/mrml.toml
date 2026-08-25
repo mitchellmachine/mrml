@@ -1,0 +1,45 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.system.kernel-bench"
+kind = "test"
+name = "mrml-kernel-bench"
+profile = "test"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_kernel_bench"
+
+[rust]
+crate_name = "mrml_kernel_bench"
+crate_type = "lib"
+source = "packages/tests/kernel-bench/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[build_input]]
+kind = "native-link"
+line = 153
+path = "packages/tests/kernel-bench/src/lib.rs"
+reason = "reviewed repository build input"

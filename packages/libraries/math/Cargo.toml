@@ -1,8 +1,0 @@
-[package]
-name = "mrml-math"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-description = "Allocation-free native floating-point primitives for MRML"
-

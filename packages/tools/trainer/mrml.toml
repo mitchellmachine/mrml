@@ -1,0 +1,63 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.tool.trainer"
+kind = "tool"
+name = "mrml-trainer"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-trainer"
+
+[rust]
+crate_name = "mrml_trainer_action"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_math"
+compile_name = "mrml-math"
+package = "org.mrml.library.math"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tensor"
+compile_name = "mrml-tensor"
+package = "org.mrml.library.tensor"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tokenizer"
+compile_name = "mrml-tokenizer"
+package = "org.mrml.library.tokenizer"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_wikipedia"
+compile_name = "mrml-wikipedia"
+package = "org.mrml.library.wikipedia"
+scope = "compile"
+
+[[binary]]
+crate_name = "mrml_trainer"
+output = "mrml-trainer"
+self_extern = false
+source = "packages/tools/trainer/src/main.rs"

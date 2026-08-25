@@ -1,0 +1,261 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.tool.host"
+kind = "tool"
+name = "mrml-tools"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "runtime"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_tools"
+
+[rust]
+crate_name = "mrml_tools"
+crate_type = "lib"
+source = "packages/tools/host/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+feature = "runtime"
+package = "org.mrml.library.error"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_http"
+compile_name = "mrml-http"
+feature = "runtime"
+package = "org.mrml.library.http"
+scope = "compile"
+
+[[dependency]]
+alias = "serde_json"
+compile_name = "mrml-json"
+feature = "runtime"
+package = "org.mrml.library.json"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_linux"
+compile_name = "mrml-linux"
+feature = "runtime"
+package = "org.mrml.library.linux"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_percent_encoding"
+compile_name = "mrml-percent-encoding"
+feature = "runtime"
+package = "org.mrml.library.percent-encoding"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+feature = "runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_terminal_style"
+compile_name = "mrml-terminal-style"
+feature = "runtime"
+package = "org.mrml.library.terminal-style"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_windows"
+compile_name = "mrml-windows"
+feature = "runtime"
+package = "org.mrml.library.windows"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[feature_set]]
+features = ["runtime"]
+targets = ["WINDOWS", "LINUX"]
+
+[[compile_env]]
+name = "CARGO_MANIFEST_DIR"
+value = "packages/tools/host"
+
+[[build_input]]
+kind = "external-command"
+line = 200
+path = "packages/tools/host/src/browser.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 59
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 70
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 79
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 88
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 97
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 114
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 178
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 186
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 191
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 197
+path = "packages/tools/host/src/desktop.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 444
+path = "packages/tools/host/src/editor.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 456
+path = "packages/tools/host/src/editor.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 32
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 41
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 49
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 93
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 108
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 143
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 149
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 173
+path = "packages/tools/host/src/git.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 15
+path = "packages/tools/host/src/mcp.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 54
+path = "packages/tools/host/src/media.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 58
+path = "packages/tools/host/src/media.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 62
+path = "packages/tools/host/src/media.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 105
+path = "packages/tools/host/src/media.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 129
+path = "packages/tools/host/src/media.rs"
+reason = "reviewed repository build input"

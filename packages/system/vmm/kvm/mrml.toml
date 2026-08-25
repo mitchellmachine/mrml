@@ -1,0 +1,49 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.system.vmm-kvm"
+kind = "vmm"
+name = "mrml-kvm"
+profile = "vmm"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_kvm"
+
+[rust]
+crate_name = "mrml_kvm"
+crate_type = "lib"
+source = "packages/system/vmm/kvm/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[build_input]]
+kind = "native-link"
+line = 95
+path = "packages/system/vmm/kvm/src/native.rs"
+reason = "reviewed repository build input"

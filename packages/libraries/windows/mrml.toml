@@ -1,0 +1,35 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.windows"
+kind = "library"
+name = "mrml-windows"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_windows"
+
+[rust]
+crate_name = "mrml_windows"
+crate_type = "lib"
+source = "packages/libraries/windows/src/lib.rs"
+
+[[build_input]]
+kind = "native-link"
+line = 462
+path = "packages/libraries/windows/src/lib.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "native-link"
+line = 642
+path = "packages/libraries/windows/src/lib.rs"
+reason = "reviewed repository build input"

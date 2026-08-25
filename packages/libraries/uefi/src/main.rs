@@ -18,6 +18,8 @@ use mrml_kernel::{
     },
     encode_handoff_with_smp_service_and_recovery,
 };
+#[cfg(feature = "package-boot")]
+use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, parse as parse_package};
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore,
     decode_canonical_authority_recovery_state,
@@ -59,6 +61,11 @@ static MADT: MadtBuffer = MadtBuffer(UnsafeCell::new([0; MAX_HANDOFF_MADT_BYTES]
 const KERNEL_STACK_GUARD_PAGES: usize = 1;
 const KERNEL_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 75, 69, 82, 78, 69, 76, 46, 83, 73, 71, 78, 69, 68, 0,
+];
+#[cfg(feature = "package-boot")]
+const KERNEL_PACKAGE_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 75, 69, 82, 78, 69, 76, 46, 80, 65, 67, 75, 65, 71, 69,
+    0,
 ];
 const SERVICE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 83, 69, 82, 86, 73, 67, 69, 46, 83, 73, 71, 78, 69, 68,
@@ -358,6 +365,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         )
     }?;
 
+    #[cfg(not(feature = "package-boot"))]
     let kernel_file = unsafe {
         load_file(
             image,
@@ -367,6 +375,8 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             MAX_KERNEL_IMAGE_BYTES as usize + SIGNED_ARTIFACT_OVERHEAD_BYTES,
         )
     }?;
+    #[cfg(feature = "package-boot")]
+    let kernel_file = unsafe { load_kernel_package(image, services, framebuffer) }?;
     if kernel_file
         .address
         .checked_add(kernel_file.length as u64)
@@ -805,6 +815,11 @@ fn embedded_kernel_root() -> Option<[u8; 64]> {
     parse_root_digest(option_env!("MRML_KERNEL_ROOT_DIGEST_HEX")?.as_bytes())
 }
 
+#[cfg(feature = "package-boot")]
+fn embedded_kernel_package_root() -> Option<[u8; 64]> {
+    parse_root_digest(option_env!("MRML_KERNEL_PACKAGE_ROOT_DIGEST_HEX")?.as_bytes())
+}
+
 fn embedded_minimum_version() -> Option<u64> {
     parse_nonzero_version(option_env!("MRML_KERNEL_MIN_VERSION")?.as_bytes())
 }
@@ -1177,6 +1192,63 @@ unsafe fn load_and_admit_release_artifact(
     Ok(AdmittedReleaseArtifact {
         file,
         digest: *verified.digest(),
+    })
+}
+
+#[cfg(feature = "package-boot")]
+unsafe fn load_kernel_package(
+    image: Handle,
+    services: &BootServices,
+    framebuffer: Framebuffer,
+) -> Result<LoadedFile, Status> {
+    let package_file = unsafe {
+        load_file(
+            image,
+            services,
+            framebuffer,
+            KERNEL_PACKAGE_PATH,
+            MAX_BOOT_PACKAGE_BYTES,
+        )
+    }?;
+    loader_trace(0xb0);
+    let package_bytes = unsafe {
+        core::slice::from_raw_parts(package_file.address as *const u8, package_file.length)
+    };
+    let package = parse_package(package_bytes, true, true).map_err(|_| LOAD_ERROR)?;
+    if package.id != "org.mrml.system.kernel"
+        || package.class != "kernel"
+        || package.key_id != embedded_kernel_package_root().ok_or(LOAD_ERROR)?
+    {
+        return Err(LOAD_ERROR);
+    }
+    let payload = package.select("kernel", "x86_64").map_err(|_| LOAD_ERROR)?;
+    if payload.raw_len == 0
+        || payload.raw_len > MAX_KERNEL_IMAGE_BYTES as usize + SIGNED_ARTIFACT_OVERHEAD_BYTES
+    {
+        return Err(LOAD_ERROR);
+    }
+    loader_trace(0xb1);
+    let pages = payload.raw_len.checked_add(4095).ok_or(LOAD_ERROR)? / 4096;
+    let allocation_bytes = pages.checked_mul(4096).ok_or(LOAD_ERROR)?;
+    let mut address = 0_u64;
+    check(unsafe { (services.allocate_pages)(0, 1, pages, &mut address) })?;
+    if address == 0 || !address.is_multiple_of(4096) {
+        return Err(LOAD_ERROR);
+    }
+    let allocation =
+        unsafe { core::slice::from_raw_parts_mut(address as *mut u8, allocation_bytes) };
+    allocation.fill(0);
+    payload
+        .decode(&mut allocation[..payload.raw_len])
+        .map_err(|_| LOAD_ERROR)?;
+    let signed = SignedArtifact::decode(&allocation[..payload.raw_len]).map_err(|_| LOAD_ERROR)?;
+    if signed.kind() != ArtifactKind::Kernel || signed.version() != package.version {
+        return Err(LOAD_ERROR);
+    }
+    loader_trace(0xb2);
+    Ok(LoadedFile {
+        address,
+        length: payload.raw_len,
     })
 }
 

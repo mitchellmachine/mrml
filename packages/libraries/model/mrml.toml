@@ -1,0 +1,82 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.model"
+kind = "library"
+name = "mrml-model"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "auto"
+
+[[feature]]
+name = "cuda"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "hipblas"
+
+[[feature]]
+name = "runtime"
+
+[[feature]]
+name = "sycl"
+
+[[feature]]
+name = "vulkan"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_model"
+
+[rust]
+crate_name = "mrml_model"
+crate_type = "lib"
+source = "packages/libraries/model/src/lib.rs"
+
+[[dependency]]
+alias = "serde_json"
+compile_name = "mrml-json"
+feature = "runtime"
+package = "org.mrml.library.json"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tensor"
+compile_name = "mrml-tensor"
+feature = "runtime"
+package = "org.mrml.library.tensor"
+scope = "compile"
+
+[[feature_set]]
+features = ["runtime"]
+targets = ["WINDOWS", "LINUX"]
+
+[[feature_profile]]
+features = ["auto", "runtime"]
+name = "auto"
+targets = ["WINDOWS", "LINUX"]
+
+[[extern_profile]]
+compile_name = "mrml-tensor"
+consumer = "auto"
+provider = "cuda"

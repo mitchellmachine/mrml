@@ -1,0 +1,61 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.experiment.vbs-host"
+kind = "experiment"
+name = "mrml-vbs-host"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-vbs-host"
+
+[rust]
+crate_name = "mrml_vbs_host_action"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+package = "org.mrml.library.error"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_whp"
+compile_name = "mrml-whp"
+package = "org.mrml.system.vmm-whp"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
+alias = "mrml_windows"
+compile_name = "mrml-windows"
+package = "org.mrml.library.windows"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[binary]]
+crate_name = "mrml_vbs_host"
+output = "mrml-vbs-host"
+self_extern = false
+source = "packages/experiments/mrml-vbs-host/src/main.rs"

@@ -1,0 +1,47 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.terminal-style"
+kind = "library"
+name = "mrml-terminal-style"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_terminal_style"
+
+[rust]
+crate_name = "mrml_terminal_style"
+crate_type = "lib"
+source = "packages/libraries/terminal-style/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_linux"
+compile_name = "mrml-linux"
+package = "org.mrml.library.linux"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_windows"
+compile_name = "mrml-windows"
+package = "org.mrml.library.windows"
+scope = "compile"
+targets = ["WINDOWS"]

@@ -1,0 +1,45 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.zstd"
+kind = "library"
+name = "mrml-zstd"
+profile = "library"
+
+[[provides]]
+binding = "dynamic"
+fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"
+generation = 3
+interface = "org.mrml.interface.compression.zstd"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_zstd"
+
+[rust]
+crate_name = "mrml_zstd"
+crate_type = "lib"
+source = "packages/libraries/zstd/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_interface_zstd_v3"
+compile_name = "mrml-interface-zstd-v3"
+package = "org.mrml.interface.compression.zstd"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"

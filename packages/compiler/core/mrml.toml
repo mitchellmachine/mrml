@@ -1,0 +1,57 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.compiler.core"
+kind = "compiler"
+name = "mrml-rustc"
+profile = "compiler"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "test"
+name = "component_interface"
+
+[[artifact]]
+kind = "test"
+name = "conformance"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_rustc"
+
+[[artifact]]
+kind = "test"
+name = "rustc_nightly_replacements"
+
+[rust]
+crate_name = "mrml_rustc"
+crate_type = "lib"
+source = "packages/compiler/core/src/lib.rs"
+
+[[test]]
+name = "component_interface"
+self_extern = true
+source = "packages/compiler/core/tests/component_interface.rs"
+
+[[test]]
+name = "conformance"
+self_extern = false
+source = "packages/compiler/core/tests/conformance.rs"
+
+[[test]]
+name = "rustc_nightly_replacements"
+self_extern = true
+source = "packages/compiler/core/tests/rustc_nightly_replacements.rs"
+
+[test_policy]
+stack_bytes = 33554432

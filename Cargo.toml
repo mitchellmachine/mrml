@@ -1,56 +1,14 @@
-[workspace]
-resolver = "2"
-members = [
-    "packages/tools/mrml",
-    "packages/compiler/core",
-    "packages/compiler/driver",
-    "packages/system/bootloader",
-    "packages/system/service-image",
-    "packages/services/config",
-    "packages/services/storage",
-    "packages/libraries/uefi",
-    "packages/system/kernel",
-    "packages/tests/kernel-bench",
-    "packages/tools/sign",
-    "packages/libraries/crypto",
-    "packages/libraries/tls",
-    "packages/libraries/http",
-    "packages/libraries/runtime",
-    "packages/libraries/model",
-    "packages/libraries/math",
-    "packages/gpu/tensor",
-    "packages/libraries/agent",
-    "packages/apps/cli",
-    "packages/tools/git",
-    "packages/libraries/ssh",
-    "packages/apps/machine",
-    "packages/libraries/error",
-    "packages/apps/server",
-    "packages/libraries/terminal-style",
-    "packages/tools/host",
-    "packages/libraries/percent-encoding",
-    "packages/libraries/windows",
-    "packages/libraries/linux",
-    "packages/system/vmm/kvm",
-    "packages/tools/vmm/kvm-run",
-    "packages/system/vmm/whp",
-    "packages/tools/vmm/whp-run",
-    "packages/libraries/json",
-    "packages/interfaces/org.mrml.interface.compression.zstd",
-    "packages/libraries/zim",
-    "packages/libraries/zstd",
-    "packages/libraries/wikipedia",
-    "packages/libraries/tokenizer",
-    "packages/tools/trainer",
-    "packages/libraries/av1",
-    "packages/libraries/opus",
-]
-
-[workspace.package]
+[package]
+name = "mrml"
 version = "0.0.1"
 edition = "2024"
 authors = ["Mitchell Renouf <238751894+mitchellrenouf@users.noreply.github.com>"]
 license = "CC0-1.0"
+description = "Stage-zero bootstrap for the MRML-native build frontend"
+
+[[bin]]
+name = "mrml"
+path = "packages/tools/mrml/src/main.rs"
 
 [profile.release]
 panic = "abort"

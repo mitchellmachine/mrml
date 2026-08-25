@@ -1,0 +1,60 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.crypto"
+kind = "library"
+name = "mrml-crypto"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "runtime"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_crypto"
+
+[rust]
+crate_name = "mrml_crypto"
+crate_type = "lib"
+source = "packages/libraries/crypto/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+feature = "runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[feature_set]]
+features = ["runtime"]
+targets = ["WINDOWS", "LINUX"]
+
+[[feature_set]]
+features = []
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = [""]
+name = "core"
+targets = ["MRML_NATIVE", "UEFI", "WINDOWS", "LINUX"]
+
+[[projected_build]]
+targets = ["UEFI"]

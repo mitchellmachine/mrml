@@ -1,0 +1,45 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.wikipedia"
+kind = "library"
+name = "mrml-wikipedia"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_wikipedia"
+
+[rust]
+crate_name = "mrml_wikipedia"
+crate_type = "lib"
+source = "packages/libraries/wikipedia/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_zim"
+compile_name = "mrml-zim"
+package = "org.mrml.zim"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_zstd"
+compile_name = "mrml-zstd"
+package = "org.mrml.zstd"
+scope = "compile"

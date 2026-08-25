@@ -1,0 +1,33 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.interface.compression.zstd"
+kind = "interface"
+name = "mrml-interface-zstd-v3"
+profile = "interface"
+
+[interface]
+abi = "mrml-call-v1"
+fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"
+generation = 3
+schema = "interface.mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_interface_zstd_v3"
+
+[rust]
+crate_name = "mrml_interface_zstd_v3"
+crate_type = "lib"
+source = "packages/interfaces/org.mrml.interface.compression.zstd/src/lib.rs"

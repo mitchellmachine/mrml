@@ -1,0 +1,53 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.service.storage"
+kind = "service"
+name = "mrml-storage"
+profile = "system-service"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_storage"
+
+[rust]
+crate_name = "mrml_storage"
+crate_type = "lib"
+source = "packages/services/storage/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[projected_build]]
+targets = ["UEFI"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 67108864

@@ -1,0 +1,68 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.system.service-image"
+kind = "service"
+name = "mrml-service-image"
+profile = "system-service"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[feature]]
+name = "block-service-loop"
+
+[[feature]]
+name = "preemption-probe"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-service-pe"
+
+[rust]
+crate_name = "mrml_service_image"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_config"
+compile_name = "mrml-config"
+package = "org.mrml.service.config"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_storage"
+compile_name = "mrml-storage"
+package = "org.mrml.service.storage"
+scope = "compile"
+
+[[binary]]
+crate_name = "mrml_service_pe"
+output = "mrml-service-pe"
+self_extern = false
+source = "packages/system/service-image/src/main.rs"
+
+[[feature_set]]
+features = []
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"

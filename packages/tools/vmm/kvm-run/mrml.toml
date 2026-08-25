@@ -1,0 +1,73 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.tool.vmm-kvm-run"
+kind = "tool"
+name = "mrml-kvm-run"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-kvm-run"
+
+[rust]
+crate_name = "mrml_kvm_run_action"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+package = "org.mrml.library.error"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_kvm"
+compile_name = "mrml-kvm"
+package = "org.mrml.system.vmm-kvm"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_tensor"
+compile_name = "mrml-tensor"
+package = "org.mrml.library.tensor"
+provider_profile = "cuda"
+scope = "compile"
+targets = ["LINUX"]
+
+[[binary]]
+crate_name = "mrml_kvm_run"
+output = "mrml-kvm-run"
+self_extern = false
+source = "packages/tools/vmm/kvm-run/src/main.rs"

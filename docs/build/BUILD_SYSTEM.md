@@ -1,9 +1,9 @@
 # MRML bootstrap build and packaging toolchain
 
-**Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` now parses the versioned root
-`MRML.workspace`, emits typed list/doctor/audit/build/test results, resolves and
+**Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` now parses versioned
+root and package-local `mrml.toml` manifests, emits typed list/doctor/audit/build/test results, resolves and
 validates the complete declared dependency graph natively, inventories unusual
-build inputs, directly invokes pinned upstream rustc for all 43 actions, selects current-
+build inputs, directly invokes pinned upstream rustc for all 45 actions, selects current-
 host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
 toolchain checks, and rejects unimplemented package/release/image/publish
@@ -46,8 +46,9 @@ source -> mrml build -> pinned upstream rustc -> linked artifact
   -> mrml image -> SystemImage / installation media
 ```
 
-Cargo is stage zero and is not a second public build frontend. Clean checkout
-uses pinned Cargo/rustc only for `cargo build --locked -p mrml`, after which all
+Cargo is stage zero and is not a second public build frontend. The repository's
+only `Cargo.toml` describes the bootstrap `mrml` binary. A clean checkout uses
+pinned Cargo/rustc only for `cargo build --locked`, after which all
 normal component build/test commands use `mrml`. The internal Cargo bridge has
 been removed and missing native actions fail workspace loading. Removing rustc
 or LLVM remains an evidence-driven migration, never an OS-progress prerequisite. Compiler,
@@ -98,8 +99,12 @@ Upstream rustc does not make its native/unsafe toolchain memory-safe.
 
 ## Manifest, lockfile, profiles, and isolation
 
-`MRML.workspace` v3 is the authoritative repository component inventory and
-target/profile graph. During migration its `cargo-package` field bridges exact upstream
+The root `mrml.toml` enumerates bounded package members; each package-local
+`mrml.toml` owns its version-3 component, target/profile, action, dependency, and
+input-policy declarations. The loader rejects absent, duplicate, escaping, or
+oversized members and manifests. The former `MRML.workspace` monolith and
+per-package Cargo manifests are removed. During migration the `cargo-package`
+field remains a stage-zero compiler identity label for exact upstream
 dependency compilation; Cargo package identity is not MRML identity. Every
 existing component is classified `MRML_NATIVE`, `HOST_WINDOWS_LINUX`, `COMPILER`,
 `UEFI`, `GPU`, `TEST`, `SHARED`, or `BOOTSTRAP_ONLY`. The generic `crates/`
@@ -255,7 +260,7 @@ change still requires human review because equal counts do not establish equal
 commands, paths, libraries, or environment semantics. See
 [BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md).
 
-A canonical manifest (filename provisional) binds package identity/version/class,
+A canonical package-local `mrml.toml` binds package identity/version/class,
 profile/compiler mode, target slices, capability requests, dependencies/interfaces,
 and resources. It grants no authority. An exact lockfile binds dependency identity,
 version, digest, source, and relevant compiler/tool inputs; system graphs are

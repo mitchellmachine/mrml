@@ -1,7 +1,8 @@
 # Cargo bridge inventory
 
 **Status: IMPLEMENTED NATIVE GRAPH / CLEAN-SOURCE BOOTSTRAP ONLY.** The
-dependency-free `mrml` frontend resolves version-3 `MRML.workspace` declarations
+dependency-free `mrml` frontend resolves version-3 declarations from root and
+package-local `mrml.toml` manifests
 without invoking Cargo metadata. It rejects duplicate MRML/path/Cargo-stage
 identities while loading, then rejects missing dependencies, self-dependencies,
 cycles, unknown targets, and empty output sets with bounded structured errors.
@@ -20,13 +21,13 @@ mrml audit --output structured
 The 2026-08-25 Windows gnullvm result is:
 
 ```text
-43 components
-118 deduplicated local dependency records
+45 components
+127 deduplicated local dependency records
 72 feature names
-64 declared outputs
+68 declared outputs
 0 custom build targets
 0 procedural-macro targets
-9 native-link source sites
+12 native-link source sites
 31 compile-time environment source sites
 1 included-file source site
 48 external-command source sites
@@ -54,16 +55,16 @@ cannot create another input. The native resolver covers declared graph facts;
 the source scan identifies known direct sites. Both must pass before a direct-
 rustc or build-input change.
 
-The internal Cargo bridge is removed. All 43 components, including `mrml`
+The internal Cargo bridge is removed. All 45 components, including `mrml`
 itself, have exact native actions and workspace loading fails on any missing
-action. Fresh `cargo build --locked -p mrml` is the sole stage-zero use; both
+action. Fresh `cargo build --locked` is the sole stage-zero use; both
 exact hosts then pass doctor/audit, native self-build, and all 12 native
 self-tests with no `cargo-transition` result. This completes graph migration,
 not the still-planned package/release/image work.
 
 ## Next gate
 
-All 43 tracked components now live in semantic `apps/`, `compiler/`, `packages/`,
+All 45 tracked components now live in semantic `apps/`, `compiler/`, `packages/`,
 `services/`, `system/`, `tests/`, or `tools/` homes; no tracked component remains
 under generic `crates/`. The next gate makes source roots, crate types, editions,
 target cfgs, feature activation, extern names/artifacts, build actions, compiler

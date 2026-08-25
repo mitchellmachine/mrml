@@ -1,0 +1,54 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.experiment.vbs-enclave"
+kind = "experiment"
+name = "mrml-vbs-enclave"
+profile = "vmm"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[artifact]]
+kind = "cdylib"
+name = "mrml_vbs_enclave"
+
+[rust]
+crate_name = "mrml_vbs_enclave"
+crate_type = "cdylib"
+source = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[build_input]]
+kind = "native-link"
+line = 56
+path = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "native-link"
+line = 105
+path = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "native-link"
+line = 111
+path = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
+reason = "reviewed repository build input"

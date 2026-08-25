@@ -1,10 +1,11 @@
 # Universal build migration inventory
 
-**Status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** The authoritative machine-readable inventory
-is [`../../MRML.workspace`](../../MRML.workspace). All 43 current components are
+**Status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** The authoritative
+machine-readable inventory is the root [`../../mrml.toml`](../../mrml.toml) plus
+all 45 package-local `mrml.toml` manifests. All current components are
 classified and live in semantic `apps/`, `compiler/`, `packages/`, `services/`,
 `system/`, `tests/`, or `tools/` homes; no tracked component remains under generic
-`crates/`. The native resolver validates all 118 declared dependency edges
+`crates/`. The native resolver validates all 127 declared dependency edges
 without Cargo metadata, every component has an exact native action, and the
 internal Cargo bridge is removed. Cargo remains only for clean-source bootstrap
 of `mrml`; package/release/image work is not complete.
@@ -710,7 +711,8 @@ were not exercised by the Windows implementation environment.
 | `TEST` | kernel benchmark |
 | `SHARED` | reusable crypto/runtime/protocol/media/model/platform libraries |
 
-The exact 43 entries live in `MRML.workspace`; this table must not become a
+The exact entries live in package-local `mrml.toml` files enumerated by the root
+`mrml.toml`; this table must not become a
 second inventory.
 
 ## Post-migration constraints

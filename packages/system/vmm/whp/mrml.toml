@@ -1,0 +1,49 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.system.vmm-whp"
+kind = "vmm"
+name = "mrml-whp"
+profile = "vmm"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_whp"
+
+[rust]
+crate_name = "mrml_whp"
+crate_type = "lib"
+source = "packages/system/vmm/whp/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+test_only = true
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[build_input]]
+kind = "native-link"
+line = 70
+path = "packages/system/vmm/whp/src/native.rs"
+reason = "reviewed repository build input"

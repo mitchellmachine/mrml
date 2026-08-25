@@ -1,0 +1,230 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.tensor"
+kind = "library"
+name = "mrml-tensor"
+profile = "gpu-kernel"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[target]]
+arch = "gpu"
+environment = "gpu"
+toolchain = "cuda-nvidia"
+
+[[feature]]
+name = "cuda"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "runtime"
+
+[[artifact]]
+kind = "example"
+name = "cuda_prefill_primitives"
+
+[[artifact]]
+kind = "example"
+name = "cuda_rust_compare"
+
+[[artifact]]
+kind = "test"
+name = "device_test"
+
+[[artifact]]
+kind = "example"
+name = "gguf_inspect"
+
+[[artifact]]
+kind = "bench"
+name = "hot_paths"
+
+[[artifact]]
+kind = "test"
+name = "kv_cache_test"
+
+[[artifact]]
+kind = "test"
+name = "model_test"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_tensor"
+
+[[artifact]]
+kind = "test"
+name = "ops_test"
+
+[[artifact]]
+kind = "example"
+name = "prefill_model_check"
+
+[[artifact]]
+kind = "test"
+name = "quant_k_test"
+
+[[artifact]]
+kind = "test"
+name = "quant_test"
+
+[[artifact]]
+kind = "generated"
+name = "rust_cuda_kernels.ptx"
+
+[[artifact]]
+kind = "test"
+name = "speculative_test"
+
+[rust]
+crate_name = "mrml_tensor"
+crate_type = "lib"
+source = "packages/gpu/tensor/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+feature = "cuda"
+package = "org.mrml.system.kernel"
+scope = "compile"
+targets = ["WINDOWS", "LINUX", "CUDA"]
+
+[[dependency]]
+alias = "mrml_linux"
+compile_name = "mrml-linux"
+feature = "runtime"
+package = "org.mrml.library.linux"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_math"
+compile_name = "mrml-math"
+package = "org.mrml.library.math"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+feature = "runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_windows"
+compile_name = "mrml-windows"
+feature = "runtime"
+package = "org.mrml.library.windows"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[feature_set]]
+features = ["runtime"]
+targets = ["WINDOWS", "LINUX"]
+
+[[feature_set]]
+features = ["cuda", "runtime"]
+targets = ["CUDA"]
+
+[[feature_profile]]
+features = ["cuda", "runtime"]
+name = "cuda"
+targets = ["WINDOWS", "LINUX"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 67108864
+
+[[test]]
+name = "device_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/device_test.rs"
+
+[[test]]
+name = "kv_cache_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/kv_cache_test.rs"
+
+[[test]]
+name = "model_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/model_test.rs"
+
+[[test]]
+name = "ops_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/ops_test.rs"
+
+[[test]]
+name = "quant_k_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/quant_k_test.rs"
+
+[[test]]
+name = "quant_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/quant_test.rs"
+
+[[test]]
+name = "speculative_test"
+self_extern = true
+source = "packages/gpu/tensor/tests/speculative_test.rs"
+
+[[example]]
+feature = "cuda"
+name = "cuda_prefill_primitives"
+source = "packages/gpu/tensor/examples/cuda_prefill_primitives.rs"
+targets = ["CUDA"]
+
+[[example]]
+feature = "cuda"
+name = "cuda_rust_compare"
+source = "packages/gpu/tensor/examples/cuda_rust_compare.rs"
+targets = ["CUDA"]
+
+[[example]]
+name = "gguf_inspect"
+source = "packages/gpu/tensor/examples/gguf_inspect.rs"
+targets = ["WINDOWS", "LINUX"]
+
+[[example]]
+name = "prefill_model_check"
+source = "packages/gpu/tensor/examples/prefill_model_check.rs"
+targets = ["WINDOWS", "LINUX"]
+
+[[benchmark]]
+name = "hot_paths"
+self_extern = true
+source = "packages/gpu/tensor/benches/hot_paths.rs"
+
+[[generated]]
+compile_env = "OUT_DIR"
+default_arch = "sm_120"
+feature = "cuda"
+output = "rust_cuda_kernels.ptx"
+source = "packages/gpu/tensor/cuda_ptx/kernels.rs"
+
+[[build_input]]
+kind = "compile-env"
+line = 36
+path = "packages/gpu/tensor/src/cuda.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "included-file"
+line = 36
+path = "packages/gpu/tensor/src/cuda.rs"
+reason = "reviewed repository build input"

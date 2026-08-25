@@ -1,0 +1,159 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.system.bootloader"
+kind = "bootloader"
+name = "mrml-kernel-image"
+profile = "uefi"
+
+[[target]]
+arch = "x86_64"
+environment = "uefi"
+
+[[feature]]
+name = "ap-startup-trace"
+
+[[feature]]
+name = "block-guest-driver-probe"
+
+[[feature]]
+name = "block-service-probe"
+
+[[feature]]
+name = "emulated-ap-timing"
+
+[[feature]]
+name = "fault-probe"
+
+[[feature]]
+name = "gpu-benchmark"
+
+[[feature]]
+name = "kernel-image"
+
+[[feature]]
+name = "pci-configuration-probe"
+
+[[feature]]
+name = "preemption-probe"
+
+[[feature]]
+name = "production-policy"
+
+[[feature]]
+name = "service-preemption-probe"
+
+[[feature]]
+name = "service-probe"
+
+[[feature]]
+name = "service-restart-request-probe"
+
+[[feature]]
+name = "smp-ipi-probe"
+
+[[feature]]
+name = "smp-periodic-balance-probe"
+
+[[feature]]
+name = "smp-probe"
+
+[[feature]]
+name = "smp-scheduler-probe"
+
+[[feature]]
+name = "smp-service-migration-probe"
+
+[[feature]]
+name = "timer-probe"
+
+[[feature]]
+name = "uefi-service-preemption-probe"
+
+[[feature]]
+name = "user-probe"
+
+[[feature]]
+name = "vmx-root-probe"
+
+[[feature]]
+name = "whp-gpu-benchmark"
+
+[[feature]]
+name = "whp-smp-ipi-probe"
+
+[[feature]]
+name = "whp-smp-periodic-balance-probe"
+
+[[feature]]
+name = "whp-smp-probe"
+
+[[feature]]
+name = "whp-smp-scheduler-probe"
+
+[[feature]]
+name = "whp-smp-service-migration-probe"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-kernel-pe"
+
+[rust]
+crate_name = "mrml_kernel_image"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[binary]]
+crate_name = "mrml_kernel_pe"
+output = "mrml-kernel-pe"
+self_extern = false
+source = "packages/system/bootloader/src/main.rs"
+
+[[feature_set]]
+features = ["kernel-image"]
+targets = ["UEFI"]
+
+[[absent_compile_env]]
+name = "MRML_EMULATED_TSC_HZ"
+
+[[absent_compile_env]]
+name = "MRML_KERNEL_MIN_VERSION"
+
+[[absent_compile_env]]
+name = "MRML_SERVICE_MIN_VERSION"
+
+[[absent_compile_env]]
+name = "MRML_SERVICE_ROOT_DIGEST_HEX"
+
+[[build_input]]
+kind = "compile-env"
+line = 2372
+path = "packages/system/bootloader/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 3549
+path = "packages/system/bootloader/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 3576
+path = "packages/system/bootloader/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 4397
+path = "packages/system/bootloader/src/main.rs"
+reason = "reviewed repository build input"

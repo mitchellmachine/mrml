@@ -1,0 +1,51 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.compiler.driver"
+kind = "compiler"
+name = "mrml-rustc-driver"
+profile = "compiler"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-rustc"
+
+[rust]
+crate_name = "mrml_rustc_driver"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+package = "org.mrml.library.error"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_rustc"
+compile_name = "mrml-rustc"
+package = "org.mrml.compiler.core"
+scope = "compile"
+
+[[binary]]
+crate_name = "mrml_rustc_driver"
+output = "mrml-rustc"
+self_extern = false
+source = "packages/compiler/driver/src/main.rs"

@@ -205,8 +205,8 @@ manifest, pinned upstream orchestration, profiles, EFI export, packaging/signing
 release/image/publication, provenance, experimental `mrml-rustc`, then per-profile
 promotion. It cannot redirect this compiler lane or the foundational OS gate.
 
-**PARTIALLY IMPLEMENTED:** stage-zero `packages/tools/mrml`, `MRML.workspace`, structured
-Cargo-bridge build/test dispatch, native dependency resolution, current-host VMM
+**PARTIALLY IMPLEMENTED:** stage-zero `packages/tools/mrml`, root and package-local
+`mrml.toml` manifests, structured native build/test dispatch, native dependency resolution, current-host VMM
 selection, UEFI routing, and CUDA target validation now exist. All tracked
 components have semantic homes outside generic `crates/`. Follow
 [build/MIGRATION_INVENTORY.md](build/MIGRATION_INVENTORY.md): make compiler inputs
@@ -215,7 +215,7 @@ parity, then confine Cargo to clean-source bootstrap. Package/release/image/
 publication remain planned.
 
 The native-resolver audit increment is now implemented: `mrml doctor` validates
-all 43 components and 120 declared edges without invoking Cargo metadata, and
+all 45 components and their declared edges without invoking Cargo metadata, and
 `mrml audit` emits dependencies, features, outputs, build scripts, proc macros,
 and bounded source-input sites. Missing dependencies, invalid targets, empty
 outputs, self-dependencies, and cycles fail closed. Dependency, feature, output,

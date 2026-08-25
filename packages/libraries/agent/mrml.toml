@@ -1,0 +1,133 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.agent"
+kind = "library"
+name = "mrml-agent"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "auto"
+
+[[feature]]
+name = "cuda"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "hipblas"
+
+[[feature]]
+name = "runtime"
+
+[[feature]]
+name = "sycl"
+
+[[feature]]
+name = "vulkan"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_agent"
+
+[rust]
+crate_name = "mrml_agent"
+crate_type = "lib"
+source = "packages/libraries/agent/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+feature = "runtime"
+package = "org.mrml.library.crypto"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+feature = "runtime"
+package = "org.mrml.library.error"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_http"
+compile_name = "mrml-http"
+feature = "runtime"
+package = "org.mrml.library.http"
+scope = "compile"
+
+[[dependency]]
+alias = "serde_json"
+compile_name = "mrml-json"
+feature = "runtime"
+package = "org.mrml.library.json"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_model"
+compile_name = "mrml-model"
+feature = "runtime"
+package = "org.mrml.library.model"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_terminal_style"
+compile_name = "mrml-terminal-style"
+feature = "runtime"
+package = "org.mrml.library.terminal-style"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tools"
+compile_name = "mrml-tools"
+feature = "runtime"
+package = "org.mrml.tool.host"
+scope = "compile"
+
+[[feature_set]]
+features = ["runtime"]
+targets = ["WINDOWS", "LINUX"]
+
+[[feature_profile]]
+features = ["auto", "runtime"]
+name = "auto"
+targets = ["WINDOWS", "LINUX"]
+
+[[extern_profile]]
+compile_name = "mrml-model"
+consumer = "auto"
+provider = "auto"
+
+[[compile_env]]
+name = "CARGO_PKG_VERSION"
+value = "0.0.1"
+
+[[build_input]]
+kind = "compile-env"
+line = 91
+path = "packages/libraries/agent/src/config.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 119
+path = "packages/libraries/agent/src/config.rs"
+reason = "reviewed repository build input"

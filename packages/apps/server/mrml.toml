@@ -1,0 +1,103 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.app.server"
+kind = "application"
+name = "mrml-server"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "auto"
+
+[[feature]]
+name = "cuda"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "vulkan"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_server"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-server"
+
+[rust]
+crate_name = "mrml_server"
+crate_type = "lib"
+source = "packages/apps/server/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_agent"
+compile_name = "mrml-agent"
+package = "org.mrml.library.agent"
+provider_profile = "auto"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+package = "org.mrml.library.error"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_json"
+compile_name = "mrml-json"
+package = "org.mrml.library.json"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_model"
+compile_name = "mrml-model"
+package = "org.mrml.library.model"
+provider_profile = "auto"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_terminal_style"
+compile_name = "mrml-terminal-style"
+package = "org.mrml.library.terminal-style"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tls"
+compile_name = "mrml-tls"
+package = "org.mrml.library.tls"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tools"
+compile_name = "mrml-tools"
+package = "org.mrml.tool.host"
+scope = "compile"
+
+[[feature_set]]
+features = ["auto"]
+targets = ["WINDOWS", "LINUX"]
+
+[[binary]]
+crate_name = "mrml_server_bin"
+output = "mrml-server"
+self_extern = true
+source = "packages/apps/server/src/main.rs"

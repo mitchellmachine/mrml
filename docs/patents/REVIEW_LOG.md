@@ -1,5 +1,13 @@
 # Patent review log
 
+## 2026-08-25 — Package-local `mrml.toml` manifest migration
+
+Patent review: **NOT_TRIGGERED**. This increment redistributes the existing
+bounded native build declarations from one repository inventory into strict
+package-local TOML files, adds bounded member loading and validation, and
+confines Cargo metadata to the stage-zero `mrml` bootstrap. It introduces no new
+runtime, compiler-semantic, compression, security, or deployment mechanism.
+
 ## 2026-08-25 — Unified system-monitor architecture
 
 Status: **TRIGGERED** for implementation; documentation only in this increment.

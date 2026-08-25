@@ -1,0 +1,70 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.av1"
+kind = "library"
+name = "mrml-av1"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "default"
+
+[[feature]]
+name = "nvidia"
+
+[[artifact]]
+kind = "example"
+name = "decode_ivf"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_av1"
+
+[rust]
+crate_name = "mrml_av1"
+crate_type = "lib"
+source = "packages/libraries/av1/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_linux"
+compile_name = "mrml-linux"
+feature = "nvidia"
+package = "org.mrml.library.linux"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_windows"
+compile_name = "mrml-windows"
+feature = "nvidia"
+package = "org.mrml.library.windows"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[feature_set]]
+features = []
+targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 33554432
+
+[[example]]
+name = "decode_ivf"
+source = "packages/libraries/av1/examples/decode_ivf.rs"

@@ -1,0 +1,288 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.uefi"
+kind = "library"
+name = "mrml-uefi"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "uefi"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[feature]]
+name = "uefi-image"
+
+[[feature]]
+name = "package-boot"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_uefi"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-loader"
+
+[rust]
+crate_name = "mrml_uefi"
+crate_type = "lib"
+source = "packages/libraries/uefi/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_package_format"
+compile_name = "mrml-package-format"
+package = "org.mrml.library.package-format"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_storage"
+compile_name = "mrml-storage"
+package = "org.mrml.service.storage"
+scope = "compile"
+
+[[binary]]
+crate_name = "mrml_loader"
+feature = "uefi-image"
+output = "mrml-loader"
+self_extern = true
+source = "packages/libraries/uefi/src/main.rs"
+targets = ["UEFI"]
+
+[[feature_set]]
+features = ["uefi-image"]
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["uefi-image", "package-boot"]
+name = "package_boot"
+targets = ["UEFI"]
+
+[[feature_set]]
+features = []
+targets = ["WINDOWS", "LINUX"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[[absent_compile_env]]
+name = "MRML_KERNEL_MIN_VERSION"
+
+[[absent_compile_env]]
+name = "MRML_KERNEL_ROOT_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_KERNEL_PACKAGE_ROOT_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RECOVERY_COUNTER_NV_INDEX_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RECOVERY_PCR_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RECOVERY_PCR_SELECT_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RECOVERY_POLICY_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RECOVERY_SLOT0_NV_INDEX_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RECOVERY_SLOT1_NV_INDEX_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RELEASE_COUNTER_NV_INDEX_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RELEASE_PCR_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RELEASE_PCR_SELECT_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RELEASE_POLICY_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RELEASE_SLOT0_NV_INDEX_HEX"
+
+[[absent_compile_env]]
+name = "MRML_RELEASE_SLOT1_NV_INDEX_HEX"
+
+[[absent_compile_env]]
+name = "MRML_REQUIRE_RELEASE_MANIFEST"
+
+[[absent_compile_env]]
+name = "MRML_REQUIRE_ROLLBACK"
+
+[[absent_compile_env]]
+name = "MRML_REQUIRE_SECURE_BOOT"
+
+[[absent_compile_env]]
+name = "MRML_REQUIRE_TPM"
+
+[[absent_compile_env]]
+name = "MRML_SERVICE_MIN_VERSION"
+
+[[absent_compile_env]]
+name = "MRML_SERVICE_ROOT_DIGEST_HEX"
+
+[[absent_compile_env]]
+name = "MRML_TPM_NV_INDEX_HEX"
+
+[[build_input]]
+kind = "compile-env"
+line = 805
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 809
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 813
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 817
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 820
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 821
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 825
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 829
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 833
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 874
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 875
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 876
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 877
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 878
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 879
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 886
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 887
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 888
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 889
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 890
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 891
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 897
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"

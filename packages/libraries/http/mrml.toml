@@ -1,0 +1,39 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.http"
+kind = "library"
+name = "mrml-http"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_http"
+
+[rust]
+crate_name = "mrml_http"
+crate_type = "lib"
+source = "packages/libraries/http/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_tls"
+compile_name = "mrml-tls"
+package = "org.mrml.library.tls"
+scope = "compile"

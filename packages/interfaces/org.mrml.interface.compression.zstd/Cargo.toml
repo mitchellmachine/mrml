@@ -1,7 +1,0 @@
-[package]
-name = "mrml-interface-zstd-v3"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-

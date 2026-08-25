@@ -1,0 +1,29 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.library.linux"
+kind = "library"
+name = "mrml-linux"
+profile = "library"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_linux"
+
+[rust]
+crate_name = "mrml_linux"
+crate_type = "lib"
+source = "packages/libraries/linux/src/lib.rs"
+
+[[build_input]]
+kind = "native-link"
+line = 47
+path = "packages/libraries/linux/src/lib.rs"
+reason = "reviewed repository build input"

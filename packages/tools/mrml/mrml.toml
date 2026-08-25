@@ -1,0 +1,93 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.tool.build"
+kind = "bootstrap-tool"
+name = "mrml"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "bin"
+name = "mrml"
+
+[rust]
+crate_name = "mrml_build_action"
+crate_type = "none"
+source = "-"
+
+[[binary]]
+crate_name = "mrml"
+output = "mrml"
+self_extern = false
+source = "packages/tools/mrml/src/main.rs"
+
+[[build_input]]
+kind = "external-command"
+line = 2148
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 2311
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 2415
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 2502
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 2599
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 2707
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 2803
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 3041
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 3514
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 3539
+path = "packages/tools/mrml/src/main.rs"
+reason = "reviewed repository build input"

@@ -1,0 +1,83 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.tool.vmm-whp-run"
+kind = "tool"
+name = "mrml-whp-run"
+profile = "host-tool"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[feature]]
+name = "cuda"
+
+[[feature]]
+name = "default"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-whp-run"
+
+[rust]
+crate_name = "mrml_whp_run_action"
+crate_type = "none"
+source = "-"
+
+[[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
+alias = "mrml_error"
+compile_name = "mrml-error"
+package = "org.mrml.library.error"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
+alias = "mrml_runtime"
+compile_name = "mrml-runtime"
+package = "org.mrml.library.runtime"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
+alias = "mrml_tensor"
+compile_name = "mrml-tensor"
+feature = "cuda"
+package = "org.mrml.library.tensor"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
+alias = "mrml_whp"
+compile_name = "mrml-whp"
+package = "org.mrml.system.vmm-whp"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[feature_set]]
+features = []
+targets = ["WINDOWS"]
+
+[[binary]]
+crate_name = "mrml_whp_run"
+output = "mrml-whp-run"
+self_extern = false
+source = "packages/tools/vmm/whp-run/src/main.rs"

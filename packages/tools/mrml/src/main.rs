@@ -2,9 +2,13 @@ pub mod abi;
 pub mod binding;
 pub mod generation;
 pub mod loader;
+pub mod manifest;
+pub mod package;
 pub mod resolver;
 pub mod schema;
 pub mod servicing;
+
+extern crate self as mrml_crypto;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -14,9 +18,21 @@ use std::path::{Component as PathComponent, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use generation::mrml_package_identifier;
+use manifest::Document as ManifestDocument;
+#[path = "../../../libraries/crypto/src/sha3.rs"]
+#[allow(dead_code)]
+mod package_sha3;
+pub use package_sha3::Sha3_512;
+#[path = "../../../libraries/crypto/src/lamport.rs"]
+mod package_lamport;
+pub use package_lamport::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, lamport_verify};
+#[path = "../../../libraries/package-format/src/core.rs"]
+#[allow(dead_code)]
+mod boot_package_core;
 use schema::InterfaceSchema;
 
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
+const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_COMPONENTS: usize = 256;
 const PINNED_NIGHTLY: &str = "nightly-2026-08-24";
 const TARGET_FAMILIES: [&str; 5] = ["WINDOWS", "LINUX", "MRML_NATIVE", "UEFI", "CUDA"];
@@ -143,6 +159,7 @@ struct RustCompileMode<'a> {
     release: bool,
     test: bool,
     gpu_arch: Option<&'a str>,
+    compile_env: &'a BTreeMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -179,8 +196,10 @@ fn run() -> Result<(), String> {
         "build" | "test" => build_or_test(&workspace, &args),
         "doctor" => doctor(&workspace, &args[1..]),
         "audit" => audit(&workspace, &args[1..]),
+        "manifest" => manifest_command(&workspace, &args[1..]),
         "interface" => interface_command(&args[1..]),
-        command @ ("package" | "release" | "image" | "publish") => Err(format!(
+        "package" => package_command(&workspace, &args[1..]),
+        command @ ("release" | "image" | "publish") => Err(format!(
             "UnsupportedOperation {{ command: {command}, status: PLANNED }}"
         )),
         command => Err(format!("UnknownCommand {{ command: {command} }}")),
@@ -189,13 +208,208 @@ fn run() -> Result<(), String> {
 
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
-    println!("usage: mrml <list|doctor|audit|build|test|interface> [component] [options]");
+    println!("usage: mrml <list|doctor|audit|build|test|manifest|interface> [component] [options]");
+    println!("       mrml manifest <check|fmt> [--check]");
+    println!(
+        "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT OUTPUT [--compress] [--private-key KEY]"
+    );
+    println!("       mrml package verify FILE [--require-signature] [--output structured]");
     println!("       mrml interface generate-rust SCHEMA OUTPUT");
     println!("  --all                 select every host-compatible component");
     println!("  --target <family>     native|windows|linux|uefi-x86_64|cuda-nvidia");
     println!("  --gpu-arch <name>     required metadata for CUDA target");
     println!("  --release             use release profile");
+    println!("  --feature-profile P   select a declared Rust feature profile");
+    println!("  --compile-env N=V     set an allowlisted manifest compile input");
     println!("  --output structured   emit stable key=value records");
+}
+
+fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("create") if args.len() >= 8 => {
+            let id = &args[1];
+            if !workspace
+                .components
+                .iter()
+                .any(|component| component.id == *id)
+            {
+                return Err(format!("PackageIdentityUnknown {{ package: {id} }}"));
+            }
+            let class = &args[2];
+            let version = args[3]
+                .parse::<u64>()
+                .map_err(|_| "PackageVersionInvalid".to_owned())?;
+            let architecture = &args[4];
+            let purpose = &args[5];
+            let input_path = Path::new(&args[6]);
+            let output_path = Path::new(&args[7]);
+            let compress = args.iter().skip(8).any(|arg| arg == "--compress");
+            let private_path = args
+                .windows(2)
+                .find(|pair| pair[0] == "--private-key")
+                .map(|pair| pair[1].as_str());
+            if args
+                .iter()
+                .skip(8)
+                .any(|arg| arg.starts_with("--") && arg != "--compress" && arg != "--private-key")
+            {
+                return Err("PackageUsageError { unknown_option }".into());
+            }
+            let input = fs::read(input_path)
+                .map_err(|error| format!("PackageInputReadError {{ detail: {error} }}"))?;
+            if input.is_empty() || input.len() > package::MAX_PAYLOAD_BYTES {
+                return Err(format!("PackageInputSize {{ bytes: {} }}", input.len()));
+            }
+            let mut private = private_path
+                .map(fs::read)
+                .transpose()
+                .map_err(|error| format!("PackageKeyReadError {{ detail: {error} }}"))?;
+            let encoded = package::build(
+                id,
+                class,
+                version,
+                &[package::BuildPayload {
+                    name: purpose,
+                    purpose,
+                    architecture,
+                    compress,
+                    bytes: &input,
+                }],
+                private.as_deref(),
+            )
+            .map_err(|error| format!("PackageBuildError {{ detail: {error:?} }}"))?;
+            if let Some(private) = private.as_mut() {
+                private.fill(0);
+            }
+            if let Some(path) = private_path {
+                fs::remove_file(path)
+                    .map_err(|error| format!("PackageKeyConsumeError {{ detail: {error} }}"))?;
+            }
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output_path)
+                .map_err(|error| format!("PackageOutputCreateError {{ detail: {error} }}"))?;
+            output
+                .write_all(&encoded)
+                .and_then(|_| output.sync_all())
+                .map_err(|error| format!("PackageOutputWriteError {{ detail: {error} }}"))?;
+            println!(
+                "package|operation=create|status=PASS|id={id}|class={class}|version={version}|architecture={architecture}|purpose={purpose}|compression={}|signed={}|bytes={}",
+                if compress { "zstd" } else { "none" },
+                private.is_some(),
+                encoded.len()
+            );
+            Ok(())
+        }
+        Some("verify") if args.len() >= 2 => {
+            let require_signature = args.iter().any(|arg| arg == "--require-signature");
+            let structured = args
+                .windows(2)
+                .any(|pair| pair == ["--output", "structured"]);
+            let bytes = fs::read(&args[1])
+                .map_err(|error| format!("PackageReadError {{ detail: {error} }}"))?;
+            let parsed = package::parse(&bytes, require_signature)
+                .map_err(|error| format!("PackageVerifyError {{ detail: {error:?} }}"))?;
+            for payload in &parsed.payloads {
+                let mut decoded = vec![0_u8; payload.raw_len];
+                payload.decode(&mut decoded).map_err(|error| {
+                    format!(
+                        "PackagePayloadVerifyError {{ name: {}, detail: {error:?} }}",
+                        payload.name
+                    )
+                })?;
+                if structured {
+                    println!(
+                        "package-payload|name={}|purpose={}|architecture={}|compression={}|stored_bytes={}|raw_bytes={}",
+                        payload.name,
+                        payload.purpose,
+                        payload.architecture,
+                        payload.compression,
+                        payload.bytes.len(),
+                        payload.raw_len
+                    );
+                }
+            }
+            let digest = parsed
+                .content_digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            println!(
+                "package-verify|status=PASS|format=1|id={}|class={}|version={}|signed={}|payloads={}|digest={digest}",
+                parsed.id,
+                parsed.class,
+                parsed.version,
+                parsed.signed,
+                parsed.payloads.len()
+            );
+            Ok(())
+        }
+        _ => Err("PackageUsageError { expected: create | verify }".into()),
+    }
+}
+
+fn manifest_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
+    match args.first().map(String::as_str) {
+        Some("check") if args.len() == 1 => {
+            let graph = verify_native_graph(workspace)?;
+            println!(
+                "manifest|status=PASS|format=mrml|version=2|components={}|dependencies={}",
+                workspace.components.len(),
+                graph.dependency_count
+            );
+            Ok(())
+        }
+        Some("fmt") => {
+            let check = args.get(1).map(String::as_str) == Some("--check");
+            if args.len() > usize::from(check) + 1 {
+                return Err("ManifestUsageError { expected: fmt [--check] }".into());
+            }
+            let mut paths = vec![workspace.root.join("mrml.toml")];
+            paths.extend(
+                workspace
+                    .components
+                    .iter()
+                    .map(|component| workspace.root.join(&component.path).join("mrml.toml")),
+            );
+            let mut changed = 0_usize;
+            for path in paths {
+                let label = path
+                    .strip_prefix(&workspace.root)
+                    .unwrap_or(&path)
+                    .to_string_lossy();
+                let text = read_bounded_manifest(&path, &label)?;
+                let canonical = ManifestDocument::parse(text.as_bytes())
+                    .map_err(|error| manifest_error(&label, error))?
+                    .canonical();
+                if text != canonical {
+                    changed = changed.checked_add(1).ok_or("ManifestCountOverflow")?;
+                    if !check {
+                        let mut output = fs::OpenOptions::new()
+                            .write(true)
+                            .truncate(true)
+                            .open(&path)
+                            .map_err(|error| {
+                                format!("ManifestWriteError {{ file: {label}, detail: {error} }}")
+                            })?;
+                        output.write_all(canonical.as_bytes()).map_err(|error| {
+                            format!("ManifestWriteError {{ file: {label}, detail: {error} }}")
+                        })?;
+                        output.sync_all().map_err(|error| {
+                            format!("ManifestSyncError {{ file: {label}, detail: {error} }}")
+                        })?;
+                    }
+                }
+            }
+            if check && changed != 0 {
+                return Err(format!("ManifestFormattingRequired {{ files: {changed} }}"));
+            }
+            println!("manifest-fmt|status=PASS|changed={changed}|check={check}");
+            Ok(())
+        }
+        _ => Err("ManifestUsageError { expected: check | fmt [--check] | migrate }".into()),
+    }
 }
 
 fn interface_command(args: &[String]) -> Result<(), String> {
@@ -243,28 +457,579 @@ fn find_root() -> Result<PathBuf, String> {
     let mut current =
         env::current_dir().map_err(|e| format!("CurrentDirectoryError {{ detail: {e} }}"))?;
     loop {
-        if current.join("MRML.workspace").is_file() {
+        if current.join("mrml.toml").is_file() {
             return Ok(current);
         }
         if !current.pop() {
-            return Err("WorkspaceNotFound { file: MRML.workspace }".into());
+            return Err("WorkspaceNotFound { file: mrml.toml }".into());
         }
     }
 }
 
-fn load_workspace() -> Result<Workspace, String> {
-    let root = find_root()?;
-    let workspace_path = root.join("MRML.workspace");
-    let bytes = fs::metadata(&workspace_path)
-        .map_err(|e| format!("WorkspaceMetadataError {{ detail: {e} }}"))?
+fn read_bounded_manifest(path: &Path, label: &str) -> Result<String, String> {
+    let bytes = fs::metadata(path)
+        .map_err(|error| format!("ManifestMetadataError {{ file: {label}, detail: {error} }}"))?
         .len();
-    if bytes > MAX_WORKSPACE_BYTES {
+    if bytes == 0 || bytes > MAX_MANIFEST_BYTES {
         return Err(format!(
-            "WorkspaceSizeLimit {{ bytes: {bytes}, limit: {MAX_WORKSPACE_BYTES} }}"
+            "ManifestSizeLimit {{ file: {label}, bytes: {bytes}, limit: {MAX_MANIFEST_BYTES} }}"
         ));
     }
-    let text = fs::read_to_string(workspace_path)
-        .map_err(|e| format!("WorkspaceReadError {{ detail: {e} }}"))?;
+    fs::read_to_string(path)
+        .map_err(|error| format!("ManifestReadError {{ file: {label}, detail: {error} }}"))
+}
+
+fn load_manifest_declarations(root: &Path) -> Result<String, String> {
+    let root_text = read_bounded_manifest(&root.join("mrml.toml"), "mrml.toml")?;
+    let root_document = ManifestDocument::parse(root_text.as_bytes())
+        .map_err(|error| manifest_error("mrml.toml", error))?;
+    let workspace = root_document
+        .section("workspace")
+        .map_err(|error| manifest_error("mrml.toml", error))?;
+    let members = workspace
+        .strings("members")
+        .map_err(|error| manifest_error("mrml.toml", error))?;
+    if members.len() > MAX_COMPONENTS {
+        return Err(format!("ComponentCountLimit {{ limit: {MAX_COMPONENTS} }}"));
+    }
+    let mut seen = BTreeSet::new();
+    let mut declarations = String::from("version|3\n");
+    let mut interface_definitions = BTreeMap::new();
+    let mut providers = Vec::new();
+    let mut requirements = Vec::new();
+    for member in members {
+        if !safe_relative_path(member) || !seen.insert(member.clone()) {
+            return Err(format!("InvalidWorkspaceMember {{ path: {member} }}"));
+        }
+        let relative = format!("{member}/mrml.toml");
+        let manifest_text = read_bounded_manifest(&root.join(&relative), &relative)?;
+        let document = ManifestDocument::parse(manifest_text.as_bytes())
+            .map_err(|error| manifest_error(&relative, error))?;
+        let package = document
+            .section("package")
+            .map_err(|error| manifest_error(&relative, error))?;
+        let package_id = package
+            .string("id")
+            .map_err(|error| manifest_error(&relative, error))?;
+        let package_kind = package
+            .string("kind")
+            .map_err(|error| manifest_error(&relative, error))?;
+        let target_families: Vec<_> = document
+            .array_sections("target")
+            .map(v2_target_family)
+            .collect::<Result<_, _>>()?;
+        if let Some(interface) = document
+            .sections
+            .iter()
+            .find(|section| !section.array && section.name == "interface")
+        {
+            let generation = interface
+                .integer("generation")
+                .map_err(|error| manifest_error(&relative, error))?;
+            let fingerprint = interface
+                .string("fingerprint")
+                .map_err(|error| manifest_error(&relative, error))?;
+            if interface_definitions
+                .insert(package_id.to_owned(), (generation, fingerprint.to_owned()))
+                .is_some()
+            {
+                return Err(format!("DuplicateInterface {{ interface: {package_id} }}"));
+            }
+        }
+        for provider in document.array_sections("provides") {
+            providers.push((
+                package_id.to_owned(),
+                provider
+                    .string("interface")
+                    .map_err(|error| manifest_error(&relative, error))?
+                    .to_owned(),
+                provider
+                    .integer("generation")
+                    .map_err(|error| manifest_error(&relative, error))?,
+                provider
+                    .string("fingerprint")
+                    .map_err(|error| manifest_error(&relative, error))?
+                    .to_owned(),
+                target_families.clone(),
+            ));
+        }
+        for requirement in document.array_sections("requires") {
+            if matches!(package_kind, "bootloader" | "recovery")
+                && requirement
+                    .string("binding")
+                    .map_err(|error| manifest_error(&relative, error))?
+                    == "dynamic"
+            {
+                return Err(format!("BootDependencyInvalid {{ package: {package_id} }}"));
+            }
+            requirements.push((
+                package_id.to_owned(),
+                requirement
+                    .string("interface")
+                    .map_err(|error| manifest_error(&relative, error))?
+                    .to_owned(),
+                requirement
+                    .integer("generation")
+                    .map_err(|error| manifest_error(&relative, error))?,
+                requirement
+                    .string("fingerprint")
+                    .map_err(|error| manifest_error(&relative, error))?
+                    .to_owned(),
+                target_families.clone(),
+            ));
+        }
+        for declaration in v2_declarations(&document, member, &relative)? {
+            let next = declarations
+                .len()
+                .checked_add(declaration.len() + 1)
+                .ok_or("WorkspaceSizeOverflow")?;
+            if next as u64 > MAX_WORKSPACE_BYTES {
+                return Err(format!(
+                    "WorkspaceSizeLimit {{ bytes: {next}, limit: {MAX_WORKSPACE_BYTES} }}"
+                ));
+            }
+            declarations.push_str(&declaration);
+            declarations.push('\n');
+        }
+    }
+    for (provider, interface, generation, fingerprint, _) in &providers {
+        if interface_definitions.get(interface) != Some(&(*generation, fingerprint.clone())) {
+            return Err(format!(
+                "InterfaceProviderInvalid {{ provider: {provider}, interface: {interface}, generation: {generation} }}"
+            ));
+        }
+    }
+    for (consumer, interface, generation, fingerprint, targets) in &requirements {
+        if interface_definitions.get(interface) != Some(&(*generation, fingerprint.clone())) {
+            return Err(format!(
+                "InterfaceRequirementInvalid {{ consumer: {consumer}, interface: {interface}, generation: {generation} }}"
+            ));
+        }
+        if !providers.iter().any(
+            |(_, provided, provider_generation, provider_fingerprint, provider_targets)| {
+                provided == interface
+                    && provider_generation == generation
+                    && provider_fingerprint == fingerprint
+                    && targets
+                        .iter()
+                        .all(|target| provider_targets.contains(target))
+            },
+        ) {
+            return Err(format!(
+                "InterfaceUnavailable {{ consumer: {consumer}, interface: {interface}, generation: {generation} }}"
+            ));
+        }
+    }
+    Ok(declarations)
+}
+
+fn manifest_error(file: &str, error: manifest::Error) -> String {
+    format!("ManifestV2Error {{ file: {file}, detail: {error:?} }}")
+}
+
+fn v2_target_family(section: &manifest::Section) -> Result<&'static str, String> {
+    let environment = section
+        .string("environment")
+        .map_err(|error| manifest_error("target", error))?;
+    let arch = section
+        .string("arch")
+        .map_err(|error| manifest_error("target", error))?;
+    if arch != "x86_64" && environment != "gpu" {
+        return Err(format!(
+            "ManifestTargetUnsupported {{ environment: {environment}, arch: {arch} }}"
+        ));
+    }
+    match environment {
+        "windows" => Ok("WINDOWS"),
+        "linux" => Ok("LINUX"),
+        "mrml" => Ok("MRML_NATIVE"),
+        "uefi" => Ok("UEFI"),
+        "gpu" if section.optional_string("toolchain").ok().flatten() == Some("cuda-nvidia") => {
+            Ok("CUDA")
+        }
+        _ => Err(format!(
+            "ManifestTargetUnsupported {{ environment: {environment}, arch: {arch} }}"
+        )),
+    }
+}
+
+fn v2_build_class(kind: &str, profile: &str) -> Result<&'static str, String> {
+    match (kind, profile) {
+        ("bootstrap-tool", "host-tool") => Ok("BOOTSTRAP_ONLY"),
+        ("compiler", "compiler") => Ok("COMPILER"),
+        ("kernel", "kernel") | ("service", "system-service") => Ok("MRML_NATIVE"),
+        ("bootloader", "uefi") => Ok("UEFI"),
+        ("library", "gpu-kernel") => Ok("GPU"),
+        ("test", "test") => Ok("TEST"),
+        ("library", "library") | ("interface", "interface") => Ok("SHARED"),
+        ("application", "host-tool") | ("tool", "host-tool") | ("vmm", "vmm") => {
+            Ok("HOST_WINDOWS_LINUX")
+        }
+        ("experiment", "host-tool") | ("experiment", "vmm") => Ok("EXPERIMENT"),
+        _ => Err(format!(
+            "ManifestPackageProfileInvalid {{ kind: {kind}, profile: {profile} }}"
+        )),
+    }
+}
+
+fn v2_declarations(
+    document: &ManifestDocument,
+    member: &str,
+    file: &str,
+) -> Result<Vec<String>, String> {
+    let package = document
+        .section("package")
+        .map_err(|error| manifest_error(file, error))?;
+    let id = package
+        .string("id")
+        .map_err(|error| manifest_error(file, error))?;
+    let name = package
+        .string("name")
+        .map_err(|error| manifest_error(file, error))?;
+    let kind = package
+        .string("kind")
+        .map_err(|error| manifest_error(file, error))?;
+    let profile = package
+        .string("profile")
+        .map_err(|error| manifest_error(file, error))?;
+    let default = package
+        .boolean("default")
+        .map_err(|error| manifest_error(file, error))?;
+    let class = v2_build_class(kind, profile)?;
+    let targets: Vec<_> = document
+        .array_sections("target")
+        .map(v2_target_family)
+        .collect::<Result<_, _>>()?;
+    if targets.is_empty() {
+        return Err(format!("ManifestTargetMissing {{ package: {id} }}"));
+    }
+    let features: Vec<_> = document
+        .array_sections("feature")
+        .map(|section| {
+            section
+                .string("name")
+                .map(str::to_owned)
+                .map_err(|error| manifest_error(file, error))
+        })
+        .collect::<Result<_, _>>()?;
+    let outputs: Vec<_> = document
+        .array_sections("artifact")
+        .map(|section| {
+            Ok(format!(
+                "{}:{}",
+                section
+                    .string("name")
+                    .map_err(|error| manifest_error(file, error))?,
+                section
+                    .string("kind")
+                    .map_err(|error| manifest_error(file, error))?
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    let dependencies: Vec<_> = document
+        .array_sections("dependency")
+        .filter(|section| section.optional_string("scope").ok().flatten() == Some("compile"))
+        .map(|section| {
+            section
+                .string("compile_name")
+                .map(str::to_owned)
+                .map_err(|error| manifest_error(file, error))
+        })
+        .collect::<Result<_, _>>()?;
+    let mut input_counts = InputCounts::default();
+    for input in document.array_sections("build_input") {
+        match input
+            .string("kind")
+            .map_err(|error| manifest_error(file, error))?
+        {
+            "build-script" => input_counts.build_scripts += 1,
+            "proc-macro" => input_counts.proc_macros += 1,
+            "native-link" => input_counts.native_links += 1,
+            "compile-env" => input_counts.compile_env += 1,
+            "included-file" => input_counts.included_files += 1,
+            "external-command" => input_counts.external_commands += 1,
+            other => {
+                return Err(format!(
+                    "ManifestBuildInputInvalid {{ package: {id}, kind: {other} }}"
+                ));
+            }
+        }
+    }
+    let mut declarations = vec![format!(
+        "component|{id}|{member}|{name}|{class}|{}|{default}|{}|{}|{}|{}",
+        targets.join(","),
+        dependencies.join(","),
+        features.join(","),
+        outputs.join(","),
+        input_counts.structured()
+    )];
+    let rust = document
+        .section("rust")
+        .map_err(|error| manifest_error(file, error))?;
+    let mut externs = Vec::new();
+    for dependency in document
+        .array_sections("dependency")
+        .filter(|section| section.optional_string("scope").ok().flatten() == Some("compile"))
+    {
+        let compile_name = dependency
+            .string("compile_name")
+            .map_err(|error| manifest_error(file, error))?;
+        let alias = dependency
+            .string("alias")
+            .map_err(|error| manifest_error(file, error))?;
+        let targets = dependency
+            .optional_strings("targets")
+            .map_err(|error| manifest_error(file, error))?;
+        let mut encoded = format!(
+            "{compile_name}={alias}@{}",
+            if targets.is_empty() {
+                "*".into()
+            } else {
+                targets.join(",")
+            }
+        );
+        if let Some(feature) = dependency
+            .optional_string("feature")
+            .map_err(|error| manifest_error(file, error))?
+        {
+            encoded.push('?');
+            encoded.push_str(feature);
+        }
+        if let Some(provider_profile) = dependency
+            .optional_string("provider_profile")
+            .map_err(|error| manifest_error(file, error))?
+        {
+            encoded.push('#');
+            encoded.push_str(provider_profile);
+        }
+        if dependency
+            .optional_boolean("test_only")
+            .map_err(|error| manifest_error(file, error))?
+            == Some(true)
+        {
+            encoded.push_str("!test");
+        }
+        externs.push(encoded);
+    }
+    declarations.push(format!(
+        "rust-action|{id}|{}|{}|{}|{}",
+        rust.string("crate_name")
+            .map_err(|error| manifest_error(file, error))?,
+        rust.string("crate_type")
+            .map_err(|error| manifest_error(file, error))?,
+        rust.string("source")
+            .map_err(|error| manifest_error(file, error))?,
+        externs.join(";")
+    ));
+    for (section_name, record_name) in [("test", "rust-test"), ("benchmark", "rust-benchmark")] {
+        for section in document.array_sections(section_name) {
+            declarations.push(format!(
+                "{record_name}|{id}|{}|{}|{}",
+                section
+                    .string("name")
+                    .map_err(|error| manifest_error(file, error))?,
+                section
+                    .string("source")
+                    .map_err(|error| manifest_error(file, error))?,
+                section
+                    .boolean("self_extern")
+                    .map_err(|error| manifest_error(file, error))?
+            ));
+        }
+    }
+    for section in document.array_sections("example") {
+        let targets = section
+            .optional_strings("targets")
+            .map_err(|error| manifest_error(file, error))?;
+        let feature = section
+            .optional_string("feature")
+            .map_err(|error| manifest_error(file, error))?
+            .unwrap_or("");
+        if targets.is_empty() && feature.is_empty() {
+            declarations.push(format!(
+                "rust-example|{id}|{}|{}",
+                section
+                    .string("name")
+                    .map_err(|error| manifest_error(file, error))?,
+                section
+                    .string("source")
+                    .map_err(|error| manifest_error(file, error))?
+            ));
+        } else {
+            declarations.push(format!(
+                "rust-example|{id}|{}|{}|{}|{feature}",
+                section
+                    .string("name")
+                    .map_err(|error| manifest_error(file, error))?,
+                section
+                    .string("source")
+                    .map_err(|error| manifest_error(file, error))?,
+                if targets.is_empty() {
+                    "*".into()
+                } else {
+                    targets.join(",")
+                }
+            ));
+        }
+    }
+    for section in document.array_sections("binary") {
+        let targets = section
+            .optional_strings("targets")
+            .map_err(|error| manifest_error(file, error))?;
+        let feature = section
+            .optional_string("feature")
+            .map_err(|error| manifest_error(file, error))?;
+        let mut line = format!(
+            "rust-binary|{id}|{}|{}|{}|{}",
+            section
+                .string("output")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("crate_name")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("source")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .boolean("self_extern")
+                .map_err(|error| manifest_error(file, error))?
+        );
+        if !targets.is_empty() || feature.is_some() {
+            line.push('|');
+            let encoded_targets = targets.join(",");
+            line.push_str(if targets.is_empty() {
+                "*"
+            } else {
+                &encoded_targets
+            });
+            line.push('|');
+            line.push_str(feature.unwrap_or(""));
+        }
+        declarations.push(line);
+    }
+    for section in document.array_sections("feature_set") {
+        declarations.push(format!(
+            "rust-feature-set|{id}|{}|{}",
+            section
+                .strings("targets")
+                .map_err(|error| manifest_error(file, error))?
+                .join(","),
+            section
+                .optional_strings("features")
+                .map_err(|error| manifest_error(file, error))?
+                .join(",")
+        ));
+    }
+    for section in document.array_sections("feature_profile") {
+        declarations.push(format!(
+            "rust-feature-profile|{id}|{}|{}|{}",
+            section
+                .string("name")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .strings("targets")
+                .map_err(|error| manifest_error(file, error))?
+                .join(","),
+            section
+                .optional_strings("features")
+                .map_err(|error| manifest_error(file, error))?
+                .join(",")
+        ));
+    }
+    for section in document.array_sections("compile_env") {
+        declarations.push(format!(
+            "rust-compile-env|{id}|{}|{}|{}",
+            section
+                .string("name")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("value")
+                .map_err(|error| manifest_error(file, error))?,
+            input_counts.compile_env
+        ));
+    }
+    for section in document.array_sections("absent_compile_env") {
+        declarations.push(format!(
+            "rust-compile-env-absent|{id}|{}",
+            section
+                .string("name")
+                .map_err(|error| manifest_error(file, error))?
+        ));
+    }
+    for (name, record) in [
+        ("host_build", "rust-host-builds"),
+        ("projected_build", "rust-projected-builds"),
+        ("host_test", "rust-host-tests"),
+    ] {
+        for section in document.array_sections(name) {
+            declarations.push(format!(
+                "{record}|{id}|{}",
+                section
+                    .strings("targets")
+                    .map_err(|error| manifest_error(file, error))?
+                    .join(",")
+            ));
+        }
+    }
+    if let Ok(policy) = document.section("test_policy") {
+        declarations.push(format!(
+            "rust-test-policy|{id}|{}",
+            policy
+                .integer("stack_bytes")
+                .map_err(|error| manifest_error(file, error))?
+        ));
+    }
+    for section in document.array_sections("target_triple") {
+        declarations.push(format!(
+            "rust-target-triple|{id}|{}|{}",
+            section
+                .string("target")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("triple")
+                .map_err(|error| manifest_error(file, error))?
+        ));
+    }
+    for section in document.array_sections("extern_profile") {
+        declarations.push(format!(
+            "rust-extern-profile|{id}|{}|{}|{}",
+            section
+                .string("compile_name")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("consumer")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("provider")
+                .map_err(|error| manifest_error(file, error))?
+        ));
+    }
+    for section in document.array_sections("generated") {
+        declarations.push(format!(
+            "rust-ptx|{id}|{}|{}|{}|{}|{}",
+            section
+                .string("output")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("source")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("feature")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("compile_env")
+                .map_err(|error| manifest_error(file, error))?,
+            section
+                .string("default_arch")
+                .map_err(|error| manifest_error(file, error))?
+        ));
+    }
+    Ok(declarations)
+}
+
+fn load_workspace() -> Result<Workspace, String> {
+    let root = find_root()?;
+    let text = load_manifest_declarations(&root)?;
     let mut version = None;
     let mut components = Vec::new();
     let mut rust_actions = Vec::new();
@@ -321,7 +1086,7 @@ fn load_workspace() -> Result<Workspace, String> {
                         index + 1
                     ));
                 }
-                if !safe_relative_path(path) || !root.join(path).join("Cargo.toml").is_file() {
+                if !safe_relative_path(path) || !root.join(path).join("mrml.toml").is_file() {
                     return Err(format!(
                         "ComponentPathMissing {{ line: {}, path: {path} }}",
                         index + 1
@@ -545,7 +1310,7 @@ fn load_workspace() -> Result<Workspace, String> {
             .iter_mut()
             .find(|component| component.id == component_id)
             .ok_or_else(|| format!("RustActionComponentMissing {{ component: {component_id} }}"))?;
-        if !matches!(crate_type.as_str(), "lib" | "none") {
+        if !matches!(crate_type.as_str(), "lib" | "cdylib" | "none") {
             return Err(format!(
                 "UnsupportedRustActionType {{ component: {component_id}, crate_type: {crate_type} }}"
             ));
@@ -1170,6 +1935,26 @@ fn load_workspace() -> Result<Workspace, String> {
                     library_actions.join(",")
                 ));
             }
+            let mut declared_cdylibs: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":cdylib"))
+                .collect();
+            let mut cdylib_actions = if action.crate_type == "cdylib" {
+                vec![action.crate_name.as_str()]
+            } else {
+                Vec::new()
+            };
+            declared_cdylibs.sort();
+            cdylib_actions.sort();
+            if declared_cdylibs != cdylib_actions {
+                return Err(format!(
+                    "RustCdylibOutputDrift {{ component: {}, outputs: {}, cdylibs: {} }}",
+                    component.id,
+                    declared_cdylibs.join(","),
+                    cdylib_actions.join(",")
+                ));
+            }
             for external in &action.externs {
                 let dependency = components
                     .iter()
@@ -1512,12 +2297,20 @@ fn apply_rust_features(
         .arg("cfg(test)");
 }
 
-fn apply_rust_compile_env(command: &mut Command, action: &RustAction) {
+fn apply_rust_compile_env(
+    command: &mut Command,
+    action: &RustAction,
+    overrides: &BTreeMap<String, String>,
+) {
     for input in &action.compile_env {
         command.env(&input.name, &input.value);
     }
     for name in &action.absent_compile_env {
-        command.env_remove(name);
+        if let Some(value) = overrides.get(name) {
+            command.env(name, value);
+        } else {
+            command.env_remove(name);
+        }
     }
 }
 
@@ -1635,6 +2428,43 @@ fn selector(args: &[String]) -> Option<&str> {
         .map(String::as_str)
 }
 
+fn requested_option<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String> {
+    let mut values = args
+        .windows(2)
+        .filter(|pair| pair[0] == name)
+        .map(|pair| pair[1].as_str());
+    let value = values.next();
+    if value.is_some_and(|value| value.starts_with('-')) || values.next().is_some() {
+        return Err(format!("InvalidOption {{ option: {name} }}"));
+    }
+    if value.is_none() && args.iter().any(|arg| arg == name) {
+        return Err(format!("MissingOptionValue {{ option: {name} }}"));
+    }
+    Ok(value)
+}
+
+fn requested_compile_env(args: &[String]) -> Result<BTreeMap<String, String>, String> {
+    let mut values = BTreeMap::new();
+    for pair in args.windows(2).filter(|pair| pair[0] == "--compile-env") {
+        let (name, value) = pair[1]
+            .split_once('=')
+            .ok_or_else(|| "InvalidOption { option: --compile-env }".to_owned())?;
+        if name.is_empty()
+            || value.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+            || values.insert(name.to_owned(), value.to_owned()).is_some()
+        {
+            return Err("InvalidOption { option: --compile-env }".to_owned());
+        }
+    }
+    if args.last().is_some_and(|arg| arg == "--compile-env") {
+        return Err("MissingOptionValue { option: --compile-env }".to_owned());
+    }
+    Ok(values)
+}
+
 fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let operation = args[0].as_str();
     let mode = output_mode(args);
@@ -1648,6 +2478,8 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let all = args.iter().any(|arg| arg == "--all");
     let selected = selector(args);
     let release = args.iter().any(|arg| arg == "--release");
+    let feature_profile = requested_option(args, "--feature-profile")?.unwrap_or("default");
+    let compile_env = requested_compile_env(args)?;
     let mut components: Vec<&Component> = workspace
         .components
         .iter()
@@ -1699,7 +2531,16 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
             .windows(2)
             .find(|pair| pair[0] == "--gpu-arch")
             .map(|pair| pair[1].as_str());
-        run_rust_action(workspace, component, operation, &target, release, gpu_arch)?;
+        run_rust_action(
+            workspace,
+            component,
+            operation,
+            &target,
+            release,
+            gpu_arch,
+            feature_profile,
+            &compile_env,
+        )?;
         emit(mode, operation, component, &target, builder, "PASS");
     }
     Ok(())
@@ -1712,6 +2553,8 @@ fn run_rust_action(
     target: &str,
     release: bool,
     gpu_arch: Option<&str>,
+    feature_profile: &str,
+    compile_env: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     let compile_target = rust_compile_target(
         component
@@ -1724,6 +2567,26 @@ fn run_rust_action(
         .rust_action
         .as_ref()
         .ok_or("NativeActionDisappeared")?;
+    if feature_profile != "default"
+        && !action.feature_profiles.iter().any(|profile| {
+            profile.name == feature_profile && profile.targets.iter().any(|item| item == target)
+        })
+    {
+        return Err(format!(
+            "RustFeatureProfileUnavailable {{ component: {}, target: {target}, profile: {feature_profile} }}",
+            component.id
+        ));
+    }
+    for name in compile_env.keys() {
+        if !action.absent_compile_env.iter().any(|item| item == name)
+            && !action.compile_env.iter().any(|item| &item.name == name)
+        {
+            return Err(format!(
+                "CompileEnvNotAllowlisted {{ component: {}, name: {name} }}",
+                component.id
+            ));
+        }
+    }
     let mut built = BTreeSet::new();
     compile_rust_component(
         workspace,
@@ -1734,8 +2597,9 @@ fn run_rust_action(
             release,
             test: false,
             gpu_arch,
+            compile_env,
         },
-        "default",
+        feature_profile,
         &mut built,
     )?;
     for binary in action
@@ -1754,7 +2618,9 @@ fn run_rust_action(
                 release,
                 test: false,
                 gpu_arch,
+                compile_env,
             },
+            feature_profile,
         )?;
     }
     if operation == "test" {
@@ -1781,6 +2647,7 @@ fn run_rust_action(
                 release,
                 test: true,
                 gpu_arch,
+                compile_env,
             },
             "default",
             &mut test_built,
@@ -1804,7 +2671,9 @@ fn run_rust_action(
                     release,
                     test: true,
                     gpu_arch,
+                    compile_env,
                 },
+                "default",
             )?;
         }
         for example in action
@@ -1898,6 +2767,7 @@ fn compile_rust_component(
         release,
         test,
         gpu_arch,
+        compile_env,
     } = *mode;
     let build_key = format!(
         "{}#{target}#{compile_target}#{feature_profile}",
@@ -2030,7 +2900,7 @@ fn compile_rust_component(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, feature_profile);
-    apply_rust_compile_env(&mut command, action);
+    apply_rust_compile_env(&mut command, action, compile_env);
     apply_generated_compile_env(&mut command, action, &output_dir);
     for external in action.externs.iter().filter(|external| {
         rust_extern_active(
@@ -2130,7 +3000,7 @@ fn run_declared_test(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, "default");
-    apply_rust_compile_env(&mut command, action);
+    apply_rust_compile_env(&mut command, action, &BTreeMap::new());
     apply_generated_compile_env(&mut command, action, &output_dir);
     if test.self_extern {
         command.arg("--extern").arg(format!(
@@ -2230,7 +3100,7 @@ fn compile_declared_example(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, "default");
-    apply_rust_compile_env(&mut command, action);
+    apply_rust_compile_env(&mut command, action, &BTreeMap::new());
     apply_generated_compile_env(&mut command, action, &output_dir);
     for external in action.externs.iter().filter(|external| {
         rust_extern_active(external, action, target, compile_target, "default", false)
@@ -2313,7 +3183,7 @@ fn compile_declared_benchmark(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, "default");
-    apply_rust_compile_env(&mut command, action);
+    apply_rust_compile_env(&mut command, action, &BTreeMap::new());
     apply_generated_compile_env(&mut command, action, &output_dir);
     if benchmark.self_extern {
         command.arg("--extern").arg(format!(
@@ -2390,6 +3260,7 @@ fn compile_declared_binary(
     action: &RustAction,
     binary: &RustBinary,
     mode: &RustCompileMode<'_>,
+    feature_profile: &str,
 ) -> Result<(), String> {
     let RustCompileMode {
         target,
@@ -2397,6 +3268,7 @@ fn compile_declared_binary(
         release,
         test,
         gpu_arch: _,
+        compile_env,
     } = *mode;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     ensure_artifact_directory(&output_dir)?;
@@ -2425,8 +3297,8 @@ fn compile_declared_binary(
     } else {
         command.args(["--crate-type", "bin"]);
     }
-    apply_rust_features(&mut command, component, action, target, "default");
-    apply_rust_compile_env(&mut command, action);
+    apply_rust_features(&mut command, component, action, target, feature_profile);
+    apply_rust_compile_env(&mut command, action, compile_env);
     apply_generated_compile_env(&mut command, action, &output_dir);
     if binary.self_extern {
         command.arg("--extern").arg(format!(
@@ -2438,13 +3310,20 @@ fn compile_declared_binary(
                 target,
                 compile_target,
                 release,
-                "default",
+                feature_profile,
             )?
             .display()
         ));
     }
     for external in action.externs.iter().filter(|external| {
-        rust_extern_active(external, action, target, compile_target, "default", test)
+        rust_extern_active(
+            external,
+            action,
+            target,
+            compile_target,
+            feature_profile,
+            test,
+        )
     }) {
         let dependency = workspace
             .components
@@ -2464,7 +3343,7 @@ fn compile_declared_binary(
                 target,
                 compile_target,
                 release,
-                &external.provider_profile,
+                rust_extern_provider_profile(external, feature_profile),
             )?
             .display()
         ));
@@ -2705,10 +3584,15 @@ fn native_artifact(
     } else {
         format!("__{feature_profile}")
     };
-    Ok(
-        native_output_dir(workspace, target, compile_target, release)?
-            .join(format!("lib{}{profile_suffix}.rlib", action.crate_name)),
-    )
+    let name = match (
+        action.crate_type.as_str(),
+        compile_target_family(compile_target).ok(),
+    ) {
+        ("cdylib", Some("WINDOWS")) => format!("{}{profile_suffix}.dll", action.crate_name),
+        ("cdylib", Some("LINUX")) => format!("lib{}{profile_suffix}.so", action.crate_name),
+        _ => format!("lib{}{profile_suffix}.rlib", action.crate_name),
+    };
+    Ok(native_output_dir(workspace, target, compile_target, release)?.join(name))
 }
 
 fn find_component<'a>(workspace: &'a Workspace, cargo: &str) -> Result<&'a Component, String> {
