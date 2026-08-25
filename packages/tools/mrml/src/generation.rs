@@ -2,6 +2,10 @@ const MAX_GENERATION_PACKAGES: usize = 256;
 const MAX_PACKAGE_CANDIDATES: usize = 1024;
 const MAX_PACKAGE_DEPENDENCIES: usize = 256;
 const MAX_GENERATION_DEPENDENCY_EDGES: usize = 4096;
+const MAX_PACKAGE_ID_BYTES: usize = 255;
+const GENERATION_MAGIC: [u8; 8] = *b"MRMLSG2\0";
+const GENERATION_HEADER_BYTES: usize = 24;
+const PACKAGE_HEADER_BYTES: usize = 76;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemPackage {
@@ -289,6 +293,113 @@ impl SystemGeneration {
             .ok()
             .map(|index| &self.packages[index])
     }
+
+    pub fn encode_canonical(&self) -> Vec<u8> {
+        let capacity = GENERATION_HEADER_BYTES
+            + self
+                .packages
+                .iter()
+                .map(|package| PACKAGE_HEADER_BYTES + package.package_id.len())
+                .sum::<usize>();
+        let mut bytes = Vec::with_capacity(capacity);
+        bytes.extend_from_slice(&GENERATION_MAGIC);
+        bytes.extend_from_slice(&self.generation.to_le_bytes());
+        bytes.extend_from_slice(&(self.packages.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        for package in &self.packages {
+            bytes.extend_from_slice(&(package.package_id.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&0u16.to_le_bytes());
+            bytes.extend_from_slice(&package.version.to_le_bytes());
+            bytes.extend_from_slice(&package.artifact_digest);
+            bytes.extend_from_slice(package.package_id.as_bytes());
+        }
+        bytes
+    }
+
+    pub fn decode_canonical(bytes: &[u8]) -> Result<Self, GenerationCodecError> {
+        if bytes.len() < GENERATION_HEADER_BYTES || bytes[..8] != GENERATION_MAGIC {
+            return Err(GenerationCodecError::Header);
+        }
+        let generation = read_u64(bytes, 8)?;
+        let count = read_u32(bytes, 16)? as usize;
+        if read_u32(bytes, 20)? != 0 {
+            return Err(GenerationCodecError::Reserved);
+        }
+        if count == 0 || count > MAX_GENERATION_PACKAGES {
+            return Err(GenerationCodecError::PackageCount);
+        }
+        let mut cursor = GENERATION_HEADER_BYTES;
+        let mut packages = Vec::with_capacity(count);
+        for _ in 0..count {
+            let fixed_end = cursor
+                .checked_add(PACKAGE_HEADER_BYTES)
+                .ok_or(GenerationCodecError::Truncated)?;
+            if fixed_end > bytes.len() {
+                return Err(GenerationCodecError::Truncated);
+            }
+            let id_length = read_u16(bytes, cursor)? as usize;
+            if id_length == 0 || id_length > MAX_PACKAGE_ID_BYTES {
+                return Err(GenerationCodecError::PackageIdentity);
+            }
+            if read_u16(bytes, cursor + 2)? != 0 {
+                return Err(GenerationCodecError::Reserved);
+            }
+            let version = read_u64(bytes, cursor + 4)?;
+            let mut digest = [0u8; 64];
+            digest.copy_from_slice(&bytes[cursor + 12..fixed_end]);
+            let id_end = fixed_end
+                .checked_add(id_length)
+                .ok_or(GenerationCodecError::Truncated)?;
+            let id_bytes = bytes
+                .get(fixed_end..id_end)
+                .ok_or(GenerationCodecError::Truncated)?;
+            let package_id = core::str::from_utf8(id_bytes)
+                .map_err(|_| GenerationCodecError::PackageIdentity)?
+                .to_owned();
+            packages.push(
+                SystemPackage::new(package_id, version, digest)
+                    .map_err(GenerationCodecError::InvalidPackage)?,
+            );
+            cursor = id_end;
+        }
+        if cursor != bytes.len() {
+            return Err(GenerationCodecError::TrailingBytes);
+        }
+        Self::new(generation, packages).map_err(GenerationCodecError::InvalidGeneration)
+    }
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, GenerationCodecError> {
+    let value = bytes
+        .get(offset..offset + 2)
+        .ok_or(GenerationCodecError::Truncated)?;
+    Ok(u16::from_le_bytes([value[0], value[1]]))
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, GenerationCodecError> {
+    let value = bytes
+        .get(offset..offset + 4)
+        .ok_or(GenerationCodecError::Truncated)?;
+    Ok(u32::from_le_bytes(value.try_into().unwrap()))
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, GenerationCodecError> {
+    let value = bytes
+        .get(offset..offset + 8)
+        .ok_or(GenerationCodecError::Truncated)?;
+    Ok(u64::from_le_bytes(value.try_into().unwrap()))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenerationCodecError {
+    Header,
+    Truncated,
+    Reserved,
+    PackageCount,
+    PackageIdentity,
+    TrailingBytes,
+    InvalidPackage(GenerationError),
+    InvalidGeneration(GenerationError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -302,7 +413,8 @@ pub enum GenerationError {
 }
 
 pub fn mrml_package_identifier(value: &str) -> bool {
-    value.starts_with("org.mrml.")
+    value.len() <= MAX_PACKAGE_ID_BYTES
+        && value.starts_with("org.mrml.")
         && value.split('.').all(|segment| {
             !segment.is_empty()
                 && segment
@@ -611,5 +723,62 @@ mod tests {
             ),
             Err(GraphResolutionError::SelfDependency)
         );
+    }
+
+    #[test]
+    fn generation_codec_round_trips_exact_canonical_records() {
+        let generation = SystemGeneration::new(
+            108,
+            vec![
+                package("org.mrml.zim", 8, 0x18),
+                package("org.mrml.zstd", 14, 0x2e),
+            ],
+        )
+        .unwrap();
+        let bytes = generation.encode_canonical();
+        assert_eq!(
+            SystemGeneration::decode_canonical(&bytes).unwrap(),
+            generation
+        );
+        assert_eq!(
+            SystemGeneration::decode_canonical(&bytes)
+                .unwrap()
+                .encode_canonical(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn generation_codec_rejects_mutation_truncation_and_ambiguity() {
+        let generation =
+            SystemGeneration::new(109, vec![package("org.mrml.zstd", 14, 0x2e)]).unwrap();
+        let bytes = generation.encode_canonical();
+        for length in 0..bytes.len() {
+            assert!(SystemGeneration::decode_canonical(&bytes[..length]).is_err());
+        }
+        let mut reserved = bytes.clone();
+        reserved[20] = 1;
+        assert_eq!(
+            SystemGeneration::decode_canonical(&reserved),
+            Err(GenerationCodecError::Reserved)
+        );
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert_eq!(
+            SystemGeneration::decode_canonical(&trailing),
+            Err(GenerationCodecError::TrailingBytes)
+        );
+        let mut reordered = SystemGeneration::new(
+            109,
+            vec![
+                package("org.mrml.zim", 8, 0x18),
+                package("org.mrml.zstd", 14, 0x2e),
+            ],
+        )
+        .unwrap()
+        .encode_canonical();
+        let first_id = GENERATION_HEADER_BYTES + PACKAGE_HEADER_BYTES;
+        reordered[first_id..first_id + "org.mrml.zim".len()].copy_from_slice(b"org.mrml.zzz");
+        assert!(SystemGeneration::decode_canonical(&reordered).is_err());
     }
 }

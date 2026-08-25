@@ -43,6 +43,13 @@ fingerprint substitution fail closed. This produces dependency data only, not a
 live `InterfaceBinding`, load authority, capability, or provider selection
 preference.
 
+The containing `SystemGeneration` prerequisite also has a canonical bounded
+version-2 binary codec for its exact package identity, version, and SHA3-512
+artifact-digest records. Decode reconstructs the same canonical ordered object
+and rejects truncation, trailing bytes, reserved fields, invalid identities, and
+over-capacity input. The codec is not a signature, admission decision, durable
+root, activation transaction, or authority.
+
 **PARTIALLY IMPLEMENTED binding-identity prerequisite:** a fixed-capacity
 `InterfaceBindingTable` publishes generational binding IDs only after exact
 resolution and provider-form checks. Each entry owns immutable copies of the

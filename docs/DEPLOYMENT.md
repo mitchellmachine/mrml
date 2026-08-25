@@ -24,8 +24,12 @@ immutable bounded `SystemGeneration` record containing a nonzero local
 generation and canonically ordered exact package identity, version, and artifact
 digest entries. Focused Windows and Linux tests reject zero values, malformed
 identities, empty/oversized graphs, duplicates, and noncanonical order. It does
-not yet admit, activate, persist, retain, roll back, export, or garbage-collect
-a generation.
+not yet admit, activate, retain, roll back, export, or garbage-collect a
+generation. A canonical version-2 binary codec now round-trips this bounded
+identity/version/SHA3-512 record, rejects nonzero reserved fields, invalid UTF-8
+or identities, truncation, trailing bytes, and noncanonical package order, and
+limits package IDs to 255 bytes. This is deterministic serialization only, not
+authenticated or crash-safe persistence and not package admission.
 
 The same foundation now also performs bounded exact package resolution: every
 requirement contains one package identity, one version, and one artifact digest,

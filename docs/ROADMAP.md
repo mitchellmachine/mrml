@@ -60,8 +60,11 @@ bounded transitive closure from canonical exact roots. Closure preserves exact
 cycles, emits canonical package order, and rejects conflicting, missing,
 ambiguous, noncanonical, self-dependent, or over-limit graphs. It has no version
 ranges, optimization, backtracking, network/catalog lookup, provider
-substitution, admission policy, activation, or durable generation state; those
-broader package and component mechanisms remain **PLANNED**.
+substitution or admission policy. The resulting exact package records now have
+a canonical bounded version-2 codec that rejects truncation, trailing bytes,
+reserved fields, malformed identities, and noncanonical order. Activation,
+authenticated crash-safe persistence, and broader package/component lifecycle
+remain **PLANNED**.
 
 Stable ABI groundwork now includes canonical interface identity/generation,
 bounded borrowed-view validation, opaque generational handles, and a fixed
