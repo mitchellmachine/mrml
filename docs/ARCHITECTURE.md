@@ -92,8 +92,11 @@ send traps. Its allocation-free target floor decodes raw/RLE frames in one
 private 4 KiB scratch page and rejects entropy-coded blocks until their bounded
 workspace migration exists. Windows and Arch Linux builds produce the same
 declared x86-64 UEFI target form; the Windows output was inspected as PE32+ EFI
-application subsystem 10 with a nonzero entrypoint. This is build/format
-evidence, not execution. No admitted native dynamic loader-to-call path,
+application subsystem 10 with a nonzero entrypoint. A separate
+`org.mrml.zim` MRML-target consumer probe now builds with the exact provider
+generation and attenuated shared-buffer route supplied only in launch state,
+not in the interface request. This is build/format evidence, not execution. No
+admitted native dynamic loader-to-call path,
 independently serviced activation, launched service or guest,
 resolver-to-launch dispatch, persistent root discovery, or actual reclamation
 lifecycle is implemented.

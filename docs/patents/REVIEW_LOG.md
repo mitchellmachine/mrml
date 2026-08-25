@@ -4373,3 +4373,21 @@ bindings from existing canonical exact selection. It adds no generic inference
 search, answer inversion, specialization order, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Standalone MRML-target ZIM interface consumer probe
+
+**Result: TRIGGERED; build-only boundary retained.** This increment builds a
+separate x86-64 UEFI consumer artifact under the existing `org.mrml.zim`
+package identity. Launch registers supply one already-selected endpoint,
+provider task, shared-buffer capability, and exact provider generation. The
+consumer then sends the previously reviewed fixed Zstd ABI-3 request through
+the existing MRML syscall frames and validates the fixed response. It adds no
+provider selection, discovery, rebinding, queue, proxy, shared heap/address,
+transport choice, compression mechanism, or new interface operation.
+
+The bounded component-transport design-around remains controlling. The
+consumer has been built but not launched. Native/microVM launch, supervision,
+resource-pool integration, and WHP/KVM call execution still cross the reserved
+isolated-service lifecycle boundary and require the separate review recorded
+for that next mechanism. This entry establishes neither patent clearance nor
+infringement and does not replace independent human dual review.

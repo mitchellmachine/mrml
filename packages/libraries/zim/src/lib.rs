@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg(any(windows, unix))]
 
 use core::fmt;
 use mrml_interface_zstd_v3::{

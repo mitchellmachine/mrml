@@ -24,14 +24,33 @@ environment = "windows"
 arch = "x86_64"
 environment = "linux"
 
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_zim"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-zim-interface-probe"
 
 [rust]
 crate_name = "mrml_zim"
 crate_type = "lib"
 source = "packages/libraries/zim/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_zim_interface_probe"
+output = "mrml-zim-interface-probe"
+self_extern = false
+source = "packages/libraries/zim/src/service_probe_main.rs"
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
 
 [[dependency]]
 alias = "mrml_interface_zstd_v3"
@@ -44,3 +63,11 @@ alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
 scope = "compile"
+targets = ["WINDOWS", "LINUX"]
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+targets = ["MRML_NATIVE"]

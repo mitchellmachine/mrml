@@ -450,10 +450,12 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    (**PARTIALLY IMPLEMENTED** for immutable binding identity/lifetime only);
 4. `org.mrml.zstd` providing `compression.zstd@3`
    (**PARTIALLY IMPLEMENTED** for the canonical byte-call provider and bounded
-   hosted kernel-IPC/shared-buffer adapter);
+   hosted kernel-IPC/shared-buffer adapter, plus a standalone MRML-target
+   provider artifact that has been built but not launched);
 5. `org.mrml.zim` consuming that interface without provider path knowledge
    (**PARTIALLY IMPLEMENTED** for an isolated-service manifest requirement,
-   bounded borrowed views, and typed responses);
+   bounded borrowed views, typed responses, and a standalone MRML-target
+   consumer probe that has been built but not launched);
 6. Store update N to N+1 while old/new ZIM processes retain exact bindings
    (**PARTIALLY IMPLEMENTED** as a bounded non-retargeting binding model);
 7. lifetime/rollback/snapshot-aware GC and dependency inspection
@@ -512,12 +514,17 @@ require mechanism-specific worldwide review before implementation. Record that
 review in [patents/REVIEW_LOG.md](../patents/REVIEW_LOG.md); this design does not
 establish patent clearance and agent review does not replace human dual review.
 
-The checked-in ABI-3 binding package, direct in-process provider adapter, and
-ZIM consumer are bounded hosted evidence only. The package resolver still must
+The checked-in ABI-3 binding package and direct in-process provider adapter are
+bounded hosted evidence. Separate `org.mrml.zstd` provider and `org.mrml.zim`
+consumer artifacts now build for the MRML-native target; the consumer launch
+registers bind an exact endpoint, provider task, shared-buffer capability, and
+provider generation while the interface request remains free of routing
+identity. Neither artifact has been launched. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
-the current Wikipedia composition root constructs the provider for tests. This
-does not establish dynamic loading, service isolation, update-without-rebuild,
-retention/GC, performance, fuzzing, or physical-system evidence.
+the current Wikipedia composition root constructs the provider for hosted
+tests. This does not establish dynamic loading, service isolation,
+update-without-rebuild, retention/GC, performance, fuzzing, WHP/KVM execution,
+or physical-system evidence.
 
 The cross-compiler probe is deliberately narrower than binding compatibility.
 Pinned upstream `nightly-2026-08-24` executes the exact generation, operation,

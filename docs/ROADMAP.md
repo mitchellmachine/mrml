@@ -180,6 +180,9 @@ fixture reproducing byte-for-byte on Windows and Arch Linux. Native call
 lowering, compiler-emitted conformance metadata, ABI diffs, runtime loading, and
 native provider execution remain **PLANNED**. The hosted Zstd ABI-3 byte-call
 adapter now exercises exact generated descriptors on Windows and Arch Linux.
+Separate package-owned `org.mrml.zstd` provider and `org.mrml.zim` consumer
+artifacts also build for the MRML-native target. They have not been launched,
+so this is build evidence rather than native execution or isolation evidence.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,
