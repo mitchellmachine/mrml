@@ -3447,3 +3447,29 @@ Schema parsing, binding generation, ABI fingerprints, calling convention,
 loading, and runtime binding remain `TRIGGERED` and require separate selected-
 mechanism review. This technical screen establishes neither clearance nor
 infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Immutable W^X component load-plan admission
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** This increment validates
+only exact-package image length, page-aligned nonoverlapping section geometry,
+W^X permissions, bounds, and an executable entry point. It does not parse an
+executable format, relocate addresses, map memory, resolve paths or symbols,
+patch code, share pages, demand-page chunks, scan integrity, inject code, launch
+processes, or bind interfaces.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 2016/0232379 A1](https://patents.google.com/patent/US20160232379A1), whose
+claims concern ongoing memory-integrity checking and associated trusted-code
+enforcement; [US 9,356,229 B2](https://patents.google.com/patent/US9355229B2),
+which modifies executables and redirects DLL references through a special
+loader; [US 2017/0289151 A1](https://patents.google.com/patent/US20170289151A1),
+which demand-loads secure-enclave chunks verified through a hash tree; and
+[WO 2014/172182 A1](https://patents.google.com/patent/WO2014172182A1), which uses
+hotpatch machinery to inject and execute a component. MRML's static validation
+plan implements none of those limitations. Family discovery was worldwide and
+material national/regional publications were checked through their linked
+register records; non-overlap, not assumed status, is the design basis.
+
+Executable parsing/mapping, relocations, sharing/accounting, runtime binding,
+and servicing remain `TRIGGERED`. This screen establishes neither clearance nor
+infringement and does not replace independent human dual review.

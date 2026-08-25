@@ -56,6 +56,11 @@ little-endian call-header codec. This does not establish a calling convention,
 native layout, schema, generated binding, loader, or provider ABI; those remain
 **PLANNED**.
 
+Loader groundwork now validates exact immutable package image geometry and W^X
+section plans, including an executable entry point, without parsing, relocating,
+mapping, patching, resolving symbols, or binding a provider. Runtime loading and
+all binding/lifetime behavior remain **PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

@@ -12,6 +12,13 @@ header codec. These are data/validation primitives only: there is no schema,
 binding generator, calling convention, loader, executable mapping, provider,
 consumer migration, or runtime interface resolution.
 
+**PARTIALLY IMPLEMENTED loader prerequisite:** the build tool now admits an
+immutable exact-package load plan made only of bounded, page-aligned,
+nonoverlapping sections. It rejects writable-executable mappings, nonexecutable
+entry points, overflow, overlap, and image escape. This is validation evidence,
+not a runtime loader: it performs no parsing, relocation, symbol lookup,
+executable mapping, interface binding, or in-place patching.
+
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the

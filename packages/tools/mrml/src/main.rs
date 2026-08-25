@@ -1,5 +1,6 @@
 pub mod abi;
 pub mod generation;
+pub mod loader;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
