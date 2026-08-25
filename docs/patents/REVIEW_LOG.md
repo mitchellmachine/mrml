@@ -4684,3 +4684,12 @@ copies the existing fixed constraint state per candidate, and reuses the
 existing cycle/depth stack. It adds no new search order, coherence rule,
 specialization, cache, parser, runtime mechanism, allocation, synchronization,
 protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Conservative projection-head coherence admission
+
+**Result: NOT_TRIGGERED.** This compiler-only increment compares fixed bounded
+head nodes and treats every unresolved parameter or projection relationship as
+potential overlap, admitting disjointness only from trait/arity mismatch or an
+unequal concrete leaf. It adds no equation solver, search strategy,
+specialization order, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.

@@ -996,8 +996,14 @@ database, copied candidate constraint states, and shared proof stack through
 nested premises. Windows gnullvm and native Arch Linux WSL each pass 525 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 871 compiler tests per host. Nested success, ambiguity, cycle, and depth
-overflow have focused tests. Generic implementation heads and coherence,
-higher-ranked term binders, projection
+overflow have focused tests. The projection-bearing generic-implementation
+admission milestone adds a separate 64-entry table. It proves disjointness only
+from trait/arity mismatch or an unequal direct concrete leaf and rejects every
+projection or parameter relationship it cannot decide, including collisions
+with exact and flat-generic heads. Windows gnullvm and native Arch Linux WSL
+each pass 526 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 872 compiler tests per host. Selection,
+complete projection-equation coherence, higher-ranked term binders, projection
 terms in premise type positions, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 

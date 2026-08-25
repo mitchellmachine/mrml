@@ -1053,9 +1053,16 @@ nested implemented-trait premises. Unique nested selection commits one copied
 candidate state; multiple candidates remain ambiguous, cycles and depth
 overflow remain explicit, and callers that do not supply the database retain
 their previous closed behavior. This is bounded logical head elaboration with
-flat premises only: projection terms in premise type positions, generic
-implementation heads and
-their coherence rules, higher-ranked term binders, backtracking, caching,
+flat premises only. A separate 64-entry projection-bearing generic-
+implementation admission table establishes the first coherence gate. Different
+trait/arity or an unequal concrete leaf proves heads disjoint; parameters,
+projections, and every other unresolved relationship conservatively mean
+potential overlap. Admission rejects duplicate identities, peer overlap, and
+potential collisions with exact or flat-generic heads, while permitting heads
+separated by an explicit concrete leaf. Premises never waive overlap. Selection
+is not yet exposed from this table. Projection terms in premise type positions,
+complete projection-equation coherence, higher-ranked term binders,
+backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.
 
 Rigid clause elaboration accepts goals containing only concrete types and rigid

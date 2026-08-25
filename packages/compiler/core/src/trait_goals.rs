@@ -1922,6 +1922,214 @@ pub struct ProjectionBearingTraitClauseDatabase {
     clause_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdentifiedProjectionBearingGenericTraitImplementation {
+    id: GenericTraitImplementationId,
+    implementation: ProjectionBearingTraitClause,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionBearingGenericTraitImplementationDatabase {
+    implementations: [Option<IdentifiedProjectionBearingGenericTraitImplementation>;
+        MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
+    implementation_count: usize,
+}
+
+impl ProjectionBearingGenericTraitImplementationDatabase {
+    pub const EMPTY: Self = Self {
+        implementations: [None; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
+        implementation_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        id: GenericTraitImplementationId,
+        implementation: ProjectionBearingTraitClause,
+    ) -> Result<(), TraitGoalError> {
+        for existing in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+        {
+            if existing.id == id {
+                return Err(TraitGoalError::DuplicateGenericImplementationId);
+            }
+            if projection_bearing_heads_may_overlap(existing.implementation, implementation)? {
+                return Err(TraitGoalError::OverlappingGenericImplementation);
+            }
+        }
+        let slot = self
+            .implementations
+            .get_mut(self.implementation_count)
+            .ok_or(TraitGoalError::TooManyGenericImplementations)?;
+        *slot = Some(IdentifiedProjectionBearingGenericTraitImplementation { id, implementation });
+        self.implementation_count += 1;
+        Ok(())
+    }
+
+    pub fn insert_coherent(
+        &mut self,
+        exact: &TraitImplementationDatabase,
+        flat: &GenericTraitImplementationDatabase,
+        id: GenericTraitImplementationId,
+        implementation: ProjectionBearingTraitClause,
+    ) -> Result<(), TraitGoalError> {
+        if exact.implementations[..exact.implementation_count]
+            .iter()
+            .flatten()
+            .any(|header| projection_bearing_head_may_overlap_exact(implementation, *header))
+            || flat.implementations[..flat.implementation_count]
+                .iter()
+                .flatten()
+                .any(|candidate| {
+                    projection_bearing_head_may_overlap_flat(
+                        implementation,
+                        candidate.implementation,
+                    )
+                })
+        {
+            return Err(TraitGoalError::OverlappingExactAndGenericImplementation);
+        }
+        self.insert(id, implementation)
+    }
+}
+
+fn projection_bearing_heads_may_overlap(
+    left: ProjectionBearingTraitClause,
+    right: ProjectionBearingTraitClause,
+) -> Result<bool, TraitGoalError> {
+    if left.consequence.trait_id != right.consequence.trait_id
+        || left.consequence.argument_count != right.consequence.argument_count
+    {
+        return Ok(false);
+    }
+    if bound_terms_are_distinct_concrete(
+        &left.arena,
+        left.consequence.self_type,
+        &right.arena,
+        right.consequence.self_type,
+    )? {
+        return Ok(false);
+    }
+    for (left_term, right_term) in left
+        .consequence
+        .arguments()
+        .iter()
+        .zip(right.consequence.arguments())
+    {
+        if bound_terms_are_distinct_concrete(
+            &left.arena,
+            left_term
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            &right.arena,
+            right_term
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+        )? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn bound_terms_are_distinct_concrete(
+    left_arena: &BoundTraitGoalTermArena,
+    left: TraitGoalTermId,
+    right_arena: &BoundTraitGoalTermArena,
+    right: TraitGoalTermId,
+) -> Result<bool, TraitGoalError> {
+    Ok(matches!(
+        (left_arena.get(left), right_arena.get(right)),
+        (
+            Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(left))),
+            Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(right)))
+        ) if left != right
+    ))
+}
+
+fn projection_bearing_head_may_overlap_exact(
+    projection: ProjectionBearingTraitClause,
+    exact: TraitImplementationHeader,
+) -> bool {
+    if projection.consequence.trait_id != exact.trait_id
+        || projection.consequence.argument_count != exact.argument_count
+    {
+        return false;
+    }
+    if bound_term_is_distinct_from_concrete(
+        &projection.arena,
+        projection.consequence.self_type,
+        exact.self_type,
+    ) {
+        return false;
+    }
+    !projection
+        .consequence
+        .arguments()
+        .iter()
+        .zip(exact.arguments())
+        .any(|(term, exact)| {
+            term.zip(*exact).is_some_and(|(term, exact)| {
+                bound_term_is_distinct_from_concrete(&projection.arena, term, exact)
+            })
+        })
+}
+
+fn projection_bearing_head_may_overlap_flat(
+    projection: ProjectionBearingTraitClause,
+    flat: TraitWhereClause,
+) -> bool {
+    if projection.consequence.trait_id != flat.consequence.trait_id
+        || projection.consequence.argument_count != flat.consequence.argument_count
+    {
+        return false;
+    }
+    if bound_term_is_distinct_from_bound_leaf(
+        &projection.arena,
+        projection.consequence.self_type,
+        flat.consequence.self_type,
+    ) {
+        return false;
+    }
+    !projection
+        .consequence
+        .arguments()
+        .iter()
+        .zip(flat.consequence.arguments())
+        .any(|(term, flat)| {
+            term.zip(*flat).is_some_and(|(term, flat)| {
+                bound_term_is_distinct_from_bound_leaf(&projection.arena, term, flat)
+            })
+        })
+}
+
+fn bound_term_is_distinct_from_concrete(
+    arena: &BoundTraitGoalTermArena,
+    term: TraitGoalTermId,
+    concrete: TraitTypeId,
+) -> bool {
+    matches!(
+        arena.get(term),
+        Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(value))) if value != concrete
+    )
+}
+
+fn bound_term_is_distinct_from_bound_leaf(
+    arena: &BoundTraitGoalTermArena,
+    term: TraitGoalTermId,
+    flat: BoundTraitGoalType,
+) -> bool {
+    matches!(
+        (arena.get(term), flat),
+        (
+            Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(left))),
+            BoundTraitGoalType::Concrete(right)
+        ) if left != right
+    )
+}
+
 impl ProjectionBearingTraitClauseDatabase {
     pub const EMPTY: Self = Self {
         clauses: [None; MAX_TRAIT_WHERE_CLAUSES],
@@ -5730,6 +5938,95 @@ mod tests {
             ),
             Ok(InferredTraitGoalSolution::Ambiguous)
         );
+    }
+
+    #[test]
+    fn projection_bearing_implementation_admission_is_conservatively_coherent() {
+        fn implementation(self_type: u32) -> ProjectionBearingTraitClause {
+            let parameter = TraitGenericParameterId::new(0);
+            let mut arena = BoundTraitGoalTermArena::EMPTY;
+            let self_term = arena
+                .intern_type(BoundTraitGoalType::Concrete(TraitTypeId::new(self_type)))
+                .unwrap();
+            let parameter_term = arena
+                .intern_type(BoundTraitGoalType::Parameter(parameter))
+                .unwrap();
+            let projection = arena
+                .intern_projection(
+                    BoundProjectionBearingTraitGoal::new(TraitId::new(1101), parameter_term),
+                    TraitAssociatedTypeId::new(1),
+                )
+                .unwrap();
+            let mut head = BoundProjectionBearingTraitGoal::new(TraitId::new(1100), self_term);
+            head.push_argument(projection).unwrap();
+            ProjectionBearingTraitClause::new(1, arena, head).unwrap()
+        }
+
+        let first = implementation(10);
+        let disjoint = implementation(11);
+        let mut implementations = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(GenericTraitImplementationId::new(300), first)
+            .unwrap();
+        implementations
+            .insert(GenericTraitImplementationId::new(301), disjoint)
+            .unwrap();
+        assert_eq!(
+            implementations.insert(GenericTraitImplementationId::new(302), first),
+            Err(TraitGoalError::OverlappingGenericImplementation)
+        );
+
+        let mut exact_overlap = TraitImplementationHeader::new(
+            TraitImplementationId::new(252),
+            TraitId::new(1100),
+            TraitTypeId::new(10),
+        );
+        exact_overlap.push_argument(TraitTypeId::new(20)).unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact.insert(exact_overlap).unwrap();
+        let mut exact_checked = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        assert_eq!(
+            exact_checked.insert_coherent(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                GenericTraitImplementationId::new(303),
+                first,
+            ),
+            Err(TraitGoalError::OverlappingExactAndGenericImplementation)
+        );
+
+        let mut flat_head = BoundImplementedTraitGoal::new(
+            TraitId::new(1100),
+            BoundTraitGoalType::Concrete(TraitTypeId::new(10)),
+        );
+        flat_head
+            .push_argument(BoundTraitGoalType::Concrete(TraitTypeId::new(20)))
+            .unwrap();
+        let mut flat = GenericTraitImplementationDatabase::EMPTY;
+        flat.insert(
+            GenericTraitImplementationId::new(304),
+            TraitWhereClause::new(0, flat_head).unwrap(),
+        )
+        .unwrap();
+        let mut flat_checked = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        assert_eq!(
+            flat_checked.insert_coherent(
+                &TraitImplementationDatabase::EMPTY,
+                &flat,
+                GenericTraitImplementationId::new(305),
+                first,
+            ),
+            Err(TraitGoalError::OverlappingExactAndGenericImplementation)
+        );
+        let mut disjoint_checked = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        disjoint_checked
+            .insert_coherent(
+                &exact,
+                &flat,
+                GenericTraitImplementationId::new(306),
+                implementation(12),
+            )
+            .unwrap();
     }
 
     #[test]
