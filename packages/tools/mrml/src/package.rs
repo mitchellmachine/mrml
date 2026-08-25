@@ -666,6 +666,72 @@ mod tests {
     }
 
     #[test]
+    fn boot_release_and_exact_packages_reject_every_required_substitution() {
+        let bootloader = release_package("org.mrml.library.uefi", "bootloader", "uefi-loader", 2);
+        let kernel = release_package("org.mrml.system.kernel", "kernel", "kernel", 3);
+        let configuration = release_package(
+            "org.mrml.service.config",
+            "configuration",
+            "configuration",
+            4,
+        );
+        let release =
+            build_release(9, &bootloader, &kernel, &configuration, &private_key()).unwrap();
+        let decoded = parse_release(&release, true).unwrap();
+
+        let mut modified_payload = kernel.clone();
+        let last = modified_payload.len() - 1;
+        modified_payload[last] ^= 1;
+        assert_ne!(
+            Sha3_512::digest(&modified_payload),
+            decoded.package(BootPackageRole::Kernel).package_digest
+        );
+        assert!(parse(&modified_payload, true).is_err());
+
+        let mut wrong_release_digest = release.clone();
+        wrong_release_digest[48] ^= 1;
+        assert!(parse_release(&wrong_release_digest, true).is_err());
+        let mut bad_release_signature = release.clone();
+        let signature_byte = bad_release_signature.len() - 1;
+        bad_release_signature[signature_byte] ^= 1;
+        assert!(parse_release(&bad_release_signature, true).is_err());
+        let mut malformed_offsets = release.clone();
+        malformed_offsets[32..40].copy_from_slice(&1_u64.to_le_bytes());
+        assert!(parse_release(&malformed_offsets, true).is_err());
+        assert!(parse_release(&release[..release.len() - 1], true).is_err());
+
+        let wrong_architecture = build(
+            "org.mrml.system.kernel",
+            "kernel",
+            3,
+            &[BuildPayload {
+                name: "kernel",
+                purpose: "kernel",
+                architecture: "aarch64",
+                compress: false,
+                bytes: b"kernel",
+            }],
+            Some(&private_key()),
+        )
+        .unwrap();
+        assert!(
+            build_release(
+                9,
+                &bootloader,
+                &wrong_architecture,
+                &configuration,
+                &private_key()
+            )
+            .is_err()
+        );
+        let wrong_class = release_package("org.mrml.system.kernel", "library", "kernel", 3);
+        assert!(
+            build_release(9, &bootloader, &wrong_class, &configuration, &private_key()).is_err()
+        );
+        assert!(build_release(0, &bootloader, &kernel, &configuration, &private_key()).is_err());
+    }
+
+    #[test]
     fn canonical_signed_round_trip_and_architecture_selection() {
         let key = private_key();
         let bytes = build(
