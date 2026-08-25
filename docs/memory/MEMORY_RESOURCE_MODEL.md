@@ -110,9 +110,14 @@ page commitments and two objects. Startup verifies the complete charge; after
 both tasks exit and supervised address-space/resource cleanup completes, the
 probe consumes both wrappers, returns the exact page counts, and requires zero
 remaining object pages and mappings before success. WHP and nested KVM execute
-that path. Guest RAM, executable/private pages, vCPU time, and device
-projections are not yet charged through this pool, so complete component/microVM
-resource accounting remains **PLANNED**.
+that path. The hosted component profile now additionally derives exact image
+charges from each verified PE load plan: R and RX regions are distinct shared
+objects, RW regions are private anonymous objects, and allocation gaps are
+private nonmapped commitments. Separate target capabilities model consumer and
+provider address spaces. Reservations precede construction and reclamation
+follows backend teardown without granting authority to package metadata or
+weakening W^X. Complete component/microVM resource accounting remains
+**PLANNED**.
 
 Kernel groundwork now also provides a distinct pre-allocation guest-RAM
 reservation. It creates one exact generational `MemoryObject` with `Guest`

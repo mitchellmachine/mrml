@@ -235,8 +235,14 @@ The focused shared data and resource pages are no longer hidden in aggregate
 guest RAM: each has a distinct one-page shared object and exact guest mapping
 reservation, with a two-slot ceiling and native-teardown-first reclamation on
 WHP and KVM. This deliberately excludes opaque host-hypervisor allocations.
-Scheduler enforcement, executable/private-page integration, and broader
-device-specific projection accounting are the current gates.
+The focused profile now also accounts both verified PE images before
+construction: exact R/RX shared regions, private RW regions, and private
+allocation gaps use distinct consumer/provider address-space capabilities and
+are reclaimed only after guest teardown. Windows/Linux kernel suites,
+WHP/KVM runner suites, and fresh signed hosted probes pass; KVM reports zero
+native fallback. Scheduler enforcement, native physical backing, other
+profiles, and broader device-specific projection accounting are the current
+gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

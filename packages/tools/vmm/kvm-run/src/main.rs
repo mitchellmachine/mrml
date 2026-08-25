@@ -20,23 +20,24 @@ use mrml_kernel::{
     GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
     GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, MicrovmPageProjectionKind,
-    ObjectId, PAGE_SIZE, PreparedComponentServiceLaunch, PreparedIsolationServiceRoute,
-    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
-    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
-    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
-    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
+    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedComponentServiceLaunch,
+    PreparedIsolationServiceRoute, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmExit, VmTable, prepare_microvm_guest_ram,
-    release_microvm_guest_ram, reserve_isolation_vcpus, reserve_microvm_guest_ram,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, component_image_page_plan,
+    prepare_microvm_guest_ram, release_component_image, release_microvm_guest_ram,
+    reserve_component_image, reserve_isolation_vcpus, reserve_microvm_guest_ram,
     reserve_microvm_page_projection, run_pci_configuration_once,
     run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
     run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
@@ -60,6 +61,13 @@ use mrml_runtime::mrml_println as println;
 #[cfg(target_os = "linux")]
 type KvmConfigurationLauncher =
     PreparedMicrovmConfigurationLauncher<AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>>;
+
+#[cfg(target_os = "linux")]
+const COMPONENT_MEMORY_OBJECTS: usize = 4 + 2 * (MAX_COMPONENT_IMAGE_REGIONS + 1);
+#[cfg(target_os = "linux")]
+const COMPONENT_MEMORY_MAPPINGS: usize = 2 + 2 * MAX_COMPONENT_IMAGE_REGIONS;
+#[cfg(target_os = "linux")]
+const COMPONENT_MEMORY_CAPABILITIES: usize = 7 + 2 * (MAX_COMPONENT_IMAGE_REGIONS + 1);
 
 #[cfg(target_os = "linux")]
 fn prepare_configured_total_service(
@@ -1762,19 +1770,23 @@ fn application_main() -> Result<()> {
             .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
         let kernel_image_pages = accounted_pages(executable.image().image_size() as u64)?;
         let handoff_pages = accounted_pages(handoff.as_slice().len() as u64)?;
-        let consumer_pages = accounted_pages(consumer.image().image_size() as u64)?;
-        let provider_pages = accounted_pages(provider.image().image_size() as u64)?;
+        let consumer_plan = component_image_page_plan(consumer.image())
+            .map_err(|error| anyhow!("consumer image accounting failed: {:?}", error))?;
+        let provider_plan = component_image_page_plan(provider.image())
+            .map_err(|error| anyhow!("provider image accounting failed: {:?}", error))?;
+        let consumer_pages = consumer_plan
+            .total_pages()
+            .ok_or_else(|| anyhow!("consumer image page count overflow"))?;
+        let provider_pages = provider_plan
+            .total_pages()
+            .ok_or_else(|| anyhow!("provider image page count overflow"))?;
         let base_pages = table_pages
             .checked_add(kernel_image_pages)
             .and_then(|pages| pages.checked_add(handoff_pages))
             .and_then(|pages| pages.checked_add(PRIVILEGE_STACK_ARENA_PAGES))
             .and_then(|pages| pages.checked_add(1))
             .ok_or_else(|| anyhow!("component base guest RAM overflow"))?;
-        let service_pages = consumer_pages
-            .checked_add(8 + 32)
-            .and_then(|pages| pages.checked_add(provider_pages))
-            .and_then(|pages| pages.checked_add(8 + 32))
-            .ok_or_else(|| anyhow!("component service guest RAM overflow"))?;
+        let service_pages = (8 + 32) + (8 + 32);
         let guest_pages = base_pages
             .checked_add(service_pages)
             .ok_or_else(|| anyhow!("component guest RAM overflow"))?;
@@ -1782,14 +1794,21 @@ fn application_main() -> Result<()> {
         let total_pages = guest_pages
             .checked_add(control_pages)
             .and_then(|pages| pages.checked_add(2))
+            .and_then(|pages| pages.checked_add(consumer_pages))
+            .and_then(|pages| pages.checked_add(provider_pages))
             .ok_or_else(|| anyhow!("component memory commitment overflow"))?;
-        let mut authorities = CapabilitySpace::<6>::new();
-        let mut memory = MemoryPoolTable::<1, 4, 2>::new(0x5a52)
-            .map_err(|error| anyhow!("component RAM table failed: {:?}", error))?;
+        let mapping_limit = u32::from(consumer_plan.regions())
+            .checked_add(u32::from(provider_plan.regions()))
+            .and_then(|mappings| mappings.checked_add(2))
+            .ok_or_else(|| anyhow!("component mapping commitment overflow"))?;
+        let mut authorities = CapabilitySpace::<COMPONENT_MEMORY_CAPABILITIES>::new();
+        let mut memory =
+            MemoryPoolTable::<1, COMPONENT_MEMORY_OBJECTS, COMPONENT_MEMORY_MAPPINGS>::new(0x5a52)
+                .map_err(|error| anyhow!("component RAM table failed: {:?}", error))?;
         let (pool, pool_capability) = memory
             .create_root(
                 total_pages,
-                2,
+                mapping_limit,
                 0,
                 Rights::ALLOCATE
                     .union(Rights::CONTROL)
@@ -1825,6 +1844,12 @@ fn application_main() -> Result<()> {
                 Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL),
             )
             .map_err(|error| anyhow!("component projection target failed: {:?}", error))?;
+        let provider_projection_target = authorities
+            .insert(
+                ObjectId(0x434f_4d50_5f56_4d01),
+                Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL),
+            )
+            .map_err(|error| anyhow!("provider projection target failed: {:?}", error))?;
         let (shared_projection, shared_capability) = reserve_microvm_page_projection(
             &mut memory,
             pool,
@@ -1845,6 +1870,26 @@ fn application_main() -> Result<()> {
             &mut authorities,
         )
         .map_err(|error| anyhow!("component resource projection failed: {:?}", error))?;
+        let consumer_image = reserve_component_image(
+            &mut memory,
+            pool,
+            pool_capability,
+            projection_target,
+            consumer.image(),
+            SERVICE_VIRTUAL / PAGE_SIZE,
+            &mut authorities,
+        )
+        .map_err(|error| anyhow!("consumer image reservation failed: {:?}", error))?;
+        let provider_image = reserve_component_image(
+            &mut memory,
+            pool,
+            pool_capability,
+            provider_projection_target,
+            provider.image(),
+            SERVICE_VIRTUAL / PAGE_SIZE,
+            &mut authorities,
+        )
+        .map_err(|error| anyhow!("provider image reservation failed: {:?}", error))?;
         Some((
             memory,
             authorities,
@@ -1856,10 +1901,13 @@ fn application_main() -> Result<()> {
             control,
             control_capability,
             projection_target,
+            provider_projection_target,
             shared_projection,
             shared_capability,
             resource_projection,
             resource_capability,
+            consumer_image,
+            provider_image,
         ))
     } else {
         None
@@ -2237,10 +2285,13 @@ fn application_main() -> Result<()> {
                 control,
                 control_capability,
                 projection_target,
+                provider_projection_target,
                 shared_projection,
                 shared_capability,
                 resource_projection,
                 resource_capability,
+                consumer_image,
+                provider_image,
             ) = component_ram
                 .take()
                 .ok_or_else(|| anyhow!("missing completed component RAM construction"))?;
@@ -2257,10 +2308,13 @@ fn application_main() -> Result<()> {
                 control,
                 control_capability,
                 projection_target,
+                provider_projection_target,
                 shared_projection,
                 shared_capability,
                 resource_projection,
                 resource_capability,
+                consumer_image,
+                provider_image,
             ));
         }
         let service_entry = guest
@@ -3254,10 +3308,13 @@ fn application_main() -> Result<()> {
         control,
         control_capability,
         projection_target,
+        provider_projection_target,
         shared_projection,
         shared_capability,
         resource_projection,
         resource_capability,
+        consumer_image,
+        provider_image,
     )) = active_component_ram.take()
     {
         let expected_pages = active.pages();
@@ -3270,9 +3327,18 @@ fn application_main() -> Result<()> {
             .usage(pool, pool_capability, &authorities)
             .map_err(|error| anyhow!("component RAM inspection failed: {:?}", error))?;
         let expected_control_pages = control.pages();
+        let consumer_plan = consumer_image.plan();
+        let provider_plan = provider_image.plan();
+        let expected_image_pages = consumer_plan
+            .total_pages()
+            .and_then(|pages| provider_plan.total_pages()?.checked_add(pages))
+            .ok_or_else(|| anyhow!("component image release expectation overflow"))?;
+        let expected_image_mappings = u32::from(consumer_plan.regions())
+            .checked_add(u32::from(provider_plan.regions()))
+            .ok_or_else(|| anyhow!("component image mapping expectation overflow"))?;
         if released != expected_pages
-            || usage.object_pages() != expected_control_pages + 2
-            || usage.active_mappings() != 2
+            || usage.object_pages() != expected_control_pages + 2 + expected_image_pages
+            || usage.active_mappings() != 2 + expected_image_mappings
         {
             return Err(anyhow!("component RAM release state was invalid"));
         }
@@ -3311,12 +3377,42 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("component projection inspection failed: {:?}", error))?;
         if released_shared != 1
             || released_resource != 1
-            || usage.object_pages() != expected_control_pages
-            || usage.active_mappings() != 0
+            || usage.object_pages() != expected_control_pages + expected_image_pages
+            || usage.active_mappings() != expected_image_mappings
         {
             return Err(anyhow!(
                 "component projections were not completely reclaimed"
             ));
+        }
+        let released_consumer = unsafe {
+            release_component_image(
+                &mut memory,
+                consumer_image,
+                projection_target,
+                &mut authorities,
+            )
+        }
+        .map_err(|error| anyhow!("consumer image release failed: {:?}", error))?;
+        let released_provider = unsafe {
+            release_component_image(
+                &mut memory,
+                provider_image,
+                provider_projection_target,
+                &mut authorities,
+            )
+        }
+        .map_err(|error| anyhow!("provider image release failed: {:?}", error))?;
+        let usage = memory
+            .usage(pool, pool_capability, &authorities)
+            .map_err(|error| anyhow!("component image inspection failed: {:?}", error))?;
+        if released_consumer.pages != consumer_plan.total_pages().unwrap_or(0)
+            || released_consumer.regions != consumer_plan.regions()
+            || released_provider.pages != provider_plan.total_pages().unwrap_or(0)
+            || released_provider.regions != provider_plan.regions()
+            || usage.object_pages() != expected_control_pages
+            || usage.active_mappings() != 0
+        {
+            return Err(anyhow!("component images were not completely reclaimed"));
         }
         let released_control = unsafe {
             mrml_kernel::release_microvm_control_memory(

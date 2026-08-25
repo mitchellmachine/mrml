@@ -544,7 +544,12 @@ objects with exact read/write guest mapping reservations before construction;
 their kind and guest address grant no authority, mapping exhaustion fails before
 publication, and teardown retires mappings before object reclamation. This is
 bounded accounting for the existing transport, not a new interface ABI or a
-general device-projection mechanism. The package resolver still must
+general device-projection mechanism. The same pre-construction control plane
+now classifies both verified PE images into exact shared R/RX and private RW
+objects, charges allocation gaps privately, and uses distinct consumer/provider
+target capabilities even when their virtual layouts match. Runtime ABI-3
+traffic remains on the already-bound IPC/shared-memory data path and performs
+no provider lookup or policy round trip. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for hosted
 tests. This does not establish dynamic loading, service isolation,

@@ -7818,6 +7818,20 @@ passed 8, and fresh signed hosted probes passed with KVM reporting one eligible
 microVM and zero native fallback. This is not general VirtIO, VirtualGPU, DMA,
 host-share, physical-device, or host-resistant evidence.
 
+The focused profile now also reserves both verified component images through
+the quantitative memory model before KVM/WHP construction. The verified PE
+load plan supplies the geometry: read-only and executable regions become
+distinct shared objects with exact R/RX reservations, writable regions become
+private anonymous objects with RW reservations, and allocation gaps remain
+private nonmapped charges. Separate consumer and provider target capabilities
+allow identical virtual layouts in different address spaces without aliasing.
+Backend teardown precedes mapping/object retirement and the pool again reaches
+zero. Windows and Linux kernel suites passed 504 tests, WHP passed 7, KVM passed
+8, and fresh signed hosted probes passed with KVM reporting one eligible
+microVM and zero native fallback. This is not native physical backing,
+resource-model page-table installation, general device projection, or physical
+hardware evidence.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

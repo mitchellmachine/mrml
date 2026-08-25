@@ -233,9 +233,15 @@ with zero native fallback. The shared data and resource pages now consume two
 separate one-page shared objects and two exact guest mapping slots established
 by the control plane before construction. Teardown retires both native
 projections, then their mapping reservations and object charges; projection
-exhaustion fails before publication and never selects native placement. Other
-microVM profiles, scheduler enforcement, executable/private-page integration,
-and general device projections remain **PLANNED**.
+exhaustion fails before publication and never selects native placement. The
+same control-plane gate now derives an exact plan from each verified PE image:
+read-only and executable regions receive distinct shared objects and R/RX
+mappings, writable regions and allocation gaps are private anonymous charges,
+and separate target capabilities represent consumer and provider address
+spaces. Teardown retires native execution before these mappings and objects.
+Fresh WHP and nested-KVM probes pass with zero native fallback. Other microVM
+profiles, scheduler enforcement, native physical backing, and general device
+projections remain **PLANNED**.
 Kernel CPU-budget groundwork now provides the separate generational authority
 for the vCPU gate, including exact domain reservations and bounded parallelism.
 The signed component runners reserve exactly one vCPU before guest construction,

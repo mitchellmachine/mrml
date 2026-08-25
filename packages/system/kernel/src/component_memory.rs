@@ -1,6 +1,7 @@
 use crate::{
-    Capability, CapabilitySpace, MemoryBackingKind, MemoryMappingId, MemoryObjectId, MemoryPoolId,
-    MemoryPoolTable, MemoryResourceError, Rights,
+    Capability, CapabilitySpace, MAX_PE_SECTIONS, MemoryBackingKind, MemoryMappingId,
+    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, PAGE_SIZE, PeError,
+    PeImage, PeLoadRegion, Rights,
 };
 
 const COMPONENT_EXECUTABLE_RIGHTS: Rights = Rights::READ
@@ -28,6 +29,8 @@ const MICROVM_PAGE_PROJECTION_RIGHTS: Rights = Rights::READ
     .union(Rights::MAP)
     .union(Rights::INSPECT)
     .union(Rights::CONTROL);
+
+pub const MAX_COMPONENT_IMAGE_REGIONS: usize = MAX_PE_SECTIONS + 1;
 
 /// Accounted immutable code pages for one independently serviced component.
 ///
@@ -107,6 +110,91 @@ impl MicrovmPageProjection {
     pub const fn virtual_page(&self) -> u64 {
         self.virtual_page
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentImagePageClass {
+    ReadOnly,
+    Executable,
+    PrivateWritable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentImagePagePlan {
+    read_only_pages: u64,
+    executable_pages: u64,
+    private_writable_pages: u64,
+    private_unmapped_pages: u64,
+    regions: u16,
+}
+
+impl ComponentImagePagePlan {
+    pub const fn read_only_pages(self) -> u64 {
+        self.read_only_pages
+    }
+
+    pub const fn executable_pages(self) -> u64 {
+        self.executable_pages
+    }
+
+    pub const fn private_writable_pages(self) -> u64 {
+        self.private_writable_pages
+    }
+
+    pub const fn private_unmapped_pages(self) -> u64 {
+        self.private_unmapped_pages
+    }
+
+    pub const fn regions(self) -> u16 {
+        self.regions
+    }
+
+    pub const fn total_pages(self) -> Option<u64> {
+        match self.read_only_pages.checked_add(self.executable_pages) {
+            Some(pages) => match pages.checked_add(self.private_writable_pages) {
+                Some(pages) => pages.checked_add(self.private_unmapped_pages),
+                None => None,
+            },
+            None => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AccountedComponentImageRegion {
+    object: MemoryObjectId,
+    capability: Capability,
+    mapping: MemoryMappingId,
+    class: ComponentImagePageClass,
+    pages: u64,
+    virtual_page: u64,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct AccountedComponentImage {
+    plan: ComponentImagePagePlan,
+    regions: [Option<AccountedComponentImageRegion>; MAX_COMPONENT_IMAGE_REGIONS],
+    unmapped_private: Option<(MemoryObjectId, Capability)>,
+}
+
+impl AccountedComponentImage {
+    pub const fn plan(&self) -> ComponentImagePagePlan {
+        self.plan
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentImageAccountingError {
+    Image(PeError),
+    Resource(MemoryResourceError),
+    Arithmetic,
+    InvalidRegion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ComponentImageReleaseSummary {
+    pub regions: u16,
+    pub pages: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -297,6 +385,282 @@ pub fn reserve_microvm_page_projection<
         },
         object_capability,
     ))
+}
+
+fn add_component_image_region(
+    plan: &mut ComponentImagePagePlan,
+    region: PeLoadRegion,
+) -> Result<ComponentImagePageClass, ComponentImageAccountingError> {
+    if region.pages() == 0
+        || !region.readable()
+        || region.writable() && region.executable()
+        || u64::from(region.virtual_address()) % PAGE_SIZE != 0
+    {
+        return Err(ComponentImageAccountingError::InvalidRegion);
+    }
+    let pages = u64::from(region.pages());
+    let class = if region.executable() {
+        plan.executable_pages = plan
+            .executable_pages
+            .checked_add(pages)
+            .ok_or(ComponentImageAccountingError::Arithmetic)?;
+        ComponentImagePageClass::Executable
+    } else if region.writable() {
+        plan.private_writable_pages = plan
+            .private_writable_pages
+            .checked_add(pages)
+            .ok_or(ComponentImageAccountingError::Arithmetic)?;
+        ComponentImagePageClass::PrivateWritable
+    } else {
+        plan.read_only_pages = plan
+            .read_only_pages
+            .checked_add(pages)
+            .ok_or(ComponentImageAccountingError::Arithmetic)?;
+        ComponentImagePageClass::ReadOnly
+    };
+    plan.regions = plan
+        .regions
+        .checked_add(1)
+        .ok_or(ComponentImageAccountingError::Arithmetic)?;
+    Ok(class)
+}
+
+pub fn component_image_page_plan(
+    image: &PeImage<'_>,
+) -> Result<ComponentImagePagePlan, ComponentImageAccountingError> {
+    let mut plan = ComponentImagePagePlan {
+        read_only_pages: 0,
+        executable_pages: 0,
+        private_writable_pages: 0,
+        private_unmapped_pages: 0,
+        regions: 0,
+    };
+    for index in 0..image.load_region_count() {
+        let region = image
+            .load_region(index)
+            .map_err(ComponentImageAccountingError::Image)?;
+        add_component_image_region(&mut plan, region)?;
+    }
+    let mapped_pages = plan
+        .total_pages()
+        .filter(|pages| *pages != 0)
+        .ok_or(ComponentImageAccountingError::Arithmetic)?;
+    let image_pages = u64::from(image.image_size()) / PAGE_SIZE;
+    plan.private_unmapped_pages = image_pages
+        .checked_sub(mapped_pages)
+        .ok_or(ComponentImageAccountingError::InvalidRegion)?;
+    Ok(plan)
+}
+
+fn component_image_region_policy(
+    class: ComponentImagePageClass,
+) -> (MemoryBackingKind, Rights, Rights) {
+    let base = Rights::READ
+        .union(Rights::MAP)
+        .union(Rights::INSPECT)
+        .union(Rights::CONTROL);
+    match class {
+        ComponentImagePageClass::ReadOnly => (MemoryBackingKind::Shared, base, Rights::READ),
+        ComponentImagePageClass::Executable => (
+            MemoryBackingKind::Shared,
+            base.union(Rights::EXECUTE),
+            Rights::READ.union(Rights::EXECUTE),
+        ),
+        ComponentImagePageClass::PrivateWritable => (
+            MemoryBackingKind::Anonymous,
+            base.union(Rights::WRITE),
+            Rights::READ.union(Rights::WRITE),
+        ),
+    }
+}
+
+fn rollback_component_image_regions<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    regions: &mut [Option<AccountedComponentImageRegion>; MAX_COMPONENT_IMAGE_REGIONS],
+    count: usize,
+    target_capability: Capability,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<(), MemoryResourceError> {
+    for index in (0..count).rev() {
+        let region = regions[index].ok_or(MemoryResourceError::InvalidMapping)?;
+        unsafe {
+            table.release_mapping(region.mapping, target_capability, capabilities)?;
+        }
+        table.release_object(region.object, region.capability, capabilities)?;
+        regions[index] = None;
+    }
+    Ok(())
+}
+
+/// Reserves every verified PE load region as an exact object and guest mapping
+/// before native image construction. Immutable read-only/executable regions
+/// use shared backing; writable regions are private anonymous objects. W^X is
+/// retained by the exact final mapping access and no package field authorizes
+/// either the object or target address space.
+pub fn reserve_component_image<const P: usize, const O: usize, const M: usize, const C: usize>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    pool: MemoryPoolId,
+    pool_capability: Capability,
+    target_capability: Capability,
+    image: &PeImage<'_>,
+    load_base_virtual_page: u64,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<AccountedComponentImage, ComponentImageAccountingError> {
+    let plan = component_image_page_plan(image)?;
+    let count = usize::from(plan.regions);
+    if count > MAX_COMPONENT_IMAGE_REGIONS {
+        return Err(ComponentImageAccountingError::InvalidRegion);
+    }
+    let mut regions = [None; MAX_COMPONENT_IMAGE_REGIONS];
+    for index in 0..count {
+        let load = image
+            .load_region(index)
+            .map_err(ComponentImageAccountingError::Image)?;
+        let mut classified = ComponentImagePagePlan {
+            read_only_pages: 0,
+            executable_pages: 0,
+            private_writable_pages: 0,
+            private_unmapped_pages: 0,
+            regions: 0,
+        };
+        let class = add_component_image_region(&mut classified, load)?;
+        let (backing, object_rights, mapping_access) = component_image_region_policy(class);
+        let pages = u64::from(load.pages());
+        let virtual_page = load_base_virtual_page
+            .checked_add(u64::from(load.virtual_address()) / PAGE_SIZE)
+            .ok_or(ComponentImageAccountingError::Arithmetic)?;
+        let (object, capability) = match table.allocate_object(
+            pool,
+            pool_capability,
+            pages,
+            backing,
+            object_rights,
+            capabilities,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                rollback_component_image_regions(
+                    table,
+                    &mut regions,
+                    index,
+                    target_capability,
+                    capabilities,
+                )
+                .map_err(ComponentImageAccountingError::Resource)?;
+                return Err(ComponentImageAccountingError::Resource(error));
+            }
+        };
+        let mapping = match table.reserve_mapping(
+            object,
+            capability,
+            target_capability,
+            virtual_page,
+            0,
+            pages,
+            mapping_access,
+            capabilities,
+        ) {
+            Ok(mapping) => mapping,
+            Err(error) => {
+                table
+                    .release_object(object, capability, capabilities)
+                    .map_err(ComponentImageAccountingError::Resource)?;
+                rollback_component_image_regions(
+                    table,
+                    &mut regions,
+                    index,
+                    target_capability,
+                    capabilities,
+                )
+                .map_err(ComponentImageAccountingError::Resource)?;
+                return Err(ComponentImageAccountingError::Resource(error));
+            }
+        };
+        regions[index] = Some(AccountedComponentImageRegion {
+            object,
+            capability,
+            mapping,
+            class,
+            pages,
+            virtual_page,
+        });
+    }
+    let unmapped_private = if plan.private_unmapped_pages == 0 {
+        None
+    } else {
+        match table.allocate_object(
+            pool,
+            pool_capability,
+            plan.private_unmapped_pages,
+            MemoryBackingKind::Anonymous,
+            Rights::READ
+                .union(Rights::WRITE)
+                .union(Rights::INSPECT)
+                .union(Rights::CONTROL),
+            capabilities,
+        ) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                rollback_component_image_regions(
+                    table,
+                    &mut regions,
+                    count,
+                    target_capability,
+                    capabilities,
+                )
+                .map_err(ComponentImageAccountingError::Resource)?;
+                return Err(ComponentImageAccountingError::Resource(error));
+            }
+        }
+    };
+    Ok(AccountedComponentImage {
+        plan,
+        regions,
+        unmapped_private,
+    })
+}
+
+/// Releases exact image mappings and objects only after native guest teardown.
+///
+/// # Safety
+///
+/// The caller must prove no CPU, backend, cached translation, or peer can use
+/// any represented region. The exact target capability must remain live.
+pub unsafe fn release_component_image<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    mut image: AccountedComponentImage,
+    target_capability: Capability,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<ComponentImageReleaseSummary, MemoryResourceError> {
+    let count = usize::from(image.plan.regions);
+    let pages = image
+        .plan
+        .total_pages()
+        .ok_or(MemoryResourceError::Arithmetic)?;
+    rollback_component_image_regions(
+        table,
+        &mut image.regions,
+        count,
+        target_capability,
+        capabilities,
+    )?;
+    if let Some((object, capability)) = image.unmapped_private.take() {
+        table.release_object(object, capability, capabilities)?;
+    }
+    Ok(ComponentImageReleaseSummary {
+        regions: image.plan.regions,
+        pages,
+    })
 }
 
 pub fn prepare_microvm_guest_ram<const P: usize, const O: usize, const M: usize, const C: usize>(
@@ -799,5 +1163,40 @@ mod tests {
         let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
         assert_eq!(usage.object_pages(), 0);
         assert_eq!(usage.active_mappings(), 0);
+    }
+
+    #[test]
+    fn component_image_plan_separates_rx_ro_and_private_rw_pages() {
+        let mut plan = ComponentImagePagePlan {
+            read_only_pages: 0,
+            executable_pages: 0,
+            private_writable_pages: 0,
+            private_unmapped_pages: 0,
+            regions: 0,
+        };
+        assert_eq!(
+            add_component_image_region(&mut plan, PeLoadRegion::test_value(0, 1, false, false)),
+            Ok(ComponentImagePageClass::ReadOnly)
+        );
+        assert_eq!(
+            add_component_image_region(&mut plan, PeLoadRegion::test_value(0x1000, 2, false, true)),
+            Ok(ComponentImagePageClass::Executable)
+        );
+        assert_eq!(
+            add_component_image_region(&mut plan, PeLoadRegion::test_value(0x3000, 3, true, false)),
+            Ok(ComponentImagePageClass::PrivateWritable)
+        );
+        assert_eq!(plan.read_only_pages(), 1);
+        assert_eq!(plan.executable_pages(), 2);
+        assert_eq!(plan.private_writable_pages(), 3);
+        assert_eq!(plan.total_pages(), Some(6));
+        assert_eq!(plan.regions(), 3);
+
+        let before = plan;
+        assert_eq!(
+            add_component_image_region(&mut plan, PeLoadRegion::test_value(0x6000, 1, true, true)),
+            Err(ComponentImageAccountingError::InvalidRegion)
+        );
+        assert_eq!(plan, before);
     }
 }
