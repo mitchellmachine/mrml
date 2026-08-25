@@ -4,7 +4,7 @@ members = [
     "tools/mrml",
     "compiler/core",
     "compiler/driver",
-    "crates/mrml-kernel-image",
+    "system/bootloader",
     "crates/mrml-service-image",
     "crates/mrml-config",
     "crates/mrml-storage",

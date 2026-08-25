@@ -43,4 +43,4 @@ bench = false
 required-features = ["kernel-image"]
 
 [dependencies]
-mrml-kernel = { path = "../../system/kernel" }
+mrml-kernel = { path = "../kernel" }
