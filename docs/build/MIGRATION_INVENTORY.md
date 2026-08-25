@@ -42,6 +42,9 @@ that semantic moves or Cargo bridge removal are complete.
 - `mrml-opus` moved with its math dependency converted to a sibling semantic
   path; its codec implementation, examples, native-link declaration, and Cargo
   bridge remain unchanged.
+- `mrml-windows` moved with all six consumer paths updated; its allocation-free
+  Windows primitives, native-link declarations, and Cargo bridge remain
+  unchanged.
 
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality

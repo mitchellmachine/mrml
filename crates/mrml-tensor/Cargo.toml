@@ -20,7 +20,7 @@ mrml-kernel = { path = "../mrml-kernel" }
 mrml-runtime = { path = "../mrml-runtime" }
 
 [target.'cfg(windows)'.dependencies]
-mrml-windows = { path = "../mrml-windows" }
+mrml-windows = { path = "../../packages/libraries/windows" }
 
 [target.'cfg(unix)'.dependencies]
 mrml-linux = { path = "../mrml-linux" }

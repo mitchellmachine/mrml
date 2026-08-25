@@ -65,6 +65,10 @@ The eighth semantic move relocates `mrml-opus` and updates its math and patent-
 review paths without changing codec behavior. **Result: NOT_TRIGGERED.** The
 existing worldwide Opus mechanism review remains in force.
 
+The ninth semantic move relocates `mrml-windows` and updates its six consumer
+paths without changing platform behavior. **Result: NOT_TRIGGERED.** This is
+repository organization, not a new Windows mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

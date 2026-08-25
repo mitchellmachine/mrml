@@ -29,7 +29,7 @@ members = [
     "crates/mrml-terminal-style",
     "crates/mrml-tools",
     "packages/libraries/percent-encoding",
-    "crates/mrml-windows",
+    "packages/libraries/windows",
     "crates/mrml-linux",
     "crates/mrml-kvm",
     "crates/mrml-kvm-run",

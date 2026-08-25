@@ -7,7 +7,7 @@ license.workspace = true
 description = "MRML-owned no_std runtime containers and platform memory"
 
 [target.'cfg(windows)'.dependencies]
-mrml-windows = { path = "../mrml-windows" }
+mrml-windows = { path = "../../packages/libraries/windows" }
 
 [target.'cfg(unix)'.dependencies]
 mrml-linux = { path = "../mrml-linux" }

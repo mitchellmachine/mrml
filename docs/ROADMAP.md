@@ -148,6 +148,9 @@ edges are now sibling semantic-package references and its trainer edge remains.
 `mrml-opus` is the eighth migrated library component; its math edge is now a
 sibling semantic-package reference without changing codec behavior.
 
+`mrml-windows` is the ninth migrated library component; its six consumers now
+resolve to the semantic package without changing Windows primitive behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,
