@@ -120,11 +120,14 @@ bridge remain unchanged.
 `mrml-tools` now lives at `tools/host`; its input-policy counts, feature
 behavior, and Cargo bridge remain unchanged.
 
-The first explicit `rust-action` belongs to dependency-free `mrml-math` and
-binds crate name `mrml_math`, crate type `lib`, and its repository-relative
-source root. `mrml build mrml-math` now emits a deterministic native rlib and
-`mrml test mrml-math` compiles and executes its test harness directly through
-the pinned rustc. Action paths and crate names are validated before invocation;
+The first explicit `rust-action` nodes are the dependency-free `mrml-math`,
+`mrml-windows`, and `mrml-linux` libraries; each binds its crate name, `lib`
+type, and repository-relative source root. Native build emits a deterministic
+rlib and native test compiles and executes the inline test harness directly
+through the pinned rustc. Windows execution covers math and the Windows platform
+leaf; Arch Linux WSL2 execution covers math and the Linux platform leaf. This is
+hosted WSL2 evidence, not bare-metal Linux or KVM evidence. Action paths and crate
+names are validated before invocation;
 the frontend resolves the exact dated Windows GNU/LLVM or Linux GNU toolchain
 through rustup rather than inheriting the caller's active default. There is no
 Cargo fallback for a declared native action. Remaining nodes are

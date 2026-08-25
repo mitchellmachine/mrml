@@ -21,10 +21,23 @@ that direct-rustc migration or Cargo bridge removal is complete.
   identities, local dependencies, features, outputs, build scripts, procedural
   macros, and direct source-input sites; see
   [BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md);
-- explicit dependency-free `mrml-math` native rustc build/test action with a
-  validated crate name/type/source, deterministic artifact path, pinned target
-  flags, exact dated rustup tool resolution independent of the caller's default,
-  and no Cargo fallback;
+- explicit dependency-free `mrml-math`, `mrml-windows`, and `mrml-linux` native
+  rustc build/test actions with validated crate names/types/sources,
+  deterministic artifact paths, pinned target flags, exact dated rustup tool
+  resolution independent of the caller's default, and no Cargo fallback;
+
+The direct-action platform increment was checked on 2026-08-25 with exact dated
+toolchains:
+
+- Windows GNU/LLVM: direct `mrml-math` build/test — PASS, 1 test;
+- Windows GNU/LLVM: direct `mrml-windows` build/test — PASS, 15 tests;
+- Arch Linux WSL2 (`6.18.33.2-microsoft-standard-WSL2`): native `doctor` and
+  `audit` — PASS, 42 components and 118 dependency edges;
+- Arch Linux WSL2: direct `mrml-math` build/test — PASS, 1 test;
+- Arch Linux WSL2: direct `mrml-linux` build/test — PASS, 4 tests.
+
+This is hosted WSL2 evidence. No KVM, bare-metal Linux, or physical hardware was
+exercised by this increment.
 - stage1 `mrml` selection, `mrml-rustc-driver`, current-host WHP/KVM selection,
   x86-64 UEFI routing, and lazy CUDA/PTX routing;
 - duplicate `mrml-opus` root workspace member removed.

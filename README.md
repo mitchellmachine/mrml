@@ -284,9 +284,10 @@ and unusual build inputs. Cargo remains an internal locked compilation bridge
 during this incremental migration; package/release/image commands are not
 implemented yet.
 
-`mrml-math` is the first native compiler node: its build and test actions invoke
-the pinned upstream rustc directly and are reported as `builder=native-rustc`.
-Other components remain visibly `builder=cargo-transition` until their exact
+`mrml-math`, `mrml-windows`, and `mrml-linux` are the first native compiler
+nodes: their build and test actions invoke the pinned upstream rustc directly
+and are reported as `builder=native-rustc`. Other components remain visibly
+`builder=cargo-transition` until their exact
 extern, feature, target, and build-action declarations migrate.
 
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in

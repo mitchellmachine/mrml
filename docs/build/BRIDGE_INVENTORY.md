@@ -60,8 +60,10 @@ All 42 tracked components now live in semantic `apps/`, `compiler/`, `packages/`
 under generic `crates/`. The next gate makes source roots, crate types, editions,
 target cfgs, feature activation, extern names/artifacts, build actions, compiler
 flags, and lock/digest inputs exact enough for direct rustc. The dependency-free
-`mrml-math` leaf is the first exact native build/test action and does not invoke
-Cargo. Cargo must then be
+`mrml-math`, `mrml-windows`, and `mrml-linux` leaves are the first exact native
+build/test actions and do not invoke Cargo. Windows execution covers math and
+the Windows leaf; Arch Linux WSL2 execution covers math and the Linux leaf.
+This does not establish bare-metal Linux or KVM parity. Cargo must then be
 confined to clean-source stage-zero bootstrap only after Windows/Linux build
 equivalence is demonstrated. Treat input-policy changes as explicit review items,
 never automatically accepted count updates.
