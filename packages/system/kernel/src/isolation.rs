@@ -1,6 +1,9 @@
 use core::array;
 
-use crate::{ArtifactKind, ObjectId};
+use crate::{
+    ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetTable, CpuResourceError,
+    ObjectId, VcpuReservationId,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationMode {
@@ -241,6 +244,58 @@ pub struct RoutedIsolationService<E> {
 pub struct PreparedIsolationServiceRoute {
     spec: IsolationServiceSpec,
     launch: PreparedIsolationLaunch,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ReservedIsolationVcpus {
+    route: PreparedIsolationServiceRoute,
+    reservation: VcpuReservationId,
+}
+
+impl ReservedIsolationVcpus {
+    pub fn into_parts(self) -> (PreparedIsolationServiceRoute, VcpuReservationId) {
+        (self.route, self.reservation)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationVcpuReservationError {
+    Cpu(CpuResourceError),
+    Admission(IsolationLaunchError),
+}
+
+/// Reserves exact quantitative vCPU authority while retaining the uncommitted
+/// isolation route. Resource failure consumes the route into typed
+/// unavailability, so callers cannot retry through a weaker placement.
+pub fn reserve_isolation_vcpus<
+    const DOMAINS: usize,
+    const BUDGETS: usize,
+    const RESERVATIONS: usize,
+    const CAPABILITIES: usize,
+>(
+    route: PreparedIsolationServiceRoute,
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    budgets: &mut CpuBudgetTable<BUDGETS, RESERVATIONS>,
+    budget: CpuBudgetId,
+    budget_capability: Capability,
+    parallelism: u16,
+    capabilities: &CapabilitySpace<CAPABILITIES>,
+) -> Result<ReservedIsolationVcpus, IsolationVcpuReservationError> {
+    match budgets.reserve_vcpus(
+        budget,
+        budget_capability,
+        route.spec().domain(),
+        parallelism,
+        capabilities,
+    ) {
+        Ok(reservation) => Ok(ReservedIsolationVcpus { route, reservation }),
+        Err(error) => {
+            route
+                .unavailable(admission, IsolationUnavailableReason::VcpuBudget)
+                .map_err(IsolationVcpuReservationError::Admission)?;
+            Err(IsolationVcpuReservationError::Cpu(error))
+        }
+    }
 }
 
 impl PreparedIsolationServiceRoute {
@@ -1314,6 +1369,43 @@ mod tests {
             IsolationUnavailableReason::VmmResource
         );
         let report = table.total_microvm_report();
+        assert_eq!(report.running_microvm_eligible, 0);
+        assert_eq!(report.native_fallback, 0);
+        assert_eq!(report.unavailable_microvm_eligible, 1);
+    }
+
+    #[test]
+    fn exhausted_vcpu_budget_consumes_total_route_without_native_fallback() {
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let route = prepare_isolation_service_route(&mut admission, spec).unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut budgets = CpuBudgetTable::<1, 1>::new(3).unwrap();
+        let budget_spec = crate::CpuBudgetSpec::new(1, 5_000, 10_000, 7, 1).unwrap();
+        let (budget, capability) = budgets.create_root(budget_spec, &mut capabilities).unwrap();
+        budgets
+            .reserve_vcpus(budget, capability, ObjectId(0x99), 1, &capabilities)
+            .unwrap();
+
+        assert_eq!(
+            reserve_isolation_vcpus(
+                route,
+                &mut admission,
+                &mut budgets,
+                budget,
+                capability,
+                1,
+                &capabilities,
+            ),
+            Err(IsolationVcpuReservationError::Cpu(
+                CpuResourceError::ParallelismExhausted
+            ))
+        );
+        let unavailable = admission.unavailable_domains().next().unwrap();
+        assert_eq!(unavailable.domain(), spec.domain());
+        assert_eq!(unavailable.reason(), IsolationUnavailableReason::VcpuBudget);
+        let report = admission.total_microvm_report();
         assert_eq!(report.running_microvm_eligible, 0);
         assert_eq!(report.native_fallback, 0);
         assert_eq!(report.unavailable_microvm_eligible, 1);

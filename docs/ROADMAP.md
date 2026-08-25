@@ -226,8 +226,11 @@ vCPU and remaining VMM/device resource accounting are the next gates.
 The next vCPU prerequisite is now **PARTIALLY IMPLEMENTED** in the kernel: a
 fixed-capacity generational CPU budget binds parallelism, runtime/period,
 priority ceiling, and affinity to capability authority and issues exact
-domain-bound reservations without amplification. WHP/KVM consumption and
-scheduler enforcement remain the current gate.
+domain-bound reservations without amplification. The signed component path now
+reserves one vCPU before WHP/KVM construction, retains it through guest lifetime,
+and reclaims it after teardown. Exhaustion consumes the Total route into typed
+unavailability with zero fallback. Scheduler enforcement and the remaining VMM
+metadata/device projections are the current gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

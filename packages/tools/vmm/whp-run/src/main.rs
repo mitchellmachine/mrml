@@ -19,28 +19,28 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
-    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
-    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
-    MemoryPoolTable, ObjectId, PreparedComponentServiceLaunch, PreparedIsolationServiceRoute,
-    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
-    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
-    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
-    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    ArtifactKind, CapabilitySpace, CpuBudgetSpec, CpuBudgetTable, GPU_DOORBELL_PORT,
+    GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
+    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
+    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
+    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, ObjectId,
+    PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
+    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmExit, VmTable, prepare_microvm_guest_ram,
-    release_microvm_guest_ram, reserve_microvm_guest_ram, run_pci_configuration_once,
-    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
-    run_virtual_block_transaction_once,
+    release_microvm_guest_ram, reserve_isolation_vcpus, reserve_microvm_guest_ram,
+    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -1793,6 +1793,36 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
+    let mut component_cpu = if component_service_mode {
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
+            .map_err(|error| anyhow!("component CPU table failed: {:?}", error))?;
+        let spec = CpuBudgetSpec::new(1, 10_000, 10_000, u8::MAX, 1)
+            .map_err(|error| anyhow!("component CPU budget failed: {:?}", error))?;
+        let (budget, capability) = budgets
+            .create_root(spec, &mut capabilities)
+            .map_err(|error| anyhow!("component CPU root failed: {:?}", error))?;
+        let route = isolation_preparation
+            .take()
+            .ok_or_else(|| anyhow!("missing component isolation route for CPU reservation"))?;
+        let reserved = reserve_isolation_vcpus(
+            route,
+            isolation_admission
+                .as_mut()
+                .ok_or_else(|| anyhow!("missing component isolation admission"))?,
+            &mut budgets,
+            budget,
+            capability,
+            1,
+            &capabilities,
+        )
+        .map_err(|error| anyhow!("component vCPU reservation failed: {:?}", error))?;
+        let (route, reservation) = reserved.into_parts();
+        isolation_preparation = Some(route);
+        Some((budgets, capabilities, budget, capability, reservation))
+    } else {
+        None
+    };
     let guest_preparation = if boot_mode {
         system.prepare_boot_kernel(&executable, handoff.as_slice(), layout)
     } else if pci_configuration_mode {
@@ -2486,6 +2516,33 @@ fn application_main() -> Result<()> {
                         {
                             return Err(anyhow!("component RAM was not completely reclaimed"));
                         }
+                        let (mut budgets, mut capabilities, budget, capability, reservation) =
+                            component_cpu
+                                .take()
+                                .ok_or_else(|| anyhow!("missing component vCPU authority"))?;
+                        if budgets
+                            .release_vcpus(reservation, capability, &capabilities)
+                            .map_err(|error| {
+                                anyhow!("component vCPU release failed: {:?}", error)
+                            })?
+                            != 1
+                        {
+                            return Err(anyhow!("component vCPU release count mismatch"));
+                        }
+                        let usage =
+                            budgets
+                                .usage(budget, capability, &capabilities)
+                                .map_err(|error| {
+                                    anyhow!("component CPU inspection failed: {:?}", error)
+                                })?;
+                        if usage.reserved_parallelism() != 0 || usage.active_reservations() != 0 {
+                            return Err(anyhow!("component vCPU authority was not reclaimed"));
+                        }
+                        budgets
+                            .retire_root(budget, capability, &mut capabilities)
+                            .map_err(|error| {
+                                anyhow!("component CPU root retirement failed: {:?}", error)
+                            })?;
                         println!(
                             "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: verify={}us prepare={}us execute={}us total={}us",
                             verification_micros,

@@ -143,6 +143,16 @@ does not yet enforce time, priority, class, or affinity in the scheduler or
 either VMM backend, derive child budgets, or prove physical topology behavior.
 Those integrations remain **PLANNED**.
 
+The focused signed ZIM/Zstd component profile now consumes one exact
+domain-bound vCPU reservation before either hosted backend constructs its
+guest. The uncommitted isolation route and budget reservation are composed in
+one fail-closed kernel operation: exhaustion records `VCPU_BUDGET`
+unavailability and zero native fallback. Successful WHP and nested-KVM runs
+retain the reservation until confirmed guest teardown, then verify zero
+reserved parallelism and retire the root. This is hosted controlled-probe
+accounting only; runtime/period, priority, affinity, scheduler, multi-vCPU, and
+physical-topology enforcement remain **PLANNED**.
+
 ## System power policy
 
 First-class profiles are `LOW_POWER`, `BALANCED`, `PERFORMANCE`, and `CUSTOM`;

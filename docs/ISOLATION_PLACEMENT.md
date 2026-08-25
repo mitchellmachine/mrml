@@ -230,10 +230,13 @@ guest teardown precedes full release. WHP and nested-KVM controlled probes pass
 with zero native fallback. Other microVM profiles, vCPU budgets, VMM metadata,
 and device projections remain **PLANNED**.
 Kernel CPU-budget groundwork now provides the separate generational authority
-needed for the vCPU gate, including exact domain reservations and bounded
-parallelism. The signed component runners do not consume it yet; therefore a
-successful hosted one-vCPU creation is still not evidence of accounted CPU
-execution authority, and `VCPU_BUDGET` failure integration remains **PLANNED**.
+for the vCPU gate, including exact domain reservations and bounded parallelism.
+The signed component runners reserve exactly one vCPU before guest construction,
+retain it through the active guest, and reclaim and retire it only after guest
+teardown. A shared kernel bridge consumes reservation failure into typed
+`VCPU_BUDGET` unavailability with zero native fallback. Focused tests and fresh
+WHP/nested-KVM controlled probes pass. Broader scheduler enforcement, multiple
+profiles/vCPUs, and physical-topology evidence remain **PLANNED**.
 
 ## One policy, several placements
 
