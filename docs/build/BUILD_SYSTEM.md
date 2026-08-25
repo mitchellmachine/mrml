@@ -395,6 +395,15 @@ firmware-media results using the named accelerators; they are not evidence that
 the native MRML WHP or KVM runner executes firmware, and they are not physical-
 firmware results.
 
+The gate decodes only ordered canonical trace prefixes and reports the furthest
+bounded stage in both success and failure results: `firmware-launched`,
+`efi-loader-entered`, `generation-manifest-loaded`, `early-packages-verified`,
+`kernel-package-verified`, `kernel-image-verified`, or
+`kernel-entry-reached`. Unknown or reordered bytes cannot promote a stage. The
+fresh WHPX positive run reported `stage=kernel-entry-reached`; these host-side
+labels diagnose the test path and are not authenticated evidence or remote
+attestation.
+
 The WHP and KVM runners both consume the byte-identical canonical signed kernel
 package, authenticate its package key, select/decompress its x86-64 kernel
 payload, authenticate the inner signed PE, and construct their native guest

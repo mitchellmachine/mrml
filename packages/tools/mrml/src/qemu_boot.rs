@@ -192,7 +192,8 @@ fn run_qemu_child(
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
                 println!(
-                    "package-qemu-boot|status=QEMU_UEFI_BOOT_REJECT_PASS|accelerator={accelerator}|trace={}|bytes={}",
+                    "package-qemu-boot|status=QEMU_UEFI_BOOT_REJECT_PASS|accelerator={accelerator}|stage={}|trace={}|bytes={}",
+                    boot_stage(&bytes),
                     encode_hex(&bytes),
                     bytes.len()
                 );
@@ -204,7 +205,8 @@ fn run_qemu_child(
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
                 println!(
-                    "package-qemu-boot|status=QEMU_UEFI_BOOT_PASS|accelerator={accelerator}|trace={}|bytes={}",
+                    "package-qemu-boot|status=QEMU_UEFI_BOOT_PASS|accelerator={accelerator}|stage={}|trace={}|bytes={}",
+                    boot_stage(&bytes),
                     encode_hex(&bytes),
                     bytes.len()
                 );
@@ -214,7 +216,8 @@ fn run_qemu_child(
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(format!(
-                    "PackageQemuTraceMismatch {{ expected: {}, actual: {} }}",
+                    "PackageQemuTraceMismatch {{ stage: {}, expected: {}, actual: {} }}",
+                    boot_stage(&bytes),
                     encode_hex(expected),
                     encode_hex(&bytes)
                 ));
@@ -224,14 +227,19 @@ fn run_qemu_child(
             .try_wait()
             .map_err(|error| format!("PackageQemuWaitError {{ detail: {error} }}"))?
         {
-            return Err(format!("PackageQemuExited {{ status: {status} }}"));
+            let actual = fs::read(trace).unwrap_or_default();
+            return Err(format!(
+                "PackageQemuExited {{ stage: {}, status: {status} }}",
+                boot_stage(&actual)
+            ));
         }
         if start.elapsed() >= Duration::from_secs(timeout) {
             let _ = child.kill();
             let _ = child.wait();
             let actual = fs::read(trace).unwrap_or_default();
             return Err(format!(
-                "PackageQemuTimeout {{ expected: {}, actual: {} }}",
+                "PackageQemuTimeout {{ stage: {}, expected: {}, actual: {} }}",
+                boot_stage(&actual),
                 encode_hex(expected),
                 encode_hex(&actual)
             ));
@@ -349,6 +357,29 @@ fn rejected_twice(trace: &[u8], prefix: &[u8]) -> bool {
             .any(|window| window == SUCCESS_TRACE)
 }
 
+fn boot_stage(trace: &[u8]) -> &'static str {
+    const RELEASE_LOADED: &[u8] = &[0xc8];
+    const EARLY_PACKAGES_VERIFIED: &[u8] = &[0xc8, 0xb0, 0xb2, 0xb0, 0xb2, 0xc9];
+    const KERNEL_PACKAGE_VERIFIED: &[u8] = &[0xc8, 0xb0, 0xb2, 0xb0, 0xb2, 0xc9, 0xb0, 0xb2, 0xb2];
+    const KERNEL_IMAGE_VERIFIED: &[u8] =
+        &[0xc8, 0xb0, 0xb2, 0xb0, 0xb2, 0xc9, 0xb0, 0xb2, 0xb2, 0xa1];
+    if trace == SUCCESS_TRACE {
+        "kernel-entry-reached"
+    } else if trace.starts_with(KERNEL_IMAGE_VERIFIED) {
+        "kernel-image-verified"
+    } else if trace.starts_with(KERNEL_PACKAGE_VERIFIED) {
+        "kernel-package-verified"
+    } else if trace.starts_with(EARLY_PACKAGES_VERIFIED) {
+        "early-packages-verified"
+    } else if trace.starts_with(RELEASE_LOADED) {
+        "generation-manifest-loaded"
+    } else if trace.is_empty() {
+        "firmware-launched"
+    } else {
+        "efi-loader-entered"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +404,21 @@ mod tests {
         assert_eq!(option(&options, "--accelerator").unwrap(), Some("whpx"));
         assert!(validate_options(&["--accelerator".to_owned()]).is_err());
         assert!(validate_options(&["--unknown".to_owned(), "tcg".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn boot_stage_requires_ordered_canonical_prefixes() {
+        assert_eq!(boot_stage(&[]), "firmware-launched");
+        assert_eq!(boot_stage(&[0x01]), "efi-loader-entered");
+        assert_eq!(boot_stage(&[0xc8]), "generation-manifest-loaded");
+        assert_eq!(
+            boot_stage(&[0xc8, 0xb0, 0xb2, 0xb0, 0xb2, 0xc9]),
+            "early-packages-verified"
+        );
+        assert_eq!(
+            boot_stage(&[0xc8, 0xb0, 0xb2, 0xb0, 0xb2, 0xc9, 0xb0, 0xb2, 0xb2]),
+            "kernel-package-verified"
+        );
+        assert_eq!(boot_stage(&SUCCESS_TRACE), "kernel-entry-reached");
     }
 }
