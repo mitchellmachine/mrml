@@ -508,6 +508,19 @@ struct IdentifiedGenericTraitImplementation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenericTraitImplementationAnswer {
+    pub implementation_id: GenericTraitImplementationId,
+    pub instantiated: InstantiatedTraitWhereClause,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenericTraitImplementationSolution {
+    Unique(GenericTraitImplementationAnswer),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenericTraitImplementationDatabase {
     implementations:
         [Option<IdentifiedGenericTraitImplementation>; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
@@ -544,6 +557,39 @@ impl GenericTraitImplementationDatabase {
         *slot = Some(IdentifiedGenericTraitImplementation { id, implementation });
         self.implementation_count += 1;
         Ok(())
+    }
+
+    pub fn select(
+        &self,
+        goal: ImplementedTraitGoal,
+    ) -> Result<GenericTraitImplementationSolution, TraitGoalError> {
+        validate_concrete_goal(goal)?;
+        let mut selected = None;
+        for implementation in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            match implementation.implementation.elaborate(goal)? {
+                TraitWhereClauseElaboration::Unique(instantiated) => {
+                    if selected.is_some() {
+                        return Ok(GenericTraitImplementationSolution::Ambiguous);
+                    }
+                    selected = Some(GenericTraitImplementationAnswer {
+                        implementation_id: implementation.id,
+                        instantiated,
+                    });
+                }
+                TraitWhereClauseElaboration::Ambiguous => {
+                    return Ok(GenericTraitImplementationSolution::Ambiguous);
+                }
+                TraitWhereClauseElaboration::NoSolution => {}
+            }
+        }
+        Ok(selected.map_or(
+            GenericTraitImplementationSolution::NoSolution,
+            GenericTraitImplementationSolution::Unique,
+        ))
     }
 }
 
@@ -2461,6 +2507,86 @@ mod tests {
                 concrete_clause(100, 100, None),
             ),
             Err(TraitGoalError::TooManyGenericImplementations)
+        );
+    }
+
+    #[test]
+    fn selects_one_coherent_generic_implementation_and_instantiates_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(100),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(101),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let id = GenericTraitImplementationId::new(7);
+        let mut database = GenericTraitImplementationDatabase::EMPTY;
+        database.insert(id, implementation).unwrap();
+        let query = ImplementedTraitGoal::new(
+            TraitId::new(100),
+            TraitGoalType::Concrete(TraitTypeId::new(55)),
+        );
+        let GenericTraitImplementationSolution::Unique(answer) = database.select(query).unwrap()
+        else {
+            panic!("expected one coherent generic implementation");
+        };
+        assert_eq!(answer.implementation_id, id);
+        assert_eq!(
+            answer.instantiated.premises.predicates()[0]
+                .unwrap()
+                .self_type,
+            TraitGoalType::Concrete(TraitTypeId::new(55))
+        );
+        assert_eq!(
+            database.select(ImplementedTraitGoal::new(
+                TraitId::new(102),
+                TraitGoalType::Concrete(TraitTypeId::new(55)),
+            )),
+            Ok(GenericTraitImplementationSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn generic_selection_preserves_unconstrained_ambiguity_and_rejects_inference() {
+        let mut implementation = TraitWhereClause::new(
+            2,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(110),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(111),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+            ))
+            .unwrap();
+        let mut database = GenericTraitImplementationDatabase::EMPTY;
+        database
+            .insert(GenericTraitImplementationId::new(1), implementation)
+            .unwrap();
+        assert_eq!(
+            database.select(ImplementedTraitGoal::new(
+                TraitId::new(110),
+                TraitGoalType::Concrete(TraitTypeId::new(1)),
+            )),
+            Ok(GenericTraitImplementationSolution::Ambiguous)
+        );
+        assert_eq!(
+            database.select(ImplementedTraitGoal::new(
+                TraitId::new(110),
+                TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+            )),
+            Err(TraitGoalError::NonConcreteClauseQuery)
         );
     }
 

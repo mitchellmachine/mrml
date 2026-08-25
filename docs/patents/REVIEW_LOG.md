@@ -4256,3 +4256,11 @@ heads and rejects overlapping entries in a bounded table. It adds no novel
 specialization order, recursive theorem proving, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Coherent concrete generic-implementation selection
+
+**Result: NOT_TRIGGERED.** This compiler-only increment linearly matches a
+concrete query against the existing bounded coherent generic-head table and
+returns its stable identity plus direct fixed-array substitution. It adds no
+specialization order, recursive generic proof, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.

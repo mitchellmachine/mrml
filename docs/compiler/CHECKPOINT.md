@@ -738,6 +738,15 @@ conformance tests, and 335 replacement tests: 807 compiler tests per host.
 Premise satisfiability, cross-family coherence, specialization, and source impl
 syntax remain unsupported.
 
+The coherent generic-selection milestone matches concrete queries against the
+admitted generic implementation table. One fully constrained head returns its
+stable implementation ID and instantiated premises; no head returns no solution,
+and a parameter absent from the head remains ambiguous. Inference-bearing
+queries fail explicitly. Windows gnullvm and native Arch Linux WSL each pass 463
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 809 compiler tests per host. Recursive generic-implementation
+proof, specialization, and source impl syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.

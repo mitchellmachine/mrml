@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises; exact associated values normalize bounded projections. A separate 64-entry generic-implementation table uses exact flat equality unification across both binders and rejects satisfiable head overlap, including repeated-parameter constraints. There is no trait syntax, mixed inference/higher-ranked solving, generic/nested projections, premise-aware coherence, specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises; exact associated values normalize bounded projections. A coherent 64-entry generic-implementation table rejects exact flat-head overlap and selects one stable implementation plus instantiated premises for concrete queries, preserving unconstrained ambiguity. There is no trait syntax, recursive generic-impl proof, mixed inference/higher-ranked solving, generic/nested projections, premise-aware coherence, specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -867,6 +867,14 @@ constraints through parameter unions, so repeated-parameter heads are disjoint
 from unequal concrete tuples but overlap equal ones. Duplicate IDs, satisfiable
 head overlap, and capacity overflow fail. Premises do not waive a head conflict,
 and specialization is not implemented.
+
+Concrete generic selection elaborates each admitted implementation head against
+the query. Coherence guarantees at most one fully constrained candidate; a
+unique result carries its stable implementation identity and instantiated
+premises. No matching head returns no solution, while a parameter used only in
+premises remains ambiguous. Inference-bearing queries fail at this concrete
+boundary, and the returned premises are not yet recursively proved through the
+generic table.
 
 Rigid clause elaboration accepts goals containing only concrete types and rigid
 placeholders. Bound parameters may match either term, repeated parameters require

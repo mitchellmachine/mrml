@@ -3984,6 +3984,16 @@ conformance tests, and 335 replacement tests: 807 compiler tests per host.
 Premises do not waive head conflicts; cross-family coherence, specialization,
 and source impl syntax remain unsupported.
 
+The coherent generic-selection milestone matches a concrete query against the
+admitted 64-entry generic implementation table. A fully constrained match
+returns its stable implementation ID and instantiated premises; an absent head
+returns no solution, while a parameter used only by premises remains ambiguous.
+Inference-bearing queries fail at this concrete boundary. Windows gnullvm and
+native Arch Linux WSL each pass 463 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 809 compiler tests per
+host. Recursive generic-implementation proof, specialization, source impl syntax,
+and mixed inference selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

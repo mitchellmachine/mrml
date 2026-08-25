@@ -61,8 +61,9 @@ pub use semantics::{
 pub use trait_goals::{
     BoundImplementedTraitGoal, BoundTraitGoalType, CanonicalImplementedTraitGoal,
     CanonicalTraitGoalType, CanonicalizedImplementedTraitGoal,
-    CanonicalizedImplementedTraitPredicates, GenericTraitImplementationDatabase,
-    GenericTraitImplementationId, ImplementedTraitGoal, ImplementedTraitPredicates,
+    CanonicalizedImplementedTraitPredicates, GenericTraitImplementationAnswer,
+    GenericTraitImplementationDatabase, GenericTraitImplementationId,
+    GenericTraitImplementationSolution, ImplementedTraitGoal, ImplementedTraitPredicates,
     InstantiatedTraitWhereClause, MAX_CANONICAL_TRAIT_VARIABLES, MAX_GENERIC_TRAIT_IMPLEMENTATIONS,
     MAX_TRAIT_ASSOCIATED_TYPE_VALUES, MAX_TRAIT_GENERIC_PARAMETERS, MAX_TRAIT_GOAL_ARGUMENTS,
     MAX_TRAIT_IMPLEMENTATIONS, MAX_TRAIT_PREDICATES, MAX_TRAIT_PROOF_DEPTH,
