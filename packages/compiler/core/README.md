@@ -3762,6 +3762,21 @@ chains after one directly initialized tuple-field source, not nested projections
 multiple projected-source hops, aggregate provenance, or general regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
 
+The conditional projected-reassignment milestone extends the bounded tuple-field
+loan chain across a conditional shared-reference assignment. The exact dated
+oracle rejects mutation of either conditional owner and of the field's replaced
+initialization owner while a moved descendant remains live, accepts unrelated
+mutation, and accepts mutation of both conditional owners after the descendant's
+last use. MRML gives the conditional generation and prior exact field origin
+distinct bounded fact identities and carries both through liveness, mutable-
+parent suspension, and return-outlives traversal. Windows gnullvm and native
+Arch Linux WSL each pass 420 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 766 compiler tests per host. The
+unchanged driver and warnings-denied Clippy were not re-executed. This does not
+claim path-sensitive branch selection, nested projections, general aggregate
+provenance, named regions, or complete Polonius semantics. The
+`no_std`/allocation/unsafe hygiene scan remained empty.
+
 The repeated projected-source loan milestone extends that bounded relation
 across another directly initialized tuple whose selected reference field is
 later moved and reborrowed. The pinned oracle rejects shared and mutable live-

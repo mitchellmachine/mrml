@@ -3861,3 +3861,15 @@ mechanism, storage/GC method, executable loader, signing construction, or runtim
 dispatch mechanism. Existing `TRIGGERED` reviews for those implementation paths
 remain unchanged; this evidence/metadata tooling selects no additional patent
 mechanism.
+
+# 2026-08-25 — Conditional projected-reference loan ancestry
+
+**Result: NOT_TRIGGERED.** This compiler increment extends MRML's existing
+bounded ownership facts so a conditional reference assignment to one exact tuple
+field retains the independently observed possible source owners and the field's
+prior exact owner. It uses conventional compiler control-flow, place identity,
+generation, and liveness bookkeeping; it introduces no selected memory-
+reclamation algorithm, runtime synchronization mechanism, hardware mechanism,
+wire protocol, compression, cryptography, or executable enforcement technique.
+The existing compiler-analysis reviews remain applicable, and this bounded
+correctness extension selects no additional patent mechanism.

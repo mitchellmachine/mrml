@@ -4341,14 +4341,55 @@ impl<'source> RuntimeBodyFacts<'source> {
     fn direct_expression_loan_fact(&self, effect_index: usize) -> Option<RuntimeLoanFact> {
         let issue = self.effects.get(effect_index).and_then(|effect| *effect)?;
         let borrower = issue.loan_generation_borrower?;
-        let root = self.move_paths[..self.move_path_count]
+        let initialization = self.initializations[..self.initialization_count]
             .iter()
             .flatten()
-            .find(|path| {
-                path.base == RuntimePlaceIdentity::Local(borrower)
-                    && path.projections == RuntimePlaceProjections::EMPTY
-            })?;
-        let RuntimeExpressionType::Reference { mutable, .. } = root.ty else {
+            .filter(|initialization| {
+                initialization.event.0 > issue.event.0
+                    && self
+                        .move_paths
+                        .get(initialization.path.0)
+                        .and_then(|path| *path)
+                        .is_some_and(|path| {
+                            path.base == RuntimePlaceIdentity::Local(borrower)
+                                && matches!(path.ty, RuntimeExpressionType::Reference { .. })
+                        })
+            })
+            .min_by_key(|initialization| initialization.event.0);
+        let assignment = self.effects[..self.effect_count]
+            .iter()
+            .flatten()
+            .filter(|effect| {
+                effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.event.0 > issue.event.0
+                    && self
+                        .move_paths
+                        .get(effect.path.0)
+                        .and_then(|path| *path)
+                        .is_some_and(|path| {
+                            path.base == RuntimePlaceIdentity::Local(borrower)
+                                && matches!(path.ty, RuntimeExpressionType::Reference { .. })
+                        })
+            })
+            .min_by_key(|effect| effect.event.0);
+        let (generation_path, generation_event) = match (initialization, assignment) {
+            (Some(initialization), Some(assignment)) => {
+                if initialization.event.0 < assignment.event.0 {
+                    (initialization.path, initialization.event)
+                } else {
+                    (assignment.path, assignment.event)
+                }
+            }
+            (Some(initialization), None) => (initialization.path, initialization.event),
+            (None, Some(assignment)) => (assignment.path, assignment.event),
+            (None, None) => return None,
+        };
+        let RuntimeExpressionType::Reference { mutable, .. } = self
+            .move_paths
+            .get(generation_path.0)
+            .and_then(|path| *path)?
+            .ty
+        else {
             return None;
         };
         if !matches!(
@@ -4358,36 +4399,6 @@ impl<'source> RuntimeBodyFacts<'source> {
         ) {
             return None;
         }
-        let initialization_event = self.initializations[..self.initialization_count]
-            .iter()
-            .flatten()
-            .filter(|initialization| {
-                initialization.path == root.id && initialization.event.0 > issue.event.0
-            })
-            .map(|initialization| initialization.event)
-            .min_by_key(|event| event.0);
-        let assignment_event = self.effects[..self.effect_count]
-            .iter()
-            .flatten()
-            .filter(|effect| {
-                effect.path == root.id
-                    && effect.kind == RuntimePlaceEffectKind::Write
-                    && effect.event.0 > issue.event.0
-            })
-            .map(|effect| effect.event)
-            .min_by_key(|event| event.0);
-        let generation_event = match (initialization_event, assignment_event) {
-            (Some(initialization), Some(assignment)) => {
-                if initialization.0 < assignment.0 {
-                    initialization
-                } else {
-                    assignment
-                }
-            }
-            (Some(initialization), None) => initialization,
-            (None, Some(assignment)) => assignment,
-            (None, None) => return None,
-        };
         Some(RuntimeLoanFact {
             id: RuntimeLoanId(
                 MAX_RUNTIME_INITIALIZATION_FACTS + MAX_RUNTIME_PLACE_EFFECT_FACTS + effect_index,
@@ -4414,19 +4425,33 @@ impl<'source> RuntimeBodyFacts<'source> {
         let mut borrower = source.borrower;
         let mut issue_effect = source.issue_effect;
         for _ in 0..=move_depth {
-            let source_root = self.move_paths[..self.move_path_count]
+            let source_path = self.initializations[..self.initialization_count]
                 .iter()
                 .flatten()
-                .find(|path| {
-                    path.base == RuntimePlaceIdentity::Local(borrower)
-                        && path.projections == RuntimePlaceProjections::EMPTY
+                .find(|initialization| initialization.event == generation_event)
+                .map(|initialization| initialization.path)
+                .or_else(|| {
+                    self.effects[..self.effect_count]
+                        .iter()
+                        .flatten()
+                        .find(|effect| {
+                            effect.kind == RuntimePlaceEffectKind::Write
+                                && effect.event == generation_event
+                        })
+                        .map(|effect| effect.path)
                 })?;
+            let source_path_fact = self.move_paths.get(source_path.0).and_then(|path| *path)?;
+            if source_path_fact.base != RuntimePlaceIdentity::Local(borrower)
+                || !matches!(source_path_fact.ty, RuntimeExpressionType::Reference { .. })
+            {
+                return None;
+            }
             let (next_issue, moved) = self.effects[..self.effect_count]
                 .iter()
                 .enumerate()
                 .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
                 .filter(|(_, effect)| {
-                    effect.path == source_root.id
+                    effect.path == source_path
                         && effect.kind == RuntimePlaceEffectKind::Move
                         && runtime_ownership_position_precedes(
                             self,
@@ -4439,7 +4464,7 @@ impl<'source> RuntimeBodyFacts<'source> {
                             .iter()
                             .flatten()
                             .any(|replacement| {
-                                replacement.path == source_root.id
+                                replacement.path == source_path
                                     && replacement.kind == RuntimePlaceEffectKind::Write
                                     && runtime_ownership_position_precedes(
                                         self,
@@ -4506,6 +4531,97 @@ impl<'source> RuntimeBodyFacts<'source> {
         })
     }
 
+    fn moved_replaced_projected_loan_fact_at_depth(
+        &self,
+        initialization_index: usize,
+        replacement_depth: usize,
+    ) -> Option<RuntimeLoanFact> {
+        if replacement_depth >= self.effect_count {
+            return None;
+        }
+        let destination_generation = self
+            .initializations
+            .get(initialization_index)
+            .and_then(|initialization| *initialization)?;
+        let destination = self
+            .move_paths
+            .get(destination_generation.path.0)
+            .and_then(|path| *path)?;
+        let RuntimePlaceIdentity::Local(borrower) = destination.base else {
+            return None;
+        };
+        if destination.projections != RuntimePlaceProjections::EMPTY
+            || !matches!(destination.ty, RuntimeExpressionType::Reference { .. })
+        {
+            return None;
+        }
+        let (move_effect, moved) = self.effects[..self.effect_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .find(|(_, effect)| {
+                effect.kind == RuntimePlaceEffectKind::Move
+                    && effect.event.0.checked_add(1) == Some(destination_generation.event.0)
+                    && effect.location == destination_generation.location
+                    && effect.expression_path == destination_generation.expression_path
+                    && effect.expression_conditional
+                        == destination_generation.expression_conditional
+            })?;
+        let field = self.move_paths.get(moved.path.0).and_then(|path| *path)?;
+        if !matches!(
+            field.projections,
+            RuntimePlaceProjections {
+                items: [
+                    Some(RuntimePlaceProjection::TupleField(_)),
+                    None,
+                    None,
+                    None,
+                ],
+                count: 1,
+            }
+        ) || !matches!(field.ty, RuntimeExpressionType::Reference { .. })
+        {
+            return None;
+        }
+        let latest_write = self.effects[..self.effect_count]
+            .iter()
+            .flatten()
+            .filter(|effect| {
+                effect.path == moved.path
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.event.0 < moved.event.0
+            })
+            .max_by_key(|effect| effect.event.0)?;
+        let mut before = latest_write.event;
+        let mut origin = None;
+        for depth in 0..=replacement_depth {
+            let candidate = self
+                .direct_tuple_field_assigned_loan_origin_before(moved.path, before)
+                .or_else(|| self.direct_tuple_field_loan_origin_before(moved.path, before))
+                .or_else(|| self.direct_tuple_field_value_origin_before(moved.path, before))?;
+            if depth == replacement_depth {
+                origin = Some(candidate);
+                break;
+            }
+            before = candidate.generation_event;
+        }
+        let origin = origin?;
+        Some(RuntimeLoanFact {
+            id: RuntimeLoanId(
+                MAX_RUNTIME_INITIALIZATION_FACTS
+                    + 2 * MAX_RUNTIME_PLACE_EFFECT_FACTS
+                    + MAX_RUNTIME_INITIALIZATION_FACTS * MAX_RUNTIME_PLACE_EFFECT_FACTS
+                    + replacement_depth.checked_mul(MAX_RUNTIME_INITIALIZATION_FACTS)?
+                    + initialization_index,
+            ),
+            borrower,
+            borrowed_path: origin.borrowed_path,
+            kind: origin.kind,
+            issue_effect: move_effect,
+            generation_event: destination_generation.event,
+        })
+    }
+
     fn direct_loan_for_borrower_before(
         &self,
         borrower: RuntimeLocalId,
@@ -4532,6 +4648,11 @@ impl<'source> RuntimeBodyFacts<'source> {
             .chain((0..self.initialization_count).flat_map(|move_depth| {
                 (0..self.effect_count).filter_map(move |index| {
                     self.moved_expression_loan_fact_at_depth(index, move_depth)
+                })
+            }))
+            .chain((0..self.effect_count).flat_map(|replacement_depth| {
+                (0..self.initialization_count).filter_map(move |index| {
+                    self.moved_replaced_projected_loan_fact_at_depth(index, replacement_depth)
                 })
             }))
             .filter(|loan| loan.borrower == borrower && loan.generation_event.0 < before.0)
@@ -4701,7 +4822,11 @@ impl<'source> RuntimeBodyFacts<'source> {
                         .find(|effect| effect.event == loan.generation_event)
                         .map(|effect| (effect.event, effect.location))
                 })
-        } else {
+        } else if loan.id.0
+            < MAX_RUNTIME_INITIALIZATION_FACTS
+                + 2 * MAX_RUNTIME_PLACE_EFFECT_FACTS
+                + MAX_RUNTIME_INITIALIZATION_FACTS * MAX_RUNTIME_PLACE_EFFECT_FACTS
+        {
             let moved_index = loan.id.0.checked_sub(
                 MAX_RUNTIME_INITIALIZATION_FACTS + 2 * MAX_RUNTIME_PLACE_EFFECT_FACTS,
             )?;
@@ -4712,6 +4837,24 @@ impl<'source> RuntimeBodyFacts<'source> {
                 .iter()
                 .flatten()
                 .find(|initialization| initialization.event == derived.generation_event)?;
+            (derived.generation_event == loan.generation_event)
+                .then_some((generation.event, generation.location))
+        } else {
+            let replaced_index = loan.id.0.checked_sub(
+                MAX_RUNTIME_INITIALIZATION_FACTS
+                    + 2 * MAX_RUNTIME_PLACE_EFFECT_FACTS
+                    + MAX_RUNTIME_INITIALIZATION_FACTS * MAX_RUNTIME_PLACE_EFFECT_FACTS,
+            )?;
+            let replacement_depth = replaced_index / MAX_RUNTIME_INITIALIZATION_FACTS;
+            let initialization_index = replaced_index % MAX_RUNTIME_INITIALIZATION_FACTS;
+            let derived = self.moved_replaced_projected_loan_fact_at_depth(
+                initialization_index,
+                replacement_depth,
+            )?;
+            let generation = self
+                .initializations
+                .get(initialization_index)
+                .and_then(|generation| *generation)?;
             (derived.generation_event == loan.generation_event)
                 .then_some((generation.event, generation.location))
         }
@@ -7013,30 +7156,32 @@ fn preanalyze_runtime_assignment_reads<
     } else {
         RuntimeReadEffectContext::Move
     };
-    let expression_reference_generation = if assignment.projection.is_none()
-        && assignment.operator == crate::AssignmentOperator::Assign
-        && matches!(ty, RuntimeExpressionType::Reference { .. })
-        && (matches!(
-            tree.expression(tree.root())
-                .map(|expression| expression.kind),
-            Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
-        )
-            || runtime_expression_reference_call_origin::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
-                resolver,
-                &tree,
-                tree.root(),
-            )
+    let expression_reference_generation =
+        if matches!(
+            assignment.projection,
+            None | Some(crate::parser::AssignmentProjection::TupleField { .. })
+        ) && assignment.operator == crate::AssignmentOperator::Assign
+            && matches!(ty, RuntimeExpressionType::Reference { .. })
+            && (matches!(
+                tree.expression(tree.root())
+                    .map(|expression| expression.kind),
+                Some(ExprKind::If { .. } | ExprKind::LoopBreakIf { .. })
+            ) || runtime_expression_reference_call_origin::<
+                R,
+                MAX_PARAMETERS,
+                MAX_EXPRESSION_NODES,
+            >(resolver, &tree, tree.root())
             .is_some())
-    {
-        resolve_runtime_assignment_place(function, locals, assignment)
-            .ok()
-            .and_then(|target| match target.base {
-                RuntimePlaceBase::Local { id, .. } => Some(id),
-                RuntimePlaceBase::Parameter { .. } => None,
-            })
-    } else {
-        None
-    };
+        {
+            resolve_runtime_assignment_place(function, locals, assignment)
+                .ok()
+                .and_then(|target| match target.base {
+                    RuntimePlaceBase::Local { id, .. } => Some(id),
+                    RuntimePlaceBase::Parameter { .. } => None,
+                })
+        } else {
+            None
+        };
     facts.pending_loan_generation_borrower = expression_reference_generation;
     let result = preanalyze_runtime_expression_at_reads_with_tuple(
         facts,
@@ -10853,6 +10998,11 @@ fn runtime_specific_loan_is_active_at_effect(
                 facts.moved_expression_loan_fact_at_depth(index, move_depth)
             })
         }))
+        .chain((0..facts.effect_count).flat_map(|replacement_depth| {
+            (0..facts.initialization_count).filter_map(move |index| {
+                facts.moved_replaced_projected_loan_fact_at_depth(index, replacement_depth)
+            })
+        }))
         .filter(|replacement| {
             replacement.borrower == loan.borrower
                 && replacement.generation_event != loan.generation_event
@@ -10927,6 +11077,11 @@ fn runtime_effect_reaches_specific_loan_use(
         .chain((0..facts.initialization_count).flat_map(|move_depth| {
             (0..facts.effect_count).filter_map(move |index| {
                 facts.moved_expression_loan_fact_at_depth(index, move_depth)
+            })
+        }))
+        .chain((0..facts.effect_count).flat_map(|replacement_depth| {
+            (0..facts.initialization_count).filter_map(move |index| {
+                facts.moved_replaced_projected_loan_fact_at_depth(index, replacement_depth)
             })
         }))
         .filter(|replacement| {
@@ -11014,6 +11169,11 @@ fn runtime_loan_may_borrow_path(
                 facts.moved_expression_loan_fact_at_depth(index, move_depth)
             })
         }))
+        .chain((0..facts.effect_count).flat_map(|replacement_depth| {
+            (0..facts.initialization_count).filter_map(move |index| {
+                facts.moved_replaced_projected_loan_fact_at_depth(index, replacement_depth)
+            })
+        }))
         .filter(|parent| {
             parent.borrower == parent_borrower
                 && runtime_specific_loan_is_active_at_effect(facts, *parent, issue)
@@ -11062,6 +11222,12 @@ fn validate_runtime_bounded_direct_loan_liveness(
                 .checked_mul(facts.effect_count)
                 .and_then(|moved| count.checked_add(moved))
         })
+        .and_then(|count| {
+            facts
+                .initialization_count
+                .checked_mul(facts.effect_count)
+                .and_then(|replaced| count.checked_add(replaced))
+        })
         .ok_or(CodegenError {
             kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
             span: fallback_span,
@@ -11070,17 +11236,27 @@ fn validate_runtime_bounded_direct_loan_liveness(
         let assigned_start = facts.initialization_count;
         let expression_start = assigned_start + facts.effect_count;
         let moved_expression_start = expression_start + facts.effect_count;
+        let replaced_projected_start =
+            moved_expression_start + facts.initialization_count * facts.effect_count;
         let loan = if generation_index < assigned_start {
             facts.direct_loan_fact(generation_index)
         } else if generation_index < expression_start {
             facts.direct_assigned_loan_fact(generation_index - assigned_start)
         } else if generation_index < moved_expression_start {
             facts.direct_expression_loan_fact(generation_index - expression_start)
-        } else {
+        } else if generation_index < replaced_projected_start {
             let moved_index = generation_index - moved_expression_start;
             let move_depth = moved_index / facts.effect_count;
             let effect_index = moved_index % facts.effect_count;
             facts.moved_expression_loan_fact_at_depth(effect_index, move_depth)
+        } else {
+            let replaced_index = generation_index - replaced_projected_start;
+            let replacement_depth = replaced_index / facts.initialization_count;
+            let initialization_index = replaced_index % facts.initialization_count;
+            facts.moved_replaced_projected_loan_fact_at_depth(
+                initialization_index,
+                replacement_depth,
+            )
         };
         let Some(loan) = loan else {
             continue;
@@ -11128,6 +11304,11 @@ fn validate_runtime_bounded_direct_loan_liveness(
             .chain((0..facts.initialization_count).flat_map(|move_depth| {
                 (0..facts.effect_count).filter_map(move |index| {
                     facts.moved_expression_loan_fact_at_depth(index, move_depth)
+                })
+            }))
+            .chain((0..facts.effect_count).flat_map(|replacement_depth| {
+                (0..facts.initialization_count).filter_map(move |index| {
+                    facts.moved_replaced_projected_loan_fact_at_depth(index, replacement_depth)
                 })
             }))
             .filter(|parent| {
@@ -11355,6 +11536,11 @@ fn runtime_path_outlives_function_at_effect(
                 .chain((0..facts.initialization_count).flat_map(|move_depth| {
                     (0..facts.effect_count).filter_map(move |index| {
                         facts.moved_expression_loan_fact_at_depth(index, move_depth)
+                    })
+                }))
+                .chain((0..facts.effect_count).flat_map(|replacement_depth| {
+                    (0..facts.initialization_count).filter_map(move |index| {
+                        facts.moved_replaced_projected_loan_fact_at_depth(index, replacement_depth)
                     })
                 }))
                 .filter(|loan| {
@@ -29235,11 +29421,14 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &mut u16 = &mut *moved; slot += 1; *child }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut holder = (&mut first,); holder.0 = &mut second; let moved = holder.0; let child: &u16 = &*moved; second += 1; *child }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut holder = (&mut first,); holder.0 = &mut second; let moved = holder.0; let child: &mut u16 = &mut *moved; second += 1; *child }",
+            "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; second += 1; *child }",
+            "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; third += 1; *child }",
+            "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; first += 1; *child }",
         ] {
-            assert_eq!(
-                analyze(rejected).unwrap_err().kind,
-                CodegenErrorKind::RuntimeBorrowConflict
-            );
+            match analyze(rejected) {
+                Err(error) => assert_eq!(error.kind, CodegenErrorKind::RuntimeBorrowConflict),
+                Ok(_) => panic!("expected borrow conflict: {rejected}"),
+            }
         }
 
         for accepted in [
@@ -29249,6 +29438,8 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &u16 = &*moved; let copied = *child; slot += 1; copied + slot }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut unrelated = input + 2; let mut holder = (&mut first,); holder.0 = &mut second; let moved = holder.0; let child: &u16 = &*moved; unrelated += 1; *child + unrelated }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut holder = (&mut first,); holder.0 = &mut second; let moved = holder.0; let child: &u16 = &*moved; let copied = *child; second += 1; copied + second }",
+            "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut unrelated = input + 3; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; unrelated += 1; *child + unrelated }",
+            "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; let copied = *child; second += 1; third += 1; copied + second + third }",
         ] {
             analyze(accepted).unwrap();
         }

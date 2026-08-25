@@ -540,6 +540,16 @@ from a Windows-only run.
 
 ## Current oracle verification
 
+The conditional projected-reassignment milestone preserves bounded ancestry for
+both owners of a supported conditional reference RHS and for the tuple field's
+replaced initialization owner. ORACLE-0002 rejects live-child mutation of each
+possible owner with E0503, accepts unrelated mutation, and accepts both branch-
+owner mutations after the child's last use. The MRML native frontend passed 420
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests on Windows gnullvm and native Arch Linux WSL: 766 compiler
+tests per host. The unchanged driver and warnings-denied Clippy were not
+re-executed for this milestone.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
