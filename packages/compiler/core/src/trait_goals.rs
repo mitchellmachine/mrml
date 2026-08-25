@@ -330,6 +330,48 @@ impl ForAllImplementedTraitGoal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExistsImplementedTraitGoal {
+    parameter_count: usize,
+    pub goal: BoundImplementedTraitGoal,
+}
+
+impl ExistsImplementedTraitGoal {
+    pub fn new(
+        parameter_count: usize,
+        goal: BoundImplementedTraitGoal,
+    ) -> Result<Self, TraitGoalError> {
+        if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        validate_bound_goal(goal, parameter_count)?;
+        Ok(Self {
+            parameter_count,
+            goal,
+        })
+    }
+
+    pub const fn parameter_count(self) -> usize {
+        self.parameter_count
+    }
+
+    pub fn instantiate_in_universe(
+        self,
+        universe: TraitUniverseIndex,
+    ) -> Result<ImplementedTraitGoal, TraitGoalError> {
+        let mut arguments =
+            [TraitGoalType::InferenceVariable(TraitInferenceVariableId::in_universe(universe, 0));
+                MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments[..self.parameter_count].iter_mut().enumerate() {
+            *argument = TraitGoalType::InferenceVariable(TraitInferenceVariableId::in_universe(
+                universe,
+                index as u32,
+            ));
+        }
+        instantiate_bound_goal(self.goal, &arguments[..self.parameter_count])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstantiatedTraitWhereClause {
     pub consequence: ImplementedTraitGoal,
     pub premises: ImplementedTraitPredicates,
@@ -2149,6 +2191,19 @@ pub enum TraitGoalSolution {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExistentialTraitGoalAnswer {
+    pub implementation_id: TraitImplementationId,
+    pub substitution: TraitGoalSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExistentialTraitGoalSolution {
+    Unique(ExistentialTraitGoalAnswer),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraitImplementationDatabase {
     implementations: [Option<TraitImplementationHeader>; MAX_TRAIT_IMPLEMENTATIONS],
     implementation_count: usize,
@@ -2243,6 +2298,27 @@ impl TraitImplementationDatabase {
             .iter()
             .flatten()
             .any(|implementation| implementation.id == id)
+    }
+}
+
+pub fn solve_exists_trait_goal_exact(
+    implementations: &TraitImplementationDatabase,
+    universe: TraitUniverseIndex,
+    goal: ExistsImplementedTraitGoal,
+) -> Result<ExistentialTraitGoalSolution, TraitGoalError> {
+    let instantiated = goal.instantiate_in_universe(universe)?;
+    let canonicalized = canonicalize_implemented_trait_goal_with_variables(instantiated)?;
+    match implementations.solve(canonicalized.goal) {
+        TraitGoalSolution::Unique(answer) => Ok(ExistentialTraitGoalSolution::Unique(
+            ExistentialTraitGoalAnswer {
+                implementation_id: answer.implementation_id,
+                substitution: answer
+                    .substitute(canonicalized)
+                    .ok_or(TraitGoalError::InvalidGoal)?,
+            },
+        )),
+        TraitGoalSolution::Ambiguous => Ok(ExistentialTraitGoalSolution::Ambiguous),
+        TraitGoalSolution::NoSolution => Ok(ExistentialTraitGoalSolution::NoSolution),
     }
 }
 
@@ -3691,6 +3767,142 @@ mod tests {
                 1,
                 BoundImplementedTraitGoal::new(
                     TraitId::new(340),
+                    BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+                ),
+            ),
+            Err(TraitGoalError::UnboundGenericParameter)
+        );
+    }
+
+    #[test]
+    fn existential_goal_recovers_universe_aware_bindings() {
+        let mut implementation = TraitImplementationHeader::new(
+            TraitImplementationId::new(51),
+            TraitId::new(350),
+            TraitTypeId::new(10),
+        );
+        implementation.push_argument(TraitTypeId::new(20)).unwrap();
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        implementations.insert(implementation).unwrap();
+        let mut goal = BoundImplementedTraitGoal::new(
+            TraitId::new(350),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+        );
+        goal.push_argument(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+            1,
+        )))
+        .unwrap();
+        let goal = ExistsImplementedTraitGoal::new(2, goal).unwrap();
+        let ExistentialTraitGoalSolution::Unique(answer) =
+            solve_exists_trait_goal_exact(&implementations, TraitUniverseIndex::new(7), goal)
+                .unwrap()
+        else {
+            panic!("expected one existential answer");
+        };
+        assert_eq!(answer.implementation_id, TraitImplementationId::new(51));
+        assert_eq!(
+            answer.substitution.bindings(),
+            [
+                Some(TraitInferenceBinding {
+                    variable: TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(7), 0,),
+                    concrete_type: TraitTypeId::new(10),
+                }),
+                Some(TraitInferenceBinding {
+                    variable: TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(7), 1,),
+                    concrete_type: TraitTypeId::new(20),
+                }),
+            ]
+        );
+        assert_eq!(goal.parameter_count(), 2);
+    }
+
+    #[test]
+    fn existential_goal_enforces_repeated_variables() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut goal = BoundImplementedTraitGoal::new(
+            TraitId::new(351),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        goal.push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let goal = ExistsImplementedTraitGoal::new(1, goal).unwrap();
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        let mut unequal = TraitImplementationHeader::new(
+            TraitImplementationId::new(1),
+            TraitId::new(351),
+            TraitTypeId::new(10),
+        );
+        unequal.push_argument(TraitTypeId::new(20)).unwrap();
+        implementations.insert(unequal).unwrap();
+        assert_eq!(
+            solve_exists_trait_goal_exact(&implementations, TraitUniverseIndex::ROOT, goal),
+            Ok(ExistentialTraitGoalSolution::NoSolution)
+        );
+        let mut equal = TraitImplementationHeader::new(
+            TraitImplementationId::new(2),
+            TraitId::new(351),
+            TraitTypeId::new(30),
+        );
+        equal.push_argument(TraitTypeId::new(30)).unwrap();
+        implementations.insert(equal).unwrap();
+        let ExistentialTraitGoalSolution::Unique(answer) =
+            solve_exists_trait_goal_exact(&implementations, TraitUniverseIndex::ROOT, goal)
+                .unwrap()
+        else {
+            panic!("expected the equal exact header");
+        };
+        assert_eq!(
+            answer
+                .substitution
+                .binding(TraitInferenceVariableId::new(0)),
+            Some(TraitTypeId::new(30))
+        );
+    }
+
+    #[test]
+    fn existential_goal_preserves_ambiguity_and_rejects_invalid_binders() {
+        let goal = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(352),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        for (id, ty) in [(1, 10), (2, 20)] {
+            implementations
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(id),
+                    TraitId::new(352),
+                    TraitTypeId::new(ty),
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            solve_exists_trait_goal_exact(&implementations, TraitUniverseIndex::new(2), goal),
+            Ok(ExistentialTraitGoalSolution::Ambiguous)
+        );
+        assert_eq!(
+            solve_exists_trait_goal_exact(
+                &implementations,
+                TraitUniverseIndex::new(2),
+                ExistsImplementedTraitGoal::new(
+                    0,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(353),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(1)),
+                    ),
+                )
+                .unwrap(),
+            ),
+            Ok(ExistentialTraitGoalSolution::NoSolution)
+        );
+        assert_eq!(
+            ExistsImplementedTraitGoal::new(
+                1,
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(352),
                     BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
                 ),
             ),

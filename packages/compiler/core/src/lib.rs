@@ -61,7 +61,8 @@ pub use semantics::{
 pub use trait_goals::{
     BoundImplementedTraitGoal, BoundTraitGoalType, BoundTraitProjection,
     CanonicalImplementedTraitGoal, CanonicalTraitGoalType, CanonicalizedImplementedTraitGoal,
-    CanonicalizedImplementedTraitPredicates, ForAllImplementedTraitGoal,
+    CanonicalizedImplementedTraitPredicates, ExistentialTraitGoalAnswer,
+    ExistentialTraitGoalSolution, ExistsImplementedTraitGoal, ForAllImplementedTraitGoal,
     GenericTraitAssociatedTypeDatabase, GenericTraitAssociatedTypeTerm,
     GenericTraitAssociatedTypeValue, GenericTraitImplementationAnswer,
     GenericTraitImplementationDatabase, GenericTraitImplementationId,
@@ -81,6 +82,6 @@ pub use trait_goals::{
     canonicalize_implemented_trait_predicates, generic_trait_implementation_heads_overlap,
     generic_trait_implementation_overlaps_exact, normalize_concrete_trait_projection,
     solve_concrete_trait_goal, solve_concrete_trait_goal_with_generics,
-    solve_for_all_trait_goal_with_generics, solve_rigid_trait_goal,
+    solve_exists_trait_goal_exact, solve_for_all_trait_goal_with_generics, solve_rigid_trait_goal,
     solve_rigid_trait_goal_with_generics,
 };

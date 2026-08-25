@@ -4068,8 +4068,19 @@ instantiated goal through rigid generic solving. Invalid indices and universe
 exhaustion fail explicitly; unconstrained implementation parameters remain
 ambiguous. Windows gnullvm and native Arch Linux WSL each pass 483 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
-829 compiler tests per host. Nested binders, existential goals, leak-aware answer
-inversion, mixed inference, `for<...>` source syntax, and mixed inference
+829 compiler tests per host. Nested binders, leak-aware answer inversion, mixed
+generic inference, `for<...>` source syntax, and mixed inference selection remain
+unsupported.
+
+The exact existential trait-goal milestone binds at most eight parameters as
+inference variables in a caller-selected universe. Canonical exact selection
+restores a unique answer as substitutions keyed to the original identities;
+repeated parameters enforce equality, and ambiguity/no solution remain explicit.
+Invalid binder indices fail at construction. Windows gnullvm and native Arch
+Linux WSL each pass 486 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 832 compiler tests per host.
+Generic inference candidates, inferred premise proof, projection composition,
+universal answer inversion, source existential syntax, and mixed inference
 selection remain unsupported.
 
 The nested conditional tuple-origin milestone walks each leaf's bounded

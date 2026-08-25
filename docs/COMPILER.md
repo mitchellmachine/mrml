@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, explicit bounded universal binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises. Exact and generic associated values normalize bounded concrete projections after implementation proof; generic values may recursively project through a separate 16-frame visited stack. A coherent 64-entry generic-implementation table rejects flat-head overlap, selects one stable implementation for concrete or rigid queries, and recursively proves instantiated premises while preserving placeholder universes. Symmetric admission checks reject exact/generic overlap in either insertion order. There is no trait syntax, mixed inference solving, general higher-ranked search, projection-bearing type terms or premises, premise-aware coherence, specialization, general answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, explicit bounded universal/existential binders, and rigid placeholders. Exact existential goals recover universe-aware substitutions from exact implementation selection. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises. Exact and generic associated values normalize bounded concrete projections after implementation proof; generic values may recursively project through a separate 16-frame visited stack. A coherent 64-entry generic-implementation table rejects flat-head overlap, selects one stable implementation for concrete or rigid queries, and recursively proves instantiated premises while preserving placeholder universes. Symmetric admission checks reject exact/generic overlap in either insertion order. There is no trait syntax, mixed generic inference solving, general higher-ranked search, projection-bearing type terms or premises, premise-aware coherence, specialization, general answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -928,8 +928,15 @@ distinct rigid placeholders in that checked fresh universe, and sends the
 skolemized goal through rigid generic proof. Invalid bound indices and universe
 exhaustion fail explicitly; unconstrained implementation parameters preserve
 ambiguity. This is one bounded universal-goal introduction rule, not nested
-binders, existential goals, leak-aware answer inversion, or `for<...>` source
-integration.
+binders, leak-aware answer inversion, or `for<...>` source integration.
+
+Standalone existential implemented-trait goals bind up to eight parameters as
+universe-aware inference variables. Exact implementation selection canonicalizes
+their first occurrences and restores a unique answer as substitutions keyed to
+the original variable identities. Repeated parameters enforce equality; zero,
+one, and multiple matching exact headers remain no-solution, unique, and
+ambiguous. This does not yet search generic implementations, prove inferred
+premises, compose projections, or invert answers across a universal binder.
 
 Rigid clause elaboration accepts goals containing only concrete types and rigid
 placeholders. Bound parameters may match either term, repeated parameters require
