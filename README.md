@@ -372,6 +372,12 @@ cross-builds for `x86_64-unknown-none`, and passes all 121 tests in its declared
 native and 18 remain transitional; this is cross-build and hosted-test evidence,
 not native-storage or physical-device execution.
 
+`mrml-config` now directly consumes the native crypto-core, kernel, and storage
+artifacts. Windows and Arch Linux WSL2 cross-build it for
+`x86_64-unknown-none` and pass all 31 tests in its approved host projection.
+Twenty-five components are native and 17 remain transitional; no signed service
+runtime, target execution, or physical-hardware verification is implied.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

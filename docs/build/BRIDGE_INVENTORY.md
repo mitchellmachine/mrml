@@ -116,6 +116,11 @@ the kernel projection and crypto's `core` provider profile, cross-builds for
 `x86_64-unknown-none`, and passes all 121 tests on Windows and Arch Linux WSL2.
 Twenty-four components are native; 18 remain transitional.
 
+`mrml-config` directly binds crypto's `core` profile plus the native kernel and
+storage artifacts. Its `x86_64-unknown-none` cross-build and all 31 projected
+host tests pass on Windows and Arch Linux WSL2. Twenty-five components are
+native; 17 remain transitional.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

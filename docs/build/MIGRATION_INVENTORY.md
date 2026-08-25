@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-four
+  explicit. Twenty-five
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -754,6 +754,13 @@ dated toolchains, `mrml` unit tests, clippy, doctor, and audit pass; storage
 cross-builds for `x86_64-unknown-none` and its 64 MiB host harness passes all 121
 tests on Windows gnullvm and Arch Linux WSL2. Twenty-four components are native
 and 18 remain transitional. This is not physical-device or durability evidence.
+
+Configuration is the next dependency-ordered native action. It declares only
+crypto's empty `core` profile, kernel, and storage, matching its Cargo graph.
+Both exact dated host toolchains pass doctor/audit, cross-build the library for
+`x86_64-unknown-none`, and run all 31 projected host tests. Twenty-five
+components are native and 17 remain transitional; no signed service or target
+runtime was exercised.
 
 ## Next safe migration order
 

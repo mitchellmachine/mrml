@@ -231,6 +231,12 @@ host harness with 121 tests. Twenty-four of 42 components are native; 18 remain
 transitional. No physical storage, target execution, or durability evidence is
 claimed by this build migration.
 
+Configuration now has an exact native action over crypto's empty `core` profile,
+kernel, and storage. Both hosts cross-build it for `x86_64-unknown-none` and run
+all 31 tests through the declared host projection. Twenty-five of 42 components
+are native; 17 remain transitional. This does not establish signed-service,
+target-runtime, or physical-hardware execution.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.
