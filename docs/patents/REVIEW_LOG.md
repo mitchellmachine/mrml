@@ -4433,6 +4433,18 @@ queue, proxy, shared memory, mapping, task, supervision, update, or fallback
 mechanism. The preceding `TRIGGERED` lifecycle review remains controlling for
 actual WHP/KVM attachment and execution.
 
+# 2026-08-25 — Kernel component-launch identity handoff
+
+**Result: NOT_TRIGGERED within the reviewed lifecycle shape.** This increment
+copies the already selected consumer/provider digests, interface identity,
+generation/fingerprint, and provider generation beside the existing prepared
+isolation route. Mismatch returns the uncommitted route so the caller can record
+unavailability or cancel without publishing a running domain. It performs no
+artifact loading, mapping, task launch, IPC, shared-memory projection,
+supervision, provider selection, fallback, or transport operation. The bounded
+`TRIGGERED` lifecycle review remains controlling for backend attachment and
+execution.
+
 # 2026-08-25 — Flat symbolic generic-existential trait selection
 
 **Result: NOT_TRIGGERED.** This compiler-only increment uses fixed-size

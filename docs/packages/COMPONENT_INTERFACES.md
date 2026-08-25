@@ -523,7 +523,11 @@ registers bind an exact endpoint, provider task, shared-buffer capability, and
 provider generation while the interface request remains free of routing
 identity. A common launch admission now rejects either artifact when its exact
 package generation/digest differs from the immutable interface placement, so
-WHP and KVM do not independently select package bytes. Neither artifact has
+WHP and KVM do not independently select package bytes. A kernel-owned prepared
+launch handoff also retains both exact digests, interface fingerprint and
+generation, provider generation, and the still-uncommitted Total-mode route;
+any substitution returns that route for fail-closed unavailable/cancel
+handling. Neither artifact has
 been launched. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for hosted

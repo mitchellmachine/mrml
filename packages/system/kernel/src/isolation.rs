@@ -289,6 +289,82 @@ impl PreparedIsolationServiceRoute {
     }
 }
 
+/// One fail-closed handoff from exact interface/policy admission to a VMM
+/// backend. It owns the still-uncommitted route so attachment failure can be
+/// recorded or cancelled without ever publishing a running domain.
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedComponentServiceLaunch {
+    route: PreparedIsolationServiceRoute,
+    consumer_artifact: [u8; 64],
+    provider_artifact: [u8; 64],
+    interface_fingerprint: [u8; 32],
+}
+
+impl PreparedComponentServiceLaunch {
+    pub fn bind(
+        route: PreparedIsolationServiceRoute,
+        interface: ObjectId,
+        interface_generation: u32,
+        provider_generation: u64,
+        interface_fingerprint: [u8; 32],
+        consumer_artifact: [u8; 64],
+        provider_artifact: [u8; 64],
+    ) -> Result<Self, (PreparedIsolationServiceRoute, ComponentServiceLaunchError)> {
+        let spec = route.spec();
+        let error = if spec.interface() != interface
+            || spec.interface_generation() != interface_generation
+            || spec.provider_generation() != provider_generation
+        {
+            Some(ComponentServiceLaunchError::RouteIdentityMismatch)
+        } else if interface_fingerprint == [0; 32] {
+            Some(ComponentServiceLaunchError::InvalidInterfaceFingerprint)
+        } else if consumer_artifact == [0; 64] || provider_artifact == [0; 64] {
+            Some(ComponentServiceLaunchError::InvalidArtifactDigest)
+        } else if consumer_artifact == provider_artifact {
+            Some(ComponentServiceLaunchError::ArtifactSubstitution)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            return Err((route, error));
+        }
+        Ok(Self {
+            route,
+            consumer_artifact,
+            provider_artifact,
+            interface_fingerprint,
+        })
+    }
+
+    pub const fn spec(&self) -> IsolationServiceSpec {
+        self.route.spec()
+    }
+
+    pub const fn consumer_artifact(&self) -> &[u8; 64] {
+        &self.consumer_artifact
+    }
+
+    pub const fn provider_artifact(&self) -> &[u8; 64] {
+        &self.provider_artifact
+    }
+
+    pub const fn interface_fingerprint(&self) -> &[u8; 32] {
+        &self.interface_fingerprint
+    }
+
+    pub fn into_route(self) -> PreparedIsolationServiceRoute {
+        self.route
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceLaunchError {
+    RouteIdentityMismatch,
+    InvalidInterfaceFingerprint,
+    InvalidArtifactDigest,
+    ArtifactSubstitution,
+}
+
 pub fn prepare_isolation_service_route<const DOMAINS: usize>(
     admission: &mut IsolationAdmissionTable<DOMAINS>,
     spec: IsolationServiceSpec,
@@ -1108,6 +1184,80 @@ mod tests {
         assert_eq!(routed.provider_generation(), spec.provider_generation());
         assert_eq!(routed.placement(), IsolationPlacement::Microvm);
         assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn component_launch_retains_exact_two_artifact_route_until_commit() {
+        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let route = prepare_isolation_service_route(&mut table, spec).unwrap();
+        let launch = PreparedComponentServiceLaunch::bind(
+            route,
+            spec.interface(),
+            spec.interface_generation(),
+            spec.provider_generation(),
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(launch.spec(), spec);
+        assert_eq!(launch.interface_fingerprint(), &[0x3a; 32]);
+        assert_eq!(launch.consumer_artifact(), &[0x18; 64]);
+        assert_eq!(launch.provider_artifact(), &[0x2f; 64]);
+        assert_eq!(table.running().count(), 0);
+        launch.into_route().commit(&mut table, 0x55aa_u64).unwrap();
+        assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn component_launch_substitution_returns_uncommitted_route_for_failure_handling() {
+        for expected in [
+            ComponentServiceLaunchError::RouteIdentityMismatch,
+            ComponentServiceLaunchError::InvalidInterfaceFingerprint,
+            ComponentServiceLaunchError::InvalidArtifactDigest,
+            ComponentServiceLaunchError::ArtifactSubstitution,
+        ] {
+            let mut table =
+                IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+            let spec = service_spec(IsolationPlacement::Microvm);
+            let route = prepare_isolation_service_route(&mut table, spec).unwrap();
+            let (interface, fingerprint, consumer, provider) = match expected {
+                ComponentServiceLaunchError::RouteIdentityMismatch => (
+                    ObjectId(spec.interface().0 + 1),
+                    [0x3a; 32],
+                    [0x18; 64],
+                    [0x2f; 64],
+                ),
+                ComponentServiceLaunchError::InvalidInterfaceFingerprint => {
+                    (spec.interface(), [0; 32], [0x18; 64], [0x2f; 64])
+                }
+                ComponentServiceLaunchError::InvalidArtifactDigest => {
+                    (spec.interface(), [0x3a; 32], [0; 64], [0x2f; 64])
+                }
+                ComponentServiceLaunchError::ArtifactSubstitution => {
+                    (spec.interface(), [0x3a; 32], [0x2f; 64], [0x2f; 64])
+                }
+            };
+            let (route, error) = PreparedComponentServiceLaunch::bind(
+                route,
+                interface,
+                spec.interface_generation(),
+                spec.provider_generation(),
+                fingerprint,
+                consumer,
+                provider,
+            )
+            .unwrap_err();
+            assert_eq!(error, expected);
+            assert_eq!(table.running().count(), 0);
+            route
+                .unavailable(&mut table, IsolationUnavailableReason::InterfaceTransport)
+                .unwrap();
+            assert_eq!(table.running().count(), 0);
+            assert_eq!(table.unavailable_domains().count(), 1);
+            assert!(table.total_microvm_report().satisfied());
+        }
     }
 
     #[test]

@@ -86,7 +86,12 @@ plus a no-delete retention/inspection decision model. The committed service
 route now retains exact domain, interface, provider, policy, class, and placement
 identity, and the Zstd adapter consumes that route only when it matches an exact
 resolver/policy binding. This is a binding prerequisite, not an operating
-resolver connection. A standalone `org.mrml.zstd` MRML-target service binary now
+resolver connection. The kernel now retains the prepared fail-closed isolation
+route, exact consumer/provider artifact digests, interface identity/fingerprint,
+and provider generation in one typed component-launch handoff; substitution
+returns the still-uncommitted route for unavailable/cancel handling. Backend
+artifact comparison and launch remain incomplete. A standalone `org.mrml.zstd`
+MRML-target service binary now
 maps the service loop to the existing receive, shared-read/write, release, and
 send traps. Its allocation-free target floor decodes raw/RLE frames in one
 private 4 KiB scratch page and rejects entropy-coded blocks until their bounded

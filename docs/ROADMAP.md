@@ -187,6 +187,10 @@ A backend-neutral control-plane admission now binds those two immutable load
 plans to the exact generation/interface placement and rejects either package
 generation mismatch before backend launch. WHP/KVM attachment and execution
 remain **PLANNED**.
+The kernel-side prepared launch handoff now carries the same two digests plus
+the exact interface fingerprint/generation and provider generation while
+retaining the uncommitted fail-closed isolation route. Backend verification of
+those digests and actual attachment remain **PLANNED**.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,
