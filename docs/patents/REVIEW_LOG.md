@@ -1,5 +1,12 @@
 # Patent review log
 
+## 2026-08-25 — UEFI trust and network administration architecture
+
+**Result: TRIGGERED.** Planned typed firmware/Secure Boot transactions, trust-set
+composition and rollback, network candidate configuration, Wi-Fi privacy,
+Bluetooth profile mediation, and lifecycle recovery require claim-focused
+worldwide review before implementation. Documentation grants no clearance.
+
 ## 2026-08-25 — Bootstrap build and packaging toolchain architecture
 
 **Result: TRIGGERED.** The planned frontend composes canonical package/release/

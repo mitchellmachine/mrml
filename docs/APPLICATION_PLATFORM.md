@@ -322,6 +322,12 @@ capabilities.
 
 ## Authority and security UX
 
+The planned Network & Devices settings frontend uses the exact typed services in
+[network/NETWORK_ADMINISTRATION.md](network/NETWORK_ADMINISTRATION.md). GUI,
+shell, accessibility, automation, and AI differ in presentation/capability scope,
+not configuration semantics; none receives secrets or raw network authority by
+identity.
+
 The native terminal, object-oriented administration shell, Store, deployment
 service, and text/GUI installer follow [DEPLOYMENT.md](DEPLOYMENT.md). Semantic
 objects—not rendered text or pixels—cross administration interfaces. The GUI is

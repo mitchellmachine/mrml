@@ -177,6 +177,12 @@ slot reuse, capacity loss, or registration failure drops the recovery result.
 
 ## Persistent state and boot
 
+Firmware mutation and Secure Boot policy follow
+[platform/UEFI_BOOT_MANAGEMENT.md](platform/UEFI_BOOT_MANAGEMENT.md): typed
+generational transactions, re-read verification, owner-controlled keys,
+SecretObject use/export separation, versioned Windows/Option-ROM compatibility,
+monotonic revocations, dual-boot preservation, and physical evidence gates.
+
 Package/update/deployment security follows [DEPLOYMENT.md](DEPLOYMENT.md): UEFI
 authentication and MRML release authentication are separate; GitHub is transport,
 not trust; individually valid packages do not form a release automatically;

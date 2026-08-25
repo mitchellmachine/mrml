@@ -25,6 +25,16 @@ Its first end-to-end acceptance target is the same signed image and text install
 creating and independently booting generation 1 on supported KVM and WHP. Physical
 UEFI/NVMe/power-cut work is a later, separately evidenced gate.
 
+Within existing boot/deployment phases, add typed UEFI objects, verified installer
+entry creation, shell boot administration, owner/compatibility/dbx policy, then
+physical firmware tests per
+[UEFI_BOOT_MANAGEMENT.md](platform/UEFI_BOOT_MANAGEMENT.md). Within existing
+service/device phases, add typed Ethernet, Wi-Fi, Bluetooth, persistent secret-
+referencing profiles, shell operations, semantic Network & Devices, installer/
+recovery reuse, and power integration per
+[NETWORK_ADMINISTRATION.md](network/NETWORK_ADMINISTRATION.md). These are not new
+mega-phases and do not displace the current gate.
+
 The modern x86-64 platform lane is defined in
 [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Do not begin its broad
 implementation ahead of the current foundational dependency gate. When reached,

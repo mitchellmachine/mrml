@@ -99,6 +99,16 @@ explicitly and downgrade the status rather than guessing.
 
 ## 3. Inspect the implementation map
 
+- UEFI boot entry/order/next and Secure Boot owner/compatibility/revocation
+  direction: `docs/platform/UEFI_BOOT_MANAGEMENT.md`. Preserve Windows entries,
+  normal Option ROM trust, SecretObject key rules, re-read verification, and exact
+  physical-evidence labels.
+- Ethernet/Wi-Fi/Bluetooth shell/GUI/service direction:
+  `docs/network/NETWORK_ADMINISTRATION.md`. Preserve configuration/connection/raw
+  authority separation, secret non-exportability, one shared semantic API, offline
+  install/recovery, and crash containment. These features remain planned absent
+  exact code and focused evidence.
+
 - Build/package orchestration: `docs/build/BUILD_SYSTEM.md`. Recover the planned
   `mrml` frontend, pinned upstream production bootstrap, explicit compiler modes
   without fallback, profile-specific promotion, EFI export then bootloader

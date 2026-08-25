@@ -83,6 +83,10 @@ selected only after exact release, profile, digest, and feature validation.
 
 ## Conventional UEFI bootstrap
 
+Typed NVRAM entry/order/next administration, installer entry creation, dual-boot
+preservation, and owner Secure Boot compatibility policy are canonical in
+[platform/UEFI_BOOT_MANAGEMENT.md](platform/UEFI_BOOT_MANAGEMENT.md).
+
 > UEFI loads one conventional EFI application; that application is MRML's
 > package-aware secure loader.
 
@@ -212,6 +216,10 @@ installer” authority is insufficient. Revalidation before commit rejects devic
 replacement, changed layout, stale plan, ambiguity, or partial cleanup.
 
 ## InstallPlan and installers
+
+Optional installer Ethernet/Wi-Fi configuration reuses the services in
+[network/NETWORK_ADMINISTRATION.md](network/NETWORK_ADMINISTRATION.md); offline
+installation remains complete.
 
 A declarative `InstallPlan` contains target disk, layout, architecture, profile,
 exact `SystemRelease`, package selections, boot configuration, owner trust

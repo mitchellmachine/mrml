@@ -172,6 +172,12 @@ domain identity accompanies untrusted content in every interface.
 
 ## VMs, browser, media, boot, and recovery
 
+Boot/security settings and network/device configuration use the semantic typed
+objects in [platform/UEFI_BOOT_MANAGEMENT.md](platform/UEFI_BOOT_MANAGEMENT.md)
+and [network/NETWORK_ADMINISTRATION.md](network/NETWORK_ADMINISTRATION.md).
+Essential entry/order/trust, Ethernet, Wi-Fi, Bluetooth, pairing, and secret-
+input workflows cannot depend on visual-only UI.
+
 Installation and offline servicing follow [DEPLOYMENT.md](DEPLOYMENT.md). The
 text installer is the first complete path; a later GUI is a semantic projection
 over the same `InstallPlan`, exact destructive preview, trusted authorization,

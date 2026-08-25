@@ -64,6 +64,18 @@ verified. Never silently promote **PARTIALLY IMPLEMENTED**, **EXPERIMENTAL**,
 
 Architectural invariants:
 
+- follow `docs/platform/UEFI_BOOT_MANAGEMENT.md`: NVRAM entries/order/next are
+  typed generational objects with separate rights and re-read verification;
+  installation creates MRML without deleting Windows; normal owner Secure Boot
+  preserves versioned Option ROM compatibility and current dbx; compatibility
+  trust is not MRML authority; key use/export differs; full Option ROM removal is
+  expert-only; OVMF is not physical firmware evidence;
+- follow `docs/network/NETWORK_ADMINISTRATION.md`: Ethernet, Wi-Fi, and Bluetooth
+  use shared typed services across shell/GUI/install/recovery/accessibility/AI;
+  connection, configuration, scan/pair/profile, raw packets, secrets, and reset
+  remain separate; network credentials/bonds are non-exported; offline operation
+  remains viable; AI and first-party UI have no bypass;
+
 - keep the privileged microkernel small and mechanism-focused;
 - put storage, networking, firewall policy, configuration, consent UI,
   monitoring, supervision policy, ordinary drivers, and AI policy in isolated

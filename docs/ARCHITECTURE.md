@@ -1280,6 +1280,11 @@ under distinct capabilities and lifecycle state.
 
 ### Network, audio, USB, and input services
 
+Typed Ethernet, Wi-Fi, Bluetooth, persistence, shell/GUI parity, accessibility,
+secrets, power, and restart policy are canonical in
+[network/NETWORK_ADMINISTRATION.md](network/NETWORK_ADMINISTRATION.md). All are
+**PLANNED** unless exact code/tests below establish otherwise.
+
 **PLANNED:** networking remains a userspace service for native applications,
 which request bounded connection objects instead of raw packets. A VM receives
 a VirtIO-net-compatible or MRML virtual NIC only with explicit authority such as
