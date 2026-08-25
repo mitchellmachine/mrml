@@ -3953,6 +3953,16 @@ tests: 800 compiler tests per host. General unification, higher-ranked candidate
 matching, universe relations beyond this ordering, and source `for<...>` remain
 unsupported.
 
+The rigid clause-matching milestone accepts bound-clause queries containing only
+concrete types and rigid placeholders. Generic parameters can bind either kind;
+repeated parameters require exact equality and instantiated premises retain the
+same placeholder universe and identity. The 64-clause database preserves unique,
+ambiguous, and no-solution classification, while inference-bearing rigid queries
+fail explicitly. Windows gnullvm and native Arch Linux WSL each pass 456 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 802 compiler tests per host. Recursive rigid proof, complete higher-ranked
+reasoning, general unification, and source `for<...>` remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

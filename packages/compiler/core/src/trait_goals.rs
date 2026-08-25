@@ -443,6 +443,48 @@ impl TraitWhereClause {
         self.instantiate(&arguments[..self.parameter_count])
             .map(TraitWhereClauseElaboration::Unique)
     }
+
+    pub fn elaborate_rigid(
+        self,
+        consequence: ImplementedTraitGoal,
+    ) -> Result<TraitWhereClauseElaboration, TraitGoalError> {
+        validate_rigid_goal(consequence)?;
+        if self.consequence.trait_id != consequence.trait_id
+            || self.consequence.argument_count != consequence.argument_count
+        {
+            return Ok(TraitWhereClauseElaboration::NoSolution);
+        }
+        let mut bindings = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+        if !bound_type_matches_rigid(
+            self.consequence.self_type,
+            rigid_goal_type(consequence.self_type)?,
+            &mut bindings,
+        ) {
+            return Ok(TraitWhereClauseElaboration::NoSolution);
+        }
+        for (bound, rigid) in self
+            .consequence
+            .arguments()
+            .iter()
+            .zip(consequence.arguments())
+        {
+            let bound = bound.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+            let rigid = rigid.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+            if !bound_type_matches_rigid(bound, rigid_goal_type(rigid)?, &mut bindings) {
+                return Ok(TraitWhereClauseElaboration::NoSolution);
+            }
+        }
+        let mut arguments =
+            [TraitGoalType::Concrete(TraitTypeId::new(0)); MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, binding) in bindings[..self.parameter_count].iter().enumerate() {
+            let Some(binding) = binding else {
+                return Ok(TraitWhereClauseElaboration::Ambiguous);
+            };
+            arguments[index] = *binding;
+        }
+        self.instantiate_goal_types(&arguments[..self.parameter_count])
+            .map(TraitWhereClauseElaboration::Unique)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -528,6 +570,35 @@ impl TraitWhereClauseDatabase {
         let mut selected = None;
         for candidate in self.clauses[..self.clause_count].iter().flatten().copied() {
             match candidate.clause.elaborate(consequence)? {
+                TraitWhereClauseElaboration::Unique(instantiated) => {
+                    if selected.is_some() {
+                        return Ok(TraitWhereClauseSolution::Ambiguous);
+                    }
+                    selected = Some(TraitWhereClauseAnswer {
+                        clause_id: candidate.id,
+                        instantiated,
+                    });
+                }
+                TraitWhereClauseElaboration::Ambiguous => {
+                    return Ok(TraitWhereClauseSolution::Ambiguous);
+                }
+                TraitWhereClauseElaboration::NoSolution => {}
+            }
+        }
+        Ok(selected.map_or(
+            TraitWhereClauseSolution::NoSolution,
+            TraitWhereClauseSolution::Unique,
+        ))
+    }
+
+    pub fn elaborate_rigid(
+        &self,
+        consequence: ImplementedTraitGoal,
+    ) -> Result<TraitWhereClauseSolution, TraitGoalError> {
+        validate_rigid_goal(consequence)?;
+        let mut selected = None;
+        for candidate in self.clauses[..self.clause_count].iter().flatten().copied() {
+            match candidate.clause.elaborate_rigid(consequence)? {
                 TraitWhereClauseElaboration::Unique(instantiated) => {
                     if selected.is_some() {
                         return Ok(TraitWhereClauseSolution::Ambiguous);
@@ -672,6 +743,7 @@ pub enum TraitGoalError {
     UnknownImplementationId,
     UniverseOverflow,
     UniverseLeak,
+    NonRigidClauseQuery,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -731,6 +803,36 @@ fn validate_concrete_goal(goal: ImplementedTraitGoal) -> Result<(), TraitGoalErr
     Ok(())
 }
 
+fn validate_rigid_goal(goal: ImplementedTraitGoal) -> Result<(), TraitGoalError> {
+    if goal.argument_count > goal.arguments.len()
+        || goal.arguments[..goal.argument_count]
+            .iter()
+            .any(Option::is_none)
+        || goal.arguments[goal.argument_count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return Err(TraitGoalError::InvalidGoal);
+    }
+    rigid_goal_type(goal.self_type)?;
+    for argument in goal.arguments().iter() {
+        rigid_goal_type(
+            argument
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn rigid_goal_type(ty: TraitGoalType) -> Result<TraitGoalType, TraitGoalError> {
+    match ty {
+        TraitGoalType::Concrete(_) | TraitGoalType::Placeholder(_) => Ok(ty),
+        TraitGoalType::InferenceVariable(_) => Err(TraitGoalError::NonRigidClauseQuery),
+    }
+}
+
 fn concrete_goal_type(ty: TraitGoalType) -> Result<TraitTypeId, TraitGoalError> {
     match ty {
         TraitGoalType::Concrete(ty) => Ok(ty),
@@ -755,6 +857,28 @@ fn bound_type_matches_concrete(
                 Some(bound) => bound == concrete,
                 None => {
                     *binding = Some(concrete);
+                    true
+                }
+            }
+        }
+    }
+}
+
+fn bound_type_matches_rigid(
+    bound: BoundTraitGoalType,
+    rigid: TraitGoalType,
+    bindings: &mut [Option<TraitGoalType>; MAX_TRAIT_GENERIC_PARAMETERS],
+) -> bool {
+    match bound {
+        BoundTraitGoalType::Concrete(bound) => rigid == TraitGoalType::Concrete(bound),
+        BoundTraitGoalType::Parameter(parameter) => {
+            let Some(binding) = bindings.get_mut(parameter.get() as usize) else {
+                return false;
+            };
+            match *binding {
+                Some(bound) => bound == rigid,
+                None => {
+                    *binding = Some(rigid);
                     true
                 }
             }
@@ -1611,6 +1735,80 @@ mod tests {
         assert_eq!(
             TraitUniverseAssignment::new(root, TraitGoalType::InferenceVariable(nested)),
             Err(TraitGoalError::UniverseLeak)
+        );
+    }
+
+    #[test]
+    fn elaborates_bound_clauses_against_rigid_placeholder_goals() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut consequence = BoundImplementedTraitGoal::new(
+            TraitId::new(30),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        consequence
+            .push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let mut clause = TraitWhereClause::new(1, consequence).unwrap();
+        clause
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(31),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::new(2), TraitPlaceholderId::new(7));
+        let mut query =
+            ImplementedTraitGoal::new(TraitId::new(30), TraitGoalType::Placeholder(placeholder));
+        query
+            .push_argument(TraitGoalType::Placeholder(placeholder))
+            .unwrap();
+        let TraitWhereClauseElaboration::Unique(instantiated) =
+            clause.elaborate_rigid(query).unwrap()
+        else {
+            panic!("expected one rigid clause answer");
+        };
+        assert_eq!(
+            instantiated.premises.predicates()[0].unwrap().self_type,
+            TraitGoalType::Placeholder(placeholder)
+        );
+
+        let mut mismatch = query;
+        mismatch.arguments[0] = Some(TraitGoalType::Placeholder(TraitPlaceholder::new(
+            TraitUniverseIndex::new(2),
+            TraitPlaceholderId::new(8),
+        )));
+        assert_eq!(
+            clause.elaborate_rigid(mismatch),
+            Ok(TraitWhereClauseElaboration::NoSolution)
+        );
+    }
+
+    #[test]
+    fn rigid_clause_database_rejects_inference_queries() {
+        let clause = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(40),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        let mut database = TraitWhereClauseDatabase::EMPTY;
+        database.insert(TraitWhereClauseId::new(1), clause).unwrap();
+        let placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::new(1), TraitPlaceholderId::new(0));
+        let rigid =
+            ImplementedTraitGoal::new(TraitId::new(40), TraitGoalType::Placeholder(placeholder));
+        assert!(matches!(
+            database.elaborate_rigid(rigid),
+            Ok(TraitWhereClauseSolution::Unique(_))
+        ));
+        assert_eq!(
+            database.elaborate_rigid(ImplementedTraitGoal::new(
+                TraitId::new(40),
+                TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+            )),
+            Err(TraitGoalError::NonRigidClauseQuery)
         );
     }
 

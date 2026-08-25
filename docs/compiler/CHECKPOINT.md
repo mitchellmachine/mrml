@@ -718,6 +718,16 @@ interface probe, 10 conformance tests, and 335 replacement tests: 800 compiler
 tests per host. This is not higher-ranked candidate matching, general
 unification, or source `for<...>` support.
 
+The rigid clause-matching milestone elaborates bound consequences against goals
+containing concrete types and skolem placeholders. Repeated parameters require
+exact placeholder identity, instantiated premises retain the matched universe,
+and the fixed clause database preserves unique, ambiguous, and no-solution
+outcomes. Inference-bearing rigid queries fail explicitly. Windows gnullvm and
+native Arch Linux WSL each pass 456 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 802 compiler tests per
+host. Recursive rigid proof, general unification, and source `for<...>` remain
+unsupported.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

@@ -4137,6 +4137,14 @@ value has a newer universe number. It adds no higher-ranked search, general
 unification, cache, parser, runtime mechanism, allocation, synchronization,
 protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Rigid trait-clause matching
+
+**Result: NOT_TRIGGERED.** This compiler-only increment extends the existing
+bounded structural clause matcher from concrete values to rigid placeholder
+identities and rejects inference-bearing inputs. It adds no recursive higher-
+ranked search, general unification, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Composed configured-service isolation route
 
 **Result: NOT_TRIGGERED.** This increment conventionally composes existing
