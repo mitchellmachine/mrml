@@ -362,12 +362,28 @@ ESP from the extracted loader, three exact boot packages, authenticated
 QEMU/OVMF pair and exact-matches the boot trace. A fresh media construction
 reproduced the complete trace above. A separate image with one modified kernel-
 package payload byte produced two identical fail-closed attempts ending after
-`c8 b0 b2 b0 b2 c9`, before kernel-package admission, and the negative assertion
-reported `QEMU_UEFI_BOOT_REJECT_PASS`. This is firmware evidence for that one
-case only. The remaining wrong-digest, bad-signature, unsupported-architecture,
-malformed-offset, truncated-compressed-payload, wrong-class, missing-package,
-and incompatible-generation negative QEMU cases remain an acceptance gate; do
-not report them as completed from parser tests alone.
+`c8 b0 b2 b0 b2 c9`, before kernel-package admission. Eight additional images
+used distinct one-time package and release keys to bind a wrong release digest,
+bad package signature, unsupported architecture, malformed payload offset,
+truncated compressed payload, wrong package class, missing required package,
+and incompatible package generation. Each reported
+`QEMU_UEFI_BOOT_REJECT_PASS`; the decompression case reached the additional
+package-selection marker `b0`, while the other cases stopped before it. These
+are QEMU/OVMF firmware results, not physical-firmware evidence.
+
+The WHP and KVM runners both consume the byte-identical canonical signed kernel
+package, authenticate its package key, select/decompress its x86-64 kernel
+payload, authenticate the inner signed PE, and construct their native guest
+launch state. The shared package's SHA-256 transport checksum in the refreshed
+probe was `30ded12b7c772d88ec442b62a0afb2dd0347f100f2e09bbe037f1acae483f1e4`.
+It reached the authenticated framebuffer marker and terminal halt under nested
+KVM and WHP. WHP's ordinary `boot` preparation deliberately omits emulated xAPIC
+state so the terminal HLT remains observable; specialized timer/SMP/device
+probes retain their existing APIC policy. The runners do not currently execute
+OVMF or consume the GPT/FAT boot image. Therefore shared package admission and
+native execution are implemented and live-tested, while the stronger requested
+WHP/KVM UEFI-media path remains **PLANNED**; do not call the native direct-launch
+probes firmware boots.
 
 ## Releases, images, install, and publication
 

@@ -83,6 +83,16 @@ targets = ["WINDOWS"]
 features = []
 targets = ["WINDOWS"]
 
+[[feature_profile]]
+features = ["cuda"]
+name = "cuda"
+targets = ["WINDOWS"]
+
+[[extern_profile]]
+compile_name = "mrml-tensor"
+consumer = "cuda"
+provider = "cuda"
+
 [[binary]]
 crate_name = "mrml_whp_run"
 output = "mrml-whp-run"

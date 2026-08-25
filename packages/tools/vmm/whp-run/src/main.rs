@@ -1205,6 +1205,7 @@ fn application_main() -> Result<()> {
         || service_restart_request_mode
         || service_preemption_mode
         || smp_service_migration_mode;
+    let boot_mode = arguments.len() == 6 && arguments[5] == "boot";
     let timer_mode = arguments.len() == 6 && arguments[5] == "timer-probe";
     let block_guest_driver_mode =
         arguments.len() == 6 && arguments[5] == "block-guest-driver-probe";
@@ -1218,6 +1219,7 @@ fn application_main() -> Result<()> {
         arguments.len() == 6 && arguments[5] == "smp-periodic-balance-probe";
     if arguments.len() != 8
         && !service_artifact_mode
+        && !boot_mode
         && !timer_mode
         && !block_guest_driver_mode
         && !pci_configuration_mode
@@ -1293,6 +1295,7 @@ fn application_main() -> Result<()> {
         _ => return Err(anyhow!("incomplete service verification inputs")),
     };
     let cuda_bundle = if service_artifact_mode
+        || boot_mode
         || timer_mode
         || block_guest_driver_mode
         || pci_configuration_mode
@@ -1380,7 +1383,9 @@ fn application_main() -> Result<()> {
     let system = WhpSystem::open()
         .map_err(|error| anyhow!("Windows Hypervisor Platform is unavailable: {:?}", error))?;
     let preparation_started = Instant::now();
-    let mut guest = if pci_configuration_mode {
+    let mut guest = if boot_mode {
+        system.prepare_boot_kernel(&executable, handoff.as_slice(), layout)
+    } else if pci_configuration_mode {
         system.prepare_kernel_block_dynamic_mmio_guest(
             &executable,
             handoff.as_slice(),
@@ -1648,6 +1653,25 @@ fn application_main() -> Result<()> {
             physical,
             instruction
         ));
+    }
+    if boot_mode {
+        if exit != VmExit::Halted {
+            return Err(anyhow!("WHP boot kernel exit mismatch: {:?}", exit));
+        }
+        let mut marker = [0u8; 4];
+        VmBackend::read_guest(&guest, FRAMEBUFFER, &mut marker)
+            .map_err(|_| anyhow!("kernel framebuffer is unreadable"))?;
+        if marker != [0x57, 0xc8, 0xff, 0] {
+            return Err(anyhow!("kernel did not paint its authenticated boot marker"));
+        }
+        println!(
+            "verified Boot kernel reached its expected halt under WHP: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
     }
     if vmx_root_mode {
         let expected = [0xd0u32, 0xd1, 0xd2, 0xd3, 0xd4, 0xdf];

@@ -114,6 +114,17 @@ pub fn build_release(
         }
         records[index] = (role, package.version, Sha3_512::digest(bytes));
     }
+    build_release_records(version, records, private)
+}
+
+fn build_release_records(
+    version: u64,
+    records: [(BootPackageRole, u64, [u8; 64]); RELEASE_PACKAGE_COUNT],
+    private: &[u8],
+) -> Result<Vec<u8>, Error> {
+    if version == 0 || private.len() != LAMPORT_PRIVATE_KEY_BYTES {
+        return Err(Error::Signature);
+    }
     let mut output = vec![0; MAX_BOOT_RELEASE_BYTES];
     output[..16].copy_from_slice(&RELEASE_MAGIC);
     put_u16(&mut output, 16, RELEASE_FORMAT_VERSION)?;
@@ -141,6 +152,113 @@ pub fn build_release(
     output[RELEASE_HEADER_BYTES + public.len()..].copy_from_slice(&signature);
     parse_release(&output, true).map_err(|_| Error::Signature)?;
     Ok(output)
+}
+
+pub fn build_adversarial_boot_fixture(
+    case: &str,
+    bootloader: &[u8],
+    configuration: &[u8],
+    kernel_payload: &[u8],
+    package_private: &[u8],
+    release_private: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    let (class, architecture, compress) = match case {
+        "bad-signature"
+        | "malformed-offset"
+        | "truncated-compressed-payload"
+        | "wrong-release-digest"
+        | "incompatible-generation"
+        | "missing-package" => ("kernel", "x86_64", case == "truncated-compressed-payload"),
+        "unsupported-architecture" => ("kernel", "aarch64", false),
+        "wrong-class" => ("vmm", "x86_64", false),
+        _ => return Err(Error::Identifier),
+    };
+    let mut kernel = build(
+        "org.mrml.system.kernel",
+        class,
+        1,
+        &[BuildPayload {
+            name: "kernel",
+            purpose: "kernel",
+            architecture,
+            compress,
+            bytes: kernel_payload,
+        }],
+        None,
+    )?;
+    match case {
+        "malformed-offset" => {
+            let table = HEADER_BYTES + "org.mrml.system.kernel".len();
+            put_u64(&mut kernel, table + 80, 1)?;
+        }
+        "truncated-compressed-payload" => {
+            kernel.pop().ok_or(Error::Size)?;
+            let table = HEADER_BYTES + "org.mrml.system.kernel".len();
+            let stored = get_u64(&kernel, table + 88)?;
+            put_u64(
+                &mut kernel,
+                table + 88,
+                stored.checked_sub(1).ok_or(Error::Size)?,
+            )?;
+        }
+        _ => {}
+    }
+    sign_package_fixture(&mut kernel, package_private)?;
+    if case == "bad-signature" {
+        let last = kernel.last_mut().ok_or(Error::Size)?;
+        *last ^= 1;
+    }
+
+    let boot = parse(bootloader, true)?;
+    let config = parse(configuration, true)?;
+    let mut kernel_digest = Sha3_512::digest(&kernel);
+    if case == "wrong-release-digest" {
+        kernel_digest[0] ^= 1;
+    }
+    let kernel_version = if case == "incompatible-generation" {
+        2
+    } else {
+        1
+    };
+    let records = [
+        (
+            BootPackageRole::Bootloader,
+            boot.version,
+            Sha3_512::digest(bootloader),
+        ),
+        (BootPackageRole::Kernel, kernel_version, kernel_digest),
+        (
+            BootPackageRole::Configuration,
+            config.version,
+            Sha3_512::digest(configuration),
+        ),
+    ];
+    let release = build_release_records(1, records, release_private)?;
+    Ok((kernel, release))
+}
+
+fn sign_package_fixture(output: &mut Vec<u8>, private: &[u8]) -> Result<(), Error> {
+    if private.len() != LAMPORT_PRIVATE_KEY_BYTES || output.len() < HEADER_BYTES {
+        return Err(Error::Signature);
+    }
+    let unsigned_len = output.len();
+    let total = unsigned_len
+        .checked_add(LAMPORT_PUBLIC_KEY_BYTES + LAMPORT_SIGNATURE_BYTES)
+        .ok_or(Error::Overflow)?;
+    put_u16(output, 18, SIGNED)?;
+    put_u64(output, 56, unsigned_len as u64)?;
+    put_u64(output, 64, total as u64)?;
+    let digest = content_digest(output)?;
+    output[104..168].copy_from_slice(&digest);
+    let mut public = vec![0; LAMPORT_PUBLIC_KEY_BYTES];
+    let mut signature = vec![0; LAMPORT_SIGNATURE_BYTES];
+    lamport_public_key(private, &mut public).map_err(|_| Error::Signature)?;
+    lamport_sign(private, &signature_statement(&digest), &mut signature)
+        .map_err(|_| Error::Signature)?;
+    output[168..232].copy_from_slice(&Sha3_512::digest(&public));
+    output.extend_from_slice(&public);
+    output.extend_from_slice(&signature);
+    Ok(())
 }
 
 pub fn build(
@@ -635,6 +753,73 @@ mod tests {
             Some(&private_key()),
         )
         .unwrap()
+    }
+
+    fn private_key_seed(seed: u8) -> Vec<u8> {
+        (0..LAMPORT_PRIVATE_KEY_BYTES)
+            .map(|index| (index as u64 * 193 + seed as u64) as u8)
+            .collect()
+    }
+
+    #[test]
+    fn adversarial_boot_fixtures_reach_distinct_validation_boundaries() {
+        let bootloader = release_package("org.mrml.library.uefi", "bootloader", "uefi-loader", 1);
+        let configuration = release_package(
+            "org.mrml.service.config",
+            "configuration",
+            "configuration",
+            1,
+        );
+        for (index, case) in [
+            "bad-signature",
+            "malformed-offset",
+            "truncated-compressed-payload",
+            "wrong-release-digest",
+            "incompatible-generation",
+            "missing-package",
+            "unsupported-architecture",
+            "wrong-class",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (kernel, release) = build_adversarial_boot_fixture(
+                case,
+                &bootloader,
+                &configuration,
+                b"signed kernel payload",
+                &private_key_seed(index as u8 + 1),
+                &private_key_seed(index as u8 + 65),
+            )
+            .unwrap();
+            let release = parse_release(&release, true).unwrap();
+            match case {
+                "bad-signature" | "malformed-offset" => assert!(parse(&kernel, true).is_err()),
+                "truncated-compressed-payload" => {
+                    let package = parse(&kernel, true).unwrap();
+                    let payload = select(&package, "kernel", "x86_64").unwrap();
+                    let mut output = vec![0; payload.raw_len];
+                    assert_eq!(payload.decode(&mut output), Err(Error::Compression));
+                }
+                "wrong-release-digest" => assert_ne!(
+                    release.package(BootPackageRole::Kernel).package_digest,
+                    Sha3_512::digest(&kernel)
+                ),
+                "incompatible-generation" => {
+                    assert_eq!(release.package(BootPackageRole::Kernel).version, 2)
+                }
+                "unsupported-architecture" => {
+                    let package = parse(&kernel, true).unwrap();
+                    assert_eq!(
+                        select(&package, "kernel", "x86_64"),
+                        Err(Error::Architecture)
+                    );
+                }
+                "wrong-class" => assert_eq!(parse(&kernel, true).unwrap().class, "vmm"),
+                "missing-package" => assert!(parse(&kernel, true).is_ok()),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[test]

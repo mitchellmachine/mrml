@@ -148,20 +148,28 @@ impl WhpSystem {
     }
 
     pub(crate) fn prepare_smp_partition(&self) -> Result<PreparedWhpPartition<'_>, WhpError> {
-        self.prepare_partition_inner(true, 2)
+        self.prepare_partition_inner(true, 2, true)
     }
 
     pub(crate) fn prepare_partition_with_breakpoint_exit(
         &self,
         intercept_breakpoint: bool,
     ) -> Result<PreparedWhpPartition<'_>, WhpError> {
-        self.prepare_partition_inner(intercept_breakpoint, 1)
+        self.prepare_partition_inner(intercept_breakpoint, 1, true)
+    }
+
+    pub(crate) fn prepare_partition_without_xapic(
+        &self,
+        intercept_breakpoint: bool,
+    ) -> Result<PreparedWhpPartition<'_>, WhpError> {
+        self.prepare_partition_inner(intercept_breakpoint, 1, false)
     }
 
     fn prepare_partition_inner(
         &self,
         intercept_breakpoint: bool,
         processor_count: u32,
+        emulate_xapic: bool,
     ) -> Result<PreparedWhpPartition<'_>, WhpError> {
         if !matches!(processor_count, 1 | 2) {
             return Err(WhpError::InvalidVcpu);
@@ -203,14 +211,16 @@ impl WhpSystem {
                 )
             })?;
         }
-        check(unsafe {
-            (self.api.set_partition_property)(
-                partition.as_ptr(),
-                LOCAL_APIC_EMULATION_MODE,
-                (&XAPIC_EMULATION as *const u32).cast(),
-                4,
-            )
-        })?;
+        if emulate_xapic {
+            check(unsafe {
+                (self.api.set_partition_property)(
+                    partition.as_ptr(),
+                    LOCAL_APIC_EMULATION_MODE,
+                    (&XAPIC_EMULATION as *const u32).cast(),
+                    4,
+                )
+            })?;
+        }
         check(unsafe { (self.api.setup_partition)(partition.as_ptr()) })?;
         for index in 0..processor_count {
             check(unsafe { (self.api.create_vp)(partition.as_ptr(), index, 0) })?;

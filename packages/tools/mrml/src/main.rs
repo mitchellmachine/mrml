@@ -237,6 +237,9 @@ fn print_help() {
     );
     println!("       mrml package verify FILE [--require-signature] [--output structured]");
     println!(
+        "       mrml package adversarial-boot-fixture CASE BOOTLOADER_PACKAGE CONFIGURATION_PACKAGE KERNEL_SIGNED PACKAGE_PRIVATE RELEASE_PRIVATE KERNEL_OUTPUT RELEASE_OUTPUT"
+    );
+    println!(
         "       mrml package boot-media-create LOADER BOOTLOADER_PACKAGE KERNEL_PACKAGE CONFIGURATION_PACKAGE SYSTEM_RELEASE SERVICE_SIGNED OUTPUT SFDISK MFORMAT MMD MCOPY"
     );
     println!(
@@ -254,6 +257,50 @@ fn print_help() {
 
 fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("adversarial-boot-fixture") if args.len() == 9 => {
+            let bootloader = fs::read(&args[2]).map_err(|error| {
+                format!("AdversarialBootFixtureRead {{ role: bootloader, detail: {error} }}")
+            })?;
+            let configuration = fs::read(&args[3]).map_err(|error| {
+                format!("AdversarialBootFixtureRead {{ role: configuration, detail: {error} }}")
+            })?;
+            let kernel = fs::read(&args[4]).map_err(|error| {
+                format!("AdversarialBootFixtureRead {{ role: kernel, detail: {error} }}")
+            })?;
+            let mut package_private = fs::read(&args[5]).map_err(|error| {
+                format!("AdversarialBootFixtureKeyRead {{ role: package, detail: {error} }}")
+            })?;
+            let mut release_private = fs::read(&args[6]).map_err(|error| {
+                format!("AdversarialBootFixtureKeyRead {{ role: release, detail: {error} }}")
+            })?;
+            let result = package::build_adversarial_boot_fixture(
+                &args[1],
+                &bootloader,
+                &configuration,
+                &kernel,
+                &package_private,
+                &release_private,
+            );
+            package_private.fill(0);
+            release_private.fill(0);
+            fs::remove_file(&args[5]).map_err(|error| {
+                format!("AdversarialBootFixtureKeyConsume {{ role: package, detail: {error} }}")
+            })?;
+            fs::remove_file(&args[6]).map_err(|error| {
+                format!("AdversarialBootFixtureKeyConsume {{ role: release, detail: {error} }}")
+            })?;
+            let (kernel, release) = result
+                .map_err(|error| format!("AdversarialBootFixtureBuild {{ detail: {error:?} }}"))?;
+            write_new(&args[7], &kernel, "adversarial-kernel-package")?;
+            write_new(&args[8], &release, "adversarial-system-release")?;
+            println!(
+                "package-adversarial-fixture|status=PASS|case={}|kernel_bytes={}|release_bytes={}|one_time_keys=2",
+                args[1],
+                kernel.len(),
+                release.len()
+            );
+            Ok(())
+        }
         Some("release-create") if args.len() == 7 => {
             let version = args[1]
                 .parse::<u64>()
@@ -437,6 +484,18 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
         }
         _ => Err("PackageUsageError { expected: create | verify }".into()),
     }
+}
+
+fn write_new(path: &str, bytes: &[u8], role: &str) -> Result<(), String> {
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("OutputCreateError {{ role: {role}, detail: {error} }}"))?;
+    output
+        .write_all(bytes)
+        .and_then(|_| output.sync_all())
+        .map_err(|error| format!("OutputWriteError {{ role: {role}, detail: {error} }}"))
 }
 
 mod qemu_boot;

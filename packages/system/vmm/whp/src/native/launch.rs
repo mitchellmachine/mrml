@@ -1121,6 +1121,32 @@ impl VirtualBlockVmmMemory for PreparedWhpGuest<'_> {
 }
 
 impl WhpSystem {
+    /// Prepares the ordinary one-vCPU boot kernel without an emulated APIC so
+    /// its terminal HLT remains an observable hosted-test exit.
+    pub fn prepare_boot_kernel<'system>(
+        &'system self,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: WhpLaunchLayout,
+    ) -> Result<PreparedWhpGuest<'system>, WhpError> {
+        self.prepare_guest_inner(
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: false,
+                gpu_queue: None,
+                block_queue: None,
+                block_configuration: None,
+                block_resume: None,
+                trapped_mmio: None,
+                intercept_breakpoint: true,
+                cpus: 1,
+            },
+        )
+    }
+
     pub fn prepare_guest<'system>(
         &'system self,
         executable: &VerifiedExecutable<'_>,
@@ -1561,8 +1587,14 @@ impl WhpSystem {
         }
         validate_ranges(&virtual_ranges[..virtual_count])?;
 
+        let plain_boot = devices.framebuffer
+            && !devices.local_apic
+            && devices.gpu_queue.is_none()
+            && devices.block_queue.is_none();
         let mut partition = if smp {
             self.prepare_smp_partition()?
+        } else if plain_boot {
+            self.prepare_partition_without_xapic(devices.intercept_breakpoint)?
         } else {
             self.prepare_partition_with_breakpoint_exit(devices.intercept_breakpoint)?
         };
