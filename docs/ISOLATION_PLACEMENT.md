@@ -5,7 +5,9 @@ policy, rejects unknown fields/tokens, contradictory bounds, duplicates, and
 cross-class placements, and requires a reason for fixed platform policy. Every
 current package without an explicit table receives a conservative singleton
 default. All current application and service manifests explicitly record their
-native singleton policy. MicroVM support, effective owner-policy resolution,
+native singleton policy. The typed resolver applies package defaults, owner
+selection, and total-microVM requests without crossing supported forms or bounds;
+unsupported total-mode promotion is an explicit exception. MicroVM launch,
 persistent settings, boot overrides, and location-independent runtime transport
 remain **PLANNED**.
 
@@ -134,8 +136,8 @@ state, and evidence scope without leaking unrelated content or secrets.
 ## Implementation order and acceptance
 
 Implementation proceeds as bounded milestones. The typed placement model,
-validation, and initial Manifest V2 metadata are implemented. Next are the
-effective-policy resolver; resource plan;
+validation, initial Manifest V2 metadata, and effective request resolver are
+implemented. Next are the resource plan;
 native/interface transport invariants; microVM launch adapter; persistent policy
 service; shell/settings/monitor projections; boot-handoff override; recovery and
 adversarial tests. Do not start GUI polish before the typed backend exists.

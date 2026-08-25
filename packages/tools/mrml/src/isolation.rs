@@ -49,6 +49,36 @@ pub struct IsolationPolicy {
     supported: Vec<IsolationPlacement>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlacementRequest {
+    PackageDefault,
+    Owner(IsolationPlacement),
+    TotalMicrovm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlacementSource {
+    PackageDefault,
+    Owner,
+    TotalMicrovm,
+    TotalMicrovmException,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EffectivePlacement {
+    placement: IsolationPlacement,
+    source: PlacementSource,
+}
+
+impl EffectivePlacement {
+    pub const fn placement(self) -> IsolationPlacement {
+        self.placement
+    }
+    pub const fn source(self) -> PlacementSource {
+        self.source
+    }
+}
+
 impl IsolationPolicy {
     pub fn parse(document: &Document, kind: &str, package: &str) -> Result<Self, String> {
         let Some(section) = document
@@ -165,6 +195,30 @@ impl IsolationPolicy {
     pub fn supported(&self) -> &[IsolationPlacement] {
         &self.supported
     }
+
+    pub fn resolve(&self, request: PlacementRequest) -> Result<EffectivePlacement, String> {
+        let (placement, source) = match request {
+            PlacementRequest::PackageDefault => (self.preferred, PlacementSource::PackageDefault),
+            PlacementRequest::Owner(placement) => (placement, PlacementSource::Owner),
+            PlacementRequest::TotalMicrovm
+                if self.supported.contains(&IsolationPlacement::Microvm) =>
+            {
+                (IsolationPlacement::Microvm, PlacementSource::TotalMicrovm)
+            }
+            PlacementRequest::TotalMicrovm => {
+                (self.preferred, PlacementSource::TotalMicrovmException)
+            }
+        };
+        if !self.supported.contains(&placement) {
+            return Err("IsolationPlacementUnsupported".into());
+        }
+        if placement != IsolationPlacement::Platform
+            && (placement.rank() < self.minimum.rank() || placement.rank() > self.maximum.rank())
+        {
+            return Err("IsolationPlacementOutsideBounds".into());
+        }
+        Ok(EffectivePlacement { placement, source })
+    }
 }
 
 fn allowed_for_kind(kind: &str, values: &[IsolationPlacement]) -> bool {
@@ -240,5 +294,42 @@ mod tests {
             "\n[isolation]\ndefault = \"platform\"\nminimum = \"platform\"\nsupported = [\"platform\"]\n",
         );
         assert!(IsolationPolicy::parse(&bad, "kernel", "org.mrml.system.kernel").is_err());
+    }
+
+    #[test]
+    fn owner_and_total_requests_respect_bounds_and_report_exceptions() {
+        let document = manifest(
+            "\n[isolation]\ndefault = \"microvm\"\nminimum = \"native-process\"\nmaximum = \"microvm\"\nsupported = [\"native-process\", \"microvm\"]\n",
+        );
+        let policy = IsolationPolicy::parse(&document, "application", "org.mrml.app.test").unwrap();
+        assert_eq!(
+            policy
+                .resolve(PlacementRequest::Owner(IsolationPlacement::NativeProcess))
+                .unwrap(),
+            EffectivePlacement {
+                placement: IsolationPlacement::NativeProcess,
+                source: PlacementSource::Owner,
+            }
+        );
+        assert_eq!(
+            policy
+                .resolve(PlacementRequest::TotalMicrovm)
+                .unwrap()
+                .placement(),
+            IsolationPlacement::Microvm
+        );
+        let native = IsolationPolicy::default_for_kind("application");
+        assert_eq!(
+            native
+                .resolve(PlacementRequest::TotalMicrovm)
+                .unwrap()
+                .source(),
+            PlacementSource::TotalMicrovmException
+        );
+        assert!(
+            native
+                .resolve(PlacementRequest::Owner(IsolationPlacement::Microvm))
+                .is_err()
+        );
     }
 }
