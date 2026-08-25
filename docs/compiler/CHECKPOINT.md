@@ -1040,6 +1040,18 @@ native Arch Linux WSL each pass 540 library tests, one component-interface probe
 10 conformance tests, and 335 replacement tests: 886 compiler tests per host.
 Nested higher-ranked binders and source syntax remain unsupported.
 
+The nested universal-prefix milestone admits a fixed sequence of binder levels
+before a terminal mixed predicate conjunction. Each level advances the universe
+and restarts level-local placeholder identities, while globally indexed bound
+parameters preserve exact scope across levels. Binder levels and total parameters
+are bounded by the existing generic capacity; adding a binder after predicates
+fails closed. Focused tests cover same-local-ID/different-universe identity,
+cross-universe mismatch, valid nested proof, total-scope and universe overflow,
+closed-prefix admission, and recursive cycles. Windows gnullvm and native Arch
+Linux WSL each pass 541 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 887 compiler tests per host.
+Branching scopes and binders nested inside predicate terms remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

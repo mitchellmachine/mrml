@@ -3778,6 +3778,129 @@ pub struct ForAllTraitPredicateConjunction {
     predicate_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NestedForAllTraitPredicateConjunction {
+    binder_parameter_counts: [usize; MAX_TRAIT_GENERIC_PARAMETERS],
+    binder_count: usize,
+    total_parameter_count: usize,
+    predicates: [Option<BoundTraitPredicate>; MAX_TRAIT_PREDICATES],
+    predicate_count: usize,
+}
+
+impl NestedForAllTraitPredicateConjunction {
+    pub fn new(outer_parameter_count: usize) -> Result<Self, TraitGoalError> {
+        if outer_parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        let mut binder_parameter_counts = [0; MAX_TRAIT_GENERIC_PARAMETERS];
+        binder_parameter_counts[0] = outer_parameter_count;
+        Ok(Self {
+            binder_parameter_counts,
+            binder_count: 1,
+            total_parameter_count: outer_parameter_count,
+            predicates: [None; MAX_TRAIT_PREDICATES],
+            predicate_count: 0,
+        })
+    }
+
+    pub fn push_binder(&mut self, parameter_count: usize) -> Result<(), TraitGoalError> {
+        if self.predicate_count != 0 {
+            return Err(TraitGoalError::InvalidGoal);
+        }
+        let total = self
+            .total_parameter_count
+            .checked_add(parameter_count)
+            .ok_or(TraitGoalError::TooManyGenericParameters)?;
+        if total > MAX_TRAIT_GENERIC_PARAMETERS || self.binder_count >= MAX_TRAIT_GENERIC_PARAMETERS
+        {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        self.binder_parameter_counts[self.binder_count] = parameter_count;
+        self.binder_count += 1;
+        self.total_parameter_count = total;
+        Ok(())
+    }
+
+    pub const fn binder_count(self) -> usize {
+        self.binder_count
+    }
+
+    pub const fn total_parameter_count(self) -> usize {
+        self.total_parameter_count
+    }
+
+    pub fn push(&mut self, predicate: BoundTraitPredicate) -> Result<(), TraitGoalError> {
+        match predicate {
+            BoundTraitPredicate::Implemented(goal) => {
+                validate_bound_goal(goal, self.total_parameter_count)?;
+            }
+            BoundTraitPredicate::ProjectionEquality {
+                projection,
+                expected,
+            } => {
+                validate_bound_goal(projection.goal, self.total_parameter_count)?;
+                validate_bound_type(expected, self.total_parameter_count)?;
+            }
+        }
+        let slot = self
+            .predicates
+            .get_mut(self.predicate_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(predicate);
+        self.predicate_count += 1;
+        Ok(())
+    }
+
+    pub fn predicates(&self) -> &[Option<BoundTraitPredicate>] {
+        &self.predicates[..self.predicate_count]
+    }
+
+    fn instantiate_arguments(
+        self,
+        parent_universe: TraitUniverseIndex,
+    ) -> Result<([TraitGoalType; MAX_TRAIT_GENERIC_PARAMETERS], usize), TraitGoalError> {
+        let mut arguments =
+            [TraitGoalType::Concrete(TraitTypeId::new(0)); MAX_TRAIT_GENERIC_PARAMETERS];
+        let mut universe = parent_universe;
+        let mut offset = 0usize;
+        for parameter_count in self.binder_parameter_counts[..self.binder_count]
+            .iter()
+            .copied()
+        {
+            universe = universe.next()?;
+            for local_index in 0..parameter_count {
+                arguments[offset + local_index] = TraitGoalType::Placeholder(
+                    TraitPlaceholder::new(universe, TraitPlaceholderId::new(local_index as u32)),
+                );
+            }
+            offset += parameter_count;
+        }
+        Ok((arguments, offset))
+    }
+
+    fn instantiate_predicate(
+        self,
+        predicate: BoundTraitPredicate,
+        arguments: &[TraitGoalType],
+    ) -> Result<InferredTraitPredicate, TraitGoalError> {
+        match predicate {
+            BoundTraitPredicate::Implemented(goal) => Ok(InferredTraitPredicate::Implemented(
+                instantiate_bound_goal(goal, arguments)?,
+            )),
+            BoundTraitPredicate::ProjectionEquality {
+                projection,
+                expected,
+            } => Ok(InferredTraitPredicate::ProjectionEquality(
+                InferredTraitProjectionEquality {
+                    goal: instantiate_bound_goal(projection.goal, arguments)?,
+                    associated_type_id: projection.associated_type_id,
+                    expected: instantiate_bound_type(expected, arguments)?,
+                },
+            )),
+        }
+    }
+}
+
 impl ForAllTraitPredicateConjunction {
     pub fn new(parameter_count: usize) -> Result<Self, TraitGoalError> {
         if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
@@ -5123,6 +5246,53 @@ pub fn solve_exists_trait_predicate_conjunction(
     }))
 }
 
+fn solve_rigid_trait_predicate(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    environment: TraitProjectionEnvironment<'_>,
+    predicate: InferredTraitPredicate,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut proof_stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    match predicate {
+        InferredTraitPredicate::Implemented(goal) => solve_rigid_trait_goal_with_generics_inner(
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            Some(environment),
+            goal,
+            &mut proof_stack,
+            0,
+        ),
+        InferredTraitPredicate::ProjectionEquality(projection) => {
+            validate_rigid_goal(projection.goal)?;
+            rigid_goal_type(projection.expected)?;
+            let mut projection_stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+            match environment.normalize_rigid_inner(
+                ConcreteTraitProjectionGoal {
+                    goal: projection.goal,
+                    associated_type_id: projection.associated_type_id,
+                },
+                &mut projection_stack,
+                0,
+                &mut proof_stack,
+                0,
+            )? {
+                InferredProjectionValueSolution::Unique(actual)
+                    if actual == projection.expected =>
+                {
+                    Ok(TraitProofSolution::Proven)
+                }
+                InferredProjectionValueSolution::Unique(_)
+                | InferredProjectionValueSolution::NoSolution => Ok(TraitProofSolution::NoSolution),
+                InferredProjectionValueSolution::Ambiguous => Ok(TraitProofSolution::Ambiguous),
+                InferredProjectionValueSolution::Cycle => Ok(TraitProofSolution::Cycle),
+                InferredProjectionValueSolution::Overflow => Ok(TraitProofSolution::Overflow),
+            }
+        }
+    }
+}
+
 pub fn solve_for_all_trait_predicate_conjunction(
     exact_implementations: &TraitImplementationDatabase,
     generic_implementations: &GenericTraitImplementationDatabase,
@@ -5148,46 +5318,52 @@ pub fn solve_for_all_trait_predicate_conjunction(
                 .ok_or(TraitGoalError::InvalidGoal)?,
             universe,
         )?;
-        let mut proof_stack = [None; MAX_TRAIT_PROOF_DEPTH];
-        let result = match predicate {
-            InferredTraitPredicate::Implemented(goal) => {
-                solve_rigid_trait_goal_with_generics_inner(
-                    exact_implementations,
-                    generic_implementations,
-                    clauses,
-                    Some(environment),
-                    goal,
-                    &mut proof_stack,
-                    0,
-                )?
-            }
-            InferredTraitPredicate::ProjectionEquality(projection) => {
-                validate_rigid_goal(projection.goal)?;
-                rigid_goal_type(projection.expected)?;
-                let mut projection_stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
-                match environment.normalize_rigid_inner(
-                    ConcreteTraitProjectionGoal {
-                        goal: projection.goal,
-                        associated_type_id: projection.associated_type_id,
-                    },
-                    &mut projection_stack,
-                    0,
-                    &mut proof_stack,
-                    0,
-                )? {
-                    InferredProjectionValueSolution::Unique(actual)
-                        if actual == projection.expected =>
-                    {
-                        TraitProofSolution::Proven
-                    }
-                    InferredProjectionValueSolution::Unique(_)
-                    | InferredProjectionValueSolution::NoSolution => TraitProofSolution::NoSolution,
-                    InferredProjectionValueSolution::Ambiguous => TraitProofSolution::Ambiguous,
-                    InferredProjectionValueSolution::Cycle => TraitProofSolution::Cycle,
-                    InferredProjectionValueSolution::Overflow => TraitProofSolution::Overflow,
-                }
-            }
-        };
+        let result = solve_rigid_trait_predicate(
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            environment,
+            predicate,
+        )?;
+        if result != TraitProofSolution::Proven {
+            return Ok(result);
+        }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
+pub fn solve_nested_for_all_trait_predicate_conjunction(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    parent_universe: TraitUniverseIndex,
+    query: NestedForAllTraitPredicateConjunction,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let (arguments, argument_count) = query.instantiate_arguments(parent_universe)?;
+    let environment = TraitProjectionEnvironment {
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    for predicate in query.predicates() {
+        let predicate = query.instantiate_predicate(
+            predicate
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            &arguments[..argument_count],
+        )?;
+        let result = solve_rigid_trait_predicate(
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            environment,
+            predicate,
+        )?;
         if result != TraitProofSolution::Proven {
             return Ok(result);
         }
@@ -12678,6 +12854,183 @@ mod tests {
             .unwrap();
         assert_eq!(
             solve_for_all_trait_predicate_conjunction(
+                &TraitImplementationDatabase::EMPTY,
+                &recursive_generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                cyclic,
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+    }
+
+    #[test]
+    fn solves_nested_universal_predicates_with_distinct_placeholder_universes() {
+        let outer = TraitGenericParameterId::new(0);
+        let inner = TraitGenericParameterId::new(1);
+        let associated = TraitAssociatedTypeId::new(1);
+        let identity_id = GenericTraitImplementationId::new(204);
+        let identity = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(780),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        let inner_implemented = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(781),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic.insert(identity_id, identity).unwrap();
+        generic
+            .insert(GenericTraitImplementationId::new(205), inner_implemented)
+            .unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new(
+                    identity_id,
+                    associated,
+                    BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+                ),
+            )
+            .unwrap();
+
+        let mut query = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        query.push_binder(1).unwrap();
+        query
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(781),
+                    BoundTraitGoalType::Parameter(inner),
+                ),
+            ))
+            .unwrap();
+        query
+            .push(BoundTraitPredicate::ProjectionEquality {
+                projection: BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(780),
+                        BoundTraitGoalType::Parameter(outer),
+                    ),
+                    associated,
+                ),
+                expected: BoundTraitGoalType::Parameter(outer),
+            })
+            .unwrap();
+        assert_eq!(query.binder_count(), 2);
+        assert_eq!(query.total_parameter_count(), 2);
+        assert_eq!(
+            solve_nested_for_all_trait_predicate_conjunction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::ROOT,
+                query,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+
+        let mut cross_universe = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        cross_universe.push_binder(1).unwrap();
+        cross_universe
+            .push(BoundTraitPredicate::ProjectionEquality {
+                projection: BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(780),
+                        BoundTraitGoalType::Parameter(outer),
+                    ),
+                    associated,
+                ),
+                expected: BoundTraitGoalType::Parameter(inner),
+            })
+            .unwrap();
+        assert_eq!(
+            solve_nested_for_all_trait_predicate_conjunction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::ROOT,
+                cross_universe,
+            ),
+            Ok(TraitProofSolution::NoSolution)
+        );
+        assert_eq!(
+            solve_nested_for_all_trait_predicate_conjunction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::new(u16::MAX - 1),
+                cross_universe,
+            ),
+            Err(TraitGoalError::UniverseOverflow)
+        );
+
+        let mut closed_prefix = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        closed_prefix
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(781),
+                    BoundTraitGoalType::Parameter(outer),
+                ),
+            ))
+            .unwrap();
+        assert_eq!(
+            closed_prefix.push_binder(1),
+            Err(TraitGoalError::InvalidGoal)
+        );
+        assert_eq!(
+            NestedForAllTraitPredicateConjunction::new(1)
+                .unwrap()
+                .push_binder(MAX_TRAIT_GENERIC_PARAMETERS),
+            Err(TraitGoalError::TooManyGenericParameters)
+        );
+
+        let mut recursive = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(782),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        recursive
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(782),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ))
+            .unwrap();
+        let mut recursive_generic = GenericTraitImplementationDatabase::EMPTY;
+        recursive_generic
+            .insert(GenericTraitImplementationId::new(203), recursive)
+            .unwrap();
+        let mut cyclic = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        cyclic.push_binder(1).unwrap();
+        cyclic
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(782),
+                    BoundTraitGoalType::Parameter(inner),
+                ),
+            ))
+            .unwrap();
+        assert_eq!(
+            solve_nested_for_all_trait_predicate_conjunction(
                 &TraitImplementationDatabase::EMPTY,
                 &recursive_generic,
                 &TraitWhereClauseDatabase::EMPTY,
