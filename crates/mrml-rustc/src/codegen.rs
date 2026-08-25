@@ -10299,7 +10299,9 @@ fn runtime_loan_may_borrow_path(
     {
         return Some(false);
     }
-    if include_intermediate && loan.borrowed_path == target {
+    if include_intermediate
+        && runtime_move_path_is_ancestor_or_same(facts, target, loan.borrowed_path)?
+    {
         return Some(true);
     }
     let path = facts
@@ -10332,6 +10334,24 @@ fn runtime_loan_may_borrow_path(
         }
     }
     Some(!found_parent && loan.borrowed_path == target)
+}
+
+fn runtime_move_path_is_ancestor_or_same(
+    facts: &RuntimeBodyFacts<'_>,
+    ancestor: RuntimeMovePathId,
+    descendant: RuntimeMovePathId,
+) -> Option<bool> {
+    let mut current = Some(descendant);
+    for _ in 0..=facts.move_path_count {
+        let Some(path) = current else {
+            return Some(false);
+        };
+        if path == ancestor {
+            return Some(true);
+        }
+        current = facts.move_paths.get(path.0).and_then(|fact| *fact)?.parent;
+    }
+    None
 }
 
 fn validate_runtime_bounded_direct_loan_liveness(
@@ -28171,6 +28191,70 @@ mod tests {
         ] {
             analyze(accepted).unwrap();
         }
+    }
+
+    #[test]
+    fn runtime_owner_moves_include_projected_reference_path_ancestors() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &u16 = &*holder.0; let moved = holder; *child + *moved.0 }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &mut u16 = &mut *holder.0; let moved = holder; *child + *moved.0 }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for accepted in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &u16 = &*holder.0; let copied = *child; let moved = holder; copied + *moved.0 }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let child: &u16 = &*holder.0; let moved = holder.1; *child + *moved }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut holder = (&mut first,); let replacement = (&mut second,); let child: &u16 = &*holder.0; holder = replacement; *child + *holder.0 }",
+        ] {
+            analyze(accepted).unwrap();
+        }
+
+        let mut corrupt = RuntimeBodyFacts::EMPTY;
+        corrupt.move_path_count = 1;
+        corrupt.move_paths[0] = Some(RuntimeMovePathFact {
+            id: RuntimeMovePathId(0),
+            parent: Some(RuntimeMovePathId(0)),
+            base: RuntimePlaceIdentity::Local(RuntimeLocalId(0)),
+            projections: RuntimePlaceProjections::EMPTY,
+            ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
+        });
+        assert_eq!(
+            runtime_move_path_is_ancestor_or_same(
+                &corrupt,
+                RuntimeMovePathId(1),
+                RuntimeMovePathId(0)
+            ),
+            None
+        );
+        assert_eq!(
+            runtime_move_path_is_ancestor_or_same(
+                &corrupt,
+                RuntimeMovePathId(0),
+                RuntimeMovePathId(1)
+            ),
+            None
+        );
     }
 
     #[test]

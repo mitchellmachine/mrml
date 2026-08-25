@@ -4163,6 +4163,37 @@ fn rustc_local_reference_ancestor_moves_suspend_live_children_like_the_oracle() 
 }
 
 #[test]
+fn rustc_projected_reference_path_ancestor_moves_match_the_oracle() {
+    let rejected = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &u16 = &*holder.0; let moved = holder; *child + *moved.0 }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &mut u16 = &mut *holder.0; let moved = holder; *child + *moved.0 }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &u16 = &*holder.0; let copied = *child; let moved = holder.0; copied + *moved }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let child: &u16 = &*holder.0; let moved = holder.1; *child + *moved }",
+    ];
+    for source in accepted {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+}
+
+#[test]
 fn rustc_implicit_mutable_reborrow_matches_the_oracle() {
     let rejected = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &mut u16 = parent; let parent_value = *parent; let child_value = *child; parent_value + child_value }";
     for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
