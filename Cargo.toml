@@ -23,7 +23,7 @@ members = [
     "apps/cli",
     "tools/git",
     "packages/libraries/ssh",
-    "crates/mrml-machine",
+    "apps/machine",
     "packages/libraries/error",
     "crates/mrml-server",
     "packages/libraries/terminal-style",
