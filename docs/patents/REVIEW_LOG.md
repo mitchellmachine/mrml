@@ -4161,6 +4161,19 @@ sharing, ballooning, migration, deduplication, transport, device mechanism, or
 reclamation policy. Broader microVM resource accounting remains `TRIGGERED`;
 agent review does not replace independent human dual review.
 
+# 2026-08-25 — Hosted MRML-owned VMM control-memory accounting
+
+**Result: NOT_TRIGGERED within the reviewed resource-lifecycle shape.** The
+focused KVM/WHP component profile uses conventional `size_of`, checked page
+rounding, and the existing quantitative `MemoryObject` lifecycle to reserve its
+own fixed prepared-guest control structure before construction and reclaim it
+after teardown. It adds no allocator, scheduling or placement algorithm,
+virtualization mechanism, transport, device protocol, queue design, sharing,
+migration, or host-hypervisor introspection. Opaque host-kernel/hypervisor and
+device-model memory remain outside this increment; broader microVM resource
+accounting remains `TRIGGERED`, and agent review does not replace independent
+human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified
