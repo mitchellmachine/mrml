@@ -19,7 +19,7 @@ hipblas = ["mrml-agent/hipblas"]
 sycl = ["mrml-agent/sycl"]
 
 [dependencies]
-mrml-agent = { path = "../mrml-agent", default-features = false, features = ["runtime"] }
+mrml-agent = { path = "../../packages/libraries/agent", default-features = false, features = ["runtime"] }
 mrml-tools = { path = "../../tools/host" }
 mrml-terminal-style = { path = "../../packages/libraries/terminal-style" }
 mrml-runtime = { path = "../../packages/libraries/runtime" }

@@ -17,7 +17,7 @@ cuda = ["mrml-agent/cuda"]
 vulkan = ["mrml-agent/vulkan"]
 
 [dependencies]
-mrml-agent = { path = "../mrml-agent", default-features = false, features = ["runtime"] }
+mrml-agent = { path = "../../packages/libraries/agent", default-features = false, features = ["runtime"] }
 mrml-terminal-style = { path = "../../packages/libraries/terminal-style" }
 mrml-error = { path = "../../packages/libraries/error" }
 mrml-model = { path = "../../packages/libraries/model" }

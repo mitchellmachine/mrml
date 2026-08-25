@@ -510,6 +510,21 @@ was checked on a Windows host without changing model source behavior:
 No Linux runtime, model corpus, CUDA/GPU execution, or physical-hardware
 evidence was established by this path-only move.
 
+The agent-library move from `crates/mrml-agent` to `packages/libraries/agent`
+was checked on a Windows host without changing agent source behavior:
+
+- workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
+- pinned-nightly `cargo test -p mrml-agent` — PASS, 20 tests; conditional live
+  query test success does not prove that a remote query occurred;
+- strict all-target Clippy — FAIL on 17 existing lint sites in unchanged agent
+  source/tests;
+- `.\target\debug\mrml.exe build mrml-agent` — FAIL at the relocated tensor
+  dependency's already-recorded MSVC/no_std build-script unwind limitation;
+- stale exact `crates/mrml-agent/` path scan — PASS.
+
+No Linux runtime, live remote model service, CUDA/GPU execution, desktop tools,
+or physical-hardware evidence was established by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
