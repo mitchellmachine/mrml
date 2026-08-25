@@ -764,6 +764,10 @@ the original field generation must outlive the function. Mutually exclusive
 branch writes are both retained, as are sequential historical owners, matching
 modern Rust's projected-field return behavior. Reference-value copy/move RHS
 origins and fresh borrow RHS origins are classified separately and boundedly.
+Loop-carried projected generations apply the same rule, but only when the write
+is reachable from function entry and can reach the exact returned field. This
+retains local-backed generations from zero-or-more-iteration loops while
+excluding disconnected post-`break` suffix writes.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

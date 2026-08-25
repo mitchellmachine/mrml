@@ -584,6 +584,13 @@ initialization even after replacement, and a final sequential local-backed
 write; it accepts branch and sequential controls whose generations are all
 parameter-backed. Both host suites remain green at 766 compiler tests.
 
+The loop-carried projected-return milestone retains reachable local-backed field
+writes across a zero-or-more-iteration loop, including a local generation later
+replaced in the same iteration. It accepts the parameter-backed equivalent and
+an unreachable write after unconditional `break`. The latter requires both
+entry-to-generation and generation-to-return CFG reachability, not event order
+alone. Both host suites remain green at 766 compiler tests.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

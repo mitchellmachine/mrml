@@ -3827,6 +3827,16 @@ controls are accepted. Windows gnullvm and native Arch Linux WSL each pass the
 same 766 compiler tests. This remains bounded projected-field outlives analysis,
 not general regions, named lifetime inference, or complete Polonius semantics.
 
+The loop-carried projected-return milestone filters each candidate field write
+through both sides of the ownership CFG: it must be reachable from function
+entry and must reach the exact return. The oracle rejects a reachable local-
+backed loop generation even when the loop may execute zero times or a later
+same-iteration write restores the parameter; it accepts the parameter-backed
+loop and a disconnected local-backed write after unconditional `break`. Windows
+gnullvm and native Arch Linux WSL each pass the same 766 compiler tests. This is
+bounded CFG reachability for exact projected generations, not general regions or
+complete Polonius semantics.
+
 The repeated projected-source loan milestone extends that bounded relation
 across another directly initialized tuple whose selected reference field is
 later moved and reborrowed. The pinned oracle rejects shared and mutable live-

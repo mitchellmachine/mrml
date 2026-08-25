@@ -3862,6 +3862,13 @@ dispatch mechanism. Existing `TRIGGERED` reviews for those implementation paths
 remain unchanged; this evidence/metadata tooling selects no additional patent
 mechanism.
 
+# 2026-08-25 — Loop-carried projected-return reachability
+
+**Result: NOT_TRIGGERED.** This compiler-only increment filters existing bounded
+place generations through existing entry and return CFG reachability. It selects
+no runtime allocation, reclamation, synchronization, enforcement, hardware,
+protocol, cryptographic, or executable mechanism.
+
 # 2026-08-25 — Conditional projected-reference loan ancestry
 
 **Result: NOT_TRIGGERED.** This compiler increment extends MRML's existing

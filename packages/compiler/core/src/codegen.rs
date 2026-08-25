@@ -11781,6 +11781,16 @@ fn runtime_path_outlives_function_at_effect(
                         effect.path == path_id
                             && effect.kind == RuntimePlaceEffectKind::Write
                             && effect.event.0 < returned_at.event.0
+                            && facts
+                                .ownership_control_point(effect.location)
+                                .is_some_and(|point| {
+                                    point == RuntimeOwnershipControlPoint::Entry
+                                        || runtime_ownership_point_reaches(
+                                            facts,
+                                            RuntimeOwnershipControlPoint::Entry,
+                                            point,
+                                        )
+                                })
                     })
                 {
                     if !runtime_ownership_position_precedes(
@@ -29808,6 +29818,8 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let local = *input; let mut holder = (input,); holder.0 = input; holder.0 = &local; holder.0 }",
             "fn value(input: &u16) -> &u16 { let local = *input; let mut holder = (&local,); holder.0 = input; holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut holder = (&local,); holder.0 = if choose { input } else { &*input }; holder.0 }",
+            "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { holder.0 = &local; break; } holder.0 }",
+            "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { holder.0 = &local; holder.0 = input; break; } holder.0 }",
         ] {
             match analyze(rejected) {
                 Err(error) => assert_eq!(
@@ -29834,6 +29846,8 @@ mod tests {
             "fn value(input: &u16, first: bool, second: bool) -> &u16 { let holder = (if first { input } else if second { &*input } else { input },); holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let mut holder = (input,); if choose { holder.0 = &*input; } else { holder.0 = input; } holder.0 }",
             "fn value(input: &u16) -> &u16 { let mut holder = (input,); holder.0 = &*input; holder.0 = input; holder.0 }",
+            "fn value(input: &u16, repeat: bool) -> &u16 { let mut holder = (input,); while repeat { holder.0 = &*input; break; } holder.0 }",
+            "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { break; holder.0 = &local; } holder.0 }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }
