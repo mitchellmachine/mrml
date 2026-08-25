@@ -5,6 +5,13 @@ loading, lifetime, and evidence requirements. It does not claim that an
 interface schema, resolver, dynamic loader, shared executable mapping,
 independently serviced provider, or ZIM integration is implemented.
 
+**PARTIALLY IMPLEMENTED prerequisite:** `packages/tools/mrml` now defines
+compiler-independent canonical interface identity/generation validation, bounded
+borrowed views, opaque generational handles, and one fixed little-endian call
+header codec. These are data/validation primitives only: there is no schema,
+binding generator, calling convention, loader, executable mapping, provider,
+consumer migration, or runtime interface resolution.
+
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the

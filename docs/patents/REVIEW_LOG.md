@@ -3419,3 +3419,31 @@ Transitive graph solving, interface/provider resolution, installation,
 activation, update, and servicing remain `TRIGGERED` and require separate
 mechanism-specific review. This technical screen establishes neither clearance
 nor infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Fixed MRML ABI validation primitives
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The implementation adds
+only canonical interface-name/generation validation, checked offset/length
+borrowed views, opaque index/generation handles, and an exact fixed-size
+little-endian call-header codec. It generates no source or bindings, defines no
+native-language layout or calling convention, maps no executable, performs no
+symbol or provider lookup, creates no channel/service/runtime, and parses no
+user-supplied interface schema.
+
+Claim-focused worldwide searching reviewed adjacent language-neutral interface
+and binding families including [CN 1073276 A](https://patents.google.com/patent/CN1073276A/en),
+which describes compiling an object-interface definition into intermediate form
+and emitting language bindings/loadable modules;
+[EP 1 688 836 A1](https://patents.google.com/patent/EP1688836A1/en), which concerns
+abstract service descriptions, generated contracts/configuration, channels, and
+service runtimes; and [EP 2 015 177 A1](https://patents.google.com/patent/EP2015177A1/en),
+which concerns translator bind points, native call stubs, parameter transforms,
+and generated target IR. The bounded MRML validation primitives implement none
+of those claim-defining mechanisms. Relevant publications were checked against
+the corresponding CNIPA/EPO family records exposed by the national/regional
+register links; non-overlap, not assumed status, is the design basis.
+
+Schema parsing, binding generation, ABI fingerprints, calling convention,
+loading, and runtime binding remain `TRIGGERED` and require separate selected-
+mechanism review. This technical screen establishes neither clearance nor
+infringement and does not replace independent human dual review.

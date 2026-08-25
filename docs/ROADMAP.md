@@ -50,6 +50,12 @@ no version ranges, optimization, backtracking, network/catalog lookup, provider
 substitution, activation, or transitive graph construction; those broader
 package and component mechanisms remain **PLANNED**.
 
+Stable ABI groundwork now includes canonical interface identity/generation,
+bounded borrowed-view validation, opaque generational handles, and a fixed
+little-endian call-header codec. This does not establish a calling convention,
+native layout, schema, generated binding, loader, or provider ABI; those remain
+**PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per
