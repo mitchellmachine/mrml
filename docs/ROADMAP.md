@@ -347,6 +347,13 @@ at eight tests. Forty-one of 42 components are native; only the `mrml`
 clean-source bootstrap remains transitional. No VM, bare-metal, IOMMU, GPU, or
 physical-hardware execution occurred.
 
+The native build graph is complete: `mrml` now self-builds/tests through its own
+bin-only action, workspace loading rejects any missing native action, and the
+internal Cargo transition branch is removed. Locked clean-source bootstrap plus
+doctor/audit, native self-build, and 12 self-tests passes on both exact hosts.
+All 42 components are native. Cargo remains only stage zero; package, release,
+image, install, and publication milestones remain independently incomplete.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

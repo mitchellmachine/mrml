@@ -2,15 +2,13 @@
 
 **Status: PARTIALLY IMPLEMENTED.** `tools/mrml` now parses the versioned root
 `MRML.workspace`, emits typed list/doctor/audit/build/test results, resolves and
-validates the declared dependency graph natively, inventories unusual build
-inputs, directly invokes upstream rustc for the first exact native leaf while
-using a locked Cargo/upstream-rustc compilation bridge for remaining nodes, selects current-
+validates the complete declared dependency graph natively, inventories unusual
+build inputs, directly invokes pinned upstream rustc for all 42 actions, selects current-
 host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
 toolchain checks, and rejects unimplemented package/release/image/publish
 commands. All tracked components have semantic homes outside generic `crates/`.
-Direct rustc graph coverage, Linux execution evidence, package/release/image builders,
-sandboxing, and publication remain planned. See
+Package/release/image builders, sandboxing, and publication remain planned. See
 [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
 
 > Until `mrml-rustc` satisfies the defined production-readiness gate, the MRML
@@ -42,19 +40,17 @@ key paths. Publisher, Store-metadata, release, and OS-root key roles remain
 separate.
 
 ```text
-source -> mrml build -> pinned upstream rustc/Cargo initially -> linked artifact
+source -> mrml build -> pinned upstream rustc -> linked artifact
   -> ABI/security/build metadata -> mrml package -> exact package digest
   -> isolated mrml sign -> PackageStore / mrml release
   -> mrml image -> SystemImage / installation media
 ```
 
-Cargo is stage-zero plus a private transitional bridge invoked by `mrml`; it is
-not a second public build frontend. Clean checkout uses pinned Cargo/rustc only
-for `cargo build -p mrml`, after which normal build/test commands use `mrml` for
-kernel, VMM, bootloader, services, drivers, apps, libraries, compiler, tests,
-host tools, CUDA, packages, releases, and images as each graph node migrates.
-Removing the internal Cargo bridge, rustc, or LLVM is an evidence-driven
-migration, never an OS-progress prerequisite. Compiler,
+Cargo is stage zero and is not a second public build frontend. Clean checkout
+uses pinned Cargo/rustc only for `cargo build --locked -p mrml`, after which all
+normal component build/test commands use `mrml`. The internal Cargo bridge has
+been removed and missing native actions fail workspace loading. Removing rustc
+or LLVM remains an evidence-driven migration, never an OS-progress prerequisite. Compiler,
 object, package, release, and image responsibilities may later be libraries or
 tools; avoid premature process/tool proliferation.
 
@@ -130,9 +126,8 @@ hosted WSL2 evidence, not bare-metal Linux or KVM evidence. Action paths and cra
 names are validated before invocation;
 the frontend resolves the exact dated Windows GNU/LLVM or Linux GNU toolchain
 through rustup rather than inheriting the caller's active default. There is no
-Cargo fallback for a declared native action. Remaining nodes are
-honestly labeled `cargo-transition` until their extern, feature, target, and
-build-action declarations are exact.
+Cargo fallback: all nodes now have exact actions, and workspace loading fails if
+any action is missing.
 
 `mrml-runtime` is the first dependent native node. Its action declares the
 package identity, Rust crate name, and target family for each platform extern:

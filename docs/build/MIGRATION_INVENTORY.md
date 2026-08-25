@@ -1,12 +1,13 @@
 # Universal build migration inventory
 
-**Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
+**Status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
 classified and live in semantic `apps/`, `compiler/`, `packages/`, `services/`,
 `system/`, `tests/`, or `tools/` homes; no tracked component remains under generic
 `crates/`. The native resolver validates all 118 declared dependency edges
-without Cargo metadata. Cargo remains a compilation bridge, so no claim is made
-that direct-rustc migration or Cargo bridge removal is complete.
+without Cargo metadata, every component has an exact native action, and the
+internal Cargo bridge is removed. Cargo remains only for clean-source bootstrap
+of `mrml`; package/release/image work is not complete.
 
 ## Implemented first gate
 
@@ -712,15 +713,13 @@ were not exercised by the Windows implementation environment.
 The exact 42 entries live in `MRML.workspace`; this table must not become a
 second inventory.
 
-## Cargo-removal blockers
+## Post-migration constraints
 
-- Every component still has Cargo dependency metadata, but no tracked component
-  remains beneath generic `crates/`. The root Cargo workspace still contains
-  every component so the bridge resolves today's exact graph.
-- `packages/gpu/tensor/build.rs` remains only for Cargo comparison while that
-  bridge exists. The native graph now replaces its behavior with an explicit
-  structured PTX action; final Cargo removal can delete the legacy script after
-  dependent native nodes and clean-source bootstrap are complete.
+- Every component retains Cargo dependency metadata for audit parity and
+  historical comparison, but normal component build/test paths do not invoke
+  Cargo. No tracked component remains beneath generic `crates/`.
+- Tensor's obsolete Cargo `build.rs` is deleted. Its explicit structured PTX
+  action is the sole generated-kernel path after stage-zero bootstrap.
 - Dependency, feature, output, and source-input facts are persisted and fail
   closed on Cargo metadata or lexical-audit drift. Lexical discovery still
   cannot prove that arbitrary macro expansion introduces no additional input.
@@ -730,10 +729,10 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Forty-one
+  explicit. All 42
   components now have native actions. Direct-rustc expansion still needs
-  lock/digest validation and the remaining non-library actions before
-  Cargo can be removed behind the remaining nodes.
+  lock/digest validation for later packaging, but Cargo has been removed from
+  every normal component build/test path.
 - Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,
   and CI together and verifying both Windows/WHP and Linux/KVM. The present task
   intentionally establishes the graph before that high-churn move.
@@ -917,6 +916,17 @@ Linux WSL2 toolchain passes doctor/audit, native build, and matching native/Carg
 eight-test suites. Forty-one components are native and only `mrml` itself
 remains transitional as the clean-source bootstrap boundary. No VM, bare metal,
 IOMMU, physical GPU, or physical hardware ran.
+
+The `mrml` build tool now has an exact native self-build/self-test action.
+Workspace loading rejects any component without an action, structured listing
+has no transition builder, and the internal Cargo subprocess path is deleted.
+Fresh locked Cargo bootstrap followed by doctor/audit, native self-build, and
+all 12 native self-tests passes on Windows gnullvm and Arch Linux WSL2. All 42
+components are native; Cargo is required only to obtain the first `mrml` binary
+from clean source. Full host-family builds pass on both hosts, as do all declared
+MRML-native components, both UEFI components, and the CUDA target. Runtime,
+error, JSON, and AV1 no longer overclaim target families lacking source cfg
+implementations. Package/release/image work remains separately incomplete.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

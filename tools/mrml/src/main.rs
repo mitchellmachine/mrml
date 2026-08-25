@@ -1203,22 +1203,22 @@ fn load_workspace() -> Result<Workspace, String> {
                     benchmark_actions.join(",")
                 ));
             }
-            let mut declared_custom_builds: Vec<_> = component
+            let mut declared_generated: Vec<_> = component
                 .outputs
                 .iter()
-                .filter_map(|output| output.strip_suffix(":custom-build"))
+                .filter_map(|output| output.strip_suffix(":generated"))
                 .collect();
             let mut ptx_actions = action
                 .ptx
                 .iter()
-                .map(|_| "build-script-build")
+                .map(|ptx| ptx.output.as_str())
                 .collect::<Vec<_>>();
-            declared_custom_builds.sort();
+            declared_generated.sort();
             ptx_actions.sort();
-            if declared_custom_builds != ptx_actions
+            if declared_generated != ptx_actions
                 || action.ptx.is_some()
-                    && (component.input_policy.build_scripts != 1
-                        || component.input_policy.external_commands != 1
+                    && (component.input_policy.build_scripts != 0
+                        || component.input_policy.external_commands != 0
                         || component.input_policy.included_files != 1)
             {
                 return Err(format!(
@@ -1247,6 +1247,15 @@ fn load_workspace() -> Result<Workspace, String> {
                 ));
             }
         }
+    }
+    if let Some(component) = components
+        .iter()
+        .find(|component| component.rust_action.is_none())
+    {
+        return Err(format!(
+            "NativeActionMissing {{ component: {} }}",
+            component.id
+        ));
     }
     Ok(Workspace { root, components })
 }
@@ -1513,7 +1522,7 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     for component in &workspace.components {
         if mode == OutputMode::Structured {
             println!(
-                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|builder={}",
+                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|builder=native-rustc",
                 component.id,
                 component.path,
                 component.class,
@@ -1521,12 +1530,7 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 component.dependencies.join(","),
                 component.features.join(","),
                 component.outputs.join(","),
-                component.input_policy.structured(),
-                if component.rust_action.is_some() {
-                    "native-rustc"
-                } else {
-                    "cargo-transition"
-                }
+                component.input_policy.structured()
             );
         } else {
             println!(
@@ -1628,73 +1632,16 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 "metadata|target=CUDA|gpu_arch={gpu_arch}|artifact=PTX|toolchain=upstream-rustc-nvptx|runtime_authority=none"
             );
         }
-        let builder = if component.rust_action.is_some() {
-            "native-rustc"
-        } else {
-            "cargo-transition"
-        };
+        let builder = "native-rustc";
         emit(mode, operation, component, &target, builder, "START");
-        if component.rust_action.is_some() {
-            let gpu_arch = args
-                .windows(2)
-                .find(|pair| pair[0] == "--gpu-arch")
-                .map(|pair| pair[1].as_str());
-            run_rust_action(workspace, component, operation, &target, release, gpu_arch)?;
-        } else {
-            run_cargo_transition(workspace, component, operation, &target, release)?;
-        }
+        let gpu_arch = args
+            .windows(2)
+            .find(|pair| pair[0] == "--gpu-arch")
+            .map(|pair| pair[1].as_str());
+        run_rust_action(workspace, component, operation, &target, release, gpu_arch)?;
         emit(mode, operation, component, &target, builder, "PASS");
     }
     Ok(())
-}
-
-fn run_cargo_transition(
-    workspace: &Workspace,
-    component: &Component,
-    operation: &str,
-    target: &str,
-    release: bool,
-) -> Result<(), String> {
-    let cargo = pinned_tool("cargo")?;
-    let mut command = Command::new(cargo);
-    command
-        .current_dir(&workspace.root)
-        .arg(operation)
-        .arg("--locked")
-        .arg("-p")
-        .arg(&component.cargo_package);
-    if release {
-        command.arg("--release");
-    }
-    if component.cargo_package == "mrml-whp-run" {
-        command.arg("--no-default-features");
-    }
-    if target == "MRML_NATIVE" {
-        command.args(["--target", "x86_64-unknown-none"]);
-    } else if target == "UEFI" {
-        command.args([
-            "--target",
-            "x86_64-unknown-uefi",
-            "--features",
-            "kernel-image",
-        ]);
-    } else if target == "CUDA" {
-        command.args(["--features", "cuda"]);
-    }
-    let status = command.status().map_err(|error| {
-        format!(
-            "ToolchainUnavailable {{ target: {target}, required_component: cargo, detail: {error} }}"
-        )
-    })?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "BuildFailed {{ component: {}, target: {target}, builder: cargo-transition, status: {:?} }}",
-            component.id,
-            status.code()
-        ))
-    }
 }
 
 fn run_rust_action(

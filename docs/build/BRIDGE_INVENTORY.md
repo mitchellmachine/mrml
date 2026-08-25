@@ -1,14 +1,14 @@
 # Cargo bridge inventory
 
-**Status: IMPLEMENTED NATIVE AUDIT / TRANSITIONAL COMPILATION BRIDGE.** The
+**Status: IMPLEMENTED NATIVE GRAPH / CLEAN-SOURCE BOOTSTRAP ONLY.** The
 dependency-free `mrml` frontend resolves version-3 `MRML.workspace` declarations
 without invoking Cargo metadata. It rejects duplicate MRML/path/Cargo-stage
 identities while loading, then rejects missing dependencies, self-dependencies,
 cycles, unknown targets, and empty output sets with bounded structured errors.
 Its deterministic dependency-first order is repository-owned. Input policies
-are compared with the bounded source scan. Cargo remains only as the current
-compilation bridge while direct-rustc actions are made exact; Cargo identity is
-not MRML package identity or runtime authority.
+are compared with the bounded source scan. All components have native actions;
+Cargo is used only for locked clean-source bootstrap of `mrml`. Cargo identity
+is not MRML package identity or runtime authority.
 
 Run the human or stable structured inventory with the pinned toolchain:
 
@@ -24,7 +24,7 @@ The 2026-08-25 Windows gnullvm result is:
 118 deduplicated local dependency records
 72 feature names
 64 declared outputs
-1 custom build target
+0 custom build targets
 0 procedural-macro targets
 9 native-link source sites
 31 compile-time environment source sites
@@ -39,21 +39,27 @@ file sizes, and reports exact repository-relative file and line locations.
 
 ## Exact exceptional mechanisms
 
-- `mrml-tensor` owns the sole legacy Cargo custom-build target. Its native action
-  now invokes the pinned rustc CUDA target directly and materializes the PTX
-  consumed through `include_bytes!`; `build.rs` remains only for Cargo comparison
-  until the bridge is removed.
+- `mrml-tensor` invokes the pinned rustc CUDA target through its native action
+  and materializes the PTX consumed through `include_bytes!`. The obsolete Cargo
+  custom-build target has been deleted.
 - There are no procedural-macro targets.
 - Native link attributes occur only in the Windows/Linux platform layers, KVM,
   WHP, `mrml-math`, the hosted kernel benchmark, and the Opus differential
   example. They are host/compatibility inputs, not MRML-native application ABI.
-- Compile-time environment and external-command sites remain bridge inputs and
-  must become explicit per-node declarations before direct-rustc execution.
+- Compile-time environment and external-command sites are exact per-node native
+  declarations and remain explicit review inputs.
 
 This inventory is lexical risk discovery, not proof that arbitrary macro output
 cannot create another input. The native resolver covers declared graph facts;
 the source scan identifies known direct sites. Both must pass before a direct-
-rustc or Cargo-removal step.
+rustc or build-input change.
+
+The internal Cargo bridge is removed. All 42 components, including `mrml`
+itself, have exact native actions and workspace loading fails on any missing
+action. Fresh `cargo build --locked -p mrml` is the sole stage-zero use; both
+exact hosts then pass doctor/audit, native self-build, and all 12 native
+self-tests with no `cargo-transition` result. This completes graph migration,
+not the still-planned package/release/image work.
 
 ## Next gate
 
@@ -65,10 +71,10 @@ flags, and lock/digest inputs exact enough for direct rustc. The dependency-free
 `mrml-math`, `mrml-windows`, and `mrml-linux` leaves are the first exact native
 build/test actions and do not invoke Cargo. Windows execution covers math and
 the Windows leaf; Arch Linux WSL2 execution covers math and the Linux leaf.
-This does not establish bare-metal Linux or KVM parity. Cargo must then be
-confined to clean-source stage-zero bootstrap only after Windows/Linux build
-equivalence is demonstrated. Treat input-policy changes as explicit review items,
-never automatically accepted count updates.
+This does not establish bare-metal Linux or KVM parity. Cargo is now confined to
+clean-source stage-zero bootstrap after Windows/Linux equivalence was
+demonstrated. Treat input-policy changes as explicit review items, never
+automatically accepted count updates.
 
 `mrml-runtime` is the first dependent native action. Its two declared package/
 crate extern bindings are target-scoped, dependency-first, and wired by exact

@@ -3318,3 +3318,14 @@ core provider profile, and recursive generated-input path to the unchanged KVM
 launcher and its exact dependency graph. It adds no hypervisor, VM, guest,
 mapping, CUDA, resolver, cache, or runtime mechanism. Agent review does not
 replace independent human dual review.
+
+# 2026-08-25 — Native self-build and Cargo bridge removal
+
+**Result: TRIGGERED.** Workspace loading now requires every component to have a
+native action, `mrml` self-builds/tests through rustc, and the internal Cargo
+fallback is removed. This changes resolver/build failure behavior in the
+existing package/cache/resolver risk area and establishes neither clearance nor
+infringement; material release mechanisms remain subject to the recorded
+worldwide authoritative-register review. Agent review does not replace
+independent human dual review. Narrowing unsupported target declarations and
+deleting the obsolete Cargo-only tensor build script add no mechanism.

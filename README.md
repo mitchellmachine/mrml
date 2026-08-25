@@ -274,21 +274,20 @@ upstream-rustc bootstrap policy are specified in
 repository-pinned Windows/Linux Rust toolchain:
 
 ```text
-cargo build -p mrml
+cargo build --locked -p mrml
 ```
 
 Then use `mrml doctor`, `mrml audit`, `mrml build`, `mrml test`, and target/
-component selectors for migrated repository work. `doctor` verifies the native
-dependency graph without Cargo metadata; `audit` inventories native declarations
-and unusual build inputs. Cargo remains an internal locked compilation bridge
-during this incremental migration; package/release/image commands are not
-implemented yet.
+component selectors for repository work. `doctor` verifies the native dependency
+graph without Cargo metadata; `audit` inventories native declarations and
+unusual build inputs. All 42 components have exact native actions and `mrml`
+contains no Cargo fallback. Cargo is confined to the locked clean-source
+bootstrap above; package/release/image commands are not implemented yet.
 
-`mrml-math`, `mrml-windows`, and `mrml-linux` are the first native compiler
-nodes: their build and test actions invoke the pinned upstream rustc directly
-and are reported as `builder=native-rustc`. Other components remain visibly
-`builder=cargo-transition` until their exact
-extern, feature, target, and build-action declarations migrate.
+`mrml-math`, `mrml-windows`, and `mrml-linux` were the first native compiler
+nodes. Every component now invokes pinned upstream rustc through an exact native
+action and is reported as `builder=native-rustc`; a missing action makes workspace
+loading fail closed.
 
 `mrml-runtime` is the first dependent native node. Its Windows and Linux externs
 are target-scoped; `mrml` builds the active platform leaf first and supplies its
@@ -489,6 +488,13 @@ host `cuda` profile directly. Arch Linux WSL2 matches Cargo at eight passing
 tests. Forty-one components are native and only the `mrml` clean-source
 bootstrap remains transitional. No VM, bare metal, IOMMU, physical GPU, or
 physical hardware ran.
+
+Finally, `mrml` has an exact native self-build/self-test action and the internal
+Cargo transition branch has been deleted. Fresh locked Cargo bootstrap followed
+by doctor/audit, native self-build, and all 12 self-tests passes on Windows
+gnullvm and Arch Linux WSL2. All 42 components are native; Cargo is used only to
+obtain the first `mrml` binary from a clean checkout. Package/release/image work
+remains separate and incomplete.
 
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
