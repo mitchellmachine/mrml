@@ -156,6 +156,69 @@ not physical DMA/IOMMU proof. Kernel launch does not establish CUDA replacement;
 distinguish API, native kernels, optimized libraries, measured parity, and
 ecosystem competitiveness.
 
+## Abstraction and profile discipline
+
+> The MRML GPU API should expose only control that applications genuinely need
+> to express semantics or performance intent. Hardware details that the
+> compiler, runtime, scheduler, or backend can safely infer should remain below
+> the application ABI.
+
+Before adding control ask: **Can the compiler or backend infer this safely and
+efficiently?** If yes, keep it internal. Physical heaps/banks/engines, queue-
+family minutiae, cache operations, packets, tiling/compression, registers, and
+redundant synchronization are not mandatory ordinary API. API growth requires
+architectural justification; convenience belongs in libraries.
+
+The stable ABI contains domains, pools, buffers/images/tensors, modules,
+pipelines, queues, graphs, timelines, surfaces, and media/peer sessions. Three
+layers never collapse: stable object ABI; evolving High IR/library algorithms
+such as matmul, convolution, attention, fusion, quantization, and reductions;
+and vendor Machine IR/final lowering. High-level algorithms are not syscalls or
+fixed commands, and `CommandGraph` never freezes framework nodes such as
+`AttentionNode`. Tensors remain first-class for type, shape, strides, layout,
+quantization, sparsity, backing, placement, and specialization.
+
+- **Safe GPU** is ordinary: memory-safe source, typed objects/address spaces,
+  ownership/lifetimes, explicit synchronization/atomics, bounded capability-
+  limited resources, and no raw address/MMIO/packet/blob submission.
+- **Advanced GPU** adds validated placement, subgroup, specialization, staging,
+  topology, layout, and vendor-feature constraints while retaining budgets,
+  generations, IOMMU, ownership, and capability checks.
+- **Raw/Vendor GPU** is narrow privileged audited and revocable driver/compiler/
+  research authority; termination removes MMIO, DMA, handles, and generation.
+
+> MRML must not introduce one broad `unsafe_gpu` authority that bypasses the
+> entire GPU object, memory, capability, and validation model.
+
+Missing semantics are classified as portable, Advanced, or backend-private/Raw;
+Raw is not a workaround for incomplete safe abstractions. Ordinary source uses
+references, `Buffer<T>`, `Tensor<T>`, and `Image`; verified lowering may erase
+them into addresses. Memory safety (bounds, lifetime, stale state, address space)
+and concurrency safety (conflicts, atomics, synchronization scopes) are distinct;
+ownership alone is insufficient.
+
+Infer barriers, transitions, overlap, lifetime/reuse, queue/placement, pipeline
+specialization, subgroup/tile tuning, matrix instructions, and shared-memory
+layout where safe and measurable. Reusable/versioned graphs avoid reconstructing
+known work. Advanced/Raw controls require a benchmark against the inferred path
+and documented complexity/security cost; unmeasured escape hatches are rejected.
+
+Blackwell is an implementation, not the specification. Its descriptors, launch
+packets, firmware, synchronization, and layouts remain backend-private or
+`nvidia.*` unless genuinely cross-vendor. Portable expansions record hardware
+need, semantic justification, alternatives, private-state feasibility, and
+measured benefit.
+
+MRML GPU does not reproduce Vulkan one-for-one, expose every knob, freeze AI
+framework algorithms into ABI, normalize raw addresses, grant ordinary vendor
+packets, or clone CUDA. Zero avoidable abstraction cost after validation does not
+require exposing hardware machinery. Canonical validation rejects rights, types,
+generations, ranges, shapes, graph cycles, features, and budgets before backend
+submission; native validation remains defense in depth.
+
+> GPU performance features may increase computational power but must not
+> implicitly increase security authority.
+
 Patent review: `TRIGGERED` — the planned GPU API, IR, VirtualGPU, native drivers,
 media/fabric, and compatibility mechanisms require targeted worldwide review
 before implementation. See [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

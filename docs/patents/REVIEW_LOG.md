@@ -1586,6 +1586,14 @@ Targeted claim/family and authoritative territorial review is required before
 implementation. These documents add no runtime and make no clearance or
 infringement claim. See [`docs/gpu/GPU_ARCHITECTURE.md`](../gpu/GPU_ARCHITECTURE.md).
 
+# 2026-08-24 — Native GPU abstraction-boundary refinement
+
+**Result: NOT_TRIGGERED.** This documentation narrows the already-triggered GPU
+architecture: it separates stable objects from evolving algorithm IR, forbids a
+universal unsafe escape hatch, prefers inference, and keeps Blackwell details
+private. It adds no mechanism or clearance conclusion; the parent GPU review
+remains `TRIGGERED` above.
+
 # 2026-08-24 — Read-only virtual-block configuration page
 
 **Result: NOT_TRIGGERED.** The change conventionally validates a page-aligned

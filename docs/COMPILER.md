@@ -668,6 +668,10 @@ Future GPU compiler work follows [gpu/GPU_ARCHITECTURE.md](gpu/GPU_ARCHITECTURE.
 only after the current CPU typed-place/CFG/ownership dependency gates. It adds a
 safe typed kernel subset, explicit address spaces, High/Machine IR, and metadata
 admission without displacing the Polonius-direction critical path.
+GPU High IR is evolving compiler/library state, not an early frozen public ABI;
+Machine IR remains low-level semantic SSA/address-space/subgroup/matrix/barrier
+state, not ordinary-source vendor packets. Stable object ABI, evolving
+algorithms, and final vendor emission remain distinct.
 
 Score candidate work by MRML usefulness, modern Rust relevance, security
 relevance, dependency unlocks, implementation complexity, oracle stability, and

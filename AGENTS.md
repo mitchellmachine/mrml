@@ -120,6 +120,10 @@ Architectural invariants:
   AMD/Intel later; safe kernels, exact generations, bounded resources, DMA/IOMMU
   revocation, and hosted/virtual/native-physical evidence separation are hard
   gates; Linux traces are oracle evidence, never trusted production replay;
+- do not recreate Vulkan in the native API: prefer inference, keep tensors first-
+  class while AI algorithms remain evolving libraries/IR, separate Safe/
+  Advanced/Raw profiles, forbid universal `unsafe_gpu`, require measured escape
+  hatches, and keep Blackwell details backend-local;
 - treat every guest descriptor, queue, feature, interrupt, reset, removal, and
   device-state transition as hostile; reset invalidates stale queue state, and
   no guest-provided pointer, length, or host address is trusted;

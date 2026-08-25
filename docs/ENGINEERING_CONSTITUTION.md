@@ -204,6 +204,13 @@ free-form logs. Human-readable rendering is a view over that state.
 
 ## Complexity is a budget
 
+> Native GPU API growth requires architectural justification.
+
+Prefer compiler/backend inference and orthogonal semantic objects over hardware
+knobs or convenience commands. Account for parser, VirtualGPU, driver,
+compatibility, review, and permanent ABI cost; Advanced/Raw controls require
+measured need.
+
 Complexity is a resource like CPU, memory, latency, and attack surface. Every
 subsystem, abstraction, dependency, compatibility layer, service, parser,
 protocol, and persistent state machine consumes a permanent budget.

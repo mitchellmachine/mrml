@@ -20,6 +20,11 @@ development-only and not production runtime dependencies.
 
 ## Blackwell
 
+Every Blackwell-driven portable-API expansion records the exact hardware need,
+portable semantic case, alternatives, backend-private option, and measured
+performance. Device descriptors, packets, firmware state, synchronization, and
+layouts remain private unless genuinely cross-vendor.
+
 Target exact GPU, PCI identity, firmware/GSP, and protocol generation; do not
 generalize one observation to all NVIDIA hardware. Support multiple explicitly
 recognized versions and fail closed on unknown incompatible generations. Vendor

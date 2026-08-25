@@ -1194,7 +1194,11 @@ reset, fuzzing, and conformance; Linux oracle tooling; then physical Blackwell
 transfer/compute/matrix/desktop/VirtualGPU host and later advanced features, AMD,
 Intel, optimized libraries, and compatibility expansion. VirtualGPU is GPU
 priority 1 and Blackwell is priority 2; compositor/application prerequisites
-remain in their existing order.
+remain in their existing order. API simplicity precedes feature growth: stable
+objects stay separate from evolving AI/compiler IR; Safe, Advanced, and Raw
+profiles remain distinct; VirtualGPU compactness/fuzzability tests portable
+additions; Blackwell-driven expansion requires portable justification and
+performance evidence.
 
 Before trusted consent UI, establish the application-facing foundation:
 
