@@ -8,6 +8,23 @@ compatibility follows the native object/security foundation.
 MRML has a native capability-oriented GPU API. Vulkan, CUDA, Direct3D, OpenCL,
 ROCm, WebGPU, and vendor driver APIs do not define MRML authority.
 
+> Control planes establish authority; data planes should take the shortest safe
+> path.
+
+For VirtualGPU, policy and the GPU broker create the capability-bound domain,
+queues, mappings, budgets, and generations once. Steady-state commands then use
+the established bounded shared queues directly; they do not repeat policy IPC or
+gain authority from queue contents.
+
+```text
+CONTROL PLANE
+App -> request GPU capability -> policy -> GPU broker
+    -> create VirtualGPU + queues -> done
+
+DATA PLANE
+App VM == bounded shared command queue ==> GPU backend -> hardware
+```
+
 ```text
 applications / compositor / compute / media
   -> MRML GPU API

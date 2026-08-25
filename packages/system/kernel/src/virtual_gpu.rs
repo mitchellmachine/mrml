@@ -376,6 +376,47 @@ impl GpuSharedQueueLayout {
     }
 }
 
+/// One control-plane result authorizing an already validated VirtualGPU queue
+/// identity and shared-memory layout. Consuming it constructs the steady-state
+/// data-plane endpoints; data-plane traffic cannot change policy, mappings, or
+/// queue authority.
+pub struct GpuDataPlaneBinding<const N: usize> {
+    identity: GpuQueueIdentity,
+    layout: GpuSharedQueueLayout,
+}
+
+impl<const N: usize> GpuDataPlaneBinding<N> {
+    pub fn establish(
+        identity: GpuQueueIdentity,
+        layout: GpuSharedQueueLayout,
+    ) -> Result<Self, GpuError> {
+        if usize::from(layout.slots()) != N {
+            return Err(GpuError::InvalidQueueCapacity);
+        }
+        validate_queue_identity(identity.session(), &identity.key())?;
+        Ok(Self { identity, layout })
+    }
+
+    pub fn into_endpoints(
+        self,
+    ) -> Result<
+        (
+            GpuGuestCommandPublisher<N>,
+            GpuVmmQueueBridge<N>,
+            GpuQueueSender,
+            GpuQueueReceiver,
+        ),
+        GpuError,
+    > {
+        Ok((
+            GpuGuestCommandPublisher::new()?,
+            GpuVmmQueueBridge::new(self.layout)?,
+            GpuQueueSender::new(self.identity.session(), self.identity.key())?,
+            GpuQueueReceiver::new(self.identity.session(), self.identity.key())?,
+        ))
+    }
+}
+
 /// A monotonic position and its derived physical slot. Positions do not wrap;
 /// exhaustion requires establishing a new authenticated GPU session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6008,6 +6049,31 @@ mod tests {
         assert_eq!(
             GpuSharedQueueLayout::new(u64::MAX - (PAGE_SIZE - 1), 0x1000, 1),
             Err(GpuError::RangeOverflow)
+        );
+    }
+
+    #[test]
+    fn control_plane_establishes_one_bounded_data_plane() {
+        let identity = GpuQueueIdentity::from_boot_entropy(&[0x5a; 32]).unwrap();
+        let layout = GpuSharedQueueLayout::new(0x1000, 0x3000, 2).unwrap();
+        assert!(matches!(
+            GpuDataPlaneBinding::<1>::establish(identity, layout),
+            Err(GpuError::InvalidQueueCapacity)
+        ));
+        let (publisher, bridge, mut sender, mut receiver) =
+            GpuDataPlaneBinding::<2>::establish(identity, layout)
+                .unwrap()
+                .into_endpoints()
+                .unwrap();
+        assert!(!publisher.is_poisoned());
+        assert!(!bridge.is_poisoned());
+        let mut message = [0; GPU_QUEUE_MESSAGE_BYTES];
+        sender
+            .encode(1, ResourceCommand::Allocate { bytes: 4096 }, &mut message)
+            .unwrap();
+        assert_eq!(
+            receiver.decode(&message),
+            Ok((1, ResourceCommand::Allocate { bytes: 4096 }))
         );
     }
 

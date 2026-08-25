@@ -7,6 +7,16 @@ VirtualGPU projects a host-owned `GpuDomain` through the common native object
 model. It never exposes host pointers, handles, VAs, packets, or wider authority.
 Blackwell work must not delay this semantic/transport gate.
 
+> Control planes establish authority; data planes should take the shortest safe
+> path.
+
+The control plane admits a `GpuDomain`, derives exact rights and budgets, and
+establishes immutable queue identity, layout, mappings, and generations. The
+data plane then carries authenticated bounded commands and completions over the
+shared rings directly between the App VM projection and GPU backend. Data-plane
+bytes never create capabilities, change policy, select host objects, or widen
+the admitted queue binding.
+
 > A GPU abstraction that cannot be represented cleanly and securely across the
 > VirtualGPU boundary requires additional scrutiny before becoming part of the
 > portable MRML API.
@@ -22,6 +32,13 @@ submissions, timelines, presentation, and media requests—not repeated state,
 packets, host handles, or addresses. Creation/authority projection remains
 understandable, submission auditable, and messages independently fuzzable. A
 giant hardware-specific wire protocol triggers abstraction redesign.
+
+The existing mediated implementation now has a one-use
+`GpuDataPlaneBinding`: control-plane establishment validates one queue identity
+and exact slot/layout shape, then consumption yields the guest publisher, VMM
+bridge, authenticated sender, and authenticated receiver for steady-state I/O.
+This is **PARTIALLY IMPLEMENTED** mechanism evidence, not the complete planned
+VirtualGPU control plane or physical-GPU path.
 
 Guest requests, IDs, offsets, graphs, shader metadata, timelines, tensor shapes,
 and claimed features are hostile. Host policy projects exact rights and budgets;
