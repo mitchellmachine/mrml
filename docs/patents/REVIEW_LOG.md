@@ -176,7 +176,7 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 | High | Quantized inference, planning, KV cache, speculative decoding | `crates/mrml-tensor/src/{quant,ops,execution_plan,kv_cache,speculative}.rs` | Must distinguish standard formats from MRML scheduling/layout. |
 | High | Zstandard FSE/Huffman/sequences | `packages/libraries/zstd/src/` | Compression and upstream grant review required. |
 | High | Hybrid X25519/ML-KEM TLS and AEAD | `packages/libraries/tls/`, `packages/libraries/crypto/` | Standards/IPR and exact protocol-version review required. |
-| Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `system/kernel/src/protected_*.rs`, `crates/mrml-whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
+| Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `system/kernel/src/protected_*.rs`, `system/vmm/whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
 | Medium | Rust-subset lowering/object generation | `compiler/core/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
 
 ### Discovery performed
@@ -269,7 +269,7 @@ compiler category.
 
 MRML source: `system/kernel/src/vm.rs`,
 `system/vmm/kvm/src/{abi,native.rs,native/launch.rs}`, and
-`crates/mrml-whp/src/{abi,native.rs,native/launch.rs}`.
+`system/vmm/whp/src/{abi,native.rs,native/launch.rs}`.
 
 The VMM adapters now remove exact second-level guest mappings before the common
 mapping identity is retired and prevent vCPU execution after uncertain native
@@ -325,7 +325,7 @@ operations.
 ## 2026-08-23 — pinned cross-core and live WHP mapping benchmarks
 
 MRML source: `tests/kernel-bench/src/lib.rs`,
-`crates/mrml-whp/src/native.rs`, and `system/vmm/kvm/src/native.rs`.
+`system/vmm/whp/src/native.rs`, and `system/vmm/kvm/src/native.rs`.
 
 The host-only harness parses documented Windows processor topology, pins two
 threads to distinct reported cores, and measures the existing ownership

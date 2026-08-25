@@ -154,7 +154,7 @@ explicitly and downgrade the status rather than guessing.
 - CPL3 service image: `system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`
 - Linux KVM: `system/vmm/kvm/`, `crates/mrml-kvm-run/`
-- Windows WHP: `crates/mrml-whp/`, `crates/mrml-whp-run/`
+- Windows WHP: `system/vmm/whp/`, `crates/mrml-whp-run/`
 - VBS and protected execution: search for `Vbs`, `Vtl1`, `ProtectionMode`,
   `AuthenticatedAdmission`, `receipt`, and `sealed` across the workspace.
 - Capabilities/IPC/lifecycle: `capability.rs`, `ipc.rs`, `shared_memory.rs`,

@@ -19,7 +19,7 @@ mrml-crypto = { path = "../../packages/libraries/crypto", default-features = fal
 mrml-error = { path = "../../packages/libraries/error" }
 mrml-kernel = { path = "../../system/kernel" }
 mrml-runtime = { path = "../../packages/libraries/runtime" }
-mrml-whp = { path = "../mrml-whp" }
+mrml-whp = { path = "../../system/vmm/whp" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 mrml-tensor = { path = "../mrml-tensor", features = ["cuda"], optional = true }

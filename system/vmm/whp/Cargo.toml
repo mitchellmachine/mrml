@@ -7,8 +7,8 @@ license.workspace = true
 description = "Strict allocation-free Windows Hypervisor Platform adapter for MRML"
 
 [dependencies]
-mrml-kernel = { path = "../../system/kernel" }
-mrml-runtime = { path = "../../packages/libraries/runtime" }
+mrml-kernel = { path = "../../kernel" }
+mrml-runtime = { path = "../../../packages/libraries/runtime" }
 
 [dev-dependencies]
-mrml-crypto = { path = "../../packages/libraries/crypto", default-features = false }
+mrml-crypto = { path = "../../../packages/libraries/crypto", default-features = false }

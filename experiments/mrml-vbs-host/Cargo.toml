@@ -18,7 +18,7 @@ bench = false
 mrml-error = { path = "../../packages/libraries/error" }
 mrml-kernel = { path = "../../system/kernel" }
 mrml-runtime = { path = "../../packages/libraries/runtime" }
-mrml-whp = { path = "../../crates/mrml-whp" }
+mrml-whp = { path = "../../system/vmm/whp" }
 mrml-windows = { path = "../../packages/libraries/windows" }
 
 [profile.release]

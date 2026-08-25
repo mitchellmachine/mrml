@@ -428,6 +428,23 @@ Windows host without changing VMM source behavior:
 No Linux host/runtime, `/dev/kvm`, nested virtualization, VM launch, or physical-
 hardware execution was exercised by this path-only move.
 
+The WHP-library move from `crates/mrml-whp` to `system/vmm/whp` was checked on a
+Windows host without changing VMM source behavior:
+
+- `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-whp`
+  — PASS, 22 tests with 1 manual live-mapping performance gate ignored;
+- `.\target\debug\mrml.exe build mrml-whp` — PASS;
+- `git grep -n 'crates/mrml-whp/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact WHP-library path matches.
+
+Several focused tests are conditional on hypervisor availability; a passing
+test process does not by itself prove those conditional operations ran. No
+nested-virtualization, physical-hardware, VTL1, TPM, IOMMU, or remote-attestation
+evidence was established by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
