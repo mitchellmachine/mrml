@@ -4716,7 +4716,7 @@ with `virtual_block` and `virtual_pci` filters, `cargo
 --no-default-features --lib --no-deps -- -D warnings -A
 clippy::result_unit_err`, and the equivalent Arch commands with
 `CARGO_TARGET_DIR=target/pci-reset-pending-kvm` and the default Arch toolchain.
-This is unit/simulation evidence only; no hosted pending-I/O reset, live native
+At that milestone this was unit/simulation evidence only; no hosted pending-I/O reset, live native
 unmapping/hotplug, durable backend, QEMU, nested-virtualization, bare-metal,
 physical-device, accessibility-device, or user evidence is claimed.
 
@@ -6670,8 +6670,8 @@ target/pci-restart-evidence/release/mrml-whp-run.exe target/pci-restart-evidence
 
 One fresh Lamport key signed the exact shared UEFI artifact once; the private
 key was consumed. This is unit/simulation and hosted controlled KVM/WHP orderly
-replacement evidence. It is not asynchronous crash capture, pending-I/O or
-uncertain-mutation recovery, reset/hotplug, durable storage, production BAR
+replacement evidence for that milestone. It did not cover asynchronous crash
+capture, pending-I/O or uncertain-mutation recovery, reset/hotplug, durable storage, production BAR
 revocation, VirtIO/QEMU, physical-device, bare-metal, or host-resistant evidence.
 
 DIGITAL-RIGHTS REVIEW: replacement creates no ambient host path, telemetry,
@@ -6752,6 +6752,67 @@ It adds no live-unmap technique, compatibility, host-share,
 accessibility-device, browser, JavaScript/Wasm, or media mechanism. Those
 planned scopes remain `TRIGGERED`; agent review does not replace independent
 human dual review.
+
+### Hosted pending-I/O block reset isolation
+
+The same signed KVM/WHP PCI-block probe now deliberately leaves two distinct
+ownership classes after its ordinary write/read/flush and orderly-replacement
+proof: request 6 is completed and published into native guest queue memory but
+never acknowledged, while request 7 is consumed and admitted into the device
+but never issued to the backend. The host then destroys the complete native VM
+or partition before invoking the existing exact cleanup adapter. Old backend
+and interrupt capabilities are revoked before block, attachment, and PCI
+generations advance.
+
+After reset, completing request 7's retained ticket fails as stale and the
+generation-1 request bytes copied from the destroyed guest fail admission. Only
+after the device is explicitly renegotiated and activated does a fresh bridge,
+fresh generational backend and interrupt capabilities, and a generation-2
+attachment exist; a fresh generation-2 request is then admissible. The earlier
+focused simulation continues to cover the stale BAR acknowledgement and latched
+notification cases, which cannot be exercised after deliberate destruction
+without inventing a second live native mapping path.
+
+Recorded verification on 2026-08-24:
+
+```text
+cargo +nightly-x86_64-pc-windows-gnullvm test -p mrml-kvm-run -p mrml-whp-run --release --no-default-features
+  PASS: KVM-run 5; WHP-run 7
+cargo +nightly-x86_64-pc-windows-gnullvm clippy -p mrml-kvm-run -p mrml-whp-run --all-targets --release --no-default-features --no-deps -- -D warnings -A clippy::result_unit_err
+  PASS
+wsl.exe -e sh -lc 'cd /mnt/c/Users/Mitch/Documents/mrml && CARGO_TARGET_DIR=/tmp/mrml-pending-reset-target cargo test -p mrml-kvm-run -p mrml-whp-run --release --no-default-features'
+  PASS: KVM-run 8; WHP-run 4
+/tmp/mrml-pending-reset-kvm/release/mrml-kvm-run target/pci-restart-evidence/kernel.signed target/pci-restart-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=18392us prepare=2137us execute=87244us total=134985us
+target/pending-reset-whp/release/mrml-whp-run.exe target/pci-restart-evidence/kernel.signed target/pci-restart-evidence/release.public 1 pci-configuration-probe
+  PASS: verify=18223us prepare=3526us execute=5171us total=30957us
+```
+
+These are hosted controlled probes using an existing one-time-signed test
+artifact, not live hotplug/unmapping, durable-backend, QEMU-differential,
+physical-device, bare-metal, or host-resistant evidence.
+
+DIGITAL-RIGHTS REVIEW: reset retains no old backend, interrupt, mapping, device,
+or capability authority. The successor receives only newly issued exact
+capabilities; device identity and queue bytes remain non-authorizing data. The
+change adds no ambient path, telemetry, attestation, DRM, vendor authority,
+accessibility restriction, secret export, or AI-only interface.
+
+HOSTILE SECURITY REVIEW: the destroyed guest bytes, counters, completion,
+ticket, generations, attachment, BAR state, cleanup record, and capability
+handles are hostile. Native destruction and complete cleanup preflight precede
+revocation and generation advance. Stale completion and request identities are
+tested after reactivation so rejection cannot be explained merely by an
+inactive device. Fresh capability and attachment generations are required
+before successor admission; uncertainty remains fail closed.
+
+Patent review: `NOT_TRIGGERED` — this extends the existing controlled
+MRML-native reset probe with conventional pending-record staging, stale
+generation checks, capability reissuance, and successor admission. It adds no
+VirtIO compatibility, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or media
+mechanism. Those planned scopes remain `TRIGGERED`; agent review does not
+replace independent human dual review.
 
 ## Milestones
 

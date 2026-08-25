@@ -13,13 +13,14 @@ use mrml_kernel::{
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
     VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockMutationError, VirtualBlockPciAttachment,
-    VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord,
-    VirtualBlockPciFunctionRevoker, VirtualBlockPciMemoryMapper, VirtualBlockPciResourceRevoker,
-    VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockTransactionOutcome,
-    VirtualBlockTransport, VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
+    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
+    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciMemoryMapper,
+    VirtualBlockPciResourceRevoker, VirtualBlockPciWindowBackend, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
+    VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
@@ -982,6 +983,77 @@ fn run_pci_configuration_probe(
     {
         return Err(anyhow!("KVM PCI proof mismatch: {:?}", proof));
     }
+    // Leave both reset-sensitive ownership classes in the destroyed native
+    // guest: request 6 has a published completion that was never acknowledged,
+    // while request 7 remains admitted but unissued. These records are test
+    // data only; the exact attachment, capabilities, and generations below
+    // remain the authority for cleanup and successor admission.
+    let old_generation = device.generation();
+    let published_request = VirtualBlockRequest::write(
+        old_generation,
+        u64::from(PCI_BLOCK_PROBE_OPERATIONS) + 1,
+        0,
+        1,
+        FRAMEBUFFER,
+        4096,
+    );
+    let mut encoded_request = [0; mrml_kernel::VIRTUAL_BLOCK_REQUEST_BYTES];
+    published_request.encode(&mut encoded_request);
+    VirtualBlockVmmMemory::write_virtual_block(
+        &mut guest,
+        layout.request_base() + 192,
+        &encoded_request,
+    )
+    .and_then(|()| {
+        VirtualBlockVmmMemory::write_virtual_block(
+            &mut guest,
+            layout.request_base(),
+            &6u64.to_le_bytes(),
+        )
+    })
+    .map_err(|_| anyhow!("failed to stage published reset request"))?;
+    let mut consumed = [0; mrml_kernel::VIRTUAL_BLOCK_REQUEST_BYTES];
+    bridge
+        .consume_request(&mut guest, &mut consumed)
+        .map_err(|error| anyhow!("failed to consume published reset request: {:?}", error))?;
+    let admitted = device
+        .admit(&consumed)
+        .map_err(|error| anyhow!("failed to admit published reset request: {:?}", error))?;
+    let completion = device
+        .complete(admitted.ticket(), VirtualBlockCompletionStatus::Ok, 4096)
+        .map_err(|error| anyhow!("failed to complete published reset request: {:?}", error))?;
+    bridge
+        .publish_completion(&mut guest, completion)
+        .map_err(|error| anyhow!("failed to publish reset completion: {:?}", error))?;
+    let inflight_request = VirtualBlockRequest::read(
+        old_generation,
+        u64::from(PCI_BLOCK_PROBE_OPERATIONS) + 2,
+        1,
+        1,
+        FRAMEBUFFER + 4096,
+        4096,
+    );
+    inflight_request.encode(&mut encoded_request);
+    VirtualBlockVmmMemory::write_virtual_block(
+        &mut guest,
+        layout.request_base() + 128,
+        &encoded_request,
+    )
+    .and_then(|()| {
+        VirtualBlockVmmMemory::write_virtual_block(
+            &mut guest,
+            layout.request_base(),
+            &7u64.to_le_bytes(),
+        )
+    })
+    .map_err(|_| anyhow!("failed to stage in-flight reset request"))?;
+    bridge
+        .consume_request(&mut guest, &mut consumed)
+        .map_err(|error| anyhow!("failed to consume in-flight reset request: {:?}", error))?;
+    let stale_ticket = device
+        .admit(&consumed)
+        .map_err(|error| anyhow!("failed to admit in-flight reset request: {:?}", error))?
+        .ticket();
     let expected_pci = router
         .describe_attachment(pci)
         .map_err(|_| anyhow!("PCI cleanup attachment disappeared"))?
@@ -1035,6 +1107,58 @@ fn run_pci_configuration_probe(
             .is_ok()
     {
         return Err(anyhow!("destroyed KVM PCI cleanup state mismatch"));
+    }
+    device
+        .negotiate(VIRTUAL_BLOCK_FEATURE_FLUSH)
+        .and_then(|_| device.activate(layout, 48))
+        .map_err(|_| anyhow!("failed to activate successor PCI block device"))?;
+    if device.complete(stale_ticket, VirtualBlockCompletionStatus::Ok, 4096)
+        != Err(VirtualBlockError::StaleTicket)
+        || device.admit(&encoded_request) != Err(VirtualBlockError::StaleGeneration)
+    {
+        return Err(anyhow!(
+            "destroyed KVM PCI cleanup retained stale block ownership"
+        ));
+    }
+    let successor_bridge = VirtualBlockQueueBridge::<2>::new(layout)
+        .map_err(|_| anyhow!("failed to construct successor PCI block queue"))?;
+    let successor_block_capability = destroyed
+        .capabilities
+        .insert(
+            block_object,
+            Rights::READ.union(Rights::WRITE).union(Rights::FLUSH),
+        )
+        .map_err(|_| anyhow!("failed to authorize successor block backend"))?;
+    let successor_interrupt_capability = destroyed
+        .capabilities
+        .insert(interrupt_object, Rights::SIGNAL)
+        .map_err(|_| anyhow!("failed to authorize successor block interrupt"))?;
+    let successor_authority =
+        VirtualBlockBackendAuthority::new(successor_block_capability, block_object, 0, 2)
+            .map_err(|_| anyhow!("invalid successor block authority"))?;
+    let successor_attachment = VirtualBlockPciAttachment::new(
+        router
+            .describe_attachment(pci)
+            .map_err(|_| anyhow!("successor PCI attachment disappeared"))?,
+        &device,
+        &successor_bridge,
+        successor_authority,
+    )
+    .map_err(|_| anyhow!("failed to bind successor PCI block attachment"))?;
+    let fresh_request = VirtualBlockRequest::read(2, 1, 0, 1, FRAMEBUFFER, 4096);
+    let mut fresh_encoded = [0; mrml_kernel::VIRTUAL_BLOCK_REQUEST_BYTES];
+    fresh_request.encode(&mut fresh_encoded);
+    if successor_attachment.block_generation() != 2
+        || successor_attachment.pci().function_generation() != 2
+        || device.admit(&fresh_encoded).is_err()
+        || destroyed
+            .capabilities
+            .authorize(successor_interrupt_capability, Rights::SIGNAL)
+            .is_err()
+    {
+        return Err(anyhow!(
+            "KVM PCI successor generation was not independently admissible"
+        ));
     }
     Ok(())
 }
@@ -1409,7 +1533,7 @@ fn application_main() -> Result<()> {
     if mode == LaunchMode::PciConfigurationProbe {
         run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, and destroyed-VM cleanup under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, and pending-I/O destroyed-VM reset isolation under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

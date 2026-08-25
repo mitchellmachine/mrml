@@ -2784,6 +2784,19 @@ JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Hosted pending-I/O MRML-native block reset isolation
+
+**Result: NOT_TRIGGERED.** The controlled KVM/WHP probe conventionally stages
+one published-but-unacknowledged completion and one admitted in-flight request
+in the existing MRML-native queue/device state, destroys the native execution
+container, applies the existing exact capability revocation and generational
+reset, rejects stale ownership, and issues fresh capabilities before successor
+admission. It introduces no VirtIO compatibility, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, durable recovery protocol, or new
+authority model. Previously recorded planned scopes remain `TRIGGERED`; this
+agent review does not replace the required independent human dual review.
+
 # 2026-08-24 — Conditional-loan move chains
 
 **Result: NOT_TRIGGERED.** The compiler conventionally extends its bounded

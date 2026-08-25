@@ -1106,14 +1106,20 @@ negotiated, independently `FLUSH`-authorized backend flush. Production native
 PCI interrupt routing, MSI/MSI-X, DMA, durable block I/O, QEMU comparison, and a production
 PCI identity remain pending, so the broader PCI attachment/transport gate is
 still partial.
-The `BLOCK` reset acceptance slice now has host-side simulation for a reset
+The `BLOCK` reset acceptance slice now has host-side simulation and controlled
+KVM/WHP execution for a reset
 with one published-but-unacknowledged completion and one request still in
 flight. Reactivation requires a fresh queue bridge and attachment at block and
-PCI generation 2; the old MMIO acknowledgement, BAR window, attachment,
-completion ticket, and generation-1 request all fail before successor mutation,
-and a fresh generation-2 request remains admissible. Hosted pending-I/O reset,
-live native unmapping/hotplug, durable backend recovery, and QEMU differential
-evidence remain pending, so this does not complete `BLOCK` acceptance.
+PCI generation 2; across the combined simulation and hosted evidence, the old
+MMIO acknowledgement, BAR window, attachment, completion ticket, and
+generation-1 request all fail before successor mutation,
+and a fresh generation-2 request remains admissible. The controlled hosted
+probe stages the two pending ownership classes in native guest memory after the
+signed workload, destroys that VM/partition, revokes the old block and interrupt
+capabilities, performs the exact common reset, rejects both stale identities,
+and issues fresh successor capabilities before admission. Live native
+unmapping/hotplug, durable backend recovery, and QEMU differential evidence
+remain pending, so this does not complete `BLOCK` acceptance.
 Legacy completion notification now also revalidates the exact live router
 generation, BAR, memory-decode, and interrupt-disable state. The first signed
 completion is retained while masked, the guest explicitly unmasks the same
