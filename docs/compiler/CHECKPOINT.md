@@ -170,9 +170,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   origins, and one- or multi-hop direct shared-reference copies. Copy ancestry
   requires the exact immediately preceding local-initialization effect with
   matching expression identity and reference mutability; mutable references
-  still require a move. Ambiguous nested-loop control values, general regions,
-  named lifetime relationships, and complete Polonius outlives reasoning remain
-  unimplemented.
+  still require a move. Ambiguous nested-loop control coordinates, general
+  regions, named lifetime relationships, and complete Polonius outlives
+  reasoning remain unimplemented.
   Return expressions inside conditional action blocks now have a distinct,
   shape-validated ownership location mapped to the action block's exact
   unconditional return edge. This lets the outlives pass reject direct and
