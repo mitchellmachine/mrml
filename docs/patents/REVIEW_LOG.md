@@ -2749,3 +2749,15 @@ model, compatibility protocol, host-share mechanism, accessibility or browser-
 semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
 mechanism, or other patent-candidate mechanism. This agent review does not
 replace the required independent human dual review.
+
+# 2026-08-24 — Moved-reference loan identity
+
+**Result: NOT_TRIGGERED.** The compiler conventionally transfers an existing
+single direct mutable-reference loan origin when that reference value moves into
+an inferred local. Bounded earlier-event lookup supports direct chains and
+selects the source's latest direct assignment generation while initializedness
+continues to consume the source. It adds no optimization, authority model,
+compatibility protocol, host-share mechanism, accessibility or browser-semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.
