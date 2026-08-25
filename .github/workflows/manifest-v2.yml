@@ -103,4 +103,9 @@ jobs:
       - name: Compile the host VMM runner
         shell: bash
         run: |
-          "${{ matrix.mrml }}" build "${{ matrix.vmm }}" --target "${{ matrix.host_target }}"
+          if ! output=$("${{ matrix.mrml }}" build "${{ matrix.vmm }}" --target "${{ matrix.host_target }}" 2>&1); then
+            summary=$(printf '%s' "$output" | tail -n 30 | tr '\n' ' ')
+            echo "::error title=MRML VMM build failed::$summary"
+            exit 1
+          fi
+          printf '%s\n' "$output"
