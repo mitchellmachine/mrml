@@ -3223,6 +3223,7 @@ pub enum TraitGoalError {
     TooManyArguments,
     TooManyCanonicalVariables,
     TooManyGenericParameters,
+    TooManyBinderLevels,
     TooManyPredicates,
     TooManyTraitGoalTerms,
     InvalidTraitGoalTermReference,
@@ -3811,9 +3812,11 @@ impl NestedForAllTraitPredicateConjunction {
             .total_parameter_count
             .checked_add(parameter_count)
             .ok_or(TraitGoalError::TooManyGenericParameters)?;
-        if total > MAX_TRAIT_GENERIC_PARAMETERS || self.binder_count >= MAX_TRAIT_GENERIC_PARAMETERS
-        {
+        if total > MAX_TRAIT_GENERIC_PARAMETERS {
             return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        if self.binder_count >= MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyBinderLevels);
         }
         self.binder_parameter_counts[self.binder_count] = parameter_count;
         self.binder_count += 1;
@@ -3878,6 +3881,16 @@ impl NestedForAllTraitPredicateConjunction {
         Ok((arguments, offset))
     }
 
+    fn advance_universe(
+        self,
+        mut parent_universe: TraitUniverseIndex,
+    ) -> Result<TraitUniverseIndex, TraitGoalError> {
+        for _ in 0..self.binder_count {
+            parent_universe = parent_universe.next()?;
+        }
+        Ok(parent_universe)
+    }
+
     fn instantiate_predicate(
         self,
         predicate: BoundTraitPredicate,
@@ -3898,6 +3911,68 @@ impl NestedForAllTraitPredicateConjunction {
                 },
             )),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForAllTraitPredicateBranchForest {
+    branches: [Option<NestedForAllTraitPredicateConjunction>; MAX_TRAIT_PREDICATES],
+    branch_count: usize,
+    total_binder_count: usize,
+    total_predicate_count: usize,
+}
+
+impl ForAllTraitPredicateBranchForest {
+    pub const EMPTY: Self = Self {
+        branches: [None; MAX_TRAIT_PREDICATES],
+        branch_count: 0,
+        total_binder_count: 0,
+        total_predicate_count: 0,
+    };
+
+    pub fn push_branch(
+        &mut self,
+        branch: NestedForAllTraitPredicateConjunction,
+    ) -> Result<(), TraitGoalError> {
+        let binder_count = self
+            .total_binder_count
+            .checked_add(branch.binder_count)
+            .ok_or(TraitGoalError::TooManyBinderLevels)?;
+        if binder_count > MAX_TRAIT_PROOF_DEPTH {
+            return Err(TraitGoalError::TooManyBinderLevels);
+        }
+        let predicate_count = self
+            .total_predicate_count
+            .checked_add(branch.predicate_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        if predicate_count > MAX_TRAIT_PREDICATES {
+            return Err(TraitGoalError::TooManyPredicates);
+        }
+        let slot = self
+            .branches
+            .get_mut(self.branch_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(branch);
+        self.branch_count += 1;
+        self.total_binder_count = binder_count;
+        self.total_predicate_count = predicate_count;
+        Ok(())
+    }
+
+    pub fn branches(&self) -> &[Option<NestedForAllTraitPredicateConjunction>] {
+        &self.branches[..self.branch_count]
+    }
+
+    pub const fn branch_count(self) -> usize {
+        self.branch_count
+    }
+
+    pub const fn total_binder_count(self) -> usize {
+        self.total_binder_count
+    }
+
+    pub const fn total_predicate_count(self) -> usize {
+        self.total_predicate_count
     }
 }
 
@@ -5367,6 +5442,38 @@ pub fn solve_nested_for_all_trait_predicate_conjunction(
         if result != TraitProofSolution::Proven {
             return Ok(result);
         }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
+pub fn solve_for_all_trait_predicate_branch_forest(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    parent_universe: TraitUniverseIndex,
+    forest: ForAllTraitPredicateBranchForest,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut branch_parent = parent_universe;
+    for branch in forest.branches() {
+        let branch = branch
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let result = solve_nested_for_all_trait_predicate_conjunction(
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            exact_values,
+            generic_values,
+            branch_parent,
+            branch,
+        )?;
+        if result != TraitProofSolution::Proven {
+            return Ok(result);
+        }
+        branch_parent = branch.advance_universe(branch_parent)?;
     }
     Ok(TraitProofSolution::Proven)
 }
@@ -13036,6 +13143,206 @@ mod tests {
                 &TraitWhereClauseDatabase::EMPTY,
                 &TraitAssociatedTypeDatabase::EMPTY,
                 &GenericTraitAssociatedTypeDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                cyclic,
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+    }
+
+    #[test]
+    fn solves_bounded_independent_universal_predicate_branches() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let implemented = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(790),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let projected_id = GenericTraitImplementationId::new(201);
+        let projected = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(791),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(200), implemented)
+            .unwrap();
+        generic.insert(projected_id, projected).unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new(
+                    projected_id,
+                    associated,
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+
+        let mut first = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        first
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(790),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            ))
+            .unwrap();
+        let mut second = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        second
+            .push(BoundTraitPredicate::ProjectionEquality {
+                projection: BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(791),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ),
+                    associated,
+                ),
+                expected: BoundTraitGoalType::Parameter(parameter),
+            })
+            .unwrap();
+        let mut forest = ForAllTraitPredicateBranchForest::EMPTY;
+        forest.push_branch(first).unwrap();
+        forest.push_branch(second).unwrap();
+        assert_eq!(forest.branch_count(), 2);
+        assert_eq!(forest.total_binder_count(), 2);
+        assert_eq!(forest.total_predicate_count(), 2);
+        assert_eq!(
+            solve_for_all_trait_predicate_branch_forest(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::ROOT,
+                forest,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+        assert_eq!(
+            solve_for_all_trait_predicate_branch_forest(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::new(u16::MAX - 1),
+                forest,
+            ),
+            Err(TraitGoalError::UniverseOverflow)
+        );
+
+        let mut missing = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        missing
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(792),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            ))
+            .unwrap();
+        let mut failing = ForAllTraitPredicateBranchForest::EMPTY;
+        failing.push_branch(first).unwrap();
+        failing.push_branch(missing).unwrap();
+        assert_eq!(
+            solve_for_all_trait_predicate_branch_forest(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::ROOT,
+                failing,
+            ),
+            Ok(TraitProofSolution::NoSolution)
+        );
+
+        let mut predicate_full = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        for _ in 0..MAX_TRAIT_PREDICATES {
+            predicate_full
+                .push(BoundTraitPredicate::Implemented(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(790),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ),
+                ))
+                .unwrap();
+        }
+        let mut predicate_bounded = ForAllTraitPredicateBranchForest::EMPTY;
+        predicate_bounded.push_branch(predicate_full).unwrap();
+        assert_eq!(
+            predicate_bounded.push_branch(first),
+            Err(TraitGoalError::TooManyPredicates)
+        );
+
+        let mut eight_levels = NestedForAllTraitPredicateConjunction::new(0).unwrap();
+        for _ in 1..MAX_TRAIT_GENERIC_PARAMETERS {
+            eight_levels.push_binder(0).unwrap();
+        }
+        let mut binder_bounded = ForAllTraitPredicateBranchForest::EMPTY;
+        binder_bounded.push_branch(eight_levels).unwrap();
+        binder_bounded.push_branch(eight_levels).unwrap();
+        assert_eq!(
+            binder_bounded.push_branch(NestedForAllTraitPredicateConjunction::new(0).unwrap()),
+            Err(TraitGoalError::TooManyBinderLevels)
+        );
+
+        let mut branch_bounded = ForAllTraitPredicateBranchForest::EMPTY;
+        let empty = NestedForAllTraitPredicateConjunction::new(0).unwrap();
+        for _ in 0..MAX_TRAIT_PREDICATES {
+            branch_bounded.push_branch(empty).unwrap();
+        }
+        assert_eq!(
+            branch_bounded.push_branch(empty),
+            Err(TraitGoalError::TooManyPredicates)
+        );
+
+        let mut recursive = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(793),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        recursive
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(793),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut recursive_generic = generic;
+        recursive_generic
+            .insert(GenericTraitImplementationId::new(202), recursive)
+            .unwrap();
+        let mut recursive_branch = NestedForAllTraitPredicateConjunction::new(1).unwrap();
+        recursive_branch
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(793),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            ))
+            .unwrap();
+        let mut cyclic = ForAllTraitPredicateBranchForest::EMPTY;
+        cyclic.push_branch(first).unwrap();
+        cyclic.push_branch(recursive_branch).unwrap();
+        assert_eq!(
+            solve_for_all_trait_predicate_branch_forest(
+                &TraitImplementationDatabase::EMPTY,
+                &recursive_generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
                 TraitUniverseIndex::ROOT,
                 cyclic,
             ),

@@ -4245,6 +4245,15 @@ library tests, one component probe, 10 conformance tests, and 335 replacement
 tests: 887 compiler tests per host. Branching scopes, term-nested binders, and
 source syntax remain unsupported.
 
+The universal branch forest combines up to eight independent nested prefixes
+and assigns each a consecutive, non-overlapping universe segment. Global caps of
+eight predicates and 16 binder levels prevent branch amplification. Mixed branch
+success, missing later obligations, later-segment universe overflow, every
+capacity boundary, and recursive cycles have focused tests. Windows gnullvm and
+native Arch Linux WSL each pass 542 library tests, one component probe, 10
+conformance tests, and 335 replacement tests: 888 compiler tests per host.
+Predicate-nested binders and source syntax remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

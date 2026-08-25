@@ -1052,6 +1052,17 @@ Linux WSL each pass 541 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 887 compiler tests per host.
 Branching scopes and binders nested inside predicate terms remain unsupported.
 
+The universal branch-forest milestone combines up to eight independent nested
+prefixes. Branches receive consecutive non-overlapping universe segments, while
+the forest globally caps eight predicates and 16 binder levels so branching
+cannot amplify the solver beyond existing fixed work. Focused tests cover mixed
+branch success, a missing later branch, later-segment universe overflow,
+predicate, binder, and branch capacity, and recursive cycles. Windows gnullvm
+and native Arch Linux WSL each pass 542 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 888 compiler tests per
+host.
+Binders nested inside predicate terms and source syntax remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
