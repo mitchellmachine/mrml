@@ -23,4 +23,4 @@ mrml-agent = { path = "../mrml-agent", default-features = false, features = ["ru
 mrml-tools = { path = "../mrml-tools" }
 mrml-terminal-style = { path = "../mrml-terminal-style" }
 mrml-runtime = { path = "../../packages/libraries/runtime" }
-mrml-error = { path = "../mrml-error" }
+mrml-error = { path = "../../packages/libraries/error" }

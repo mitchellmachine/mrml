@@ -187,6 +187,10 @@ semantic home without changing HTTP/HTTPS behavior.
 edges are sibling semantic-package references and its Git consumer resolves to
 the semantic SSH home without changing protocol or signing behavior.
 
+`mrml-error` is the sixteenth migrated library component; its JSON/runtime
+edges are sibling semantic-package references and all eleven consumers resolve
+to its semantic home without changing error behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

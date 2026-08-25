@@ -24,7 +24,7 @@ members = [
     "crates/mrml-git",
     "packages/libraries/ssh",
     "crates/mrml-machine",
-    "crates/mrml-error",
+    "packages/libraries/error",
     "crates/mrml-server",
     "crates/mrml-terminal-style",
     "crates/mrml-tools",

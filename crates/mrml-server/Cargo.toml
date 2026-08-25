@@ -19,7 +19,7 @@ vulkan = ["mrml-agent/vulkan"]
 [dependencies]
 mrml-agent = { path = "../mrml-agent", default-features = false, features = ["runtime"] }
 mrml-terminal-style = { path = "../mrml-terminal-style" }
-mrml-error = { path = "../mrml-error" }
+mrml-error = { path = "../../packages/libraries/error" }
 mrml-model = { path = "../mrml-model" }
 mrml-json = { path = "../../packages/libraries/json" }
 mrml-tools = { path = "../mrml-tools" }

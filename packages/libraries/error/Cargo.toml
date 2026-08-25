@@ -6,5 +6,5 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-mrml-runtime = { path = "../../packages/libraries/runtime" }
-mrml-json = { path = "../../packages/libraries/json" }
+mrml-runtime = { path = "../runtime" }
+mrml-json = { path = "../json" }

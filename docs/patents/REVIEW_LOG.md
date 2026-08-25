@@ -98,6 +98,11 @@ updates its Git consumer without changing SSH or signing behavior. **Result:
 NOT_TRIGGERED.** This is repository organization, not a new protocol or
 cryptographic mechanism.
 
+The sixteenth semantic move relocates `mrml-error` after JSON/runtime and
+updates all eleven inbound Cargo paths without changing error behavior.
+**Result: NOT_TRIGGERED.** This is repository organization, not a new error-
+handling mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
