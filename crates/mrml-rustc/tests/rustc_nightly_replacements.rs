@@ -4253,6 +4253,35 @@ fn rustc_projected_reference_value_moves_preserve_tuple_field_loans() {
 }
 
 #[test]
+fn rustc_projected_reference_value_move_chains_preserve_tuple_field_loans() {
+    let rejected = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; slot += 1; *child }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let third = second; let child: &mut u16 = &mut *third; slot += 1; *child }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; second += 1; *child }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeBorrowConflict
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; let copied = *child; slot += 1; copied + slot }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first,); let mut moved = holder.0; moved = &mut second; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_moved_conditional_reference_origins_match_the_oracle() {
     let rejected = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = if choose { &mut *first } else { &mut *second }; let moved = parent; let child: &u16 = &*moved; let changed: &mut u16 = &mut *first; *changed += 1; *child }",

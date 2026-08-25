@@ -28749,6 +28749,45 @@ mod tests {
     }
 
     #[test]
+    fn runtime_projected_reference_value_move_chains_preserve_tuple_field_loans() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 12>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<12>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 12, 48>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; slot += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let third = second; let child: &mut u16 = &mut *third; slot += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; second += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for accepted in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; let copied = *child; slot += 1; copied + slot }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first,); let mut moved = holder.0; moved = &mut second; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
+        ] {
+            analyze(accepted).unwrap();
+        }
+    }
+
+    #[test]
     fn runtime_reference_moves_preserve_conditional_loan_origins() {
         fn analyze(source: &str) -> Result<usize, CodegenError> {
             let module = Parser::new(source).parse_module::<1, 8>().unwrap();
