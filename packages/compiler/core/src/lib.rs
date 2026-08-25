@@ -70,9 +70,9 @@ pub use trait_goals::{
     TraitGoalSubstitution, TraitGoalType, TraitId, TraitImplementationDatabase,
     TraitImplementationHeader, TraitImplementationId, TraitInferenceBinding,
     TraitInferenceVariableId, TraitPlaceholder, TraitPlaceholderId, TraitProjectionSolution,
-    TraitProofSolution, TraitTypeId, TraitUniverseIndex, TraitWhereClause, TraitWhereClauseAnswer,
-    TraitWhereClauseDatabase, TraitWhereClauseElaboration, TraitWhereClauseId,
-    TraitWhereClauseSolution, canonicalize_implemented_trait_goal,
+    TraitProofSolution, TraitTypeId, TraitUniverseAssignment, TraitUniverseIndex, TraitWhereClause,
+    TraitWhereClauseAnswer, TraitWhereClauseDatabase, TraitWhereClauseElaboration,
+    TraitWhereClauseId, TraitWhereClauseSolution, canonicalize_implemented_trait_goal,
     canonicalize_implemented_trait_goal_with_variables, canonicalize_implemented_trait_predicates,
     solve_concrete_trait_goal,
 };

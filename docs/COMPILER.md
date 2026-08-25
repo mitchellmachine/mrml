@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, inference variables, generic binder parameters, and rigid placeholders carrying explicit universe identity. Binders can instantiate fresh rigid placeholders with bounded universe advancement. A 64-entry clause database, 16-frame concrete proof, and exact associated-value table preserve ambiguity and bounded failure. There is no trait syntax, higher-ranked solving, inference-bearing recursive solving, generic/nested projections, complete coherence/specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, generic binder parameters, and rigid placeholders. Binders instantiate fresh rigid placeholders; assignments reject a newer placeholder or inference universe leaking into an older variable. A 64-entry clause database, 16-frame concrete proof, and exact associated-value table preserve ambiguity and bounded failure. There is no trait syntax, higher-ranked matching, inference-bearing recursive solving, generic/nested projections, complete coherence/specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -843,6 +843,14 @@ parameters as distinct rigid placeholders in a caller-selected fresh universe;
 canonicalization preserves those identities, different universes do not alias,
 and universe advancement overflow fails. No leak checking, universe relation,
 higher-ranked matching, or `for<...>` source syntax exists yet.
+
+Inference-variable identity now includes its creation universe while preserving
+the root-universe `new(id)` constructor. Canonicalization treats identical
+numeric IDs from different universes as distinct. A checked assignment permits
+concrete values and same-or-older-universe inference variables/placeholders, but
+rejects any value from a newer universe with an explicit leak error. This is a
+bounded leak-check primitive, not higher-ranked candidate matching or complete
+unification.
 
 ```text
 Complexity impact: LOW

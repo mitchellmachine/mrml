@@ -54,15 +54,29 @@ impl TraitTypeId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct TraitInferenceVariableId(u32);
+pub struct TraitInferenceVariableId {
+    universe: TraitUniverseIndex,
+    id: u32,
+}
 
 impl TraitInferenceVariableId {
     pub const fn new(value: u32) -> Self {
-        Self(value)
+        Self::in_universe(TraitUniverseIndex::ROOT, value)
+    }
+
+    pub const fn in_universe(universe: TraitUniverseIndex, value: u32) -> Self {
+        Self {
+            universe,
+            id: value,
+        }
     }
 
     pub const fn get(self) -> u32 {
-        self.0
+        self.id
+    }
+
+    pub const fn universe(self) -> TraitUniverseIndex {
+        self.universe
     }
 }
 
@@ -118,6 +132,37 @@ pub enum TraitGoalType {
     Concrete(TraitTypeId),
     InferenceVariable(TraitInferenceVariableId),
     Placeholder(TraitPlaceholder),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitUniverseAssignment {
+    variable: TraitInferenceVariableId,
+    value: TraitGoalType,
+}
+
+impl TraitUniverseAssignment {
+    pub fn new(
+        variable: TraitInferenceVariableId,
+        value: TraitGoalType,
+    ) -> Result<Self, TraitGoalError> {
+        let value_universe = match value {
+            TraitGoalType::Concrete(_) => TraitUniverseIndex::ROOT,
+            TraitGoalType::InferenceVariable(variable) => variable.universe(),
+            TraitGoalType::Placeholder(placeholder) => placeholder.universe,
+        };
+        if value_universe > variable.universe() {
+            return Err(TraitGoalError::UniverseLeak);
+        }
+        Ok(Self { variable, value })
+    }
+
+    pub const fn variable(self) -> TraitInferenceVariableId {
+        self.variable
+    }
+
+    pub const fn value(self) -> TraitGoalType {
+        self.value
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -626,6 +671,7 @@ pub enum TraitGoalError {
     DuplicateAssociatedTypeValue,
     UnknownImplementationId,
     UniverseOverflow,
+    UniverseLeak,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -1513,6 +1559,58 @@ mod tests {
         assert_eq!(
             TraitUniverseIndex::new(u16::MAX).next(),
             Err(TraitGoalError::UniverseOverflow)
+        );
+    }
+
+    #[test]
+    fn canonicalization_distinguishes_inference_variable_universes() {
+        let root = TraitInferenceVariableId::new(5);
+        let nested = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(1), 5);
+        assert_ne!(root, nested);
+        assert_eq!(root.universe(), TraitUniverseIndex::ROOT);
+        assert_eq!(nested.universe(), TraitUniverseIndex::new(1));
+        let mut goal =
+            ImplementedTraitGoal::new(TraitId::new(1), TraitGoalType::InferenceVariable(root));
+        goal.push_argument(TraitGoalType::InferenceVariable(nested))
+            .unwrap();
+        let canonical = canonicalize_implemented_trait_goal(goal).unwrap();
+        assert_eq!(
+            canonical.self_type,
+            CanonicalTraitGoalType::BoundVariable(0)
+        );
+        assert_eq!(
+            canonical.arguments(),
+            &[Some(CanonicalTraitGoalType::BoundVariable(1))]
+        );
+    }
+
+    #[test]
+    fn rejects_inference_assignments_that_leak_newer_universes() {
+        let root = TraitInferenceVariableId::new(1);
+        let nested = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(1), 2);
+        let root_placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::ROOT, TraitPlaceholderId::new(1));
+        let nested_placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::new(1), TraitPlaceholderId::new(1));
+        assert!(
+            TraitUniverseAssignment::new(root, TraitGoalType::Concrete(TraitTypeId::new(9)),)
+                .is_ok()
+        );
+        assert!(
+            TraitUniverseAssignment::new(root, TraitGoalType::Placeholder(root_placeholder))
+                .is_ok()
+        );
+        assert!(
+            TraitUniverseAssignment::new(nested, TraitGoalType::Placeholder(nested_placeholder),)
+                .is_ok()
+        );
+        assert_eq!(
+            TraitUniverseAssignment::new(root, TraitGoalType::Placeholder(nested_placeholder),),
+            Err(TraitGoalError::UniverseLeak)
+        );
+        assert_eq!(
+            TraitUniverseAssignment::new(root, TraitGoalType::InferenceVariable(nested)),
+            Err(TraitGoalError::UniverseLeak)
         );
     }
 

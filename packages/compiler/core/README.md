@@ -3942,6 +3942,17 @@ probe, 10 conformance tests, and 335 replacement tests: 798 compiler tests per
 host. This is a higher-ranked prerequisite, not leak checking, universe-relation
 reasoning, higher-ranked matching, or source `for<...>` support.
 
+The inference-universe leak-check milestone records the creation universe in
+each inference-variable identity; the existing `new(id)` constructor continues
+to create a root variable. Canonicalization keeps equal numeric IDs from
+different universes distinct. Checked assignments accept concrete and same-or-
+older-universe values but reject a newer placeholder or inference variable with
+`UniverseLeak`. Windows gnullvm and native Arch Linux WSL each pass 454 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 800 compiler tests per host. General unification, higher-ranked candidate
+matching, universe relations beyond this ordering, and source `for<...>` remain
+unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

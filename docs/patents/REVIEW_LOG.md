@@ -4129,6 +4129,14 @@ selection, VM construction, transport, or application publication. Automated
 adaptive selection and cross-placement transport remain `TRIGGERED` under the
 existing worldwide-review entry.
 
+# 2026-08-25 — Trait inference-universe leak checks
+
+**Result: NOT_TRIGGERED.** This compiler-only increment adds a conventional
+creation-universe field to inference identity and rejects assignments whose
+value has a newer universe number. It adds no higher-ranked search, general
+unification, cache, parser, runtime mechanism, allocation, synchronization,
+protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Composed configured-service isolation route
 
 **Result: NOT_TRIGGERED.** This increment conventionally composes existing
