@@ -7,5 +7,4 @@ license.workspace = true
 description = "Dependency-free percent encoding for MRML"
 
 [dependencies]
-mrml-runtime = { path = "../../../crates/mrml-runtime" }
-
+mrml-runtime = { path = "../runtime" }

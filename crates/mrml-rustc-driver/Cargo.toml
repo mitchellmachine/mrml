@@ -12,5 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 mrml-error = { path = "../mrml-error" }
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }
 mrml-rustc = { path = "../mrml-rustc" }

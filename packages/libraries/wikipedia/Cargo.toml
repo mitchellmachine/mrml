@@ -6,7 +6,6 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-mrml-runtime = { path = "../../../crates/mrml-runtime" }
+mrml-runtime = { path = "../runtime" }
 mrml-zim = { path = "../zim" }
 mrml-zstd = { path = "../zstd" }
-

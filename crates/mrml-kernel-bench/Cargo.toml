@@ -10,4 +10,4 @@ path = "src/lib.rs"
 
 [dependencies]
 mrml-kernel = { path = "../mrml-kernel" }
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }

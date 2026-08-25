@@ -23,5 +23,5 @@ mrml-error = { path = "../mrml-error" }
 mrml-model = { path = "../mrml-model" }
 mrml-json = { path = "../../packages/libraries/json" }
 mrml-tools = { path = "../mrml-tools" }
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }
 mrml-tls = { path = "../mrml-tls" }

@@ -12,7 +12,7 @@ name = "mrml-trainer"
 path = "src/main.rs"
 
 [dependencies]
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }
 mrml-tokenizer = { path = "../../packages/libraries/tokenizer" }
 mrml-wikipedia = { path = "../../packages/libraries/wikipedia" }
 mrml-tensor = { path = "../mrml-tensor" }

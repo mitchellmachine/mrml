@@ -23,4 +23,4 @@ mrml-agent = { path = "../mrml-agent", default-features = false, features = ["ru
 mrml-json = { path = "../../packages/libraries/json" }
 mrml-tools = { path = "../mrml-tools" }
 mrml-error = { path = "../mrml-error" }
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }

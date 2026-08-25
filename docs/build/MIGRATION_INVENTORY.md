@@ -2,12 +2,12 @@
 
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
-classified and reachable through the Cargo bridge. `mrml-math` and
-`mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`, and
-`mrml-json`, and `mrml-wikipedia` have moved under
-`packages/libraries/`, and stage-zero
-lives at `tools/mrml`; other source remains under `crates/`. No claim is made
-that semantic moves or Cargo bridge removal are complete.
+classified and reachable through the Cargo bridge. Eleven libraries—`mrml-math`,
+`mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`,
+`mrml-json`, `mrml-wikipedia`, `mrml-opus`, `mrml-windows`,
+`mrml-linux`, and `mrml-runtime`—have moved under `packages/libraries/`,
+and stage-zero lives at `tools/mrml`; other source remains under `crates/`.
+No claim is made that semantic moves or Cargo bridge removal are complete.
 
 ## Implemented first gate
 
@@ -48,6 +48,24 @@ that semantic moves or Cargo bridge removal are complete.
 - `mrml-linux` moved with all five consumer paths updated; its allocation-free
   Linux/Unix primitives, native-link declaration, and Cargo bridge remain
   unchanged. Linux execution evidence remains outstanding.
+- `mrml-runtime` moved after both platform leaves, with its two dependency
+  paths and all thirty-one inbound Cargo paths updated across thirty manifests;
+  its runtime implementation, direct-input policy, and Cargo bridge remain
+  unchanged.
+
+The runtime move was checked on a Windows host:
+
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-runtime -- --check`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-runtime`
+  — PASS, 38 tests;
+- `.\target\debug\mrml.exe doctor` and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `.\target\debug\mrml.exe build mrml-runtime` — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-runtime --all-targets --no-deps -- -D warnings`
+  — FAIL, six existing lints in unchanged runtime source and tests.
+
+No Linux host or runtime execution was exercised by this move.
 
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
@@ -71,7 +89,7 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the seven moved
+- Every component still has Cargo dependency metadata; all except the eleven moved
   libraries and stage-zero remain beneath `crates/`. The root Cargo workspace
   still contains every component so the bridge resolves today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

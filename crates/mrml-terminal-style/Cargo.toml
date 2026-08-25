@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }
 
 [target.'cfg(windows)'.dependencies]
 mrml-windows = { path = "../../packages/libraries/windows" }

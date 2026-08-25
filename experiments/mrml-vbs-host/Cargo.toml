@@ -17,7 +17,7 @@ bench = false
 [dependencies]
 mrml-error = { path = "../../crates/mrml-error" }
 mrml-kernel = { path = "../../crates/mrml-kernel" }
-mrml-runtime = { path = "../../crates/mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }
 mrml-whp = { path = "../../crates/mrml-whp" }
 mrml-windows = { path = "../../packages/libraries/windows" }
 

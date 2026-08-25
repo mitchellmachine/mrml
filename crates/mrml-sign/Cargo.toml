@@ -13,4 +13,4 @@ path = "src/main.rs"
 mrml-crypto = { path = "../mrml-crypto" }
 mrml-error = { path = "../mrml-error" }
 mrml-kernel = { path = "../mrml-kernel" }
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }

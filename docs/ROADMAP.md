@@ -166,6 +166,11 @@ resolve to the semantic package without changing Windows primitive behavior.
 resolve to the semantic package without changing Linux/Unix primitive behavior.
 This Windows-host move does not establish Linux execution evidence.
 
+`mrml-runtime` is the eleventh migrated library component; its Windows/Linux
+edges are now sibling semantic-package references and all thirty-one inbound
+Cargo paths across thirty manifests resolve to the semantic runtime home without
+changing runtime behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

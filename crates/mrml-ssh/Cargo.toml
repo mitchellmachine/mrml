@@ -8,4 +8,4 @@ description = "Dependency-free SSH remote and signing support for MRML"
 
 [dependencies]
 mrml-crypto = { path = "../mrml-crypto" }
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../packages/libraries/runtime" }

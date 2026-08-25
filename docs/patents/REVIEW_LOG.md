@@ -73,6 +73,11 @@ The tenth semantic move relocates `mrml-linux` and updates its five consumer
 paths without changing platform behavior. **Result: NOT_TRIGGERED.** This is
 repository organization, not a new Linux or Unix mechanism.
 
+The eleventh semantic move relocates `mrml-runtime` after both platform leaves,
+updating its dependency paths and thirty-one inbound Cargo paths without
+changing runtime behavior. **Result: NOT_TRIGGERED.** This is repository organization,
+not a new runtime mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
