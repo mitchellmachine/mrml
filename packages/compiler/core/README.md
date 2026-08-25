@@ -3779,6 +3779,21 @@ claim path-sensitive branch selection, nested projections, general aggregate
 provenance, named regions, or complete Polonius semantics. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
 
+The projected conditional-return outlives milestone validates every retained
+origin of the latest reference assignment when an exact tuple field is returned.
+The exact dated oracle rejects a conditional local/parameter generation with
+E0515 and accepts a directly projected parameter plus a conditional generation
+whose two branches both trace to that parameter. MRML now reports its bounded
+outlives diagnostic for the mixed generation instead of degrading to invalid
+internal place facts. Windows gnullvm and native Arch Linux WSL each pass 420
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 766 compiler tests per host. Formatting and the
+`no_std`/allocation/unsafe hygiene scan pass. The Manifest V2 workspace rejects
+the obsolete Cargo package selector, so warnings-denied Clippy was not exercised.
+This remains exact one-step tuple-field provenance, not general aggregate escape
+analysis, path-sensitive branch selection, named lifetime inference, or complete
+Polonius semantics.
+
 The repeated projected-source loan milestone extends that bounded relation
 across another directly initialized tuple whose selected reference field is
 later moved and reborrowed. The pinned oracle rejects shared and mutable live-

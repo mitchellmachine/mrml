@@ -743,6 +743,12 @@ across two successive exact field writes. This is exact one-field conditional
 and repeated-generation provenance, not path-
 sensitive branch selection, nested projections, general aggregate provenance,
 or complete Polonius semantics.
+Exact returned tuple fields now require every retained origin of their latest
+conditional reference-assignment generation to outlive the function. A mixed
+parameter/local generation therefore fails closed even when another branch is
+parameter-backed, while a generation whose branches all trace to the input is
+accepted. This remains one-step tuple-field provenance, not general aggregate
+escape analysis or named lifetime inference.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

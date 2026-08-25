@@ -11489,6 +11489,42 @@ fn runtime_path_outlives_function_at_effect(
                 let RuntimeExpressionType::Reference { .. } = path.ty else {
                     return Some(false);
                 };
+                let latest_write = facts.effects[..facts.effect_count]
+                    .iter()
+                    .flatten()
+                    .filter(|effect| {
+                        effect.path == path_id
+                            && effect.kind == RuntimePlaceEffectKind::Write
+                            && effect.event.0 < returned_at.event.0
+                    })
+                    .max_by_key(|effect| effect.event.0);
+                if let Some(latest_write) = latest_write {
+                    let mut found_expression_origin = false;
+                    for origin in (0..facts.effect_count)
+                        .filter_map(|index| facts.direct_expression_loan_fact(index))
+                        .filter(|origin| {
+                            origin.borrower == local
+                                && origin.generation_event == latest_write.event
+                        })
+                    {
+                        found_expression_origin = true;
+                        let issue = facts
+                            .effects
+                            .get(origin.issue_effect)
+                            .and_then(|effect| *effect)?;
+                        if !runtime_path_outlives_function_at_effect(
+                            facts,
+                            origin.borrowed_path,
+                            issue,
+                            depth + 1,
+                        )? {
+                            return Some(false);
+                        }
+                    }
+                    if found_expression_origin {
+                        return Some(true);
+                    }
+                }
                 if let Some(origin) =
                     facts.direct_tuple_field_assigned_loan_origin_before(path_id, returned_at.event)
                 {
@@ -29475,11 +29511,17 @@ mod tests {
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; if choose { return &local; } input }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut selected: &u16 = &local; if choose { selected = input; } selected }",
             "fn value(input: &u16) -> &u16 { let local = *input; let source: &u16 = &local; let returned = source; returned }",
+            "fn value(input: &u16) -> &u16 { let local = *input; let holder = (&local,); holder.0 }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut holder = (input,); holder.0 = if choose { input } else { &local }; holder.0 }",
         ] {
-            assert_eq!(
-                analyze(rejected).unwrap_err().kind,
-                CodegenErrorKind::RuntimeReferenceOutlivesFunction
-            );
+            match analyze(rejected) {
+                Err(error) => assert_eq!(
+                    error.kind,
+                    CodegenErrorKind::RuntimeReferenceOutlivesFunction,
+                    "{rejected}"
+                ),
+                Ok(_) => panic!("expected outlives failure: {rejected}"),
+            }
         }
 
         for accepted in [
@@ -29489,6 +29531,8 @@ mod tests {
             "fn value(input: &mut u16) -> &u16 { let moved = input; let returned: &u16 = &*moved; returned }",
             "fn value(input: &u16) -> &u16 { let returned = input; returned }",
             "fn value(input: &u16) -> &u16 { let first = input; let second = first; second }",
+            "fn value(input: &u16) -> &u16 { let holder = (input,); holder.0 }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let mut holder = (input,); holder.0 = if choose { input } else { &*input }; holder.0 }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }

@@ -3880,3 +3880,11 @@ correctness extension selects no additional patent mechanism.
 existing bounded generation walk across two successive writes to one exact tuple
 field. They select no new compiler algorithm or runtime mechanism beyond the
 conditional projected-reference ownership analysis reviewed immediately above.
+
+# 2026-08-25 — Projected conditional-return outlives validation
+
+**Result: NOT_TRIGGERED.** This compiler increment applies the existing bounded
+generation and outlives walk to every retained source of one exact returned
+tuple field. It is conventional compiler place, control-flow, and lifetime
+validation and selects no new runtime enforcement, allocation, reclamation,
+synchronization, hardware, protocol, cryptographic, or executable mechanism.

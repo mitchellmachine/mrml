@@ -554,6 +554,17 @@ reassignments: all three owners remain protected while the moved descendant is
 live, unrelated mutation is accepted, and all owners are released after its
 last use.
 
+The projected conditional-return outlives milestone checks every retained
+origin of the latest exact tuple-field assignment. ORACLE-0002 rejects a return
+whose conditional generation may reference local storage with E0515 and accepts
+direct projected parameter storage plus a conditional generation whose branches
+both trace to that parameter. The Windows gnullvm and native Arch Linux WSL
+frontend suites each pass the same 766 compiler tests. Formatting and the
+`no_std`/no-allocation/unsafe hygiene scan pass. The current Manifest V2
+workspace has no Cargo package named `mrml-rustc`, so the obsolete direct Cargo
+Clippy command was rejected before compilation; warnings-denied Clippy is not
+claimed for this milestone.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
