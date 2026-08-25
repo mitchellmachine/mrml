@@ -76,6 +76,6 @@ pub use trait_goals::{
     TraitWhereClauseAnswer, TraitWhereClauseDatabase, TraitWhereClauseElaboration,
     TraitWhereClauseId, TraitWhereClauseSolution, canonicalize_implemented_trait_goal,
     canonicalize_implemented_trait_goal_with_variables, canonicalize_implemented_trait_predicates,
-    generic_trait_implementation_heads_overlap, solve_concrete_trait_goal,
-    solve_concrete_trait_goal_with_generics, solve_rigid_trait_goal,
+    generic_trait_implementation_heads_overlap, generic_trait_implementation_overlaps_exact,
+    solve_concrete_trait_goal, solve_concrete_trait_goal_with_generics, solve_rigid_trait_goal,
 };

@@ -4272,3 +4272,12 @@ fixed-depth premise traversal with the coherent generic selector and reports
 exact/generic collisions as ambiguity. It adds no specialization order,
 inference search, cache, parser, runtime mechanism, allocation, synchronization,
 protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Exact/generic trait admission coherence
+
+**Result: NOT_TRIGGERED.** This compiler-only increment compares bounded flat
+trait heads during admission and rejects a concrete header that instantiates a
+generic head. It reuses direct equality and fixed-array parameter binding and
+adds no specialization order, inference search, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.

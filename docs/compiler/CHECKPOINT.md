@@ -757,6 +757,16 @@ one component-interface probe, 10 conformance tests, and 335 replacement tests:
 812 compiler tests per host. Inference-bearing generic proof, specialization,
 cross-family coherence, and source impl syntax remain unsupported.
 
+The cross-family coherence milestone adds symmetric bounded admission paths for
+exact and generic implementations. Either insertion order rejects a concrete
+header that instantiates a generic head, including repeated-parameter equality;
+disjoint heads remain admissible. Runtime selection retains defensive ambiguity
+for databases constructed through older unchecked paths. Windows gnullvm and
+native Arch Linux WSL each pass 468 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 814 compiler tests per
+host. Premise-aware coherence, specialization, and source impl syntax remain
+unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.

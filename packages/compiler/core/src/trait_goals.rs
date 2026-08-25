@@ -559,6 +559,23 @@ impl GenericTraitImplementationDatabase {
         Ok(())
     }
 
+    pub fn insert_coherent_with_exact(
+        &mut self,
+        exact: &TraitImplementationDatabase,
+        id: GenericTraitImplementationId,
+        implementation: TraitWhereClause,
+    ) -> Result<(), TraitGoalError> {
+        if exact.implementations[..exact.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+            .any(|header| generic_trait_implementation_overlaps_exact(implementation, header))
+        {
+            return Err(TraitGoalError::OverlappingExactAndGenericImplementation);
+        }
+        self.insert(id, implementation)
+    }
+
     pub fn select(
         &self,
         goal: ImplementedTraitGoal,
@@ -614,6 +631,57 @@ pub fn generic_trait_implementation_heads_overlap(
             left.zip(*right)
                 .is_some_and(|(left, right)| unifier.unify(left, right))
         })
+}
+
+pub fn generic_trait_implementation_overlaps_exact(
+    generic: TraitWhereClause,
+    exact: TraitImplementationHeader,
+) -> bool {
+    if generic.consequence.trait_id != exact.trait_id
+        || generic.consequence.argument_count != exact.argument_count
+    {
+        return false;
+    }
+    let mut bindings = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+    if !bound_type_matches_exact(
+        generic.consequence.self_type,
+        exact.self_type,
+        &mut bindings,
+    ) {
+        return false;
+    }
+    generic
+        .consequence
+        .arguments()
+        .iter()
+        .zip(exact.arguments())
+        .all(|(generic, exact)| {
+            generic.zip(*exact).is_some_and(|(generic, exact)| {
+                bound_type_matches_exact(generic, exact, &mut bindings)
+            })
+        })
+}
+
+fn bound_type_matches_exact(
+    generic: BoundTraitGoalType,
+    exact: TraitTypeId,
+    bindings: &mut [Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS],
+) -> bool {
+    match generic {
+        BoundTraitGoalType::Concrete(generic) => generic == exact,
+        BoundTraitGoalType::Parameter(parameter) => {
+            let Some(binding) = bindings.get_mut(parameter.get() as usize) else {
+                return false;
+            };
+            match *binding {
+                Some(generic) => generic == exact,
+                None => {
+                    *binding = Some(exact);
+                    true
+                }
+            }
+        }
+    }
 }
 
 const FLAT_GENERIC_HEAD_VARIABLES: usize = MAX_TRAIT_GENERIC_PARAMETERS * 2;
@@ -1112,6 +1180,7 @@ pub enum TraitGoalError {
     TooManyGenericImplementations,
     DuplicateGenericImplementationId,
     OverlappingGenericImplementation,
+    OverlappingExactAndGenericImplementation,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -1560,6 +1629,27 @@ impl TraitImplementationDatabase {
         *slot = Some(implementation);
         self.implementation_count += 1;
         Ok(())
+    }
+
+    pub fn insert_coherent_with_generics(
+        &mut self,
+        generic: &GenericTraitImplementationDatabase,
+        implementation: TraitImplementationHeader,
+    ) -> Result<(), TraitGoalError> {
+        if generic.implementations[..generic.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+            .any(|candidate| {
+                generic_trait_implementation_overlaps_exact(
+                    candidate.implementation,
+                    implementation,
+                )
+            })
+        {
+            return Err(TraitGoalError::OverlappingExactAndGenericImplementation);
+        }
+        self.insert(implementation)
     }
 
     pub fn solve(&self, goal: CanonicalImplementedTraitGoal) -> TraitGoalSolution {
@@ -2838,6 +2928,82 @@ mod tests {
                 ),
             ),
             Ok(TraitProofSolution::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn rejects_exact_generic_overlap_in_either_admission_order() {
+        let parameter = TraitGenericParameterId::new(0);
+        let generic_implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(150),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let exact_implementation = TraitImplementationHeader::new(
+            TraitImplementationId::new(1),
+            TraitId::new(150),
+            TraitTypeId::new(7),
+        );
+
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact.insert(exact_implementation).unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        assert_eq!(
+            generic.insert_coherent_with_exact(
+                &exact,
+                GenericTraitImplementationId::new(1),
+                generic_implementation,
+            ),
+            Err(TraitGoalError::OverlappingExactAndGenericImplementation)
+        );
+
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), generic_implementation)
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        assert_eq!(
+            exact.insert_coherent_with_generics(&generic, exact_implementation),
+            Err(TraitGoalError::OverlappingExactAndGenericImplementation)
+        );
+    }
+
+    #[test]
+    fn admits_disjoint_exact_and_generic_implementations() {
+        let mut exact_implementation = TraitImplementationHeader::new(
+            TraitImplementationId::new(1),
+            TraitId::new(160),
+            TraitTypeId::new(1),
+        );
+        exact_implementation
+            .push_argument(TraitTypeId::new(2))
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact.insert(exact_implementation).unwrap();
+        let parameter = TraitGenericParameterId::new(0);
+        let mut generic_implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(160),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        generic_implementation
+            .consequence
+            .push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        assert_eq!(
+            generic.insert_coherent_with_exact(
+                &exact,
+                GenericTraitImplementationId::new(1),
+                generic_implementation,
+            ),
+            Ok(())
         );
     }
 

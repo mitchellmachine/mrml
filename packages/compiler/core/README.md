@@ -4005,6 +4005,16 @@ one component-interface probe, 10 conformance tests, and 335 replacement tests:
 cross-family coherence, source impl syntax, and mixed inference selection remain
 unsupported.
 
+The cross-family coherence milestone adds symmetric bounded admission methods
+for exact and generic implementations. A concrete header that instantiates a
+generic head is rejected in either insertion order, including conflicts imposed
+by repeated generic parameters; disjoint heads remain admissible. The proof
+solver preserves defensive ambiguity for unchecked legacy collisions. Windows
+gnullvm and native Arch Linux WSL each pass 468 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 814 compiler
+tests per host. Premise-aware coherence, specialization, source impl syntax, and
+mixed inference selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
