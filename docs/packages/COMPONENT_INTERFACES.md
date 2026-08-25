@@ -60,6 +60,18 @@ continues to resolve its old entry. Release advances the slot generation before
 reuse, so stale IDs cannot reach a replacement. This remains host policy-model
 evidence, not capability-authorized runtime loading or execution.
 
+**PARTIALLY IMPLEMENTED placement-composition prerequisite:** the build tool can
+now compose one isolated-service binding, one exact immutable
+`SystemGeneration`, and one already resolved native-service or microVM placement
+into a `GenerationBoundServicePlacement`. Composition rechecks the exact
+consumer and provider package versions/digests in that generation, retains the
+interface generation/fingerprint and generational endpoint, rejects stale
+binding IDs and in-process targets, and refuses a Total-MicroVM exception rather
+than converting it into a native launch. Names and metadata remain identity
+data; the endpoint remains the authority-bearing runtime reference. This is a
+host policy object only: it does not select a provider or placement, grant a
+capability, load code, construct a VM, or transport an interface invocation.
+
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the

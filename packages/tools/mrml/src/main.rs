@@ -7,6 +7,7 @@ pub mod manifest;
 pub mod migration;
 pub mod package;
 pub mod resolver;
+pub mod runtime_placement;
 pub mod schema;
 pub mod servicing;
 

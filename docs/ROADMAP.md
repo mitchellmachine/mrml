@@ -49,7 +49,12 @@ Three new persistent deltas are documented before implementation:
   pre-construction admission through endpoint commit and teardown-safe rollback.
   Both hosted configuration probes use it around real guest construction and
   pass build/unit gates; fresh retained-artifact execution did not complete, so
-  live KVM/WHP transaction parity remains pending.
+  live KVM/WHP transaction parity remains pending. The build tool now also
+  composes one exact `SystemGeneration`, isolated-service `InterfaceBinding`,
+  and already resolved placement into a generation-bound handoff while rejecting
+  stale IDs, package substitution, in-process targets, and Total-mode exceptions.
+  This remains host policy evidence and does not yet launch or transport the
+  representative service.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.

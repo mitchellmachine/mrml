@@ -69,6 +69,16 @@ not complete on either backend with the available retained artifacts, so live
 transaction execution parity remains **PLANNED** and no new hosted-execution
 claim is made.
 
+The build tool now has a bounded composition prerequisite between exact package
+resolution and kernel launch routing. A `GenerationBoundServicePlacement`
+rechecks that an isolated-service `InterfaceBinding` retains the exact consumer
+and provider records in one immutable `SystemGeneration`, then binds its
+generational endpoint to an already resolved native-service or microVM
+placement. Stale bindings, package-generation substitution, in-process targets,
+and Total-mode exceptions fail closed. This does not select the provider or
+placement, grant capabilities, create either runtime, or carry interface
+traffic, so the representative dual-placement service remains **PLANNED**.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and
