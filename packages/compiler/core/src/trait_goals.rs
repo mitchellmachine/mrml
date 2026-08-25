@@ -1,9 +1,9 @@
 //! Bounded canonical trait-goal foundations.
 //!
-//! This module deliberately stops before trait selection. It provides stable,
-//! allocation-free identities and first-occurrence canonicalization so later
-//! solver slices can compare and cache goals without confusing inference
-//! variables, placeholders, or concrete types.
+//! It provides stable, allocation-free identities, first-occurrence
+//! canonicalization, exact concrete-header selection, and bounded response
+//! substitutions without confusing inference variables, placeholders, or
+//! concrete types.
 
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
@@ -117,6 +117,19 @@ pub struct CanonicalImplementedTraitGoal {
     variable_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalizedImplementedTraitGoal {
+    pub goal: CanonicalImplementedTraitGoal,
+    variables: [Option<TraitInferenceVariableId>; MAX_CANONICAL_TRAIT_VARIABLES],
+    variable_count: usize,
+}
+
+impl CanonicalizedImplementedTraitGoal {
+    pub fn variables(&self) -> &[Option<TraitInferenceVariableId>] {
+        &self.variables[..self.variable_count]
+    }
+}
+
 impl CanonicalImplementedTraitGoal {
     pub fn arguments(&self) -> &[Option<CanonicalTraitGoalType>] {
         &self.arguments[..self.argument_count]
@@ -198,13 +211,59 @@ pub struct TraitGoalAnswer {
     binding_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitInferenceBinding {
+    pub variable: TraitInferenceVariableId,
+    pub concrete_type: TraitTypeId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitGoalSubstitution {
+    bindings: [Option<TraitInferenceBinding>; MAX_CANONICAL_TRAIT_VARIABLES],
+    binding_count: usize,
+}
+
+impl TraitGoalSubstitution {
+    pub fn bindings(&self) -> &[Option<TraitInferenceBinding>] {
+        &self.bindings[..self.binding_count]
+    }
+
+    pub fn binding(&self, variable: TraitInferenceVariableId) -> Option<TraitTypeId> {
+        self.bindings()
+            .iter()
+            .flatten()
+            .find(|binding| binding.variable == variable)
+            .map(|binding| binding.concrete_type)
+    }
+}
+
 impl TraitGoalAnswer {
     pub fn bindings(&self) -> &[Option<TraitTypeId>] {
         &self.bindings[..self.binding_count]
     }
 
     pub fn binding(&self, variable: u8) -> Option<TraitTypeId> {
-        self.bindings.get(variable as usize).copied().flatten()
+        self.bindings().get(variable as usize).copied().flatten()
+    }
+
+    pub fn substitute(
+        &self,
+        canonicalized: CanonicalizedImplementedTraitGoal,
+    ) -> Option<TraitGoalSubstitution> {
+        if self.binding_count != canonicalized.variable_count {
+            return None;
+        }
+        let mut bindings = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+        for (index, variable) in canonicalized.variables().iter().enumerate() {
+            bindings[index] = Some(TraitInferenceBinding {
+                variable: variable.as_ref().copied()?,
+                concrete_type: self.bindings[index]?,
+            });
+        }
+        Some(TraitGoalSubstitution {
+            bindings,
+            binding_count: self.binding_count,
+        })
     }
 }
 
@@ -335,6 +394,12 @@ fn canonical_type_matches_concrete(
 pub fn canonicalize_implemented_trait_goal(
     goal: ImplementedTraitGoal,
 ) -> Result<CanonicalImplementedTraitGoal, TraitGoalError> {
+    Ok(canonicalize_implemented_trait_goal_with_variables(goal)?.goal)
+}
+
+pub fn canonicalize_implemented_trait_goal_with_variables(
+    goal: ImplementedTraitGoal,
+) -> Result<CanonicalizedImplementedTraitGoal, TraitGoalError> {
     if goal.argument_count > goal.arguments.len()
         || goal.arguments[..goal.argument_count]
             .iter()
@@ -356,11 +421,15 @@ pub fn canonicalize_implemented_trait_goal(
             &mut variable_count,
         )?);
     }
-    Ok(CanonicalImplementedTraitGoal {
-        trait_id: goal.trait_id,
-        self_type,
-        arguments,
-        argument_count: goal.argument_count,
+    Ok(CanonicalizedImplementedTraitGoal {
+        goal: CanonicalImplementedTraitGoal {
+            trait_id: goal.trait_id,
+            self_type,
+            arguments,
+            argument_count: goal.argument_count,
+            variable_count,
+        },
+        variables,
         variable_count,
     })
 }
@@ -564,22 +633,71 @@ mod tests {
             TraitId::new(2),
             TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(99)),
         );
+        let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal).unwrap();
+        let answer = TraitGoalAnswer {
+            implementation_id: TraitImplementationId::new(1),
+            bindings: [
+                Some(TraitTypeId::new(3)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            binding_count: 1,
+        };
         assert_eq!(
-            database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
-            TraitGoalSolution::Unique(TraitGoalAnswer {
-                implementation_id: TraitImplementationId::new(1),
-                bindings: [
-                    Some(TraitTypeId::new(3)),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ],
-                binding_count: 1,
-            })
+            database.solve(canonicalized.goal),
+            TraitGoalSolution::Unique(answer)
+        );
+        let substitution = answer.substitute(canonicalized).unwrap();
+        assert_eq!(
+            substitution.binding(TraitInferenceVariableId::new(99)),
+            Some(TraitTypeId::new(3))
+        );
+        assert_eq!(
+            substitution.binding(TraitInferenceVariableId::new(100)),
+            None
+        );
+    }
+
+    #[test]
+    fn restores_first_occurrence_variable_identities_in_answers() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        let mut implementation = TraitImplementationHeader::new(
+            TraitImplementationId::new(5),
+            TraitId::new(7),
+            TraitTypeId::new(20),
+        );
+        implementation.push_argument(TraitTypeId::new(30)).unwrap();
+        database.insert(implementation).unwrap();
+        let mut goal = ImplementedTraitGoal::new(
+            TraitId::new(7),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(900)),
+        );
+        goal.push_argument(TraitGoalType::InferenceVariable(
+            TraitInferenceVariableId::new(100),
+        ))
+        .unwrap();
+        let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal).unwrap();
+        let TraitGoalSolution::Unique(answer) = database.solve(canonicalized.goal) else {
+            panic!("expected one exact answer");
+        };
+        let substitution = answer.substitute(canonicalized).unwrap();
+        assert_eq!(
+            substitution.bindings(),
+            [
+                Some(TraitInferenceBinding {
+                    variable: TraitInferenceVariableId::new(900),
+                    concrete_type: TraitTypeId::new(20),
+                }),
+                Some(TraitInferenceBinding {
+                    variable: TraitInferenceVariableId::new(100),
+                    concrete_type: TraitTypeId::new(30),
+                }),
+            ]
         );
     }
 

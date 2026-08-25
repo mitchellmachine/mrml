@@ -4017,3 +4017,12 @@ fixed-array variable bindings already calculated during exact structural trait-
 header matching and returns them with the selected stable implementation ID.
 It adds no generic search, recursive solver, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Bounded trait-response variable restoration
+
+**Result: NOT_TRIGGERED.** This compiler-only increment retains the original
+inference-variable IDs in a fixed array during canonicalization and pairs them
+with an exact answer's existing fixed bindings. This is conventional bounded
+substitution bookkeeping and adds no generic search, recursive solver, cache,
+parser, runtime mechanism, allocation, synchronization, protocol, cryptography,
+or hardware behavior.

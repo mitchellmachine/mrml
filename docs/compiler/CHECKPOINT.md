@@ -631,6 +631,15 @@ interface probe, 10 conformance tests, and 335 replacement tests: 778 compiler
 tests per host. Generic impls, where-clauses, projections, recursive goals,
 answer composition, and source integration remain unsupported.
 
+The bounded response-substitution milestone retains the original inference-
+variable identities alongside the canonical goal and maps a unique answer back
+to those identities in first-occurrence order. Missing bindings or mismatched
+response arity fail closed, and lookup remains fixed-capacity and allocation-
+free. Windows gnullvm and native Arch Linux WSL each pass 433 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 779
+compiler tests per host. This does not add generic unification, nested answer
+composition, where-clauses, projections, recursive goals, or source integration.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

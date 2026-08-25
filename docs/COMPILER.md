@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, and placeholders and canonicalize inference variables by first occurrence. A bounded table rejects duplicate IDs and overlapping exact concrete impl heads, returns a fixed canonical-variable substitution for one matching exact header, reports multiple candidate answers as ambiguous, and preserves repeated-variable equality. There is no trait syntax, generic impl, where-clause, projection, recursive goal, complete coherence/specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, and placeholders and canonicalize inference variables by first occurrence while retaining the caller's variable identities. A bounded table rejects duplicate IDs and overlapping exact concrete impl heads, returns a fixed substitution for one matching exact header, maps that response back to the caller's inference variables, reports multiple candidate answers as ambiguous, and preserves repeated-variable equality. There is no trait syntax, generic impl, where-clause, projection, recursive goal, complete coherence/specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -787,8 +787,10 @@ overlapping heads fail, one matching header returns its exact implementation
 and fixed canonical-variable substitution, multiple matching inference answers
 remain ambiguous, and no matching header returns no solution. Per-candidate
 fixed bindings preserve equality when a canonical variable occurs more than
-once. This is not generic unification or a complete solver and cannot authorize
-trait syntax.
+once. Canonicalization can also retain the first-occurrence inference identities
+so a unique response maps its fixed bindings back to the caller without
+allocation; incomplete or mismatched responses fail closed. This is not generic
+unification or a complete solver and cannot authorize trait syntax.
 
 ```text
 Complexity impact: LOW

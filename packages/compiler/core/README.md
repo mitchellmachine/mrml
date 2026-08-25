@@ -3857,6 +3857,16 @@ tests: 778 compiler tests per host. The result is not generic unification,
 where-clause solving, projection normalization, recursive goal handling, answer
 composition, specialization, complete coherence, or source-level trait support.
 
+The bounded response-substitution milestone retains the caller's inference-
+variable identities alongside the canonical goal. A unique answer can then be
+mapped back to fixed `(inference variable, concrete type)` bindings in canonical
+first-occurrence order. Missing bindings or mismatched response arity fail
+closed; lookup is fixed-capacity and allocation-free. Windows gnullvm and native
+Arch Linux WSL each pass 433 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 779 compiler tests per host. This
+does not implement generic unification, nested answer composition, where-clause
+solving, projections, recursive goals, or source-level trait support.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
