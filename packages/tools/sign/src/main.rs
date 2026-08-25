@@ -56,12 +56,12 @@ fn application_main() -> Result<()> {
             &args[4],
         ),
         Some("inspect-bootstrap-state") if args.len() == 3 => bootstrap_state::inspect(&args[2]),
-        Some("build-receipt") if args.len() == 13 => build_receipt::create(&args[2..]),
+        Some("build-receipt") if args.len() == 14 => build_receipt::create(&args[2..]),
         Some("compare-build-receipts") if args.len() == 4 => {
             build_receipt::compare(&args[2], &args[3])
         }
         _ => Err(anyhow!(
-            "usage:\n  mrml-sign keygen PRIVATE PUBLIC\n  mrml-sign sign KIND VERSION ARTIFACT PRIVATE SIGNATURE\n  mrml-sign sign-bundle KIND VERSION ARTIFACT PRIVATE OUTPUT\n  mrml-sign key-digest PUBLIC\n  mrml-sign authenticode-digest IMAGE.efi\n  mrml-sign attach-authenticode IMAGE.efi SIGNATURE.p7b OUTPUT.efi\n  mrml-sign finalize-vbs-enclave INPUT.dll OUTPUT.dll\n  mrml-sign manifest VERSION OUTPUT NEXT_ROOT KERNEL VM SERVICE CUDA POLICY\n  mrml-sign bootstrap-state MINIMUM_RELEASE OUTPUT OWNER_PUBLIC\n  mrml-sign inspect-bootstrap-state STATE\n  mrml-sign build-receipt OUTPUT SOURCE_ARCHIVE RUSTC_VERSION CARGO_VERSION TARGET PROFILE CARGO_LOCK KERNEL SERVICE LOADER CONFIG\n  mrml-sign compare-build-receipts FIRST SECOND"
+            "usage:\n  mrml-sign keygen PRIVATE PUBLIC\n  mrml-sign sign KIND VERSION ARTIFACT PRIVATE SIGNATURE\n  mrml-sign sign-bundle KIND VERSION ARTIFACT PRIVATE OUTPUT\n  mrml-sign key-digest PUBLIC\n  mrml-sign authenticode-digest IMAGE.efi\n  mrml-sign attach-authenticode IMAGE.efi SIGNATURE.p7b OUTPUT.efi\n  mrml-sign finalize-vbs-enclave INPUT.dll OUTPUT.dll\n  mrml-sign manifest VERSION OUTPUT NEXT_ROOT KERNEL VM SERVICE CUDA POLICY\n  mrml-sign bootstrap-state MINIMUM_RELEASE OUTPUT OWNER_PUBLIC\n  mrml-sign inspect-bootstrap-state STATE\n  mrml-sign build-receipt OUTPUT SOURCE_ARCHIVE RUSTC_VERSION TARGET PROFILE WORKSPACE_MANIFEST WORKSPACE_LOCK TOOLCHAIN_LOCK KERNEL SERVICE LOADER CONFIG\n  mrml-sign compare-build-receipts FIRST SECOND"
         )),
     }
 }

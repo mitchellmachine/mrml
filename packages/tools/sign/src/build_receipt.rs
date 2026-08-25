@@ -5,7 +5,7 @@ use mrml_runtime::{Text, Vector, mrml_println as println};
 
 const MAX_INPUT: usize = 512 * 1024 * 1024;
 const MAX_VALUE: usize = 256;
-const HEADER: &str = "MRML-BUILD-RECEIPT-v1\n";
+const HEADER: &str = "MRML-BUILD-RECEIPT-v2\n";
 
 struct Input<'a> {
     name: &'static str,
@@ -13,47 +13,59 @@ struct Input<'a> {
 }
 
 pub fn create(args: &[Text]) -> Result<()> {
-    if args.len() != 11 {
+    if args.len() != 12 {
         return Err(anyhow!("invalid build-receipt arguments"));
     }
     let output = &args[0];
     let source = &args[1];
-    let rustc = canonical_value("rustc", &args[2])?;
-    let cargo = canonical_value("cargo", &args[3])?;
-    let target = canonical_value("target", &args[4])?;
-    let profile = canonical_value("profile", &args[5])?;
+    let compiler_version = canonical_value("compiler-version", &args[2])?;
+    let target = canonical_value("target", &args[3])?;
+    let profile = canonical_value("profile", &args[4])?;
     let inputs = [
         Input {
             name: "source-archive",
             path: source,
         },
         Input {
-            name: "cargo-lock",
+            name: "workspace-manifest",
+            path: &args[5],
+        },
+        Input {
+            name: "workspace-lock",
             path: &args[6],
         },
         Input {
-            name: "kernel",
+            name: "toolchain-lock",
             path: &args[7],
         },
         Input {
-            name: "service",
+            name: "kernel",
             path: &args[8],
         },
         Input {
-            name: "loader",
+            name: "service",
             path: &args[9],
         },
         Input {
-            name: "configuration",
+            name: "loader",
             path: &args[10],
+        },
+        Input {
+            name: "configuration",
+            path: &args[11],
         },
     ];
 
     let mut receipt =
         Vector::with_capacity(BUILD_RECEIPT_MAX_BYTES).map_err(|_| anyhow!("allocation failed"))?;
     append(&mut receipt, HEADER.as_bytes())?;
-    append_field(&mut receipt, "rustc", rustc.as_bytes())?;
-    append_field(&mut receipt, "cargo", cargo.as_bytes())?;
+    append_field(&mut receipt, "builder", b"mrml")?;
+    append_field(&mut receipt, "compiler", b"upstream-rustc")?;
+    append_field(
+        &mut receipt,
+        "compiler-version",
+        compiler_version.as_bytes(),
+    )?;
     append_field(&mut receipt, "target", target.as_bytes())?;
     append_field(&mut receipt, "profile", profile.as_bytes())?;
     for input in inputs {
@@ -134,10 +146,11 @@ mod tests {
         args.push(output.into());
         args.push(mrml_runtime::join_path(root, "source.tar"));
         args.push("rustc 1.91.0 (fixture)".into());
-        args.push("cargo 1.91.0 (fixture)".into());
         args.push("x86_64-unknown-uefi".into());
         args.push("release".into());
-        args.push(mrml_runtime::join_path(root, "Cargo.lock"));
+        args.push(mrml_runtime::join_path(root, "mrml.toml"));
+        args.push(mrml_runtime::join_path(root, "mrml.lock"));
+        args.push(mrml_runtime::join_path(root, "rust-toolchain.toml"));
         args.push(mrml_runtime::join_path(root, "kernel.efi"));
         args.push(mrml_runtime::join_path(root, "service.efi"));
         args.push(mrml_runtime::join_path(root, "loader.efi"));
@@ -154,7 +167,9 @@ mod tests {
         mrml_runtime::create_dir_all(&root).unwrap();
         for (name, bytes) in [
             ("source.tar", b"source".as_slice()),
-            ("Cargo.lock", b"dependencies".as_slice()),
+            ("mrml.toml", b"workspace".as_slice()),
+            ("mrml.lock", b"resolved graph".as_slice()),
+            ("rust-toolchain.toml", b"toolchain".as_slice()),
             ("kernel.efi", b"kernel".as_slice()),
             ("service.efi", b"service".as_slice()),
             ("loader.efi", b"loader".as_slice()),
@@ -186,8 +201,8 @@ mod tests {
 
     #[test]
     fn canonical_parser_rejects_ambiguous_or_extended_receipts() {
-        assert!(BuildReceipt::decode(b"MRML-BUILD-RECEIPT-v1\n").is_err());
-        assert!(BuildReceipt::decode(b"MRML-BUILD-RECEIPT-v1\nrustc=x\n").is_err());
+        assert!(BuildReceipt::decode(b"MRML-BUILD-RECEIPT-v2\n").is_err());
+        assert!(BuildReceipt::decode(b"MRML-BUILD-RECEIPT-v2\nbuilder=mrml\n").is_err());
         assert!(canonical_value("target", "line\nbreak").is_err());
         assert!(canonical_value("target", "").is_err());
     }

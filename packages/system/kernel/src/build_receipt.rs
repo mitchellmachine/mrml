@@ -1,6 +1,6 @@
 pub const BUILD_RECEIPT_MAX_BYTES: usize = 4096;
 
-const HEADER: &str = "MRML-BUILD-RECEIPT-v1";
+const HEADER: &str = "MRML-BUILD-RECEIPT-v2";
 const MAX_VALUE_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,11 +28,12 @@ pub enum BuildReceiptError {
 /// Strict, borrowed view of one canonical release build receipt. Receipt data
 /// is identity evidence only and grants no authority.
 pub struct BuildReceipt<'a> {
-    rustc: &'a str,
-    cargo: &'a str,
+    builder: &'a str,
+    compiler: &'a str,
+    compiler_version: &'a str,
     target: &'a str,
     profile: &'a str,
-    inputs: [BuildInputIdentity; 6],
+    inputs: [BuildInputIdentity; 8],
 }
 
 impl<'a> BuildReceipt<'a> {
@@ -48,17 +49,20 @@ impl<'a> BuildReceipt<'a> {
         if lines.next() != Some(HEADER) {
             return Err(BuildReceiptError::Malformed);
         }
-        let rustc = parse_value(&mut lines, "rustc")?;
-        let cargo = parse_value(&mut lines, "cargo")?;
+        let builder = parse_value(&mut lines, "builder")?;
+        let compiler = parse_value(&mut lines, "compiler")?;
+        let compiler_version = parse_value(&mut lines, "compiler-version")?;
         let target = parse_value(&mut lines, "target")?;
         let profile = parse_value(&mut lines, "profile")?;
         let mut inputs = [BuildInputIdentity {
             length: 0,
             digest: [0; 64],
-        }; 6];
+        }; 8];
         for (identity, name) in inputs.iter_mut().zip([
             "source-archive",
-            "cargo-lock",
+            "workspace-manifest",
+            "workspace-lock",
+            "toolchain-lock",
             "kernel",
             "service",
             "loader",
@@ -72,20 +76,25 @@ impl<'a> BuildReceipt<'a> {
             return Err(BuildReceiptError::Malformed);
         }
         Ok(Self {
-            rustc,
-            cargo,
+            builder,
+            compiler,
+            compiler_version,
             target,
             profile,
             inputs,
         })
     }
 
-    pub const fn rustc(&self) -> &str {
-        self.rustc
+    pub const fn builder(&self) -> &str {
+        self.builder
     }
 
-    pub const fn cargo(&self) -> &str {
-        self.cargo
+    pub const fn compiler(&self) -> &str {
+        self.compiler
+    }
+
+    pub const fn compiler_version(&self) -> &str {
+        self.compiler_version
     }
 
     pub const fn target(&self) -> &str {
@@ -100,24 +109,32 @@ impl<'a> BuildReceipt<'a> {
         self.inputs[0]
     }
 
-    pub const fn cargo_lock(&self) -> BuildInputIdentity {
+    pub const fn workspace_manifest(&self) -> BuildInputIdentity {
         self.inputs[1]
     }
 
-    pub const fn kernel(&self) -> BuildInputIdentity {
+    pub const fn workspace_lock(&self) -> BuildInputIdentity {
         self.inputs[2]
     }
 
-    pub const fn service(&self) -> BuildInputIdentity {
+    pub const fn toolchain_lock(&self) -> BuildInputIdentity {
         self.inputs[3]
     }
 
-    pub const fn loader(&self) -> BuildInputIdentity {
+    pub const fn kernel(&self) -> BuildInputIdentity {
         self.inputs[4]
     }
 
-    pub const fn configuration(&self) -> BuildInputIdentity {
+    pub const fn service(&self) -> BuildInputIdentity {
         self.inputs[5]
+    }
+
+    pub const fn loader(&self) -> BuildInputIdentity {
+        self.inputs[6]
+    }
+
+    pub const fn configuration(&self) -> BuildInputIdentity {
+        self.inputs[7]
     }
 
     /// Requires the receipt to describe the release UEFI target and bind the
@@ -221,7 +238,7 @@ mod tests {
 
     fn receipt() -> std::string::String {
         std::format!(
-            "{HEADER}\nrustc=rustc fixture\ncargo=cargo fixture\ntarget=x86_64-unknown-uefi\nprofile=release\nsource-archive.length=1\nsource-archive.sha3-512={ZERO_DIGEST}\ncargo-lock.length=2\ncargo-lock.sha3-512={ZERO_DIGEST}\nkernel.length=3\nkernel.sha3-512={ZERO_DIGEST}\nservice.length=4\nservice.sha3-512={ZERO_DIGEST}\nloader.length=5\nloader.sha3-512={ZERO_DIGEST}\nconfiguration.length=0\nconfiguration.sha3-512={ZERO_DIGEST}\n"
+            "{HEADER}\nbuilder=mrml\ncompiler=upstream-rustc\ncompiler-version=rustc fixture\ntarget=x86_64-unknown-uefi\nprofile=release\nsource-archive.length=1\nsource-archive.sha3-512={ZERO_DIGEST}\nworkspace-manifest.length=2\nworkspace-manifest.sha3-512={ZERO_DIGEST}\nworkspace-lock.length=3\nworkspace-lock.sha3-512={ZERO_DIGEST}\ntoolchain-lock.length=4\ntoolchain-lock.sha3-512={ZERO_DIGEST}\nkernel.length=3\nkernel.sha3-512={ZERO_DIGEST}\nservice.length=4\nservice.sha3-512={ZERO_DIGEST}\nloader.length=5\nloader.sha3-512={ZERO_DIGEST}\nconfiguration.length=0\nconfiguration.sha3-512={ZERO_DIGEST}\n"
         )
     }
 

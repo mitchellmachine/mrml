@@ -408,8 +408,82 @@ fn manifest_command(workspace: &Workspace, args: &[String]) -> Result<(), String
             println!("manifest-fmt|status=PASS|changed={changed}|check={check}");
             Ok(())
         }
-        _ => Err("ManifestUsageError { expected: check | fmt [--check] | migrate }".into()),
+        Some("lock") => {
+            let check = args.get(1).map(String::as_str) == Some("--check");
+            if args.len() > usize::from(check) + 1 {
+                return Err("ManifestUsageError { expected: lock [--check] }".into());
+            }
+            write_workspace_lock(workspace, check)
+        }
+        _ => Err(
+            "ManifestUsageError { expected: check | fmt [--check] | lock [--check] | migrate }"
+                .into(),
+        ),
     }
+}
+
+fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String> {
+    let mut components = workspace.components.iter().collect::<Vec<_>>();
+    components.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut encoded = String::from(
+        "[lock]\nformat = \"mrml-workspace-lock\"\nversion = 1\ntoolchain = \"nightly-2026-08-24\"\n\n",
+    );
+    for component in components {
+        let mut dependencies = component
+            .dependencies
+            .iter()
+            .map(|name| {
+                workspace
+                    .components
+                    .iter()
+                    .find(|candidate| &candidate.cargo_package == name)
+                    .map(|candidate| candidate.id.as_str())
+                    .ok_or_else(|| {
+                        format!(
+                            "WorkspaceLockDependencyMissing {{ component: {}, dependency: {name} }}",
+                            component.id
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        dependencies.sort_unstable();
+        encoded.push_str("[[package]]\n");
+        encoded.push_str(&format!("id = \"{}\"\n", component.id));
+        encoded.push_str(&format!("path = \"{}\"\n", component.path));
+        encoded.push_str("compile_dependencies = [");
+        for (index, dependency) in dependencies.iter().enumerate() {
+            if index != 0 {
+                encoded.push_str(", ");
+            }
+            encoded.push('"');
+            encoded.push_str(dependency);
+            encoded.push('"');
+        }
+        encoded.push_str("]\n\n");
+    }
+    let canonical = encoded;
+    let path = workspace.root.join("mrml.lock");
+    let current = fs::read_to_string(&path).ok();
+    if check && current.as_deref() != Some(canonical.as_str()) {
+        return Err("WorkspaceLockOutOfDate".into());
+    }
+    if !check && current.as_deref() != Some(canonical.as_str()) {
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|error| format!("WorkspaceLockWriteError {{ detail: {error} }}"))?;
+        output
+            .write_all(canonical.as_bytes())
+            .and_then(|_| output.sync_all())
+            .map_err(|error| format!("WorkspaceLockWriteError {{ detail: {error} }}"))?;
+    }
+    println!(
+        "manifest-lock|status=PASS|packages={}|check={check}",
+        workspace.components.len()
+    );
+    Ok(())
 }
 
 fn interface_command(args: &[String]) -> Result<(), String> {
