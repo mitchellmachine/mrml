@@ -4662,3 +4662,12 @@ and sends them through the existing depth- and cycle-bounded proof operation.
 It adds no recursive projection-clause lookup, coherence rule, branching search,
 specialization order, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Recursive projection-bearing clause selection
+
+**Result: NOT_TRIGGERED.** This compiler-only increment threads an optional
+fixed clause table through the existing bounded inference and premise proof,
+copies the existing fixed constraint state per candidate, and reuses the
+existing cycle/depth stack. It adds no new search order, coherence rule,
+specialization, cache, parser, runtime mechanism, allocation, synchronization,
+protocol, cryptography, or hardware behavior.

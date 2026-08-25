@@ -61,9 +61,11 @@ pub use build_receipt::{
 };
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 pub use component_memory::{
-    ActiveMicrovmGuestRam, ComponentExecutablePages, MicrovmGuestRam, MicrovmGuestRamError,
-    PreparedMicrovmGuestRam, account_component_executable, prepare_microvm_guest_ram,
-    release_microvm_guest_ram, reserve_component_executable_mapping, reserve_microvm_guest_ram,
+    ActiveMicrovmGuestRam, ComponentExecutablePages, MicrovmControlMemory, MicrovmGuestRam,
+    MicrovmGuestRamError, PreparedMicrovmGuestRam, account_component_executable,
+    prepare_microvm_guest_ram, release_microvm_control_memory, release_microvm_guest_ram,
+    reserve_component_executable_mapping, reserve_microvm_control_memory,
+    reserve_microvm_guest_ram,
 };
 pub use cpu_resource::{
     CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError, VcpuReservationId,

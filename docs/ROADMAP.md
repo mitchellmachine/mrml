@@ -213,24 +213,26 @@ metadata cannot substitute for pool or target capabilities. Physical backing,
 population/sealing, native mapping, private-state charges, and runtime provider
 binding remain **PLANNED**. The focused hosted component profile now also
 charges its fixed-capacity task runtime and supervisor to one exact memory pool
-and proves both commitments return after supervised cleanup; guest RAM,
-executable/private pages, vCPU, and device projections remain unaccounted in
-that path. A separate kernel guest-RAM reservation prerequisite now charges an
+and proves both commitments return after supervised cleanup; executable/private
+pages and device projections remain unaccounted in that path. A separate kernel
+guest-RAM reservation prerequisite now charges an
 exact non-executable `Guest` `MemoryObject` under a pool capability, rejects
 overcommit or metadata-only allocation, and requires proven native teardown
 before release. The signed component profile now consumes exact backend-
 specific base, consumer/provider, and shared/resource phases before WHP/KVM
 native allocation, requires complete consumption before admission, and returns
-the object after confirmed guest teardown. Fresh WHP and nested-KVM probes pass;
-vCPU and remaining VMM/device resource accounting are the next gates.
-The next vCPU prerequisite is now **PARTIALLY IMPLEMENTED** in the kernel: a
+the object after confirmed guest teardown. Fresh WHP and nested-KVM probes pass.
+The vCPU prerequisite is now **PARTIALLY IMPLEMENTED** in the kernel: a
 fixed-capacity generational CPU budget binds parallelism, runtime/period,
 priority ceiling, and affinity to capability authority and issues exact
 domain-bound reservations without amplification. The signed component path now
 reserves one vCPU before WHP/KVM construction, retains it through guest lifetime,
 and reclaims it after teardown. Exhaustion consumes the Total route into typed
-unavailability with zero fallback. Scheduler enforcement and the remaining VMM
-metadata/device projections are the current gates.
+unavailability with zero fallback. Each runner also pre-reserves a separate
+page-rounded anonymous object for its exact MRML-owned prepared guest structure,
+retains that charge through teardown, and requires the pool to return to zero.
+This deliberately excludes opaque host-hypervisor allocations. Scheduler
+enforcement and device/shared projection accounting are the current gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

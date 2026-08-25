@@ -216,13 +216,15 @@ and service supervisor through the existing quantitative `MemoryPool` wrappers.
 It verifies the exact two-object page charge before launch and, only after both
 services and cleanup tickets retire, returns both commitments and verifies zero
 remaining object pages and mappings. The same signed kernel passed this gate on
-WHP and nested KVM. Guest RAM, executable/private pages, vCPU time, and device
-projections remain outside this focused pool and are still **PLANNED**.
-The kernel now has the separate capability-bound `MicrovmGuestRam` reservation
-needed for the next step: it charges an exact non-executable `Guest`
-`MemoryObject` before backend allocation and may be returned only after native
-teardown is proven. KVM/WHP do not yet consume that reservation, so this does
-not by itself promote Total mode beyond its existing status. The focused signed
+WHP and nested KVM. Executable/private pages and device projections remain
+outside this focused pool and are still **PLANNED**. The focused hosted profile
+now pre-reserves exact mapped guest RAM, one domain-bound vCPU, and a distinct
+page-rounded anonymous `MemoryObject` for its MRML-owned prepared KVM/WHP guest
+structure before construction. The control-structure object is non-executable,
+non-mappable, non-shareable, and retained until guest teardown; failure to
+reserve any of these resources makes the Total-mode component unavailable
+without native fallback. Opaque host-hypervisor internals and device-model
+allocations are not counted or claimed. The focused signed
 component path now does consume it: backend-specific base pages, both service
 images/stacks/page tables, and the shared/resource pages are charged before
 their native construction phases; exact completion precedes admission; and

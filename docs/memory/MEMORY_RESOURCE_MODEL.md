@@ -139,7 +139,18 @@ consumed before its corresponding backend call, the reservation must be exactly
 complete before isolation admission, and the full object returns only after
 the guest owner confirms teardown. Fresh controlled probes passed on WHP and
 nested KVM on 2026-08-25. This accounts mapped guest RAM for this one profile;
-vCPU, VMM metadata, and device-specific resources remain **PLANNED**.
+device-specific resources and opaque host-hypervisor allocations remain
+**PLANNED**.
+
+The same focused profile now also reserves a separate anonymous
+`MemoryObject` for the exact page-rounded size of its MRML-owned prepared VMM
+guest structure before construction. KVM accounts `PreparedKvmGuest<16>` and
+WHP accounts `PreparedWhpGuest`; this control-memory capability permits only
+read, write, inspection, and lifecycle control, with no mapping, execution,
+pinning, sharing, DMA, device, or placement authority. The object remains live
+through guest ownership, is reclaimed only after backend teardown, and must
+leave the common pool at zero. This intentionally does not estimate or claim
+opaque KVM/WHP host-kernel, hypervisor, allocator, or device-model memory.
 
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact

@@ -18,6 +18,11 @@ const MICROVM_GUEST_RAM_RIGHTS: Rights = Rights::READ
     .union(Rights::INSPECT)
     .union(Rights::CONTROL);
 
+const MICROVM_CONTROL_MEMORY_RIGHTS: Rights = Rights::READ
+    .union(Rights::WRITE)
+    .union(Rights::INSPECT)
+    .union(Rights::CONTROL);
+
 /// Accounted immutable code pages for one independently serviced component.
 ///
 /// This is a memory-resource identity, not a package or interface identity and
@@ -41,6 +46,24 @@ pub struct ComponentExecutablePages {
 pub struct MicrovmGuestRam {
     object: MemoryObjectId,
     pages: u64,
+}
+
+/// Exact MRML-owned VMM control-structure storage for one guest generation.
+/// This does not claim or authorize opaque host-hypervisor internal memory.
+#[derive(Debug, Eq, PartialEq)]
+pub struct MicrovmControlMemory {
+    object: MemoryObjectId,
+    pages: u64,
+}
+
+impl MicrovmControlMemory {
+    pub const fn object(&self) -> MemoryObjectId {
+        self.object
+    }
+
+    pub const fn pages(&self) -> u64 {
+        self.pages
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,6 +162,44 @@ pub fn reserve_microvm_guest_ram<const P: usize, const O: usize, const M: usize,
         capabilities,
     )?;
     Ok((MicrovmGuestRam { object, pages }, capability))
+}
+
+pub fn reserve_microvm_control_memory<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    pool: MemoryPoolId,
+    pool_capability: Capability,
+    pages: u64,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<(MicrovmControlMemory, Capability), MemoryResourceError> {
+    let (object, capability) = table.allocate_object(
+        pool,
+        pool_capability,
+        pages,
+        MemoryBackingKind::Anonymous,
+        MICROVM_CONTROL_MEMORY_RIGHTS,
+        capabilities,
+    )?;
+    Ok((MicrovmControlMemory { object, pages }, capability))
+}
+
+/// Returns MRML-owned control storage only after complete guest teardown.
+pub unsafe fn release_microvm_control_memory<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    reservation: MicrovmControlMemory,
+    capability: Capability,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<u64, MemoryResourceError> {
+    table.release_object(reservation.object, capability, capabilities)
 }
 
 pub fn prepare_microvm_guest_ram<const P: usize, const O: usize, const M: usize, const C: usize>(
@@ -523,6 +584,35 @@ mod tests {
                 release_microvm_guest_ram(&mut table, reservation, capability, &mut capabilities)
             },
             Ok(6)
+        );
+    }
+
+    #[test]
+    fn vmm_control_memory_is_separate_nonmapped_nonexecutable_authority() {
+        let mut capabilities = CapabilitySpace::<4>::new();
+        let mut table = MemoryPoolTable::<1, 1>::new(28).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(2, 1, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let (control, capability) =
+            reserve_microvm_control_memory(&mut table, pool, pool_capability, 2, &mut capabilities)
+                .unwrap();
+        assert_eq!(control.pages(), 2);
+        assert_eq!(
+            table.object_backing(control.object()),
+            Ok(MemoryBackingKind::Anonymous)
+        );
+        for denied in [Rights::EXECUTE, Rights::MAP, Rights::PIN, Rights::SHARE] {
+            assert_eq!(
+                capabilities.authorize(capability, denied),
+                Err(CapabilityError::PermissionDenied)
+            );
+        }
+        assert_eq!(
+            unsafe {
+                release_microvm_control_memory(&mut table, control, capability, &mut capabilities)
+            },
+            Ok(2)
         );
     }
 }

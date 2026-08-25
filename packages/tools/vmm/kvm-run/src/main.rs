@@ -1774,12 +1774,16 @@ fn application_main() -> Result<()> {
             .and_then(|pages| pages.checked_add(provider_pages))
             .and_then(|pages| pages.checked_add(8 + 32))
             .ok_or_else(|| anyhow!("component service guest RAM overflow"))?;
-        let total_pages = base_pages
+        let guest_pages = base_pages
             .checked_add(service_pages)
             .and_then(|pages| pages.checked_add(2))
             .ok_or_else(|| anyhow!("component guest RAM overflow"))?;
-        let mut authorities = CapabilitySpace::<2>::new();
-        let mut memory = MemoryPoolTable::<1, 1>::new(0x5a52)
+        let control_pages = accounted_pages(core::mem::size_of::<PreparedKvmGuest<16>>() as u64)?;
+        let total_pages = guest_pages
+            .checked_add(control_pages)
+            .ok_or_else(|| anyhow!("component memory commitment overflow"))?;
+        let mut authorities = CapabilitySpace::<3>::new();
+        let mut memory = MemoryPoolTable::<1, 2>::new(0x5a52)
             .map_err(|error| anyhow!("component RAM table failed: {:?}", error))?;
         let (pool, pool_capability) = memory
             .create_root(
@@ -1796,7 +1800,7 @@ fn application_main() -> Result<()> {
             &mut memory,
             pool,
             pool_capability,
-            total_pages,
+            guest_pages,
             &mut authorities,
         )
         .map_err(|error| anyhow!("component RAM reservation failed: {:?}", error))?;
@@ -1806,6 +1810,14 @@ fn application_main() -> Result<()> {
         prepared
             .consume_phase(base_pages)
             .map_err(|error| anyhow!("component base RAM phase failed: {:?}", error))?;
+        let (control, control_capability) = mrml_kernel::reserve_microvm_control_memory(
+            &mut memory,
+            pool,
+            pool_capability,
+            control_pages,
+            &mut authorities,
+        )
+        .map_err(|error| anyhow!("component control-memory reservation failed: {:?}", error))?;
         Some((
             memory,
             authorities,
@@ -1814,6 +1826,8 @@ fn application_main() -> Result<()> {
             ram_capability,
             prepared,
             service_pages,
+            control,
+            control_capability,
         ))
     } else {
         None
@@ -2188,10 +2202,19 @@ fn application_main() -> Result<()> {
             .attach_service_resource_page(0, resource)
             .map_err(|error| anyhow!("service resource-page attachment failed: {:?}", error))?;
         if component_service_mode {
-            let (memory, authorities, pool, pool_capability, ram_capability, prepared, _) =
-                component_ram
-                    .take()
-                    .ok_or_else(|| anyhow!("missing completed component RAM construction"))?;
+            let (
+                memory,
+                authorities,
+                pool,
+                pool_capability,
+                ram_capability,
+                prepared,
+                _,
+                control,
+                control_capability,
+            ) = component_ram
+                .take()
+                .ok_or_else(|| anyhow!("missing completed component RAM construction"))?;
             let active = prepared
                 .complete()
                 .map_err(|error| anyhow!("component RAM publication failed: {:?}", error))?;
@@ -2202,6 +2225,8 @@ fn application_main() -> Result<()> {
                 pool_capability,
                 ram_capability,
                 active,
+                control,
+                control_capability,
             ));
         }
         let service_entry = guest
@@ -3185,8 +3210,16 @@ fn application_main() -> Result<()> {
         _ => {}
     }
     guest.finish()?;
-    if let Some((mut memory, mut authorities, pool, pool_capability, ram_capability, active)) =
-        active_component_ram.take()
+    if let Some((
+        mut memory,
+        mut authorities,
+        pool,
+        pool_capability,
+        ram_capability,
+        active,
+        control,
+        control_capability,
+    )) = active_component_ram.take()
     {
         let expected_pages = active.pages();
         let reservation = unsafe { active.retire() };
@@ -3197,8 +3230,30 @@ fn application_main() -> Result<()> {
         let usage = memory
             .usage(pool, pool_capability, &authorities)
             .map_err(|error| anyhow!("component RAM inspection failed: {:?}", error))?;
-        if released != expected_pages || usage.object_pages() != 0 || usage.active_mappings() != 0 {
-            return Err(anyhow!("component RAM was not completely reclaimed"));
+        let expected_control_pages = control.pages();
+        if released != expected_pages
+            || usage.object_pages() != expected_control_pages
+            || usage.active_mappings() != 0
+        {
+            return Err(anyhow!("component RAM release state was invalid"));
+        }
+        let released_control = unsafe {
+            mrml_kernel::release_microvm_control_memory(
+                &mut memory,
+                control,
+                control_capability,
+                &mut authorities,
+            )
+        }
+        .map_err(|error| anyhow!("component control-memory release failed: {:?}", error))?;
+        let usage = memory
+            .usage(pool, pool_capability, &authorities)
+            .map_err(|error| anyhow!("component memory inspection failed: {:?}", error))?;
+        if released_control != expected_control_pages
+            || usage.object_pages() != 0
+            || usage.active_mappings() != 0
+        {
+            return Err(anyhow!("component memory was not completely reclaimed"));
         }
     }
     if let Some((mut budgets, mut capabilities, budget, capability, reservation)) =

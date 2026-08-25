@@ -96,8 +96,9 @@ pub use trait_goals::{
     solve_concrete_trait_goal, solve_concrete_trait_goal_with_generics,
     solve_exists_projection_bearing_trait_goal, solve_exists_trait_goal_exact,
     solve_exists_trait_goal_generic, solve_exists_trait_goal_with_environment,
-    solve_exists_trait_goal_with_generics, solve_exists_trait_goal_with_projection_environment,
-    solve_exists_trait_predicate_conjunction, solve_exists_trait_projection_equality,
-    solve_for_all_trait_goal_with_generics, solve_projection_bearing_trait_goal,
-    solve_rigid_trait_goal, solve_rigid_trait_goal_with_generics,
+    solve_exists_trait_goal_with_generics, solve_exists_trait_goal_with_projection_clauses,
+    solve_exists_trait_goal_with_projection_environment, solve_exists_trait_predicate_conjunction,
+    solve_exists_trait_projection_equality, solve_for_all_trait_goal_with_generics,
+    solve_projection_bearing_trait_goal, solve_rigid_trait_goal,
+    solve_rigid_trait_goal_with_generics,
 };

@@ -7796,6 +7796,16 @@ not bare-metal, physical-device, host-security-boundary, or complete Total-mode
 evidence. Patent review remains `TRIGGERED` under the existing bounded
 component-lifecycle review; see [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
 
+The focused runners now also reserve, before construction, a separate
+page-rounded anonymous `MemoryObject` for the exact MRML-owned
+`PreparedKvmGuest<16>` or `PreparedWhpGuest` control structure. Its capability
+cannot map, execute, pin, share, delegate, or authorize a device. Guest RAM is
+released after backend teardown while this control charge remains observable;
+the control object is then released and the pool must reach zero. Windows and
+Linux kernel suites passed 502 tests, the WHP runner passed 7, and the KVM
+runner passed 8. This does not account opaque host-kernel KVM/WHP allocations,
+hypervisor internals, or device-model memory.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

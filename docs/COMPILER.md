@@ -1047,9 +1047,14 @@ mismatch, and the unconstrained-parameter boundary. Each head may also retain
 up to eight flat implemented-trait premises; the selected substitution
 instantiates them and the existing projection-aware recursive proof must
 discharge them before the candidate succeeds. Missing premises and premise
-capacity have focused tests. This is bounded logical head elaboration with flat
-premises only: recursive projection-bearing-clause integration, projection
-terms in premise type positions, generic implementation heads and
+capacity have focused tests. An opt-in existential solver threads the same
+projection-clause database, inference state, and 16-frame proof stack through
+nested implemented-trait premises. Unique nested selection commits one copied
+candidate state; multiple candidates remain ambiguous, cycles and depth
+overflow remain explicit, and callers that do not supply the database retain
+their previous closed behavior. This is bounded logical head elaboration with
+flat premises only: projection terms in premise type positions, generic
+implementation heads and
 their coherence rules, higher-ranked term binders, backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.
 
