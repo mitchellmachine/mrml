@@ -57,8 +57,9 @@ An installed current nightly is never an oracle merely because it is available.
 Each oracle generation records the rustc version, full commit, date, edition and
 default behavior, Polonius state, trait-solver state, relevant unstable feature
 state, MRML-relevant semantic deltas, and conformance outcome under
-`docs/compiler/oracles/`. The initial record is
-[ORACLE-0001](compiler/oracles/ORACLE-0001.md).
+`docs/compiler/oracles/`. Preserve the initial
+[ORACLE-0001](compiler/oracles/ORACLE-0001.md); the current default build and
+behavioral reference is [ORACLE-0002](compiler/oracles/ORACLE-0002.md).
 
 An oracle is a reproducible observation point, not a permanent compatibility
 ceiling. To advance it:

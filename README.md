@@ -281,20 +281,20 @@ Then use `mrml build`, `mrml test`, and target/component selectors for migrated
 repository work. Cargo remains an internal locked dependency bridge during this
 incremental migration; package/release/image commands are not implemented yet.
 
-MRML uses Rust 2024 and the nightly build toolchain configured in
-`rust-toolchain.toml`. That development toolchain is distinct from
-`mrml-rustc`'s exact dated behavioral oracle recorded under
-`docs/compiler/oracles/`; a floating installed nightly is never oracle evidence.
+MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
+`rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
+recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
+installed nightly is never oracle evidence.
 
 Windows requires the self-contained GNU/LLVM toolchain:
 
 ```powershell
 winget install Rustlang.Rustup
-rustup toolchain install nightly-x86_64-pc-windows-gnullvm --profile minimal `
+rustup toolchain install nightly-2026-08-24-x86_64-pc-windows-gnullvm --profile minimal `
   --component rust-src --component rustfmt --component clippy `
   --component rust-mingw --target nvptx64-nvidia-cuda `
   --target x86_64-unknown-uefi --target x86_64-unknown-none
-rustup default nightly-x86_64-pc-windows-gnullvm
+rustup default nightly-2026-08-24-x86_64-pc-windows-gnullvm
 rustc -vV
 ```
 
@@ -361,8 +361,9 @@ the repository or undoing its invariants.
    under `docs/`, not in an ever-growing README status narrative.
 7. Commit and push only after proportional Windows and Linux testing and an
    explicit review of security and performance impact.
-8. For compiler work, read [COMPILER.md](docs/COMPILER.md) and the relevant
-   [oracle generation](docs/compiler/oracles/ORACLE-0001.md). Rust 2024 is the
+8. For compiler work, read [COMPILER.md](docs/COMPILER.md), preserve the prior
+   oracle records, and use the [current oracle](docs/compiler/oracles/ORACLE-0002.md).
+   Rust 2024 is the
    floor; prioritize modern/future semantics and do not infer old-edition,
    stable-Rust, every-nightly, or unstable-Rust-ABI compatibility.
 

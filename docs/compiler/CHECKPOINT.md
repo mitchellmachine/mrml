@@ -41,9 +41,11 @@ the named commit and current source.
   (`Bound runtime place projection facts`), `308c781`
   (`Record stable runtime identifier reads`), and `099b11c` (`Retain bounded
   runtime place facts`).
-- Oracle: `docs/compiler/oracles/ORACLE-0001.md`, rustc
+- Current build/oracle: `docs/compiler/oracles/ORACLE-0002.md`, rustc
   `1.100.0-nightly`, full commit
-  `f7d782a3be46d6bb4b9792fe69a61db389ba1769`, dated 2026-08-19.
+  `fb6531d550e0075b9eb9a51464f404805eec87d9`, dated 2026-08-23 and
+  distributed as `nightly-2026-08-24`. Preserve ORACLE-0001 as the prior
+  generation.
 - Language direction: Rust 2024 is the edition floor. Contemporary and future
   Rust semantics are the target; obsolete editions, historical unsoundness,
   rustc internals, diagnostic wording, and unstable Rust ABI details are not
@@ -520,35 +522,35 @@ already installed, install the pinned nightly and target components required by
 the repository before testing. The exact dated oracle toolchain must remain
 available for black-box oracle work; the workspace `rust-toolchain.toml` also
 requires `rustfmt`, `clippy`, `rust-src`, `nvptx64-nvidia-cuda`, and
-`x86_64-unknown-uefi`.
+`x86_64-unknown-none` and `x86_64-unknown-uefi`.
 
 On Arch Linux, install the native build prerequisites required by the linker and
-use rustup's `nightly-x86_64-unknown-linux-gnu` toolchain with the same declared
-components and targets. Do not infer successful cross-host verification from a
-Windows-only run.
+use rustup's `nightly-2026-08-24-x86_64-unknown-linux-gnu` toolchain with the same
+declared components and targets. Do not infer successful cross-host verification
+from a Windows-only run.
 
-## Last complete verification
+## Current oracle verification
 
-The checkpoint source passed 767 tests on each host: 420
-library tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
-Warnings-denied Clippy also passed on both hosts. The commands were:
+On 2026-08-25, ORACLE-0002 passed 767 tests on Windows gnullvm: 420 library
+tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
+Warnings-denied Clippy also passed. The current commands are:
 
 ```powershell
 $env:RUSTFLAGS='-C link-arg=/stack:16777216'
-cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm test -p mrml-rustc -p mrml-rustc-driver
-cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driver --all-targets --no-deps -- -D warnings
+cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-rustc -p mrml-rustc-driver
+cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driver --all-targets --no-deps -- -D warnings
 ```
 
 ```sh
 cd /mnt/c/Users/Mitch/Documents/mrml
-cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --release --offline
-cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --all-targets --release --offline --no-deps -- -D warnings
+cargo +nightly-2026-08-24-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --release --offline
+cargo +nightly-2026-08-24-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --all-targets --release --offline --no-deps -- -D warnings
 ```
 
-The separately installed 2026-08-23 Arch nightly at commit
-`fb6531d550e0075b9eb9a51464f404805eec87d9` crashed in LLVM `PromotePass` while
-building the release test binary. That compiler-host failure is recorded but is
-not passing evidence and does not replace the pinned oracle generation.
+The Arch Linux toolchain at the same commit crashed in LLVM `PromotePass` while
+building the release test binary. That compiler-host failure is recorded as an
+ORACLE-0002 regression/blocker, not passing evidence. The previous ORACLE-0001
+generation retains the last complete Windows/Linux evidence.
 
 The hygiene scan must remain empty:
 
