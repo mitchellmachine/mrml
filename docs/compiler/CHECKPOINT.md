@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `bda053d`
-  (`compiler: propagate moved reference loans`)
+- Compiler checkpoint commit: `620fd7d`
+  (`compiler: preserve moved conditional loans`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -134,8 +134,12 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   value moved into an inferred local now carries its single direct loan origin
   through bounded, event-decreasing one-hop or chained moves. The lookup selects
   the source's latest direct initialization or assignment generation, so an old
-  owner is not revived after reassignment. Conditional multi-origin moves remain
-  outside this propagation slice.
+  owner is not revived after reassignment. One immediate precise root move of a
+  conditional expression-generation now derives one destination loan per
+  existing branch-origin effect. The derived category is bounded by the place-
+  effect capacity, retains each origin independently, and refuses derivation
+  across a source-generation replacement. Chained conditional-origin moves
+  remain unimplemented.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -471,8 +475,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 754 tests on each host: 412
-library tests, 10 conformance tests, 330 replacement tests, and 2 driver tests.
+The checkpoint source passed 756 tests on each host: 413
+library tests, 10 conformance tests, 331 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

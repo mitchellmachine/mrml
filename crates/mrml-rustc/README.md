@@ -3685,3 +3685,17 @@ binding, and mutation of the superseded owner. Existing conditional-generation
 regressions remain green, but conditional multi-origin and projected reference-
 value moves are not claimed. This does not claim general alias tracking or
 regions. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The moved conditional-loan-origin milestone passed all 756 compiler and driver
+tests on Windows gnullvm and all 756 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. One immediate precise root
+move of a conditional reference local now derives a destination loan for every
+retained branch-origin effect. Conflicts against either possible owner therefore
+survive the move, while unrelated-owner access and access after the moved
+child's last use remain accepted. The derived category is capped by the existing
+place-effect ledger and refuses stale origins across source-generation
+replacement. The pinned oracle rejected the shared/mutable live-child cases and
+accepted both precision controls. Chained conditional-origin and projected
+reference-value moves remain unimplemented; this does not claim general alias
+tracking or regions. The `no_std`/allocation/unsafe hygiene scan remained empty.

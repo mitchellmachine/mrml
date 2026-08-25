@@ -572,8 +572,14 @@ origin into the destination local instead of discarding it. Event-decreasing,
 fixed-capacity lookup supports chained moves and selects the source binding's
 latest direct initialization or assignment generation. The consumed source
 still participates in initializedness, while conflicts and last-use restoration
-follow the moved destination. Conditional multi-origin moves, projected
-reference-value moves, and general alias/region propagation remain unimplemented.
+follow the moved destination. For one immediate precise root move, conditional
+expression-origin loans now derive one destination fact per existing branch
+borrow effect. The facts retain distinct borrowed paths and share only the
+destination generation, so a later conflict with either possible owner is
+preserved without inventing a conflict with unrelated owners. A source-
+generation replacement blocks derivation. Chained conditional-origin moves,
+projected reference-value moves, and general alias/region propagation remain
+unimplemented.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
