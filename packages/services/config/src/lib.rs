@@ -140,6 +140,56 @@ pub trait ConfigurationMicrovmFactory {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdmittedConfigurationGuestError {
+    BindingMismatch,
+    AlreadyConsumed,
+}
+
+/// Transfers one guest already constructed by a backend transaction into the
+/// common configuration-microVM lifecycle. The exact service specification is
+/// rechecked at transfer, and the guest can be consumed only once.
+pub struct AdmittedConfigurationGuestFactory<Guest> {
+    expected: IsolationServiceSpec,
+    guest: Option<Guest>,
+}
+
+impl<Guest> AdmittedConfigurationGuestFactory<Guest> {
+    pub const fn new(expected: IsolationServiceSpec, guest: Guest) -> Self {
+        Self {
+            expected,
+            guest: Some(guest),
+        }
+    }
+}
+
+impl<Guest> ConfigurationMicrovmFactory for AdmittedConfigurationGuestFactory<Guest> {
+    type Guest = Guest;
+    type Error = AdmittedConfigurationGuestError;
+
+    fn prepare(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Guest, (IsolationUnavailableReason, Self::Error)> {
+        if spec != self.expected {
+            return Err((
+                IsolationUnavailableReason::InterfaceTransport,
+                AdmittedConfigurationGuestError::BindingMismatch,
+            ));
+        }
+        self.guest.take().ok_or((
+            IsolationUnavailableReason::VmmResource,
+            AdmittedConfigurationGuestError::AlreadyConsumed,
+        ))
+    }
+
+    fn destroy(&mut self, _guest: &mut Self::Guest) -> Result<(), Self::Error> {
+        // Returning success authorizes the launcher to drop the backend-owned
+        // guest and all of its native resources as one operation.
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConfigurationMicrovmEndpoint {
     launch_generation: u64,
     domain: ObjectId,
@@ -183,6 +233,11 @@ pub enum PreparedMicrovmConfigurationError<E> {
     Backend(E),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreparedMicrovmConfigurationAccessError {
+    WrongEndpoint,
+}
+
 /// Owns one backend-prepared configuration microVM from successful construction
 /// through confirmed destruction. Failed destruction retains both the guest and
 /// endpoint for an exact retry; there is no native-service fallback.
@@ -211,6 +266,26 @@ impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<
 
     pub fn active(&self) -> Option<ConfigurationMicrovmEndpoint> {
         self.active.as_ref().map(|(endpoint, _)| *endpoint)
+    }
+
+    pub fn active_guest(
+        &self,
+        endpoint: ConfigurationMicrovmEndpoint,
+    ) -> Result<&Factory::Guest, PreparedMicrovmConfigurationAccessError> {
+        match self.active.as_ref() {
+            Some((active, guest)) if *active == endpoint => Ok(guest),
+            _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
+        }
+    }
+
+    pub fn active_guest_mut(
+        &mut self,
+        endpoint: ConfigurationMicrovmEndpoint,
+    ) -> Result<&mut Factory::Guest, PreparedMicrovmConfigurationAccessError> {
+        match self.active.as_mut() {
+            Some((active, guest)) if *active == endpoint => Ok(guest),
+            _ => Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint),
+        }
     }
 }
 
@@ -3800,9 +3875,17 @@ mod tests {
         assert_eq!(endpoint.interface_generation(), 1);
         assert_eq!(endpoint.provider_generation(), 11);
         assert_eq!(endpoint.policy_generation(), 5);
+        assert_eq!(
+            backend.microvm.active_guest(endpoint),
+            Ok(&configuration_service_spec(IsolationPlacement::Microvm))
+        );
 
         let mut wrong = endpoint;
         wrong.launch_generation += 1;
+        assert_eq!(
+            backend.microvm.active_guest_mut(wrong),
+            Err(PreparedMicrovmConfigurationAccessError::WrongEndpoint)
+        );
         assert_eq!(
             backend.revoke(&ConfigurationServiceEndpoint::Microvm(wrong)),
             Err(ConfigurationPlacementError::Microvm(
@@ -3829,6 +3912,37 @@ mod tests {
         assert_eq!(replacement.launch_generation(), 2);
         assert_ne!(replacement, endpoint);
         assert_eq!(backend.microvm.factory().preparations, 2);
+    }
+
+    #[test]
+    fn admitted_guest_transfer_rechecks_exact_binding_and_is_one_use() {
+        let expected = configuration_service_spec(IsolationPlacement::Microvm);
+        let mut factory = AdmittedConfigurationGuestFactory::new(expected, 0x55aa_u64);
+        let different = IsolationServiceSpec::new(
+            expected.domain(),
+            expected.interface(),
+            expected.interface_generation(),
+            expected.provider_generation() + 1,
+            expected.policy_generation(),
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::Microvm,
+        )
+        .unwrap();
+        assert_eq!(
+            factory.prepare(different),
+            Err((
+                IsolationUnavailableReason::InterfaceTransport,
+                AdmittedConfigurationGuestError::BindingMismatch
+            ))
+        );
+        assert_eq!(factory.prepare(expected), Ok(0x55aa));
+        assert_eq!(
+            factory.prepare(expected),
+            Err((
+                IsolationUnavailableReason::VmmResource,
+                AdmittedConfigurationGuestError::AlreadyConsumed
+            ))
+        );
     }
 
     #[test]

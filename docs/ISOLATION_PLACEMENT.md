@@ -56,6 +56,11 @@ retires it; uncertain destruction retains the guest and endpoint for exact
 retry. Forged or stale endpoint tokens never reach backend teardown. Concrete
 KVM and WHP factories are not yet wired to this owner, so the dual-placement
 milestone remains **PARTIALLY IMPLEMENTED** rather than complete.
+An admitted-guest transfer factory now accepts one backend-constructed guest
+only when the complete `IsolationServiceSpec` matches, consumes it once, and
+permits trusted mutable guest access only through the matching generational
+endpoint. This is the explicit bridge the existing KVM/WHP construction
+transactions will use; it is not yet runner integration evidence.
 
 The kernel routing API now also exposes a one-use prepared service transaction
 for VMM launchers whose construction spans multiple backend operations. The

@@ -43,7 +43,10 @@ Three new persistent deltas are documented before implementation:
   exact retryable address-space cleanup. The VMM form now has a backend-neutral
   owner that retains one prepared guest behind an exact generational endpoint
   until confirmed teardown, including retry after teardown uncertainty; concrete
-  KVM/WHP factories remain unwired. A complete representative dual-placement
+  KVM/WHP factories remain unwired. Its one-use admitted-guest transfer now
+  rechecks the complete service specification and gates trusted guest access on
+  the exact endpoint, providing the runner integration boundary. A complete
+  representative dual-placement
   service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this
