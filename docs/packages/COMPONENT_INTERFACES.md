@@ -19,6 +19,15 @@ entry points, overflow, overlap, and image escape. This is validation evidence,
 not a runtime loader: it performs no parsing, relocation, symbol lookup,
 executable mapping, interface binding, or in-place patching.
 
+**PARTIALLY IMPLEMENTED memory-accounting prerequisite:** the kernel now wraps
+the existing `MemoryPoolTable` rather than defining component-local resource
+authority. One shared immutable-code `MemoryObject` is charged once, carries no
+write authority, and can have multiple separately target-authorized RX mapping
+reservations. Live mappings prevent object reclamation. This is policy and
+accounting evidence only: no physical backing, code population/sealing, native
+page-table installation, provider binding, private-state charge, or runtime
+loader is implemented.
+
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the

@@ -61,6 +61,14 @@ section plans, including an executable entry point, without parsing, relocating,
 mapping, patching, resolving symbols, or binding a provider. Runtime loading and
 all binding/lifetime behavior remain **PLANNED**.
 
+Kernel memory-accounting groundwork now charges one immutable component code
+object once to an existing `MemoryPool` and permits separately authorized,
+bounded read/execute mapping reservations for multiple consumers. The object
+capability contains no write right, live mappings block reclamation, and package
+metadata cannot substitute for pool or target capabilities. Physical backing,
+population/sealing, native mapping, private-state charges, and runtime provider
+binding remain **PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

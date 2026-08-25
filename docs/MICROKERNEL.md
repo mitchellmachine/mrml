@@ -7538,6 +7538,52 @@ browser semantic interface, JavaScript/WebAssembly runtime, AI/media mechanism,
 or deployment/package composition. Recorded planned `TRIGGERED` scopes remain
 unchanged; agent review does not replace independent human dual review.
 
+### Shared immutable component-code accounting
+
+The first component-memory prerequisite is **PARTIALLY IMPLEMENTED**. The
+kernel's `account_component_executable` helper allocates one exact nonzero page
+commitment from an already authorized `MemoryPool` as a shared
+`MemoryObject`. Its capability permits read, execute, mapping, sharing,
+pinning, inspection, and lifecycle control but deliberately omits write.
+`reserve_component_executable_mapping` projects the complete object as RX only
+and independently requires the target address-space capability. Multiple
+consumers therefore share one object-page charge while consuming separately
+bounded mapping slots. Active mappings prevent logical object reclamation.
+
+This increment is policy/accounting evidence only. It does not bind physical
+backing, populate or seal executable bytes, install native page-table leaves,
+perform relocation, resolve a provider, charge private component state, or run
+on hosted or physical hardware. The existing unsafe reservation-release
+contract remains responsible for proving native teardown before accounting is
+retired.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through `MemoryPoolTable`, `MemoryObject`, mapping reservations, and the
+capability space.
+
+DIGITAL-RIGHTS REVIEW: package, interface, publisher, vendor, provider, and
+first-party metadata grant no resource or mapping authority. The mechanism adds
+no DRM, attestation, telemetry, content inspection, AI-only interface, or
+accessibility restriction. Existing owner-selected pool and target
+capabilities remain the only authority.
+
+HOSTILE SECURITY REVIEW: page quantities, pool/object/mapping generations,
+capabilities, rights, target identity, virtual arithmetic, mapping capacity,
+W^X, reclamation timing, and stale handles are hostile. Allocation and mapping
+reuse existing checked policy paths; the code capability cannot authorize a
+write, metadata-only capability fails before charging, and live reservations
+block release.
+
+Patent review: `NOT_TRIGGERED` for this bounded adapter — it reuses conventional
+explicit resource charging and RX shared-page reservations and implements no
+content deduplication, harmonic/fractional sharing metric, page migration,
+copy-on-write scanning, GPU code cache, or runtime provider resolver. The
+broader independently serviced component subsystem remains `TRIGGERED`; see
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md). Agent review does not replace
+independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

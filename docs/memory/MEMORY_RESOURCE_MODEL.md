@@ -94,6 +94,15 @@ charges every consumer for bounded mapping metadata and private component state.
 Mapping fanout is bounded. Sharing never hides RAM, creates allocation authority,
 permits writable executable code, or lets a stale mapping select newer code.
 
+**PARTIALLY IMPLEMENTED foundation:** `account_component_executable` charges one
+shared `MemoryObject` to an already authorized pool and issues an object
+capability without `WRITE`. `reserve_component_executable_mapping` records one
+complete RX projection under a separate target-address-space capability; the
+existing mapping limit bounds fanout and live reservations block reclamation.
+The current helper records accounting/policy only. Physical backing,
+population/sealing, native installation, per-consumer private-state accounting,
+and runtime generation binding remain **PLANNED**.
+
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact
 object plus device/DMA authority and a valid IOMMU mapping; invalidation completes

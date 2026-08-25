@@ -12,6 +12,7 @@ mod boot_recovery;
 mod boot_recovery_syscall;
 mod build_receipt;
 mod capability;
+mod component_memory;
 mod early;
 mod framebuffer;
 mod grant;
@@ -57,6 +58,9 @@ pub use build_receipt::{
     BUILD_RECEIPT_MAX_BYTES, BuildInputIdentity, BuildReceipt, BuildReceiptError,
 };
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
+pub use component_memory::{
+    ComponentExecutablePages, account_component_executable, reserve_component_executable_mapping,
+};
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
 pub use grant::{DirectoryGrant, GrantError, GrantMode, MAX_HOST_PATH};

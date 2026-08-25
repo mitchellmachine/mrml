@@ -3473,3 +3473,34 @@ register records; non-overlap, not assumed status, is the design basis.
 Executable parsing/mapping, relocations, sharing/accounting, runtime binding,
 and servicing remain `TRIGGERED`. This screen establishes neither clearance nor
 infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Shared immutable component-code accounting
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The kernel adapter charges
+one explicitly selected shared `MemoryObject` to an existing authorized
+`MemoryPool`, gives the object no write authority, and records separately
+target-authorized RX mapping reservations under the existing fixed mapping
+limit. It performs no content discovery, hashing, comparison, deduplication,
+copy-on-write conversion, fractional sharing metric, page migration, GPU code
+cache, physical allocation, native mapping, executable population, provider
+resolution, or servicing.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 6,789,156 B1](https://patents.google.com/patent/US6789156B1), whose claims
+concern finding identical context pages and transparently replacing them with a
+shared copy; [US 8,166,253 B2](https://patents.google.com/patent/US8166253B2),
+whose claims concern memory-sharing metrics derived from counts of virtual pages
+backed by the same physical page; [US 7,500,048 B1](https://patents.google.com/patent/US7500048B1),
+whose claims require hashing and comparing candidate VM pages before creating a
+shared anonymous page; and
+[US 2021/0191641 A1](https://patents.google.com/patent/US20210191641A1), which
+concerns migration and caching of read-only-executable-shareable coprocessor
+pages. The bounded MRML adapter implements none of those claim-defining
+mechanisms. Family discovery was worldwide; material national publications and
+claims were checked through their linked register records. Non-overlap, not
+assumed legal status, is the design basis.
+
+Physical sharing, executable population/sealing, native mapping, provider
+resolution, lifetime retention/GC, and servicing remain `TRIGGERED` and require
+their own selected-mechanism review. This technical screen establishes neither
+clearance nor infringement and does not replace independent human dual review.
