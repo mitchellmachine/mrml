@@ -128,7 +128,8 @@ semantic leaf move is complete: dependency-free `mrml-math` now resides under
 `packages/libraries/math` with its Cargo bridge retained. The next leaf,
 `mrml-percent-encoding`, now resides under `packages/libraries/percent-encoding`
 with its runtime edge and Cargo bridge retained. Continue one dependency-light
-leaf at a time before group moves; see
+leaf at a time before group moves; `mrml-tokenizer` is now the third migrated
+leaf with its trainer edge retained. See
 [build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
 
 The independently scoped compiler lane follows

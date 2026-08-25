@@ -54,13 +54,14 @@ semantic path move or Cargo-removal step.
 
 ## Next gate
 
-The first two leaves have moved: dependency-free `mrml-math` to
+The first three leaves have moved: dependency-free `mrml-math` to
 `packages/libraries/math`, and `mrml-percent-encoding` to
-`packages/libraries/percent-encoding`. Their Cargo bridges remain. Extend moves
-one dependency-light leaf at a time after checking every path reference and the
-v3 graph/audit. Do not remove Cargo bridge entries until Windows/Linux build
-equivalence is demonstrated. Treat input-policy changes as explicit review
-items, never automatically accepted count updates.
+`packages/libraries/percent-encoding`, and `mrml-tokenizer` to
+`packages/libraries/tokenizer`. Their Cargo bridges remain. Extend moves one
+dependency-light leaf at a time after checking every path reference and the v3
+graph/audit. Do not remove Cargo bridge entries until Windows/Linux build
+equivalence is demonstrated. Treat input-policy changes as explicit review items,
+never automatically accepted count updates.
 
 Patent review: `NOT_TRIGGERED`. This increment adds conventional bounded metadata
 parsing, graph consistency checks, and lexical source inventory. It does not

@@ -39,7 +39,7 @@ members = [
     "crates/mrml-zim",
     "crates/mrml-zstd",
     "crates/mrml-wikipedia",
-    "crates/mrml-tokenizer",
+    "packages/libraries/tokenizer",
     "crates/mrml-trainer",
     "crates/mrml-av1",
     "crates/mrml-opus",

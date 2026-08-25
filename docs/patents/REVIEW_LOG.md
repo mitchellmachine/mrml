@@ -41,6 +41,10 @@ The second semantic move relocates `mrml-percent-encoding` and updates its exact
 runtime and tools paths without changing implementation or behavior. **Result:
 NOT_TRIGGERED.** This is repository organization, not a new encoding mechanism.
 
+The third semantic move relocates `mrml-tokenizer` and updates its runtime and
+trainer paths without changing tokenization behavior. **Result: NOT_TRIGGERED.**
+This is repository organization, not a new tokenizer mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
