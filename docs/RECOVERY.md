@@ -964,6 +964,13 @@ Recover the three new persistent deltas from
 documentation first, then keep adaptive isolation and storage/optical as
 sequential foundational OS milestones. Preserve every **PLANNED** physical, UDF,
 optical, and total-microVM claim until exact implementation and evidence exist.
+Total MicroVM is strict: a failed eligible microVM launch makes that component
+unavailable and never silently boots or launches it natively. Recovery remains a
+separate small audited environment so it can repair persistent isolation policy,
+the VMM, and guest-runtime generations even when Total mode cannot start. A
+repeated failed persistent Total request may offer an explicit Balanced-once or
+Recovery choice, but must not mutate persistent policy automatically; authorized
+recovery policy changes are recorded where audit support exists.
 
 For system-monitor work, recover the single canonical observer from
 [monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). Its caches are

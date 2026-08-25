@@ -190,7 +190,15 @@ Sensor inspection is not fan/voltage/frequency/power/thermal control. DMA/IOMMU
 views grant no physical addresses or mappings. Firmware, TPM, VBS, hosted VMM,
 nested VM, and bare-metal claims retain exact evidence and threat-model labels.
 Planned adaptive-isolation views distinguish requested/effective placement,
-policy source, mandatory floor, generation, resource cost, and exceptions.
+policy source and generation, mandatory floor, eligibility classification,
+host-substrate reason, active/required unsupported blockers, resource cost,
+unavailable domains, and native-fallback count. The monitor reports actual
+placement rather than inferring it from Settings. Successful Total mode requires
+every running `MICROVM_ELIGIBLE` domain in a microVM and native fallback zero.
+`MICROVM_REQUIRED_BUT_UNAVAILABLE` and `TOTAL_MICROVM_DOWNGRADE_ATTEMPT` are
+structured findings; they never authorize native launch. Requested Total with
+an active required blocker or eligible native execution is reported not
+satisfied, even when the request came from boot or an intentional override.
 Planned optical views distinguish drive/media generations, actual profiles,
 semantic burn progress/errors, and delegation without inventing telemetry. See
 [../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md) and

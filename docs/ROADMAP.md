@@ -24,11 +24,13 @@ Three new persistent deltas are documented before implementation:
   filename-independence tests are now **IMPLEMENTED**; `.mrz` and `.mrsig`
   tooling remains **PLANNED**.
 - [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md) defines adaptive placement,
-  mandatory floors, stable location-independent interfaces, persistent owner
-  policy, and a one-boot total-microVM request. Typed Manifest V2 validation and
-  explicit current application/service native policies are **IMPLEMENTED**. The
+  mandatory floors, semantic interface compatibility across admitted forms,
+  persistent owner policy, and a strict one-boot total-microVM request. Typed
+  Manifest V2 validation and explicit current application/service native
+  policies are **IMPLEMENTED**. The
   resolver handles defaults, owner selection, total-mode promotion, and visible
-  unsupported exceptions; persistence and runtime work remain **PLANNED**.
+  unsupported exceptions; workspace/lock retention, owner-setting persistence,
+  and runtime work remain **PLANNED**.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.
@@ -36,6 +38,16 @@ Three new persistent deltas are documented before implementation:
 With the small package-extension/tooling gate complete, keep adaptive isolation
 and storage/optical as separate sequential foundational OS tasks under
 the work-in-progress limit; do not combine them into one functional commit.
+
+Adaptive-isolation milestones remain separate: policy/object schema; one
+dual-placement service; one dual-placement GUI app; monitor visibility;
+resource/device projection; Settings/shell policy; strict Total runtime;
+bootloader selector; EFI Shell selector; required-system Total readiness;
+broad application compatibility; and physical/performance evidence. A menu
+entry, policy type, UI, or one guest cannot promote Total mode. Successful
+tested Total requires every running `MICROVM_ELIGIBLE` domain in a microVM, no
+active required `UNSUPPORTED_BLOCKER`, zero native fallback, and every host/
+boot/recovery exception explicitly enumerated and justified.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

@@ -100,6 +100,12 @@ System LowPower/Balanced/Performance policy may tune Wi-Fi saving/scans,
 Bluetooth LE preference, or latency, but never expands network authority. Driver/
 firmware identity/version/state are inspectable without low-level authority.
 
+For a microVM component, network access is a separately authorized projection.
+Projection failure may leave the guest offline where its policy permits or fail
+the operation when networking is required; strict Total MicroVM mode never moves
+the component to native placement to restore network access. See
+[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md).
+
 One network service/driver crash remains one crash: revoke stale authority,
 reset/reinitialize where authorized, restart a clean generation, and reconnect
 under policy without requiring system reboot where practical. Recovery networking

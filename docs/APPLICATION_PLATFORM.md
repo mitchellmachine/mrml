@@ -101,8 +101,12 @@ accepts self-asserted compiler metadata as proof.
 
 Per-component placement preferences, mandatory floors, supported forms,
 persistent owner policy, and the one-boot total-microVM request are canonical in
-[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). These are **PLANNED** and refine
-the classes below without introducing another sandbox architecture.
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). Typed Manifest V2 policy
+validation is **PARTIALLY IMPLEMENTED**; microVM placement, Settings, and strict
+Total runtime/boot enforcement remain **PLANNED**. Total mode never converts a
+failed eligible microVM launch into native execution. Balanced may select a
+visible supported native placement where the package floor permits. These rules
+refine the classes below without introducing another sandbox architecture.
 
 1. A native safe application is a memory-safe, isolated CPL3 process controlled
    by capabilities.

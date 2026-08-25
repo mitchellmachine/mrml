@@ -203,8 +203,13 @@ forms to match exactly, and retains the form in `mrml.lock`. This is structural
 graph evidence only: the isolated-service runtime remains **PLANNED**.
 
 Where it stays simple, a semantic interface may support either location. This is
-not mandatory. For each candidate, review performance benefit, fault impact,
-memory-safety evidence, parser attack surface, IPC cost, and update frequency.
+not mandatory. Placement preserves semantic interface compatibility where
+admitted, not identical transport, latency, startup, timeout, shared-memory,
+debugging, accounting, or failure behavior. Direct calls, native IPC, and
+microVM VirtIO/shared-IPC may therefore differ observably without changing the
+contract or granting authority. For each candidate, review performance benefit,
+fault impact, memory-safety evidence, parser attack surface, IPC cost, and update
+frequency.
 An in-process fault can terminate or corrupt the caller; a service fault follows
 service revocation/restart policy. Speed alone does not justify sharing an
 address space.

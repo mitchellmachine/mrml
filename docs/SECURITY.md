@@ -544,6 +544,16 @@ microVM projection must preserve exact capability identity, rights,
 generations, revocation, and protocol validation across the transport. Hosted
 WHP/KVM still does not protect such a VM from its host.
 
+Strict Total MicroVM semantics are canonical in
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). Failure to satisfy a stronger
+requested boundary must not silently weaken it: an eligible component whose
+microVM or required resource/device projection cannot be created is unavailable,
+not launched natively. Every host-substrate exception is explicitly classified
+and justified. A microVM limits compromise propagation but grants no file,
+network, GPU, device, secret, IPC, or resource authority; capabilities remain
+authoritative. Total mode changes the TCB's shape and does not eliminate trust in
+the microkernel, VMM, device isolation, narrow brokers, or bootstrap path.
+
 The planned compositor owns trusted identity indicators, secure prompts, focus,
 input routing, capture policy, and final composition. Application pixels cannot
 draw or obscure the trusted portion of those surfaces. Semantic inspection,

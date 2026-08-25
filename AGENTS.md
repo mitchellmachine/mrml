@@ -261,7 +261,11 @@ Adaptive placement follows `docs/ISOLATION_PLACEMENT.md`: use the existing
 process/service/capability/VMM architecture, distinguish preference from mandatory
 minimum and supported forms, preserve stable exact-generation interfaces across
 placement, and never let placement metadata grant capabilities. Total MicroVM
-Isolation and its boot override remain **PLANNED** until end-to-end tests exist.
+Isolation is strict: every running `MICROVM_ELIGIBLE` userspace domain must run
+in a microVM. Failed microVM creation makes that component unavailable and never
+silently falls back to native execution. Every non-microVM component requires an
+explicit architectural classification and reason. Total mode and its boot
+override remain **PLANNED** until end-to-end tests prove effective placement.
 
 Storage and optical work follows `docs/storage/STORAGE_AND_OPTICAL.md` in its
 dependency order. Disk/image tooling is first-party; optical `.iso` is

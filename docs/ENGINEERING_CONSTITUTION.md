@@ -144,6 +144,9 @@ answer, redesign it as a narrowly capable isolated service.
 
 > One crash should remain one crash.
 
+> Failure of a stronger isolation mechanism must not silently weaken the
+> requested security boundary.
+
 Where practical, detect a failed service, revoke its authority, clean derived
 state, destroy it, and restart a clean instance. Unsupported, malformed,
 ambiguous, or security-sensitive states fail explicitly, especially in the

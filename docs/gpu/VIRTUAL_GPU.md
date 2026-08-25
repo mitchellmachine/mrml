@@ -35,6 +35,12 @@ implement GPU-0 transfer, compute, rendering, timelines, accounting, and reset;
 later physical backends use the same protocol. VirtIO-GPU display compatibility
 may coexist but does not replace the MRML API or signed-kernel CUDA channel.
 
+Under strict Total MicroVM policy, VirtualGPU or narrowly brokered projection is
+the expected GPU path. Failure to allocate VRAM, establish the projection, or
+create the required GPU-capable guest makes that workload unavailable; it never
+causes broad raw-device access or native-placement fallback. See
+[`../ISOLATION_PLACEMENT.md`](../ISOLATION_PLACEMENT.md).
+
 The first completion gate runs under both KVM and WHP: negotiate a bounded
 domain; create/destroy buffers and an image; transfer; basic compute and render;
 timeline synchronization; reusable graph; authorized presentation; enforced

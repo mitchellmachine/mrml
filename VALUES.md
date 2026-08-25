@@ -101,6 +101,8 @@ or sources of training data. Technology serves people and preserves dignity.
   measurements, audits, and proofs.
 - **Bounded failure:** contain crashes and compromises, revoke authority, and
   clean derived state.
+- **No silent security downgrade:** failure of a stronger isolation mechanism
+  must not silently weaken the requested security boundary.
 - **Simplicity without lost protection:** reduce duplication through shared
   semantics, never by removing necessary isolation, validation, accessibility,
   or correctness.

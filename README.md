@@ -140,6 +140,12 @@ formal noninterference. Those require hardware validation, TPM-backed monotonic
 state, IOMMU/reset testing, reproducible release infrastructure, formal work,
 and independent security review.
 
+The optional planned Total MicroVM mode is strict: every running eligible
+userspace domain must be in a microVM, and a failed VM launch makes that domain
+unavailable instead of silently falling back to native execution. The canonical
+requested-versus-effective semantics are in
+[docs/ISOLATION_PLACEMENT.md](docs/ISOLATION_PLACEMENT.md).
+
 Protected execution is reported as an explicit backend and bounded claim set,
 never inferred from a VMM name. Ordinary WHP/KVM is unprotected; the planned
 Windows VBS authority protects only against VTL0 and still trusts Hyper-V and

@@ -112,6 +112,13 @@ packages do not automatically compose a valid release. Changing the VMM or any
 other bound artifact produces a different release graph even if the kernel is
 unchanged.
 
+Candidate-generation validation must eventually re-evaluate isolation defaults,
+floors, supported forms, interface transports, VMM/runtime compatibility, and
+required Total-mode blockers. A package that loses a required microVM path is
+not silently activated with native fallback. Any derived
+`TOTAL_MICROVM_READY` profile is bound to exact generation, policy, runtime,
+hardware, and evidence; it is not package self-asserted trust metadata.
+
 A `SystemGeneration` is a locally admitted instantiation of the immutable release
 graph plus an exact configuration generation, owner trust policy, and required
 boot/security state. Useful lifecycle states include `Downloaded`, `Staged`,

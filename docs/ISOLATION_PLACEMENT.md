@@ -1,54 +1,46 @@
 # MRML adaptive isolation placement
 
-Status: **PARTIALLY IMPLEMENTED**. Manifest V2 now parses a typed placement
-policy, rejects unknown fields/tokens, contradictory bounds, duplicates, and
-cross-class placements, and requires a reason for fixed platform policy. Every
-current package without an explicit table receives a conservative singleton
-default. All current application and service manifests explicitly record their
-native singleton policy. The typed resolver applies package defaults, owner
-selection, and total-microVM requests without crossing supported forms or bounds;
-unsupported total-mode promotion is an explicit exception. MicroVM launch,
-persistent settings, boot overrides, and location-independent runtime transport
-remain **PLANNED**.
+Status: **PARTIALLY IMPLEMENTED**. Manifest V2 parses a typed placement policy,
+rejects unknown fields/tokens, contradictory bounds, duplicates, and cross-class
+placements, and requires a reason for fixed platform policy. Current application
+and service manifests explicitly record native singleton policies. The bounded
+resolver applies package defaults, owner requests, and total-mode requests; an
+unsupported total promotion is reported as an exception and launches nothing.
+Workspace/lock retention, MicroVM launch, persistent settings, boot overrides,
+eligibility metadata, and cross-placement runtime transport remain **PLANNED**.
 
 ## One policy, several placements
 
-Every eligible application or service has one explicit placement policy. MRML
-extends its existing process, service, capability, and VMM architecture; it does
-not add a second sandbox system.
+MRML extends its existing process, service, capability, package-generation, and
+VMM architecture; it does not add a second sandbox system. `IsolationPlacement`
+conceptually contains:
 
-The conceptual placements are:
-
-- `IN_PROCESS`: admitted safe code in an explicitly compatible consumer;
+- `IN_PROCESS`: admitted code in an explicitly compatible consumer domain;
 - `NATIVE_PROCESS`: a distinct native userspace process/domain;
 - `NATIVE_SERVICE`: a supervised native service domain;
-- `MICROVM`: a supervised VMM guest using projected capabilities and stable
-  MRML interfaces;
-- `PLATFORM`: a fixed kernel, loader, recovery, or pre-VMM component which is
-  outside user-selectable placement.
+- `MICROVM`: a supervised VMM guest using projected capabilities and typed MRML
+  interfaces;
+- `PLATFORM`: fixed kernel, loader, or pre-VMM execution outside selectable
+  userspace placement.
 
-The exact wire enum is frozen only with its schema and tests. Kernel and UEFI
-loader placement is fixed. Ordinary applications may support native process or
-microVM placement; services may support native service or microVM placement.
-An independently serviced safe provider may support in-process, service, and/or
-microVM forms only when its interface declares those forms.
+Kernel and UEFI-loader placement is fixed. Applications may support native
+process and/or microVM placement; services may support native service and/or
+microVM placement. An independently serviced provider may support in-process,
+service, and/or microVM forms only when its package and interface admit them.
+Some interfaces legitimately support only one form. There is no universal
+location-independence promise.
 
-## Preference, floor, and ceiling
+## Preference, floor, supported forms, and policy
 
-Package metadata separately records the default/preferred placement, minimum
-required isolation, supported placements, and—where needed—a maximum allowed
-placement. Ordering is policy-specific, not a claim that every placement is a
-strict security superset in every threat model.
+Package metadata separately records default/preferred placement, minimum
+required isolation, supported placements, and, where needed, a maximum. Owner
+policy may strengthen placement and may select a weaker preference only within
+the admitted supported set and never below the mandatory floor. A package whose
+minimum is `MICROVM` cannot be weakened by ordinary Settings. Publisher identity
+or metadata describes policy input but neither grants authority nor lets a
+malicious package demand ambient in-process authority.
 
-Owner policy may strengthen placement. It may weaken a preference only within
-the package/interface supported set and never below a mandatory security floor.
-Weakening a mandatory minimum requires an explicit owner-authorized expert or
-development policy, visible consequences, and must remain forbidden for
-non-overridable TCB constraints. Publisher identity or metadata describes the
-floor but does not itself grant authority.
-
-Canonical Manifest V2 uses one bounded `[isolation]` table with explicit
-tokens, conceptually:
+Canonical Manifest V2 uses one bounded table:
 
 ```toml
 [isolation]
@@ -57,100 +49,236 @@ minimum = "native-process"
 supported = ["native-process", "microvm"]
 ```
 
-A pre-VMM component instead uses `default = "platform"`, a singleton supported
-set, and a bounded reason. Manifest admission rejects unknown placements,
-contradictory bounds, duplicate values, unsupported defaults, and a microVM
-requirement on a component that cannot run in a guest. Metadata never grants
-capabilities.
+A fixed pre-VMM component uses `platform`, a singleton supported set, and a
+bounded reason. Admission rejects unknown placements, contradictory bounds,
+duplicates, unsupported defaults, and impossible requirements. Placement and
+authority are orthogonal: metadata never grants capabilities.
 
-## Interface location independence
+Defaults consider untrusted-input exposure, parser complexity, network/device
+exposure, authority breadth, unsafe/FFI and third-party surfaces, persistence,
+fault impact, performance, RAM, and startup cost. Memory safety is important but
+not decisive; a memory-safe browser renderer remains a strong microVM candidate
+because it processes adversarial content and has a large attack surface.
+Third-party identity alone neither requires a microVM nor grants native placement.
 
-Consumers bind a stable typed MRML interface and exact provider generation, not
-a DLL/SO name, filesystem path, process ID, VM ID, or placement. The resolver
-selects an admitted provider form compatible with the interface, package,
-system generation, host capability, and effective placement policy. In-process,
-native-service IPC, and microVM transport are distinct adapters behind the same
-semantic interface; transport details cannot change authority or invent an
-AI-only/accessibility-only control path.
+The planned `IsolationMode` values are `BALANCED`, `MORE_ISOLATED`,
+`TOTAL_MICROVM`, and `CUSTOM` (wire spellings remain provisional). Balanced uses
+risk-based defaults and may make a visible policy-permitted fallback within the
+supported set and mandatory floor. More Isolated forces additional admitted
+components into microVMs but does not claim Total completeness. Custom applies
+explicit owner choices above mandatory floors. Choosing native placement where
+permitted does not disable address-space isolation, capabilities, resource
+limits, memory protection, or explicit device/network/file authority.
 
-Moving a provider preserves exact immutable generation binding, protocol
-semantics, capability attenuation, revocation, W^X, memory/resource accounting,
-and supported accessibility meaning. A placement change is a supervised
-replacement, never in-place executable patching. Existing consumers retain
-their bound generation until orderly rebind/restart. Rust's native ABI is not
-the stable cross-placement ABI.
+Conceptual precedence is: non-overridable platform/security constraint, strict
+boot/session overlay, owner component override, system/project default, package
+recommendation. A Total overlay therefore supersedes a stale `FORCE_NATIVE`
+preference for that boot when microVM placement is supported.
 
-## Defaults and owner policy
+## Semantic interface compatibility across placements
 
-MRML supplies conservative package defaults. Risky unsafe or compatibility
-components may require microVM placement; ordinary memory-safe applications may
-default to native processes; boot-critical code remains platform-fixed. The
-owner may set per-package, per-service, class, profile, and global preferences,
-subject to mandatory floors and resource feasibility.
+Consumers bind a stable typed MRML interface and exact immutable provider
+generation, not a DLL/SO name, path, PID, VM ID, or placement. The resolver
+selects an admitted form compatible with interface, package, generation,
+hardware, and effective policy. Where multiple forms exist, in-process calls,
+native-service IPC, and microVM VirtIO/shared-IPC are transport adapters behind
+the same semantic contract.
 
-`Total MicroVM Isolation` is a best-effort maximum-isolation policy over every
-eligible component, not a promise that the kernel, loader, VMM, early recovery,
-or every boot-critical codec runs in a microVM. Components without an admitted
-microVM form remain at their fixed or minimum-safe placement and are reported
-explicitly. Resource exhaustion fails closed or presents an owner-visible
-degraded-placement decision according to policy; it never silently violates a
-minimum.
+Placement may legitimately change latency, startup time, failure boundaries,
+resource accounting, shared-memory behavior, timeouts, and debugging. This is
+semantic compatibility where supported, not identical transport or performance.
+Interfaces define observable failure, cancellation, and bounded backpressure as
+needed. Shared memory is explicit, range/right/lifetime bounded, revocable, and
+generation-safe; executable sharing is immutable and preserves W^X.
 
-The settings application and object shell project the same typed policy service.
-They show requested versus effective placement, immutable constraints, expected
-CPU/RAM/device overhead, restart/reboot requirements, and security consequences.
-They never edit package files directly or scrape command output. First-party UI
-has no hidden authority. Changes are transactional, generation-bound, auditable,
-recoverable, and accessible through keyboard, Braille, speech, and trusted
-nonvisual prompts.
+Moving a provider preserves exact generation binding, protocol semantics,
+capability attenuation, revocation, accounting, and supported accessibility
+meaning. It is a supervised replacement, never in-place executable patching.
+Existing consumers retain their generation until orderly rebind/restart. Rust's
+native ABI is not the stable cross-placement ABI.
 
-## One-boot override
+## Strict Total MicroVM semantics
 
-The MRML bootloader will offer a one-boot `Total MicroVM Isolation` choice and
-accept the equivalent explicit argument when launched from a UEFI/EFI Shell.
-The option is bounded, exact-token, nonpersistent by default, recorded in the
-authenticated boot handoff, and consumed by the early policy service. Unknown,
-duplicated, malformed, or conflicting arguments fail closed. EFI shell
-compatibility does not turn arbitrary command-line data into authority.
+`TOTAL_MICROVM` is a strict one-boot or persistent policy overlay. Every running
+`MICROVM_ELIGIBLE` userspace execution domain MUST execute within an admitted
+microVM boundary. If its microVM, resources, projection, or required transport
+cannot be created, that component is unavailable. It MUST NOT automatically run
+as `IN_PROCESS`, `NATIVE_PROCESS`, or `NATIVE_SERVICE`.
 
-The boot menu must explain that startup may be slower and RAM consumption
-higher, remain operable without a monitor where supported, and preserve owner-
-controlled recovery. A one-boot request cannot bypass Secure Boot, package,
-generation, capability, or mandatory placement policy.
+```text
+TOTAL_MICROVM + MICROVM_ELIGIBLE
+  -> microVM starts       -> run in MICROVM
+  -> microVM cannot start -> component unavailable
 
-## Security, resources, and monitoring
+NEVER: failed microVM -> native or in-process fallback
+```
 
-A microVM is isolated from sibling guests by the VMM and projected capabilities,
-but hosted KVM/WHP is not a boundary against its host. Device, network, storage,
-GPU, accessibility, semantic inspection, debug, and monitoring authority remain
-separately projected and revocable. Secure attention terminates in the trusted
-host. Placement never implies ambient host access.
+Total mode may sacrifice availability to preserve the requested boundary.
+Failure of an optional launch need not shut down the machine; a boot- or
+session-critical failure may block the session or enter explicitly labeled
+diagnostic/recovery handling. Changing to Balanced, changing a later-boot policy,
+or overriding a floor is an explicit authorized owner action, never an automatic
+recovery decision.
 
-Each placement has explicit CPU scheduling, committed/resident/shared memory,
-page-table, IPC/queue, device, and teardown accounting. Shared executable pages
-remain represented by `MemoryPool` and `MemoryObject`; microVM duplication or
-sharing is not hidden. The monitor exposes requested/effective placement,
-policy source, provider generation, VM/domain identity, resource cost, restart
-state, and evidence scope without leaking unrelated content or secrets.
+Every component has one explainable Total-mode eligibility class:
+
+- `MICROVM_ELIGIBLE`: the execution domain supports the standard microVM runtime
+  and MUST use it whenever running in Total mode;
+- `HOST_SUBSTRATE_REQUIRED`: it must remain outside guests to instantiate,
+  supervise, broker, or secure microVM execution, with a specific reason;
+- `BOOT_ONLY`: it executes before the normal microVM substrate exists;
+- `RECOVERY_ONLY`: it belongs to the independently repairable recovery
+  environment and follows recovery policy;
+- `UNSUPPORTED_BLOCKER`: ordinary userspace should be eligible, but the current
+  implementation lacks an admitted microVM path.
+
+Unsupported does not mean unsafe or untrusted. An unfinished Settings app or
+service is an `UNSUPPORTED_BLOCKER`, not host substrate. Performance alone is
+not a substrate reason. Every `HOST_SUBSTRATE_REQUIRED` classification is
+reviewed as the architecture evolves. The substrate SHOULD be minimized,
+memory-safe where practical, capability-limited, fuzzed, and inspectable.
+
+Total mode stops at the minimal host substrate; it does not recursively place
+the VMM inside another VMM. Its TCB still includes the relevant microkernel,
+virtualization core, IOMMU/device isolation, minimum capability/resource/device
+brokers, and microVM bootstrap path. Shared brokers are explicit common-mode
+dependencies and expose narrow typed interfaces rather than ambient proxies.
+A microVM boundary limits compromise propagation; it does not define or grant
+authority.
+
+In-process libraries admitted inside a guest remain inside that guest boundary.
+Total does not mean one VM per crate, library, function, process, or thread. A
+browser microVM may contain its exact in-process Zstd and Unicode providers; a
+shared service may run in its own microVM. Approved multi-component guest groups
+are explicit and inspectable. Each guest graph is exact and generational, with
+private writable state and bounded RAM, vCPU, GPU, IPC, and device projections.
+
+Balanced and Total differ explicitly:
+
+```text
+Balanced browser renderer:
+  preferred MICROVM; minimum NATIVE_PROCESS
+  microVM unavailable -> policy MAY visibly permit NATIVE_PROCESS
+
+Total browser renderer:
+  MICROVM_ELIGIBLE
+  microVM unavailable -> DO NOT LAUNCH
+```
+
+Package updates that change defaults, floors, supported forms, or microVM
+transport are re-evaluated before generation activation. A required unsupported
+component blocks Total readiness; an installed but unused optional blocker need
+not prevent a current session, but it cannot launch natively under the Total
+label. Provider substitution still requires exact interface compatibility,
+admission, security policy, and generation binding.
+
+## Settings, boot, recovery, and accessibility
+
+The planned Settings application and object shell project one typed policy
+service. They distinguish configured default, requested boot mode, effective
+state, and policy generation; show floors, supported forms, blockers, overhead,
+and restart/reboot requirements; and allow Default, stronger microVM placement,
+or an explicit native selection only where the floor permits. Changes are
+transactional, auditable, recoverable, capability-controlled, and semantically
+available through keyboard, Braille, speech, automation, and authorized AI.
+Configuration expresses desired policy; it does not prove current placement.
+
+The planned boot menu is `MRML`, `MRML — Total MicroVM Isolation`, `MRML
+Recovery`, and an independently discovered `Windows Boot Manager` where
+applicable. The Total entry selects the same admitted `SystemGeneration` plus a
+strict one-boot overlay, not a separate unsigned build. The same signed loader
+accepts `BOOTX64.EFI --isolation=total-microvm` from a UEFI/EFI Shell and produces
+the same typed policy object rather than a second implementation. Parsing is
+bounded, exact-token, and fail closed; the selector contains no secrets.
+
+The one-boot request expires after that boot and cannot bypass Secure Boot,
+package signatures, `SystemRelease` admission, anti-rollback, capabilities, or
+mandatory floors. Selection proves only requested mode; runtime evidence proves
+satisfaction. Virtualization or resource failure MUST NOT silently convert the
+boot to Balanced. The owner may explicitly retry, boot Balanced once, or enter
+Recovery. Recovery remains a separate small audited environment and can repair
+policy or VMM/runtime generations without depending on successful Total mode.
+
+## Resources, devices, security, and monitoring
+
+RAM, vCPU, `VirtualGPU`, VirtIO, device-projection, or VMM exhaustion in Total
+mode makes the affected component unavailable and reports the exact shortage.
+Power/thermal policy MAY throttle or stop workloads but MUST NOT weaken their
+placement. Network, file-portal, GPU, accessibility-bridge, or other projection
+failure never justifies native fallback. Balanced may use an explicit policy-
+permitted alternative within the mandatory floor.
+
+Every microVM receives only explicitly projected files, network, GPU, input,
+audio, devices, secrets, IPC, and resources. VirtualGPU/brokered devices are the
+normal path, not broad raw-device fallback. Capabilities remain separately
+attenuated and revocable. Hosted WHP/KVM cannot protect a guest from its host;
+QEMU, hosted WHP/KVM, nested virtualization, and physical Intel/AMD evidence are
+distinct. MicroVM isolation does not eliminate shared-hardware side channels or
+common-mode VMM, broker, scheduler, GPU, or device failures.
+
+The planned monitor is authoritative for actual runtime state rather than
+configuration files. It reports requested mode, effective status, eligibility,
+placement and policy generation, substrate reasons, active/required blockers,
+unavailable domains, resource costs, and native-fallback count. Findings include
+`MICROVM_REQUIRED_BUT_UNAVAILABLE` and `TOTAL_MICROVM_DOWNGRADE_ATTEMPT`; neither
+triggers a native launch. Conceptual successful evidence is:
+
+```text
+requested_mode = TOTAL_MICROVM
+effective_status = SATISFIED
+running_microvm_eligible = N
+running_in_microvm = N
+unsupported_blocker_required = 0
+native_fallback = 0
+```
+
+Installed-but-idle applications do not count as running domains. Every running
+`HOST_SUBSTRATE_REQUIRED`, `BOOT_ONLY`, and `RECOVERY_ONLY` exception is
+enumerated and justified. A request with an eligible native execution or active
+required blocker is `TOTAL_MICROVM_NOT_SATISFIED`, even if selected by the boot
+menu, Settings, EFI Shell, or an intentional developer override. Monitor and
+shell expose typed structured state without revealing unrelated content or
+secrets.
 
 ## Implementation order and acceptance
 
-Implementation proceeds as bounded milestones. The typed placement model,
-validation, initial Manifest V2 metadata, and effective request resolver are
-implemented. Next are the resource plan;
-native/interface transport invariants; microVM launch adapter; persistent policy
-service; shell/settings/monitor projections; boot-handoff override; recovery and
-adversarial tests. Do not start GUI polish before the typed backend exists.
+Documentation is not implementation evidence. Implement bounded milestones:
+
+1. policy/object schema and validation (**PARTIALLY IMPLEMENTED**);
+2. one representative dual-placement service;
+3. one representative dual-placement GUI application;
+4. monitor placement visibility;
+5. resource and device projections;
+6. persistent Settings and shell policy;
+7. strict Total runtime enforcement;
+8. bootloader and EFI Shell selectors;
+9. required-system Total readiness and broader application compatibility;
+10. recovery, adversarial, performance, and physical-hardware evidence.
 
 Acceptance includes contradictory-manifest rejection, floor enforcement,
-owner strengthening, authorized preference weakening, exact-generation
-interface behavior across supported forms, revocation and restart, resource
-exhaustion, stale policy/generation rejection, boot-token parsing, recovery, and
-WHP/KVM parity. `Total MicroVM Isolation` remains **PLANNED** until an actual
-booted generation proves all eligible placements and reports every exception.
+owner strengthening, authorized Balanced weakening, exact-generation interface
+behavior across supported forms, revocation/restart, resource exhaustion,
+stale-policy rejection, boot-token parsing, recovery, and backend parity. Total
+MicroVM remains **PLANNED** until a tested configuration proves every running
+eligible domain is in a microVM, zero active required blockers, zero native
+fallback, and an enumerated justified host/boot/recovery substrate.
 
-Patent review: **TRIGGERED**. Adaptive placement selection, transparent
-interface transport, whole-system isolation policy, and boot-time policy
-composition require targeted worldwide claim review before implementation. See
+## Total MicroVM invariants
+
+1. Every running `MICROVM_ELIGIBLE` domain MUST execute within an admitted
+   microVM boundary.
+2. Failure to create that boundary MUST NOT cause automatic native fallback.
+3. Required non-microVM components MUST have explicit classification and
+   architectural justification; unsupported userspace cannot masquerade as host
+   substrate.
+4. Resource pressure MAY reduce availability but MUST NOT silently weaken
+   placement.
+5. Capabilities remain the authority mechanism regardless of placement.
+6. Requested Total mode is satisfied only when effective runtime state meets
+   these invariants.
+
+Patent review: **TRIGGERED**. Adaptive placement selection, interface transport,
+whole-system isolation policy, and boot-time policy composition require targeted
+worldwide claim review before implementation. See
 [the patent review log](patents/REVIEW_LOG.md); this is technical screening, not
 legal advice or a clearance conclusion.

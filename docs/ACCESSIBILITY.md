@@ -189,6 +189,11 @@ semantic objects described in
 isolation settings and the boot-time total-microVM choice likewise require
 equivalent visual, keyboard, Braille, speech, and trusted nonvisual meaning; see
 [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md).
+An accessibility bridge or projected input/speech failure in strict Total mode
+is a high-priority component/feature failure, not permission to launch the
+eligible application natively. Pre-OS selection guarantees only the boot menu's
+documented text/keyboard baseline; full semantic accessibility begins with the
+admitted runtime stack.
 
 Application VMs project authenticated, bounded guest GUI semantics into the
 host graph. Guest semantics are untrusted content and cannot forge compositor-

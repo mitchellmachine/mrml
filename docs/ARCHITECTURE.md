@@ -235,6 +235,13 @@ application microVM projection; trusted compositor and semantic GUI; a no-JIT
 browser; production shared-memory queues; TPM-backed rollback state; complete
 physical VT-d/device-reset validation; recovery and release key rotation.
 
+Adaptive placement and strict Total MicroVM semantics are canonical in
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). Total is a claim about effective
+runtime placement, not merely configuration: every running eligible userspace
+domain is in an admitted microVM, failures never trigger automatic native
+fallback, and every required host/boot/recovery exception is classified and
+justified. Capabilities remain authoritative at every placement.
+
 **ASPIRATIONAL:** a production-secure sovereign local-AI OS, broad device
 support, machine-checked noninterference, independently audited security, and
 additional architectures.
