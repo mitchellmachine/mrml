@@ -1011,6 +1011,16 @@ path. Windows gnullvm and native Arch Linux WSL each pass 534 library tests, one
 component-interface probe, 10 conformance tests, and 335 replacement tests: 880
 compiler tests per host.
 
+The premise-bearing rigid-normalization milestone proves the selected generic
+implementation's instantiated trait and projection predicates before exposing
+its associated value. It shares the caller's 16-frame rigid proof stack and
+retains the separate 16-frame projection visited stack, so recursive premise
+cycles and deep proof chains report `Cycle` and `Overflow` rather than escaping
+the bounds. Focused tests cover satisfied and missing prerequisites, recursive
+cycles, and proof-depth overflow. Windows gnullvm and native Arch Linux WSL each
+pass 537 library tests, one component-interface probe, 10 conformance tests, and
+335 replacement tests: 883 compiler tests per host.
+
 The projection-bearing logical clause-head milestone stores up to 64 identified
 bound heads separately from flat clauses. Every parameter must be constrained
 by a direct leaf position before the instantiated head is normalized through
