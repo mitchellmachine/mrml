@@ -43,7 +43,7 @@ jobs:
       - name: Install exact stage-zero toolchain
         shell: bash
         run: |
-          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal --component "${{ matrix.components }}" --target x86_64-unknown-none
+          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal --component "${{ matrix.components }}" --target x86_64-unknown-none,nvptx64-nvidia-cuda
 
       - name: Bootstrap and test mrml
         shell: bash
