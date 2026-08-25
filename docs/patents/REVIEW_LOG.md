@@ -4290,3 +4290,12 @@ selector's existing fixed-array substitution, proves existing bounded premises,
 and substitutes a concrete or parameter value. It adds no new search strategy,
 specialization order, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Unified concrete trait projection selection
+
+**Result: NOT_TRIGGERED.** This compiler-only increment dispatches one bounded
+concrete projection query between the existing exact and generic implementation
+and associated-value tables, retaining existing proof and ambiguity outcomes.
+It adds no new search strategy, specialization order, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.

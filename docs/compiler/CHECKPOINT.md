@@ -779,6 +779,16 @@ tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 817 compiler tests per host. Nested projection terms, premise projection
 goals, specialization, and source associated-type syntax remain unsupported.
 
+The unified concrete-projection milestone selects coherently across the exact
+and generic implementation families before consulting their separate bounded
+value tables. Exact facts return exact values; generic values retain recursive
+premise proof and parameter substitution. Absent implementations or values
+return no solution, while unchecked family collisions fail closed as ambiguity.
+Windows gnullvm and native Arch Linux WSL each pass 473 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 819
+compiler tests per host. Nested projections, projection answer composition,
+specialization, and source associated-type syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.

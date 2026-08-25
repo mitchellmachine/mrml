@@ -848,6 +848,14 @@ collisions remain ambiguous at the projection boundary. Nested projections,
 projection goals inside premises, and source associated-type syntax remain
 unsupported.
 
+A unified concrete projection entry point now selects across exact and generic
+implementation families before reading either value table. Exact facts return
+their registered values directly; generic candidates must pass recursive premise
+proof before substitution. An absent implementation or value returns no
+solution, and any unchecked cross-family collision remains ambiguous. This is
+one bounded projection boundary, not nested projection normalization or answer
+composition.
+
 The higher-ranked prerequisite gives every rigid placeholder an explicit 16-bit
 universe plus a stable placeholder identity. A bound clause can instantiate its
 parameters as distinct rigid placeholders in a caller-selected fresh universe;

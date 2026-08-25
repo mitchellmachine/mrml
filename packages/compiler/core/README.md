@@ -4028,6 +4028,17 @@ tests: 817 compiler tests per host. Nested projection terms, premise projection
 goals, specialization, source associated-type syntax, and mixed inference
 selection remain unsupported.
 
+The unified concrete-projection milestone chooses between exact and generic
+implementation families before reading their separate fixed value tables. Exact
+facts return exact values; generic candidates retain recursive premise proof and
+parameter substitution. Missing implementations or values return no solution,
+and any unchecked cross-family collision fails closed as ambiguity. Windows
+gnullvm and native Arch Linux WSL each pass 473 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 819 compiler
+tests per host. Nested projections, projection answer composition,
+specialization, source associated-type syntax, and mixed inference selection
+remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

@@ -1648,6 +1648,43 @@ impl GenericTraitAssociatedTypeDatabase {
     }
 }
 
+pub fn normalize_concrete_trait_projection(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    goal: ImplementedTraitGoal,
+    associated_type_id: TraitAssociatedTypeId,
+) -> Result<TraitProjectionSolution, TraitGoalError> {
+    validate_concrete_goal(goal)?;
+    let canonical = canonicalize_implemented_trait_goal(goal)?;
+    let exact = exact_implementations.solve(canonical);
+    let generic = generic_implementations.select(goal)?;
+    match (exact, generic) {
+        (TraitGoalSolution::Unique(_), GenericTraitImplementationSolution::NoSolution) => {
+            Ok(exact_values.normalize(exact_implementations, canonical, associated_type_id))
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(_)) => {
+            generic_values.normalize(
+                exact_implementations,
+                generic_implementations,
+                clauses,
+                goal,
+                associated_type_id,
+            )
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::NoSolution) => {
+            Ok(TraitProjectionSolution::NoSolution)
+        }
+        (TraitGoalSolution::Unique(_), _)
+        | (TraitGoalSolution::Ambiguous, _)
+        | (_, GenericTraitImplementationSolution::Ambiguous) => {
+            Ok(TraitProjectionSolution::Ambiguous)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraitImplementationHeader {
     pub id: TraitImplementationId,
@@ -3727,6 +3764,152 @@ mod tests {
                 ),
             ),
             Err(TraitGoalError::UnboundGenericParameter)
+        );
+    }
+
+    #[test]
+    fn unified_projection_selects_exact_or_proven_generic_values() {
+        let associated_type_id = TraitAssociatedTypeId::new(4);
+        let exact_id = TraitImplementationId::new(31);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                exact_id,
+                TraitId::new(200),
+                TraitTypeId::new(1),
+            ))
+            .unwrap();
+        let mut exact_values = TraitAssociatedTypeDatabase::EMPTY;
+        exact_values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(exact_id, associated_type_id, TraitTypeId::new(10)),
+            )
+            .unwrap();
+
+        let parameter = TraitGenericParameterId::new(0);
+        let generic_id = GenericTraitImplementationId::new(32);
+        let mut generic_clause = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(201),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        generic_clause
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(202),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic.insert(generic_id, generic_clause).unwrap();
+        let mut generic_values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        generic_values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new(
+                    generic_id,
+                    associated_type_id,
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(33),
+                TraitId::new(202),
+                TraitTypeId::new(2),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            normalize_concrete_trait_projection(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &exact_values,
+                &generic_values,
+                ImplementedTraitGoal::new(
+                    TraitId::new(200),
+                    TraitGoalType::Concrete(TraitTypeId::new(1)),
+                ),
+                associated_type_id,
+            ),
+            Ok(TraitProjectionSolution::Unique(TraitTypeId::new(10)))
+        );
+        assert_eq!(
+            normalize_concrete_trait_projection(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &exact_values,
+                &generic_values,
+                ImplementedTraitGoal::new(
+                    TraitId::new(201),
+                    TraitGoalType::Concrete(TraitTypeId::new(2)),
+                ),
+                associated_type_id,
+            ),
+            Ok(TraitProjectionSolution::Unique(TraitTypeId::new(2)))
+        );
+        assert_eq!(
+            normalize_concrete_trait_projection(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &exact_values,
+                &generic_values,
+                ImplementedTraitGoal::new(
+                    TraitId::new(203),
+                    TraitGoalType::Concrete(TraitTypeId::new(2)),
+                ),
+                associated_type_id,
+            ),
+            Ok(TraitProjectionSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn unified_projection_rejects_unchecked_family_collisions() {
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(210),
+            TraitGoalType::Concrete(TraitTypeId::new(5)),
+        );
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(210),
+                TraitTypeId::new(5),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(
+                GenericTraitImplementationId::new(1),
+                TraitWhereClause::new(
+                    1,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(210),
+                        BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            normalize_concrete_trait_projection(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                goal,
+                TraitAssociatedTypeId::new(1),
+            ),
+            Ok(TraitProjectionSolution::Ambiguous)
         );
     }
 
