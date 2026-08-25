@@ -3619,6 +3619,18 @@ live mutable/shared grandchild cases with E0503 and accepted both post-last-use
 controls. This does not claim unrestricted regions or arbitrary alias analysis.
 The `no_std`/allocation/unsafe hygiene scan remained empty.
 
+The local-reference ancestor-move milestone passed all 750 compiler and driver
+tests on Windows gnullvm and all 750 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Moving a local reference
+ancestor now checks the bounded intermediate-loan relation and is rejected while
+a shared or mutable child remains live; it is accepted after the child's last
+reachable use. The pinned future-edition oracle rejected both live-child cases
+with E0505 and accepted both last-use controls. Legal reference-generation
+replacement remains accepted. This does not claim unrestricted regions or
+arbitrary alias analysis. The `no_std`/allocation/unsafe hygiene scan remained
+empty.
+
 The call-reborrow ancestor-invalidation milestone passed all 746 compiler and
 driver tests on Windows gnullvm and all 746 in release mode on native Arch
 Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned

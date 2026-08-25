@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `4d90166`
-  (`compiler: invalidate shared call ancestors`)
+- Compiler checkpoint commit: `f1fcffe`
+  (`compiler: invalidate local ancestor moves`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -124,7 +124,9 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   reference. The fixed-capacity traversal covers entry, blocks, edges, returns,
   and genuine cycles without treating mutually unreachable points as ordered.
   This is bounded direct-loan liveness and invalidation evidence, not indirect
-  alias tracking, regions, or complete NLL enforcement.
+  alias tracking, regions, or complete NLL enforcement. Moving an intermediate
+  local reference ancestor is also checked against live shared or mutable child
+  loans; bounded last-use reachability restores the move after the child dies.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -460,8 +462,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 748 tests on each host: 409
-library tests, 10 conformance tests, 327 replacement tests, and 2 driver tests.
+The checkpoint source passed 750 tests on each host: 410
+library tests, 10 conformance tests, 328 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

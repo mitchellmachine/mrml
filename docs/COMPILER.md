@@ -559,10 +559,10 @@ uses only for reference locals with a derived direct loan. Across reachable
 paths in the validated bounded CFG, live shared loans reject later exact-owner
 moves, mutable borrows, writes, or read-modify-writes, while live mutable loans
 reject later copies, moves, borrows, writes, or read-modify-writes of the exact
-borrowed path. Mutation-through-reference and shared or mutable call reborrows
-additionally inspect bounded intermediate ancestry. This is bounded loan liveness and
-invalidation, not unrestricted alias tracking, regions, reborrow completion, or
-a complete borrow checker.
+borrowed path. Mutation-through-reference, shared or mutable call reborrows, and
+moves of a local reference ancestor additionally inspect bounded intermediate
+ancestry. This is bounded loan liveness and invalidation, not unrestricted alias
+tracking, regions, reborrow completion, or a complete borrow checker.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
