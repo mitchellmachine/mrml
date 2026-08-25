@@ -8425,7 +8425,7 @@ fn preanalyze_runtime_loop_declarations<
                             operation_index,
                             arm_index: 0,
                         };
-                    preanalyze_runtime_source_expression_reads::<
+                    preanalyze_runtime_return_expression_reads::<
                         R,
                         MAX_PARAMETERS,
                         MAX_EXPRESSION_NODES,
@@ -8492,7 +8492,7 @@ fn preanalyze_runtime_loop_declarations<
                                     operation_index,
                                     arm_index,
                                 };
-                            preanalyze_runtime_source_expression_reads::<
+                            preanalyze_runtime_return_expression_reads::<
                                 R,
                                 MAX_PARAMETERS,
                                 MAX_EXPRESSION_NODES,
@@ -11282,6 +11282,7 @@ const fn runtime_location_is_exact_function_return_value(
             | RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopConditionalReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopReturnValue { .. }
+            | RuntimeOwnershipEventLocation::LoopConditionalTerminal { .. }
             | RuntimeOwnershipEventLocation::ReturnValue { .. }
             | RuntimeOwnershipEventLocation::Tail
     )
@@ -29321,6 +29322,34 @@ mod tests {
         ] {
             analyze(accepted).unwrap();
         }
+    }
+
+    #[test]
+    fn runtime_function_return_outlives_follow_loop_conditional_terminals() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 48>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        assert_eq!(
+            analyze("fn value(input: &mut u16, choose: bool) -> &mut u16 { loop { if choose { let mut local = *input; return identity(&mut local); } else { return input; } } }")
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeReferenceOutlivesFunction
+        );
+        analyze("fn value(input: &mut u16, choose: bool) -> &mut u16 { loop { if choose { return identity(input); } else { return input; } } }").unwrap();
     }
 
     #[test]
