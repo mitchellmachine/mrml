@@ -1,9 +1,12 @@
 use core::array;
+use core::mem::size_of;
+use core::ops::{Deref, DerefMut};
 
 use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
-    Capability, CapabilityError, CapabilitySpace, FaultRetirement, ObjectId, Priority,
-    ScheduleOutcome, TaskId, TaskRuntime, TaskRuntimeError, TaskTermination,
+    Capability, CapabilityError, CapabilitySpace, FaultRetirement, MemoryBackingKind,
+    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
+    Priority, Rights, ScheduleOutcome, TaskId, TaskRuntime, TaskRuntimeError, TaskTermination,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,6 +251,106 @@ impl ServiceSlot {
 /// every handle to the retired instance permanently stale.
 pub struct ServiceSupervisor<const SERVICES: usize> {
     slots: [ServiceSlot; SERVICES],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountedServiceSupervisorError {
+    Memory(MemoryResourceError),
+    Arithmetic,
+}
+
+impl From<MemoryResourceError> for AccountedServiceSupervisorError {
+    fn from(value: MemoryResourceError) -> Self {
+        Self::Memory(value)
+    }
+}
+
+/// Fixed-capacity lifecycle, cleanup, policy, and restart state committed to
+/// one exact memory pool before publication.
+pub struct AccountedServiceSupervisor<const SERVICES: usize> {
+    supervisor: ServiceSupervisor<SERVICES>,
+    charge: MemoryObjectId,
+    charge_capability: Capability,
+    committed_pages: u64,
+}
+
+impl<const SERVICES: usize> AccountedServiceSupervisor<SERVICES> {
+    pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedServiceSupervisorError> {
+        let committed_pages = Self::required_pages()?;
+        let (charge, charge_capability) = memory.allocate_object(
+            pool,
+            pool_capability,
+            committed_pages,
+            MemoryBackingKind::Anonymous,
+            Rights::CONTROL,
+            authorities,
+        )?;
+        Ok(Self {
+            supervisor: ServiceSupervisor::new(),
+            charge,
+            charge_capability,
+            committed_pages,
+        })
+    }
+
+    pub fn required_pages() -> Result<u64, AccountedServiceSupervisorError> {
+        let bytes = u64::try_from(size_of::<Self>())
+            .map_err(|_| AccountedServiceSupervisorError::Arithmetic)?;
+        bytes
+            .checked_add(PAGE_SIZE - 1)
+            .map(|rounded| rounded / PAGE_SIZE)
+            .filter(|pages| *pages != 0)
+            .ok_or(AccountedServiceSupervisorError::Arithmetic)
+    }
+
+    pub const fn charge(&self) -> MemoryObjectId {
+        self.charge
+    }
+
+    pub const fn committed_pages(&self) -> u64 {
+        self.committed_pages
+    }
+
+    /// Consumes the supervisor and returns its commitment only after every
+    /// dependent lifecycle authority has been retired externally.
+    ///
+    /// Failure returns the complete still-accounted supervisor.
+    ///
+    /// # Safety
+    ///
+    /// No running/stopped task, cleanup ticket, prepared registration/restart,
+    /// peer, recovery path, or external policy state may depend on any slot or
+    /// generation in this supervisor.
+    #[allow(clippy::result_large_err)]
+    pub unsafe fn release<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        self,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<u64, (Self, MemoryResourceError)> {
+        match memory.release_object(self.charge, self.charge_capability, authorities) {
+            Ok(pages) => Ok(pages),
+            Err(error) => Err((self, error)),
+        }
+    }
+}
+
+impl<const SERVICES: usize> Deref for AccountedServiceSupervisor<SERVICES> {
+    type Target = ServiceSupervisor<SERVICES>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.supervisor
+    }
+}
+
+impl<const SERVICES: usize> DerefMut for AccountedServiceSupervisor<SERVICES> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.supervisor
+    }
 }
 
 impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
@@ -744,6 +847,100 @@ mod tests {
 
     fn context(root: u64, entry: u64) -> UserContext {
         UserContext::new(PhysAddr::new(root).unwrap(), entry, 0x7000_0000).unwrap()
+    }
+
+    const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    #[test]
+    fn accounted_supervisor_charges_complete_lifecycle_state_before_registration() {
+        let pages = AccountedServiceSupervisor::<2>::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(29).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let mut supervisor = AccountedServiceSupervisor::<2>::new(
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        assert_eq!(supervisor.committed_pages(), pages);
+        assert_eq!(memory.object_pool(supervisor.charge()), Ok(pool));
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let service = supervisor.register(ObjectId(0x90), task).unwrap();
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Running));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            pages
+        );
+    }
+
+    #[test]
+    fn supervisor_exhaustion_does_not_publish_and_empty_release_returns_charge() {
+        let large_pages = AccountedServiceSupervisor::<64>::required_pages().unwrap();
+        assert!(large_pages > 1);
+        let mut exhausted_memory = MemoryPoolTable::<1, 1>::new(30).unwrap();
+        let mut exhausted_authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = exhausted_memory
+            .create_root(
+                large_pages - 1,
+                1,
+                0,
+                MEMORY_POOL_RIGHTS,
+                &mut exhausted_authorities,
+            )
+            .unwrap();
+        assert!(matches!(
+            AccountedServiceSupervisor::<64>::new(
+                pool,
+                pool_capability,
+                &mut exhausted_memory,
+                &mut exhausted_authorities,
+            ),
+            Err(AccountedServiceSupervisorError::Memory(
+                MemoryResourceError::PoolExhausted
+            ))
+        ));
+        assert_eq!(
+            exhausted_memory
+                .usage(pool, pool_capability, &exhausted_authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+
+        let pages = AccountedServiceSupervisor::<1>::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(31).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let supervisor = AccountedServiceSupervisor::<1>::new(
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        assert!(matches!(
+            unsafe { supervisor.release(&mut memory, &mut authorities) },
+            Ok(released) if released == pages
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
     }
 
     #[derive(Default)]

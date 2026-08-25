@@ -7165,6 +7165,49 @@ JavaScript/WebAssembly runtime, AI mechanism, or media mechanism. Planned scopes
 recorded as `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain
 unchanged; agent review does not replace independent human dual review.
 
+### Accounted service-supervision state
+
+The fixed lifecycle owner is **PARTIALLY IMPLEMENTED** with quantitative
+accounting. `AccountedServiceSupervisor` rounds its complete concrete wrapper—
+including every service/task binding, state and policy generation, restart
+budget/backoff value, and cleanup-ticket slot—to pages and commits that exact
+capacity as one anonymous `MemoryObject` before any service can register.
+Registration, retirement, cleanup, policy replacement, and restart reuse this
+fixed commitment rather than allocating hidden lifecycle state.
+
+Pool exhaustion publishes no supervisor and leaves usage unchanged. Returning
+the commitment consumes the wrapper and is unsafe because `ServiceSupervisor`
+has no general unregister operation: the caller must prove that no running or
+stopped task, cleanup ticket, prepared registration/restart, peer, recovery path,
+or external policy state can depend on any slot or generation. Failure returns
+the complete still-accounted supervisor. The live kernel image has not adopted
+this wrapper, and no hosted, reboot, or physical evidence is claimed.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through `ServiceSupervisor`, `MemoryPoolTable`, and `CapabilitySpace`.
+
+DIGITAL-RIGHTS REVIEW: the charge changes no lifecycle, restart, inspection, or
+policy authority and reveals no service content, activity, or user identity. It
+creates no vendor, publisher, provider, verifier, DRM, attestation, AI-only,
+first-party, or accessibility privilege. Exhaustion cannot draw from another
+pool.
+
+HOSTILE SECURITY REVIEW: generic capacity, concrete layout size, conversion and
+rounding, pool/object generations, capability slots, task/service generations,
+restart budgets, policy generations, cleanup tickets, prepared plans, release,
+and replay are hostile. Exact charging precedes publication. Release is unsafe,
+consuming, and fail-closed; accounting never substitutes for lifecycle
+capability checks or cleanup completion.
+
+Patent review: `NOT_TRIGGERED` — page-rounded accounting of a conventional
+fixed-capacity supervision table adds no compatibility transport, host-share
+protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, or media mechanism. Planned scopes
+recorded as `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain
+unchanged; agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

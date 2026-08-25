@@ -120,9 +120,10 @@ pub use scheduler::{
     SchedulerLoad, TaskAttachError, TaskId, TaskMigration, TaskState,
 };
 pub use service_lifecycle::{
-    RestartPolicy, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket,
-    ServiceError, ServiceFault, ServiceId, ServiceRecovery, ServiceRecoveryError,
-    ServiceRegistrationPlan, ServiceRetirement, ServiceState, ServiceSupervisor,
+    AccountedServiceSupervisor, AccountedServiceSupervisorError, RestartPolicy,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket, ServiceError,
+    ServiceFault, ServiceId, ServiceRecovery, ServiceRecoveryError, ServiceRegistrationPlan,
+    ServiceRetirement, ServiceState, ServiceSupervisor,
 };
 pub use shared_buffer_syscall::{
     SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedBufferUserAccess,

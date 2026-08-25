@@ -80,7 +80,10 @@ cache charging, VMM projection, and userspace policy integration remain
 incomplete. An opt-in accounted configuration-service wrapper now commits its
 complete fixed settings and audit state for fresh, empty, and checkpoint-
 recovered construction; live service-image composition has not adopted it. An
-opt-in accounted preallocated page-table store commits its
+opt-in accounted supervisor separately commits all fixed service/task bindings,
+restart budgets, policy generations, and cleanup-ticket slots; releasing it
+requires external proof that no lifecycle authority remains. An opt-in
+accounted preallocated page-table store commits its
 complete arena capacity before publication, but live boot construction has not
 adopted it. An opt-in accounted task-runtime wrapper now commits its
 complete fixed scheduler, task/capability metadata, delegation-table, and

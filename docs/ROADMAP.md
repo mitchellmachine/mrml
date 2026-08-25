@@ -197,6 +197,11 @@ fresh, empty, and checkpoint-recovered `ConfigurationService` construction may
 commit the complete concrete settings/audit footprint to one exact pool before
 publication. Validation or exhaustion leaves usage unchanged; consuming release
 returns the commitment. The signed service image and reboot path do not use it.
+The separate fixed lifecycle owner is now **PARTIALLY IMPLEMENTED** with an
+opt-in accounted `ServiceSupervisor`: its complete service/task, restart-policy,
+budget, generation, and cleanup-ticket capacity is committed before
+registration. Release is unsafe until no task, cleanup, prepared plan, peer,
+recovery path, or external policy depends on it. Live composition is pending.
 
 1. Implement the policy/configuration service and service supervision protocol.
    **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed
@@ -206,7 +211,9 @@ returns the commitment. The signed service image and reboot path do not use it.
    configuration/supervision request and response codecs. The opt-in
    `AccountedConfigurationService` charges its complete fixed settings and audit
    capacity before fresh or checkpoint-recovered publication; live image and
-   reboot integration remain pending. Kernel service-state
+   reboot integration remain pending. `AccountedServiceSupervisor` separately
+   charges the complete fixed lifecycle/restart/cleanup table before use, but
+   live supervisor construction remains unaccounted. Kernel service-state
    introspection now requires exact READ authority rather than a service token.
    Syscall operation 9 now exposes only that authorized state query to CPL3: it
    accepts an opaque generational service token plus an exact task-local READ
