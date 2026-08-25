@@ -1,0 +1,59 @@
+name: Manifest V2
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: Linux
+            os: ubuntu-latest
+            toolchain: nightly-2026-08-24-x86_64-unknown-linux-gnu
+            components: rustfmt
+            mrml: target/debug/mrml
+          - host: Windows GNU/LLVM
+            os: windows-latest
+            toolchain: nightly-2026-08-24-x86_64-pc-windows-gnullvm
+            components: rustfmt,rust-mingw
+            mrml: target/debug/mrml.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install exact stage-zero toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "${{ matrix.toolchain }}" --profile minimal --component "${{ matrix.components }}"
+
+      - name: Bootstrap and test mrml
+        shell: bash
+        run: |
+          cargo +"${{ matrix.toolchain }}" build --locked --bin mrml
+          cargo +"${{ matrix.toolchain }}" test --locked --bin mrml
+
+      - name: Verify Manifest V2 and separated lock graphs
+        shell: bash
+        run: |
+          "${{ matrix.mrml }}" manifest check
+          "${{ matrix.mrml }}" manifest fmt --check
+          "${{ matrix.mrml }}" manifest lock --check
+          "${{ matrix.mrml }}" audit --output structured
+
+      - name: Build representative native component without Cargo
+        shell: bash
+        run: |
+          "${{ matrix.mrml }}" build org.mrml.library.math --target native

@@ -27,6 +27,10 @@ implemented; general Store release/image/publication work is not complete.
   and 3 respectively.
 - The only remaining `Cargo.toml` and `Cargo.lock` are the clean-source
   stage-zero bootstrap for `mrml`; package-local Cargo manifests are gone.
+- `.github/workflows/manifest-v2.yml` repeats the exact stage-zero bootstrap on
+  Linux and Windows GNU/LLVM, then gates V2 check/format, lock parity, audit,
+  package/interface/migration unit tests, and a representative direct `mrml`
+  native build.
 
 ## Implemented first gate
 
