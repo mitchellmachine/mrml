@@ -11,9 +11,10 @@ the named commit and current source.
 - Branch: `main`
 - Compiler checkpoint commit: `68124775`
   (`compiler: validate conditional action returns`)
-- Remote state when recorded: the compiler checkpoint and its documentation/
-  review commits are pending publication. Unrelated unstaged OS work is not part
-  of the compiler checkpoint.
+- Remote state when recorded: `origin/main` includes the compiler checkpoint,
+  durable documentation, and review through `a7da602c`. The push was a verified
+  fast-forward containing exactly the three isolated conditional-action-return
+  commits; unrelated unstaged OS work was not included.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
