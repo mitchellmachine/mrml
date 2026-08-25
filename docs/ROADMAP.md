@@ -189,7 +189,10 @@ accounting rather than frame allocation. Fixed-capacity mapping reservations
 now consume the pool's quantitative mapping budget under separate source-object
 and target-address-space capabilities, enforce W^X/bounds/non-overlap, and block
 object or pool retirement until real mapping teardown and invalidation are
-proven. They do not edit page tables or VMM backends. Physical mapping,
+proven. A backend-neutral transaction publishes a reservation only after exact
+installation succeeds and retains it across removal failure until exact teardown
+and invalidation succeed. Deterministic protocol tests cover both boundaries;
+no x86 page-table or KVM/WHP adapter is integrated yet. Physical mapping,
 sharing, pinning, DMA, resize/COW, cache charging, VMM guest projection,
 userspace policy, and hardware evidence remain pending before this prerequisite
 is complete. The first page-

@@ -90,7 +90,11 @@ capability; W^X, object bounds, target-range overlap, and pool/child mapping
 budgets are checked before publication. These are accounting records, not page-
 table or backend mappings. Object and pool retirement fail closed while a
 reservation is live; unsafe reservation release requires prior real teardown
-and invalidation. An opt-in accounted configuration-service wrapper now commits its
+and invalidation. A backend-neutral transaction can now publish a reservation
+only after a privileged mapper confirms exact installation, and retires it only
+after confirmed removal and invalidation; either backend error leaves policy
+state unpublished or retryably live. Only a deterministic protocol backend has
+been exercised, not x86 page tables, KVM/WHP, or hardware. An opt-in accounted configuration-service wrapper now commits its
 complete fixed settings and audit state for fresh, empty, and checkpoint-
 recovered construction; live service-image composition has not adopted it. An
 opt-in accounted supervisor separately commits all fixed service/task bindings,

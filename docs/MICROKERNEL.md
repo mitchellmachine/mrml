@@ -7315,6 +7315,59 @@ media mechanism. Planned scopes recorded as `TRIGGERED` in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
 
+### Transactional mapping backend publication
+
+The mapping prerequisite is **PARTIALLY IMPLEMENTED** with a backend-neutral
+publication/removal transaction. `install_mapping` completes every capability,
+range, W^X, overlap, capacity, generation, and counter preflight before invoking
+the privileged `MemoryMappingBackend`. A policy failure never calls the backend.
+Backend success means the exact object subrange, target authority, virtual range,
+and access are installed; only then does the table publish the generational
+reservation and consume one mapping-budget unit. Backend failure is contractually
+unchanged and publishes no reservation.
+
+`remove_mapping` similarly preflights the exact live reservation, target CONTROL,
+generation successor, object/pool identity, and counter decrement before calling
+the backend. It retires the reservation only after the backend confirms exact
+removal and every required CPU, device, VMM, and translation-cache invalidation.
+Failure retains both the reservation and its mapping-budget charge for retry.
+The backend trait is unsafe because an implementation must make those native
+state guarantees; its request is capability-validated data, not authority.
+
+Deterministic tests use a stateful protocol backend to prove preflight ordering,
+exact request binding, install rollback, removal retry, and final generational
+retirement. This increment does not resolve an abstract object to frames, edit
+x86 page tables, drive KVM/WHP, invalidate real translations, or provide hosted
+or physical evidence. Those adapters remain the next integration dependency.
+
+Engineering Constitution complexity score: complexity impact `MODERATE`, TCB
+impact `LOW`, new parser `NO`, new authority model `NO`, new persistent state
+`NO`, external dependency `NO`, failure isolated `YES`, and existing-object
+reuse `YES` through the mapping table and capability model.
+
+DIGITAL-RIGHTS REVIEW: the transaction adds no identity, collection, content
+inspection, retention, correlation, remote disclosure, DRM, attestation, vendor,
+publisher, provider, verifier, AI-only, first-party, or accessibility authority.
+It exercises only owner-selected local object, target, access, and quantitative
+authority. Backend requests cannot authorize themselves.
+
+HOSTILE SECURITY REVIEW: every capability, object/target identity, mapping and
+pool generation, access bit, range, slot, capacity, counter successor, backend
+result, retry, and teardown ordering is hostile. All fallible policy work occurs
+before native mutation. Installation failure publishes nothing; removal failure
+retains the exact live record; successful native transitions are followed only
+by infallible bounded policy publication or retirement. An unsafe backend that
+violates its unchanged/exact/invalidation contract is outside the safe API and
+must receive independent implementation review.
+
+Patent review: `NOT_TRIGGERED` — preflight/native-operation/commit sequencing
+for conventional memory-map accounting is a standard transactional safety
+pattern. This adds no deployment/package mechanism, compatibility transport,
+host-share protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, or media mechanism. All planned
+`TRIGGERED` scopes in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain
+unchanged; agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

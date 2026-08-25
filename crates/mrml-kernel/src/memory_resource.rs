@@ -64,6 +64,45 @@ impl MemoryMapping {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryMappingBackendRequest {
+    mapping: MemoryMapping,
+    target: ObjectId,
+}
+
+impl MemoryMappingBackendRequest {
+    pub const fn mapping(self) -> MemoryMapping {
+        self.mapping
+    }
+    pub const fn target(self) -> ObjectId {
+        self.target
+    }
+}
+
+/// Privileged adapter for one exact native mapping implementation.
+///
+/// # Safety
+///
+/// `install` may return success only after the exact request is usable with no
+/// broader access; failure must leave no usable part of the requested mapping.
+/// `remove` may return success only after the exact mapping is absent and all
+/// required CPU, device, VMM, and translation-cache invalidation is complete.
+/// Failure must retain the mapping or fail-stop every consumer. The request is
+/// validated data and never substitutes for the capabilities checked by the
+/// policy table before either call.
+pub unsafe trait MemoryMappingBackend {
+    type Error;
+
+    fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error>;
+    fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryMappingOperationError<E> {
+    Policy(MemoryResourceError),
+    Backend(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryBackingKind {
     Anonymous,
     Shared,
@@ -224,6 +263,14 @@ struct MappingEntry {
     pages: u64,
     access: Rights,
     occupied: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PreparedMapping {
+    slot: usize,
+    entry: MappingEntry,
+    pool: MemoryPoolId,
+    next_active_mappings: u32,
 }
 
 impl MappingEntry {
@@ -520,71 +567,48 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         access: Rights,
         capabilities: &CapabilitySpace<C>,
     ) -> Result<MemoryMappingId, MemoryResourceError> {
-        let allowed_access = Rights::READ.union(Rights::WRITE).union(Rights::EXECUTE);
-        if pages == 0
-            || access.bits() == 0
-            || !allowed_access.contains(access)
-            || (access.contains(Rights::WRITE) && access.contains(Rights::EXECUTE))
-        {
-            return Err(MemoryResourceError::InvalidRights);
-        }
-        let object_entry = *self.object(object)?;
-        if capabilities.authorize(object_capability, Rights::MAP.union(access))?
-            != object_entry.authority
-        {
-            return Err(MemoryResourceError::Capability(
-                CapabilityError::PermissionDenied,
-            ));
-        }
-        let target = capabilities.authorize(target_capability, Rights::MAP)?;
-        let object_end = object_page
-            .checked_add(pages)
-            .ok_or(MemoryResourceError::Arithmetic)?;
-        if object_end > object_entry.pages {
-            return Err(MemoryResourceError::ObjectRange);
-        }
-        let virtual_end = virtual_page
-            .checked_add(pages)
-            .ok_or(MemoryResourceError::Arithmetic)?;
-        if self.mappings.iter().any(|mapping| {
-            mapping.occupied
-                && mapping.target == target
-                && ranges_overlap(
-                    virtual_page,
-                    virtual_end,
-                    mapping.virtual_page,
-                    mapping.virtual_page + mapping.pages,
-                )
-        }) {
-            return Err(MemoryResourceError::MappingOverlap);
-        }
-        let pool = *self.pool(object_entry.pool)?;
-        let used = pool
-            .child_mapping_reservations
-            .checked_add(pool.active_mappings)
-            .and_then(|value| value.checked_add(1))
-            .ok_or(MemoryResourceError::Arithmetic)?;
-        if used > pool.mapping_limit {
-            return Err(MemoryResourceError::MappingLimitExceeded);
-        }
-        let slot = self.free_mapping_slot()?;
-        let generation = self.mappings[slot].generation;
-        let id = MemoryMappingId {
-            slot: slot as u16,
-            generation,
-        };
-        self.pool_mut(object_entry.pool)?.active_mappings = pool.active_mappings + 1;
-        self.mappings[slot] = MappingEntry {
-            generation,
+        let prepared = self.prepare_mapping(
             object,
-            target,
+            object_capability,
+            target_capability,
             virtual_page,
             object_page,
             pages,
             access,
-            occupied: true,
-        };
-        Ok(id)
+            capabilities,
+        )?;
+        Ok(self.commit_mapping(prepared))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn install_mapping<B: MemoryMappingBackend, const C: usize>(
+        &mut self,
+        object: MemoryObjectId,
+        object_capability: Capability,
+        target_capability: Capability,
+        virtual_page: u64,
+        object_page: u64,
+        pages: u64,
+        access: Rights,
+        capabilities: &CapabilitySpace<C>,
+        backend: &mut B,
+    ) -> Result<MemoryMappingId, MemoryMappingOperationError<B::Error>> {
+        let prepared = self
+            .prepare_mapping(
+                object,
+                object_capability,
+                target_capability,
+                virtual_page,
+                object_page,
+                pages,
+                access,
+                capabilities,
+            )
+            .map_err(MemoryMappingOperationError::Policy)?;
+        backend
+            .install(mapping_backend_request(prepared.entry))
+            .map_err(MemoryMappingOperationError::Backend)?;
+        Ok(self.commit_mapping(prepared))
     }
 
     /// Retires one reservation only after its actual page-table/backend mapping
@@ -600,27 +624,26 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         target_capability: Capability,
         capabilities: &CapabilitySpace<C>,
     ) -> Result<(), MemoryResourceError> {
-        let entry = *self.mapping(mapping)?;
-        if capabilities.authorize(target_capability, Rights::CONTROL)? != entry.target {
-            return Err(MemoryResourceError::Capability(
-                CapabilityError::PermissionDenied,
-            ));
-        }
-        let next_generation = entry
-            .generation
-            .checked_add(1)
-            .ok_or(MemoryResourceError::GenerationExhausted)?;
-        let object = *self.object(entry.object)?;
-        let pool = *self.pool(object.pool)?;
-        let next_mappings = pool
-            .active_mappings
-            .checked_sub(1)
-            .ok_or(MemoryResourceError::Arithmetic)?;
-        self.pool_mut(object.pool)?.active_mappings = next_mappings;
-        self.mappings[mapping.slot as usize] = MappingEntry {
-            generation: next_generation,
-            ..MappingEntry::EMPTY
-        };
+        let (entry, pool, next_generation, next_mappings) =
+            self.prepare_mapping_release(mapping, target_capability, capabilities)?;
+        self.commit_mapping_release(mapping, entry, pool, next_generation, next_mappings);
+        Ok(())
+    }
+
+    pub fn remove_mapping<B: MemoryMappingBackend, const C: usize>(
+        &mut self,
+        mapping: MemoryMappingId,
+        target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+        backend: &mut B,
+    ) -> Result<(), MemoryMappingOperationError<B::Error>> {
+        let (entry, pool, next_generation, next_mappings) = self
+            .prepare_mapping_release(mapping, target_capability, capabilities)
+            .map_err(MemoryMappingOperationError::Policy)?;
+        backend
+            .remove(mapping_backend_request(entry))
+            .map_err(MemoryMappingOperationError::Backend)?;
+        self.commit_mapping_release(mapping, entry, pool, next_generation, next_mappings);
         Ok(())
     }
 
@@ -780,6 +803,135 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         Ok(self.object(object)?.pool)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_mapping<const C: usize>(
+        &self,
+        object: MemoryObjectId,
+        object_capability: Capability,
+        target_capability: Capability,
+        virtual_page: u64,
+        object_page: u64,
+        pages: u64,
+        access: Rights,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<PreparedMapping, MemoryResourceError> {
+        let allowed_access = Rights::READ.union(Rights::WRITE).union(Rights::EXECUTE);
+        if pages == 0
+            || access.bits() == 0
+            || !allowed_access.contains(access)
+            || (access.contains(Rights::WRITE) && access.contains(Rights::EXECUTE))
+        {
+            return Err(MemoryResourceError::InvalidRights);
+        }
+        let object_entry = *self.object(object)?;
+        if capabilities.authorize(object_capability, Rights::MAP.union(access))?
+            != object_entry.authority
+        {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let target = capabilities.authorize(target_capability, Rights::MAP)?;
+        let object_end = object_page
+            .checked_add(pages)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        if object_end > object_entry.pages {
+            return Err(MemoryResourceError::ObjectRange);
+        }
+        let virtual_end = virtual_page
+            .checked_add(pages)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        if self.mappings.iter().any(|mapping| {
+            mapping.occupied
+                && mapping.target == target
+                && ranges_overlap(
+                    virtual_page,
+                    virtual_end,
+                    mapping.virtual_page,
+                    mapping.virtual_page + mapping.pages,
+                )
+        }) {
+            return Err(MemoryResourceError::MappingOverlap);
+        }
+        let pool = *self.pool(object_entry.pool)?;
+        let next_active_mappings = pool
+            .active_mappings
+            .checked_add(1)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        let used = pool
+            .child_mapping_reservations
+            .checked_add(next_active_mappings)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        if used > pool.mapping_limit {
+            return Err(MemoryResourceError::MappingLimitExceeded);
+        }
+        let slot = self.free_mapping_slot()?;
+        Ok(PreparedMapping {
+            slot,
+            entry: MappingEntry {
+                generation: self.mappings[slot].generation,
+                object,
+                target,
+                virtual_page,
+                object_page,
+                pages,
+                access,
+                occupied: true,
+            },
+            pool: object_entry.pool,
+            next_active_mappings,
+        })
+    }
+
+    fn commit_mapping(&mut self, prepared: PreparedMapping) -> MemoryMappingId {
+        self.pools[prepared.pool.slot as usize].active_mappings = prepared.next_active_mappings;
+        self.mappings[prepared.slot] = prepared.entry;
+        MemoryMappingId {
+            slot: prepared.slot as u16,
+            generation: prepared.entry.generation,
+        }
+    }
+
+    fn prepare_mapping_release<const C: usize>(
+        &self,
+        mapping: MemoryMappingId,
+        target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(MappingEntry, MemoryPoolId, u32, u32), MemoryResourceError> {
+        let entry = *self.mapping(mapping)?;
+        if capabilities.authorize(target_capability, Rights::CONTROL)? != entry.target {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let next_generation = entry
+            .generation
+            .checked_add(1)
+            .ok_or(MemoryResourceError::GenerationExhausted)?;
+        let object = *self.object(entry.object)?;
+        let pool = *self.pool(object.pool)?;
+        let next_mappings = pool
+            .active_mappings
+            .checked_sub(1)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        Ok((entry, object.pool, next_generation, next_mappings))
+    }
+
+    fn commit_mapping_release(
+        &mut self,
+        mapping: MemoryMappingId,
+        _entry: MappingEntry,
+        pool: MemoryPoolId,
+        next_generation: u32,
+        next_mappings: u32,
+    ) {
+        self.pools[pool.slot as usize].active_mappings = next_mappings;
+        self.mappings[mapping.slot as usize] = MappingEntry {
+            generation: next_generation,
+            ..MappingEntry::EMPTY
+        };
+    }
+
     fn pool(&self, id: MemoryPoolId) -> Result<&PoolEntry, MemoryResourceError> {
         self.pools
             .get(id.slot as usize)
@@ -864,6 +1016,19 @@ const fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> b
     a_start < b_end && b_start < a_end
 }
 
+const fn mapping_backend_request(entry: MappingEntry) -> MemoryMappingBackendRequest {
+    MemoryMappingBackendRequest {
+        mapping: MemoryMapping {
+            object: entry.object,
+            virtual_page: entry.virtual_page,
+            object_page: entry.object_page,
+            pages: entry.pages,
+            access: entry.access,
+        },
+        target: entry.target,
+    }
+}
+
 fn validate_pool_shape(
     limit_pages: u64,
     mapping_limit: u32,
@@ -899,6 +1064,45 @@ fn authority(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingMappingBackend {
+        installed: Option<MemoryMappingBackendRequest>,
+        install_calls: u32,
+        remove_calls: u32,
+        fail_install: bool,
+        fail_remove: bool,
+    }
+
+    // SAFETY: the test backend publishes only the exact copied request on
+    // success, leaves no request on install failure, and retains the exact
+    // request on remove failure.
+    unsafe impl MemoryMappingBackend for RecordingMappingBackend {
+        type Error = &'static str;
+
+        fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            self.install_calls += 1;
+            if self.fail_install {
+                return Err("install");
+            }
+            if self.installed.replace(request).is_some() {
+                return Err("occupied");
+            }
+            Ok(())
+        }
+
+        fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+            self.remove_calls += 1;
+            if self.fail_remove {
+                return Err("remove");
+            }
+            if self.installed != Some(request) {
+                return Err("substitution");
+            }
+            self.installed = None;
+            Ok(())
+        }
+    }
 
     const ROOT_RIGHTS: Rights = Rights::ALLOCATE
         .union(Rights::DELEGATE)
@@ -1340,6 +1544,136 @@ mod tests {
         assert_eq!(
             (summary.pools(), summary.objects(), summary.pages()),
             (2, 1, 1)
+        );
+    }
+
+    #[test]
+    fn backend_mapping_publication_and_retirement_are_transactional() {
+        let mut table = MemoryPoolTable::<1, 1, 1>::new(13).unwrap();
+        let mut caps = CapabilitySpace::<5>::new();
+        let (root, root_cap) = table.create_root(2, 1, 0, ROOT_RIGHTS, &mut caps).unwrap();
+        let (object, object_cap) = table
+            .allocate_object(
+                root,
+                root_cap,
+                2,
+                MemoryBackingKind::Anonymous,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let target = caps
+            .insert(
+                ObjectId(99),
+                Rights::MAP.union(Rights::CONTROL).union(Rights::INSPECT),
+            )
+            .unwrap();
+        let mut backend = RecordingMappingBackend {
+            fail_install: true,
+            ..RecordingMappingBackend::default()
+        };
+        assert_eq!(
+            table.install_mapping(
+                object,
+                object_cap,
+                target,
+                0x200,
+                0,
+                2,
+                Rights::WRITE.union(Rights::EXECUTE),
+                &caps,
+                &mut backend,
+            ),
+            Err(MemoryMappingOperationError::Policy(
+                MemoryResourceError::InvalidRights
+            ))
+        );
+        assert_eq!(backend.install_calls, 0);
+        assert_eq!(
+            table.install_mapping(
+                object,
+                object_cap,
+                target,
+                0x200,
+                0,
+                2,
+                Rights::READ,
+                &caps,
+                &mut backend,
+            ),
+            Err(MemoryMappingOperationError::Backend("install"))
+        );
+        assert_eq!(backend.install_calls, 1);
+        assert_eq!(backend.installed, None);
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+
+        backend.fail_install = false;
+        let mapping = table
+            .install_mapping(
+                object,
+                object_cap,
+                target,
+                0x200,
+                0,
+                2,
+                Rights::READ,
+                &caps,
+                &mut backend,
+            )
+            .unwrap();
+        let request = backend.installed.unwrap();
+        assert_eq!(request.target(), ObjectId(99));
+        assert_eq!(request.mapping().object(), object);
+        assert_eq!(request.mapping().virtual_page(), 0x200);
+        assert_eq!(request.mapping().pages(), 2);
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            1
+        );
+
+        backend.fail_remove = true;
+        assert_eq!(
+            table.remove_mapping(mapping, target, &caps, &mut backend),
+            Err(MemoryMappingOperationError::Backend("remove"))
+        );
+        assert_eq!(backend.installed, Some(request));
+        assert_eq!(
+            table.mapping_info(mapping, target, &caps).unwrap(),
+            request.mapping()
+        );
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            1
+        );
+
+        backend.fail_remove = false;
+        table
+            .remove_mapping(mapping, target, &caps, &mut backend)
+            .unwrap();
+        assert_eq!(backend.installed, None);
+        assert_eq!(backend.remove_calls, 2);
+        assert_eq!(
+            table.mapping_info(mapping, target, &caps),
+            Err(MemoryResourceError::InvalidMapping)
+        );
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
         );
     }
 }
