@@ -299,6 +299,27 @@ checked on a Windows host without changing bootloader source behavior:
 No UEFI runtime, Secure Boot, TPM, bare-metal, or physical-hardware execution
 was exercised by this path-only move.
 
+The signed service-image move from `crates/mrml-service-image` to
+`system/service-image` was checked on a Windows host without changing service
+source behavior:
+
+- `cargo metadata --no-deps --format-version 1`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-service-image -- --check`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm check -p mrml-service-image --target x86_64-unknown-uefi`
+  and the corresponding strict `clippy` command with `--no-deps -- -D warnings`
+  — PASS;
+- `.\target\debug\mrml.exe build mrml-service-image` — FAIL closed with
+  `NoMatchingComponents { target: WINDOWS }` because the service image is
+  declared only for the `MRML_NATIVE` target;
+- `git grep -n 'crates/mrml-service-image/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact service-image path matches.
+
+The UEFI target compilation above is compile-time evidence only. No signed
+service runtime, WHP/KVM, UEFI firmware, bare-metal, or physical-hardware
+execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

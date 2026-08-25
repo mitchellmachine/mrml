@@ -441,7 +441,7 @@ lifecycle revocation.
 ## 2026-08-23 — signed surviving-peer fault notification
 
 MRML source: `system/kernel/src/task_runtime.rs`,
-`system/bootloader/src/main.rs`, `crates/mrml-service-image/src/main.rs`,
+`system/bootloader/src/main.rs`, `system/service-image/src/main.rs`,
 and `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 Retirement now publishes an existing typed death event and wakes blocked peers
@@ -580,7 +580,7 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler access classification.
 ## 2026-08-23 — signed buffered CPL3 service IPC
 
 MRML source: `system/bootloader/src/main.rs`,
-`crates/mrml-service-image/src/main.rs`,
+`system/service-image/src/main.rs`,
 `system/kernel/src/arch/x86_64/context.rs`, and hosted launchers.
 
 The signed service probe now performs bounded user-buffer validation, ordinary
@@ -1393,7 +1393,7 @@ Patent review: `NOT_TRIGGERED` — conventional isolated page lifecycle.
 ## 2026-08-24 — kernel-image service-resource composition
 
 MRML source: `system/bootloader/src/main.rs`,
-`crates/mrml-service-image/src/main.rs`, and
+`system/service-image/src/main.rs`, and
 `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 The kernel conventionally provisions a task-local attenuated capability, binds
@@ -1409,7 +1409,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized resource lifecycle.
 
 MRML source: `system/kernel/src/shared_memory.rs`,
 `system/bootloader/src/main.rs`, and
-`crates/mrml-service-image/src/main.rs`.
+`system/service-image/src/main.rs`.
 
 The hosted service conventionally uses separate exact read and read/write
 capabilities for one non-executable bound page. Binding selection allows only a
@@ -1423,7 +1423,7 @@ Patent review: `NOT_TRIGGERED` — conventional least-authority separation.
 
 MRML source: `system/kernel/src/syscall.rs`,
 `system/bootloader/src/main.rs`, and
-`crates/mrml-service-image/src/main.rs`.
+`system/service-image/src/main.rs`.
 
 The kernel conventionally combines an exact task-local READ capability with an
 opaque generational service token and returns only a bounded detail-free
@@ -1436,7 +1436,7 @@ lookup and bounded status enumeration.
 ## 2026-08-24 — canonical userspace supervision query envelope
 
 MRML source: `crates/mrml-config/src/lib.rs`,
-`crates/mrml-service-image/src/main.rs`,
+`system/service-image/src/main.rs`,
 `system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
 
 The client conventionally sends a fixed query record with one separately
@@ -1478,7 +1478,7 @@ mapping.
 ## 2026-08-24 — capability-authorized hosted restart request
 
 MRML source: `crates/mrml-config/src/lib.rs`,
-`crates/mrml-service-image/src/main.rs`,
+`system/service-image/src/main.rs`,
 `system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
 
 An isolated manager conventionally transfers an attenuated control capability

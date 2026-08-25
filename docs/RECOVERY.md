@@ -151,7 +151,7 @@ explicitly and downgrade the status rather than guessing.
   planned unless exact code and focused evidence establish otherwise; CPU age
   never substitutes for affectedness evaluation.
 - Boot image and loader: `system/bootloader/`, `crates/mrml-uefi/`
-- CPL3 service image: `crates/mrml-service-image/`
+- CPL3 service image: `system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`
 - Linux KVM: `crates/mrml-kvm/`, `crates/mrml-kvm-run/`
 - Windows WHP: `crates/mrml-whp/`, `crates/mrml-whp-run/`
