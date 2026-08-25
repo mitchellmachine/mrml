@@ -496,6 +496,20 @@ Patent review: `TRIGGERED` remains in force for the existing tensor/GPU
 mechanisms; see [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md). The
 relocation itself introduced no new mechanism.
 
+The model-library move from `crates/mrml-model` to `packages/libraries/model`
+was checked on a Windows host without changing model source behavior:
+
+- workspace metadata, formatting, strict package Clippy, `mrml doctor`, and
+  `mrml audit` — PASS;
+- pinned-nightly `cargo test -p mrml-model` — PASS, 7 tests; the unchanged
+  tensor dependency emitted its existing warnings;
+- `.\target\debug\mrml.exe build mrml-model` — FAIL at the relocated tensor
+  dependency's already-recorded MSVC/no_std build-script unwind limitation;
+- stale exact `crates/mrml-model/` path scan — PASS.
+
+No Linux runtime, model corpus, CUDA/GPU execution, or physical-hardware
+evidence was established by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

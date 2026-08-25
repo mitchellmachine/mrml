@@ -25,7 +25,7 @@ hipblas = ["runtime", "mrml-model/hipblas"]
 sycl = ["runtime", "mrml-model/sycl"]
 
 [dependencies]
-mrml-model = { path = "../mrml-model", default-features = false, optional = true }
+mrml-model = { path = "../../packages/libraries/model", default-features = false, optional = true }
 mrml-terminal-style = { path = "../../packages/libraries/terminal-style", default-features = false, optional = true }
 mrml-tools = { path = "../../tools/host", default-features = false, optional = true }
 mrml-error = { path = "../../packages/libraries/error", optional = true }
