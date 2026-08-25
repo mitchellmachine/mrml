@@ -11,23 +11,24 @@ use mrml_kernel::{
     ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IsolationAdmissionTable, IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode,
-    IsolationPlacement, ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
-    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
-    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId,
+    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
+    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
+    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
+    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
-    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
-    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, prepare_isolation_service_route,
+    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -1495,17 +1496,24 @@ fn application_main() -> Result<()> {
     };
     let isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
         Some(
-            admission
-                .prepare(
-                    IsolationLaunchRequest::new(
-                        ObjectId(0x434f_4e46_4947),
-                        1,
-                        TotalMicrovmClass::MicrovmEligible,
-                        IsolationPlacement::Microvm,
-                    )
-                    .map_err(|error| anyhow!("KVM isolation request failed: {:?}", error))?,
+            prepare_isolation_service_route(
+                admission,
+                IsolationServiceSpec::new(
+                    ObjectId(0x434f_4e46_4947),
+                    ObjectId(0x434f_4e46_4947_0001),
+                    1,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified configuration provider"))?
+                        .artifact()
+                        .version(),
+                    1,
+                    TotalMicrovmClass::MicrovmEligible,
+                    IsolationPlacement::Microvm,
                 )
-                .map_err(|error| anyhow!("KVM isolation preparation failed: {:?}", error))?,
+                .map_err(|error| anyhow!("KVM isolation request failed: {:?}", error))?,
+            )
+            .map_err(|error| anyhow!("KVM isolation preparation failed: {:?}", error))?,
         )
     } else {
         None
@@ -1697,12 +1705,12 @@ fn application_main() -> Result<()> {
         )
         .map_err(|_| anyhow!("failed to publish KVM service entry"))?;
     }
-    if let (Some(admission), Some(prepared)) =
-        (isolation_admission.as_mut(), isolation_preparation.as_ref())
+    if let (Some(admission), Some(prepared)) = (isolation_admission.as_mut(), isolation_preparation)
     {
-        admission
-            .commit(prepared, IsolationLaunchEvidence::MicrovmReady)
-            .map_err(|error| anyhow!("KVM isolation commit failed: {:?}", error))?;
+        guest = prepared
+            .commit(admission, guest)
+            .map_err(|(_, error, _)| anyhow!("KVM isolation commit failed: {:?}", error))?
+            .into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
         }

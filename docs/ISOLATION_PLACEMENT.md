@@ -59,8 +59,15 @@ domain, interface, interface generation, provider generation, policy generation,
 class, and placement until matching endpoint commit. Construction failure can
 consume it into the typed unavailable ledger; commit failure returns both the
 transaction and endpoint so native teardown precedes admission cancellation.
-This is the common fail-closed boundary intended for the KVM and WHP launchers;
-runner integration remains **PLANNED**.
+Both KVM and WHP configuration-service probes now use this transaction around
+their real guest and projected-service construction. The prepared transaction
+exists before either backend creates the guest and binds provider generation to
+the verified service artifact version; only the fully attached guest is
+committed as the endpoint, after which execution receives it back unchanged.
+Both runners build and their focused host tests pass. Fresh signed execution did
+not complete on either backend with the available retained artifacts, so live
+transaction execution parity remains **PLANNED** and no new hosted-execution
+claim is made.
 
 ## One policy, several placements
 

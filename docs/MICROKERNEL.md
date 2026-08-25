@@ -74,8 +74,16 @@ bound placement and returns the endpoint with the same immutable interface and
 provider generations. Failure can enter the unavailable ledger, while commit
 failure returns the endpoint and transaction so backend revocation completes
 before the admission slot is cancelled. One focused test is included in the
-489-test Windows and Arch Linux kernel suites. The KVM/WHP runners have not yet
-been migrated to this transaction, so this is simulation evidence only.
+489-test Windows and Arch Linux kernel suites. The KVM and WHP service probes now
+prepare this exact transaction before constructing their native guest, commit
+the verified service artifact version as its provider generation, commit the
+fully attached guest as its endpoint, and recover the unchanged endpoint for
+execution. Release builds and focused runner tests pass on both hosts (KVM 8,
+WHP 7). A fresh WHP run using the older retained artifact reached its known
+receiver-stage mismatch; the newer corrected artifact did not complete within
+the bounded run. KVM with that corrected artifact stopped at configuration
+response stage 2. Therefore this records build/unit integration, not fresh live
+transaction execution parity, a new guest-service result, or physical evidence.
 
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1
