@@ -7,4 +7,5 @@ license.workspace = true
 description = "Dependency-free JSON parser and serializer for MRML"
 
 [dependencies]
-mrml-runtime = { path = "../mrml-runtime" }
+mrml-runtime = { path = "../../../crates/mrml-runtime" }
+

@@ -54,11 +54,12 @@ semantic path move or Cargo-removal step.
 
 ## Next gate
 
-The first five leaves have moved: dependency-free `mrml-math` to
+The first six leaves have moved: dependency-free `mrml-math` to
 `packages/libraries/math`, and `mrml-percent-encoding` to
 `packages/libraries/percent-encoding`, and `mrml-tokenizer` to
 `packages/libraries/tokenizer`, `mrml-zstd` to `packages/libraries/zstd`, and
-`mrml-zim` to `packages/libraries/zim`.
+`mrml-zim` to `packages/libraries/zim`, and `mrml-json` to
+`packages/libraries/json`.
 Their Cargo bridges remain. Extend moves one
 dependency-light leaf at a time after checking every path reference and the v3
 graph/audit. Do not remove Cargo bridge entries until Windows/Linux build

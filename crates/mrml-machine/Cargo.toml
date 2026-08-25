@@ -20,7 +20,7 @@ sycl = ["mrml-agent/sycl"]
 
 [dependencies]
 mrml-agent = { path = "../mrml-agent", default-features = false, features = ["runtime"] }
-mrml-json = { path = "../mrml-json" }
+mrml-json = { path = "../../packages/libraries/json" }
 mrml-tools = { path = "../mrml-tools" }
 mrml-error = { path = "../mrml-error" }
 mrml-runtime = { path = "../mrml-runtime" }

@@ -139,6 +139,9 @@ behavior.
 `mrml-zim` is the fifth migrated leaf; its Wikipedia edge now resolves to
 `packages/libraries/zim` without changing archive semantics.
 
+`mrml-json` is the sixth migrated leaf; its six consumer edges now resolve to
+`packages/libraries/json` without changing parser/writer semantics.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

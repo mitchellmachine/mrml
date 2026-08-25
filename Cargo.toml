@@ -35,7 +35,7 @@ members = [
     "crates/mrml-kvm-run",
     "crates/mrml-whp",
     "crates/mrml-whp-run",
-    "crates/mrml-json",
+    "packages/libraries/json",
     "packages/libraries/zim",
     "packages/libraries/zstd",
     "crates/mrml-wikipedia",

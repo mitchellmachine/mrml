@@ -3,7 +3,8 @@
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
 classified and reachable through the Cargo bridge. `mrml-math` and
-`mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, and `mrml-zim` have moved under
+`mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`, and
+`mrml-json` have moved under
 `packages/libraries/`, and stage-zero
 lives at `tools/mrml`; other source remains under `crates/`. No claim is made
 that semantic moves or Cargo bridge removal are complete.
@@ -34,6 +35,8 @@ that semantic moves or Cargo bridge removal are complete.
   source reference updated; its eight decoder tests and Cargo bridge remain.
 - `mrml-zim` moved with its runtime dependency and Wikipedia consumer updated;
   its four archive/parser tests and Cargo bridge remain.
+- `mrml-json` moved with its runtime dependency and six consumers updated; its
+  four parser/writer tests and Cargo bridge remain.
 
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
@@ -57,7 +60,7 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the five moved
+- Every component still has Cargo dependency metadata; all except the six moved
   libraries and stage-zero remain beneath `crates/`. The root Cargo workspace
   still contains every component so the bridge resolves today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

@@ -53,6 +53,10 @@ The fifth semantic move relocates `mrml-zim` and updates its runtime and
 Wikipedia paths without changing archive behavior. **Result: NOT_TRIGGERED.**
 This is repository organization, not a new archive mechanism.
 
+The sixth semantic move relocates `mrml-json` and updates its runtime and six
+consumer paths without changing parser behavior. **Result: NOT_TRIGGERED.** This
+is repository organization, not a new serialization mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
