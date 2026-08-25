@@ -2946,6 +2946,7 @@ pub fn solve_rigid_trait_goal_with_generics(
         generic_implementations,
         clauses,
         None,
+        None,
         goal,
         &mut stack,
         0,
@@ -3098,6 +3099,17 @@ fn classify_coinductive_cycle(
     }
 }
 
+fn classify_optional_coinductive_cycle(
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
+    stack: &[Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    cycle_start: usize,
+    depth: usize,
+) -> TraitProofSolution {
+    coinductive_traits.map_or(TraitProofSolution::Cycle, |coinductive_traits| {
+        classify_coinductive_cycle(coinductive_traits, stack, cycle_start, depth)
+    })
+}
+
 pub fn solve_rigid_trait_goal_with_projection_environment(
     implementations: &TraitImplementationDatabase,
     generic_implementations: &GenericTraitImplementationDatabase,
@@ -3119,6 +3131,36 @@ pub fn solve_rigid_trait_goal_with_projection_environment(
         generic_implementations,
         clauses,
         Some(environment),
+        None,
+        goal,
+        &mut stack,
+        0,
+    )
+}
+
+pub fn solve_rigid_trait_goal_with_coinductive_projection_environment(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    let environment = TraitProjectionEnvironment {
+        exact_implementations: implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    solve_rigid_trait_goal_with_generics_inner(
+        implementations,
+        generic_implementations,
+        clauses,
+        Some(environment),
+        Some(coinductive_traits),
         goal,
         &mut stack,
         0,
@@ -3164,6 +3206,7 @@ fn solve_rigid_trait_goal_with_generics_inner(
     generic_implementations: &GenericTraitImplementationDatabase,
     clauses: &TraitWhereClauseDatabase,
     environment: Option<TraitProjectionEnvironment<'_>>,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     goal: ImplementedTraitGoal,
     stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
     depth: usize,
@@ -3181,8 +3224,14 @@ fn solve_rigid_trait_goal_with_generics_inner(
             return Ok(TraitProofSolution::Ambiguous);
         }
         (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
-            if stack[..depth].contains(&Some(goal)) {
-                return Ok(TraitProofSolution::Cycle);
+            if let Some(cycle_start) = stack[..depth].iter().position(|entry| *entry == Some(goal))
+            {
+                return Ok(classify_optional_coinductive_cycle(
+                    coinductive_traits,
+                    stack,
+                    cycle_start,
+                    depth,
+                ));
             }
             if depth >= MAX_TRAIT_PROOF_DEPTH {
                 return Ok(TraitProofSolution::Overflow);
@@ -3193,6 +3242,7 @@ fn solve_rigid_trait_goal_with_generics_inner(
                 generic_implementations,
                 clauses,
                 environment,
+                coinductive_traits,
                 answer.instantiated,
                 stack,
                 depth + 1,
@@ -3202,8 +3252,13 @@ fn solve_rigid_trait_goal_with_generics_inner(
         }
         (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::NoSolution) => {}
     }
-    if stack[..depth].contains(&Some(goal)) {
-        return Ok(TraitProofSolution::Cycle);
+    if let Some(cycle_start) = stack[..depth].iter().position(|entry| *entry == Some(goal)) {
+        return Ok(classify_optional_coinductive_cycle(
+            coinductive_traits,
+            stack,
+            cycle_start,
+            depth,
+        ));
     }
     if depth >= MAX_TRAIT_PROOF_DEPTH {
         return Ok(TraitProofSolution::Overflow);
@@ -3215,6 +3270,7 @@ fn solve_rigid_trait_goal_with_generics_inner(
             generic_implementations,
             clauses,
             environment,
+            coinductive_traits,
             answer.instantiated,
             stack,
             depth + 1,
@@ -3231,6 +3287,7 @@ fn solve_rigid_generic_premises(
     generic_implementations: &GenericTraitImplementationDatabase,
     clauses: &TraitWhereClauseDatabase,
     environment: Option<TraitProjectionEnvironment<'_>>,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     instantiated: InstantiatedTraitWhereClause,
     stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
     depth: usize,
@@ -3248,6 +3305,7 @@ fn solve_rigid_generic_premises(
             generic_implementations,
             clauses,
             environment,
+            coinductive_traits,
             premise,
             stack,
             depth,
@@ -4495,6 +4553,7 @@ impl TraitProjectionEnvironment<'_> {
                 self.generic_implementations,
                 self.clauses,
                 Some(self),
+                None,
                 answer.instantiated,
                 proof_stack,
                 proof_depth + 1,
@@ -5268,6 +5327,7 @@ pub fn solve_for_all_projection_bearing_trait_goal(
         generic_implementations,
         clauses,
         Some(environment),
+        None,
         goal,
         &mut stack,
         0,
@@ -5518,6 +5578,7 @@ fn solve_rigid_trait_predicate(
             generic_implementations,
             clauses,
             Some(environment),
+            None,
             goal,
             &mut proof_stack,
             0,
@@ -10488,6 +10549,110 @@ mod tests {
         assert_eq!(
             full.insert(TraitId::new(3_000)),
             Err(TraitGoalError::TooManyCoinductiveTraits)
+        );
+    }
+
+    #[test]
+    fn rigid_coinduction_preserves_projection_premise_checks() {
+        let parameter = TraitGenericParameterId::new(0);
+        let recursive_trait = TraitId::new(283);
+        let projected_trait = TraitId::new(284);
+        let associated = TraitAssociatedTypeId::new(3);
+        let mut recursive = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                recursive_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        recursive
+            .push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        projected_trait,
+                        BoundTraitGoalType::Parameter(parameter),
+                    ),
+                    associated,
+                ),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(20)),
+            )
+            .unwrap();
+        recursive
+            .push_premise(BoundImplementedTraitGoal::new(
+                recursive_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let projected = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                projected_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let projected_id = GenericTraitImplementationId::new(6);
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(5), recursive)
+            .unwrap();
+        generic.insert(projected_id, projected).unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new(
+                    projected_id,
+                    associated,
+                    BoundTraitGoalType::Concrete(TraitTypeId::new(20)),
+                ),
+            )
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            recursive_trait,
+            TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::new(2),
+                TraitPlaceholderId::new(0),
+            )),
+        );
+        let mut coinductive = CoinductiveTraitDatabase::EMPTY;
+        coinductive.insert(recursive_trait).unwrap();
+
+        assert_eq!(
+            solve_rigid_trait_goal_with_projection_environment(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                goal,
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+        assert_eq!(
+            solve_rigid_trait_goal_with_coinductive_projection_environment(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                &coinductive,
+                goal,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+        assert_eq!(
+            solve_rigid_trait_goal_with_coinductive_projection_environment(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                &coinductive,
+                goal,
+            ),
+            Ok(TraitProofSolution::NoSolution)
         );
     }
 

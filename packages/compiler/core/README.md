@@ -4259,8 +4259,18 @@ coinductive trait identities. A repeated proof path is accepted only when every
 goal in the cycle is classified; ordinary and mixed cycles remain `Cycle`.
 Duplicate and capacity admission fail explicitly. Windows gnullvm and native
 Arch Linux WSL each pass 543 library tests, one component probe, 10 conformance
-tests, and 335 replacement tests: 889 compiler tests per host. Inference,
-projection-environment, and source-level coinduction remain unsupported.
+tests, and 335 replacement tests: 889 compiler tests per host. Projection-
+premise, inference, and source-level coinduction remain unsupported at this
+milestone.
+
+The coinductive projection-premise entry point threads the same explicit trait
+classification through rigid proof with associated values. Projection equality
+is normalized and checked before a classified trait cycle can succeed; missing
+values remain `NoSolution`, unclassified paths remain `Cycle`, and projection-
+normalization cycles are not coinductive. Windows gnullvm and native Arch Linux
+WSL each pass 544 library tests, one component probe, 10 conformance tests, and
+335 replacement tests: 890 compiler tests per host. Inference and source-level
+coinduction remain unsupported.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

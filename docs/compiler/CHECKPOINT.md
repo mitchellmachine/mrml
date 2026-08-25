@@ -1069,8 +1069,18 @@ every goal from the cycle entry onward is classified; unclassified and mixed
 inductive/coinductive cycles retain the existing `Cycle` result. Duplicate and
 capacity admission fail explicitly. Windows gnullvm and native Arch Linux WSL
 each pass 543 library tests, one component-interface probe, 10 conformance tests,
-and 335 replacement tests: 889 compiler tests per host. Inference, projection-
-environment, and source-level coinduction remain unsupported.
+and 335 replacement tests: 889 compiler tests per host. Projection-premise,
+inference, and source-level coinduction remain unsupported at this milestone.
+
+The coinductive projection-premise milestone threads the same explicit trait
+classification through rigid proof with an associated-value environment. Every
+projection equality is still normalized and compared before a classified trait
+cycle can succeed. Missing values remain `NoSolution`, unclassified paths remain
+`Cycle`, and projection-normalization cycles are not treated as coinductive.
+Windows gnullvm and native Arch Linux WSL each pass 544 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 890
+compiler tests per host. Inference and source-level coinduction remain
+unsupported.
 
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
