@@ -40,8 +40,11 @@ Three new persistent deltas are documented before implementation:
   The configuration package now admits both forms and supplies a concrete
   configuration-specific adapter with focused fail-closed tests. The native
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and
-  exact retryable address-space cleanup; the VMM form remains unwired. A complete
-  representative dual-placement service, owner-setting persistence, VM construction, resource
+  exact retryable address-space cleanup. The VMM form now has a backend-neutral
+  owner that retains one prepared guest behind an exact generational endpoint
+  until confirmed teardown, including retry after teardown uncertainty; concrete
+  KVM/WHP factories remain unwired. A complete representative dual-placement
+  service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.

@@ -124,6 +124,148 @@ pub trait MicrovmConfigurationServiceLauncher {
     fn revoke_microvm(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error>;
 }
 
+/// Constructs and destroys one backend-native prepared guest. The guest remains
+/// private to the launcher; callers receive only an exact generational endpoint
+/// token after construction has completed.
+pub trait ConfigurationMicrovmFactory {
+    type Guest;
+    type Error;
+
+    fn prepare(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Guest, (IsolationUnavailableReason, Self::Error)>;
+
+    fn destroy(&mut self, guest: &mut Self::Guest) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigurationMicrovmEndpoint {
+    launch_generation: u64,
+    domain: ObjectId,
+    interface: ObjectId,
+    interface_generation: u32,
+    provider_generation: u64,
+    policy_generation: u64,
+}
+
+impl ConfigurationMicrovmEndpoint {
+    pub const fn launch_generation(self) -> u64 {
+        self.launch_generation
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.domain
+    }
+
+    pub const fn interface(self) -> ObjectId {
+        self.interface
+    }
+
+    pub const fn interface_generation(self) -> u32 {
+        self.interface_generation
+    }
+
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreparedMicrovmConfigurationError<E> {
+    AlreadyRunning,
+    WrongEndpoint,
+    GenerationExhausted,
+    Backend(E),
+}
+
+/// Owns one backend-prepared configuration microVM from successful construction
+/// through confirmed destruction. Failed destruction retains both the guest and
+/// endpoint for an exact retry; there is no native-service fallback.
+pub struct PreparedMicrovmConfigurationLauncher<Factory: ConfigurationMicrovmFactory> {
+    factory: Factory,
+    active: Option<(ConfigurationMicrovmEndpoint, Factory::Guest)>,
+    next_generation: u64,
+}
+
+impl<Factory: ConfigurationMicrovmFactory> PreparedMicrovmConfigurationLauncher<Factory> {
+    pub const fn new(factory: Factory) -> Self {
+        Self {
+            factory,
+            active: None,
+            next_generation: 1,
+        }
+    }
+
+    pub fn factory(&self) -> &Factory {
+        &self.factory
+    }
+
+    pub fn factory_mut(&mut self) -> &mut Factory {
+        &mut self.factory
+    }
+
+    pub fn active(&self) -> Option<ConfigurationMicrovmEndpoint> {
+        self.active.as_ref().map(|(endpoint, _)| *endpoint)
+    }
+}
+
+impl<Factory: ConfigurationMicrovmFactory> MicrovmConfigurationServiceLauncher
+    for PreparedMicrovmConfigurationLauncher<Factory>
+{
+    type Endpoint = ConfigurationMicrovmEndpoint;
+    type Error = PreparedMicrovmConfigurationError<Factory::Error>;
+
+    fn launch_microvm(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, (IsolationUnavailableReason, Self::Error)> {
+        if self.active.is_some() {
+            return Err((
+                IsolationUnavailableReason::VmmResource,
+                PreparedMicrovmConfigurationError::AlreadyRunning,
+            ));
+        }
+        let next_generation = self.next_generation.checked_add(1).ok_or((
+            IsolationUnavailableReason::VmmResource,
+            PreparedMicrovmConfigurationError::GenerationExhausted,
+        ))?;
+        let guest = self.factory.prepare(spec).map_err(|(reason, error)| {
+            (reason, PreparedMicrovmConfigurationError::Backend(error))
+        })?;
+        let endpoint = ConfigurationMicrovmEndpoint {
+            launch_generation: self.next_generation,
+            domain: spec.domain(),
+            interface: spec.interface(),
+            interface_generation: spec.interface_generation(),
+            provider_generation: spec.provider_generation(),
+            policy_generation: spec.policy_generation(),
+        };
+        self.active = Some((endpoint, guest));
+        self.next_generation = next_generation;
+        Ok(endpoint)
+    }
+
+    fn revoke_microvm(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+        let (active, guest) = self
+            .active
+            .as_mut()
+            .ok_or(PreparedMicrovmConfigurationError::WrongEndpoint)?;
+        if active != endpoint {
+            return Err(PreparedMicrovmConfigurationError::WrongEndpoint);
+        }
+        self.factory
+            .destroy(guest)
+            .map_err(PreparedMicrovmConfigurationError::Backend)?;
+        self.active = None;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConfigurationServiceEndpoint<Native, Microvm> {
     Native(Native),
@@ -3517,6 +3659,34 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct PreparedGuestFactoryProbe {
+        preparations: usize,
+        destructions: usize,
+        fail_first_destruction: bool,
+    }
+
+    impl ConfigurationMicrovmFactory for PreparedGuestFactoryProbe {
+        type Guest = IsolationServiceSpec;
+        type Error = ();
+
+        fn prepare(
+            &mut self,
+            spec: IsolationServiceSpec,
+        ) -> Result<Self::Guest, (IsolationUnavailableReason, Self::Error)> {
+            self.preparations += 1;
+            Ok(spec)
+        }
+
+        fn destroy(&mut self, _guest: &mut Self::Guest) -> Result<(), Self::Error> {
+            self.destructions += 1;
+            if self.fail_first_destruction && self.destructions == 1 {
+                return Err(());
+            }
+            Ok(())
+        }
+    }
+
     fn configuration_service_spec(placement: IsolationPlacement) -> IsolationServiceSpec {
         IsolationServiceSpec::new(
             ObjectId(0x434f_4e46_4947),
@@ -3602,6 +3772,63 @@ mod tests {
         assert_eq!((native_probe.launches, microvm_probe.launches), (0, 1));
         assert_eq!(admission.unavailable_domains().count(), 1);
         assert_eq!(admission.total_microvm_report().native_fallback, 0);
+    }
+
+    #[test]
+    fn prepared_microvm_retains_exact_guest_until_confirmed_teardown() {
+        let microvm = PreparedMicrovmConfigurationLauncher::new(PreparedGuestFactoryProbe {
+            fail_first_destruction: true,
+            ..PreparedGuestFactoryProbe::default()
+        });
+        let mut backend =
+            ConfigurationPlacementBackend::new(NativePlacementProbe::default(), microvm);
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 5).unwrap();
+        let routed = route_isolation_service(
+            &mut admission,
+            &mut backend,
+            configuration_service_spec(IsolationPlacement::Microvm),
+        )
+        .unwrap();
+        let endpoint = match routed.endpoint() {
+            ConfigurationServiceEndpoint::Microvm(endpoint) => *endpoint,
+            ConfigurationServiceEndpoint::Native(_) => panic!("wrong placement"),
+        };
+        assert_eq!(endpoint.launch_generation(), 1);
+        assert_eq!(endpoint.domain(), ObjectId(0x434f_4e46_4947));
+        assert_eq!(endpoint.interface(), routed.interface());
+        assert_eq!(endpoint.interface_generation(), 1);
+        assert_eq!(endpoint.provider_generation(), 11);
+        assert_eq!(endpoint.policy_generation(), 5);
+
+        let mut wrong = endpoint;
+        wrong.launch_generation += 1;
+        assert_eq!(
+            backend.revoke(&ConfigurationServiceEndpoint::Microvm(wrong)),
+            Err(ConfigurationPlacementError::Microvm(
+                PreparedMicrovmConfigurationError::WrongEndpoint
+            ))
+        );
+        assert_eq!(backend.microvm.factory().destructions, 0);
+        assert_eq!(
+            backend.revoke(routed.endpoint()),
+            Err(ConfigurationPlacementError::Microvm(
+                PreparedMicrovmConfigurationError::Backend(())
+            ))
+        );
+        assert_eq!(backend.microvm.active(), Some(endpoint));
+        backend.revoke(routed.endpoint()).unwrap();
+        assert_eq!(backend.microvm.active(), None);
+        assert_eq!(backend.microvm.factory().destructions, 2);
+        assert_eq!(backend.native.launches, 0);
+
+        let replacement = backend
+            .microvm
+            .launch_microvm(configuration_service_spec(IsolationPlacement::Microvm))
+            .unwrap();
+        assert_eq!(replacement.launch_generation(), 2);
+        assert_ne!(replacement, endpoint);
+        assert_eq!(backend.microvm.factory().preparations, 2);
     }
 
     #[test]

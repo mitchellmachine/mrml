@@ -49,8 +49,13 @@ and `ServiceId` as one kernel-owned transition, and returns a binding-preserving
 endpoint only after the dedicated runtime starts it. Revocation retires the task
 and consumes its exact cleanup ticket only after address-space erasure. Erasure
 uncertainty retains the endpoint and ticket for exact retry. The microVM launcher
-is not yet wired to VMM construction, so the dual-placement milestone remains
-**PARTIALLY IMPLEMENTED** rather than complete.
+now has a backend-neutral owner around one actual prepared guest: successful
+construction publishes only an opaque generational endpoint bound to the exact
+domain, interface, provider, and policy generations; confirmed destruction
+retires it; uncertain destruction retains the guest and endpoint for exact
+retry. Forged or stale endpoint tokens never reach backend teardown. Concrete
+KVM and WHP factories are not yet wired to this owner, so the dual-placement
+milestone remains **PARTIALLY IMPLEMENTED** rather than complete.
 
 The kernel routing API now also exposes a one-use prepared service transaction
 for VMM launchers whose construction spans multiple backend operations. The
