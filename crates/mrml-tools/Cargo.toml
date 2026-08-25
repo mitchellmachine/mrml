@@ -30,4 +30,4 @@ mrml-http = { path = "../mrml-http", optional = true }
 mrml-windows = { path = "../../packages/libraries/windows", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-mrml-linux = { path = "../mrml-linux", optional = true }
+mrml-linux = { path = "../../packages/libraries/linux", optional = true }

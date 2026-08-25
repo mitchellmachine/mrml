@@ -69,6 +69,10 @@ The ninth semantic move relocates `mrml-windows` and updates its six consumer
 paths without changing platform behavior. **Result: NOT_TRIGGERED.** This is
 repository organization, not a new Windows mechanism.
 
+The tenth semantic move relocates `mrml-linux` and updates its five consumer
+paths without changing platform behavior. **Result: NOT_TRIGGERED.** This is
+repository organization, not a new Linux or Unix mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

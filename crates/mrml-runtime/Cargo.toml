@@ -10,4 +10,4 @@ description = "MRML-owned no_std runtime containers and platform memory"
 mrml-windows = { path = "../../packages/libraries/windows" }
 
 [target.'cfg(unix)'.dependencies]
-mrml-linux = { path = "../mrml-linux" }
+mrml-linux = { path = "../../packages/libraries/linux" }

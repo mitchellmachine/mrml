@@ -16,7 +16,7 @@ default = []
 nvidia = ["dep:mrml-linux", "dep:mrml-windows"]
 
 [target.'cfg(unix)'.dependencies]
-mrml-linux = { path = "../mrml-linux", optional = true }
+mrml-linux = { path = "../../packages/libraries/linux", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 mrml-windows = { path = "../../packages/libraries/windows", optional = true }

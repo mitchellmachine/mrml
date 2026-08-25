@@ -45,6 +45,9 @@ that semantic moves or Cargo bridge removal are complete.
 - `mrml-windows` moved with all six consumer paths updated; its allocation-free
   Windows primitives, native-link declarations, and Cargo bridge remain
   unchanged.
+- `mrml-linux` moved with all five consumer paths updated; its allocation-free
+  Linux/Unix primitives, native-link declaration, and Cargo bridge remain
+  unchanged. Linux execution evidence remains outstanding.
 
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality

@@ -12,4 +12,4 @@ mrml-runtime = { path = "../mrml-runtime" }
 mrml-windows = { path = "../../packages/libraries/windows" }
 
 [target.'cfg(unix)'.dependencies]
-mrml-linux = { path = "../mrml-linux" }
+mrml-linux = { path = "../../packages/libraries/linux" }

@@ -162,6 +162,10 @@ sibling semantic-package reference without changing codec behavior.
 `mrml-windows` is the ninth migrated library component; its six consumers now
 resolve to the semantic package without changing Windows primitive behavior.
 
+`mrml-linux` is the tenth migrated library component; its five consumers now
+resolve to the semantic package without changing Linux/Unix primitive behavior.
+This Windows-host move does not establish Linux execution evidence.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

@@ -30,7 +30,7 @@ members = [
     "crates/mrml-tools",
     "packages/libraries/percent-encoding",
     "packages/libraries/windows",
-    "crates/mrml-linux",
+    "packages/libraries/linux",
     "crates/mrml-kvm",
     "crates/mrml-kvm-run",
     "crates/mrml-whp",
