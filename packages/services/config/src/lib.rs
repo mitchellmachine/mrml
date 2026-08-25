@@ -17,14 +17,14 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
-    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
-    IsolationServiceSpec, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
-    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
-    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
-    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
+    prepare_isolation_service_route, route_isolation_service, Capability, CapabilityError,
+    CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
+    IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, Message, ObjectId, PreparedIsolationServiceRoute, Priority, RestartPolicy,
+    Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
+    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    TaskRuntimeError, PAGE_SIZE,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -448,13 +448,13 @@ pub struct SupervisedNativeConfigurationLauncher<
 }
 
 impl<
-    E,
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+        E,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     pub const fn new(
         substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
@@ -487,13 +487,13 @@ impl<
 }
 
 impl<
-    E: ServiceAddressSpaceEraser,
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> NativeConfigurationServiceLauncher
+        E: ServiceAddressSpaceEraser,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > NativeConfigurationServiceLauncher
     for SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     type Endpoint = NativeConfigurationEndpoint;
@@ -1473,13 +1473,13 @@ pub struct StableConfigurationRecoveryValidator<
 }
 
 impl<
-    'a,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
+        'a,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1547,13 +1547,13 @@ impl<
 // table and builds unpublished in-memory configuration/policy values. It
 // retains no storage handle or table reference and performs no mutation.
 unsafe impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> AuthorityRecoveryValidator<GRANTS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > AuthorityRecoveryValidator<GRANTS>
     for StableConfigurationRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     type Output = RecoveredStableConfiguration<SETTINGS, AUDIT>;
@@ -1701,14 +1701,14 @@ pub struct StableServiceRecoveryValidator<
 }
 
 impl<
-    'a,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    const SERVICES: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+        'a,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     pub const fn new(
         configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
@@ -1727,14 +1727,14 @@ impl<
 // only planned against immutable supervisor state; no lifecycle mutation occurs
 // until a committed-authority wrapper later consumes the output.
 unsafe impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    const SERVICES: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> AuthorityRecoveryValidator<GRANTS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > AuthorityRecoveryValidator<GRANTS>
     for StableServiceRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     type Output = PreparedRecoveredService<SETTINGS, AUDIT>;
@@ -2688,12 +2688,12 @@ pub struct AccountedPolicyServiceSubstrate<
 }
 
 impl<
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
@@ -4275,17 +4275,17 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_kernel::{TotalMicrovmClass, route_isolation_service};
+    use mrml_kernel::{route_isolation_service, TotalMicrovmClass};
     use mrml_storage::{
-        AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
+        authority_checkpoint_digest, encode_authority_checkpoint,
+        recover_validate_and_commit_stable_authorities, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
         BlockServiceError, BlockVolume, BootRecoveryAdmission, CowMetadataImage, CowMetadataWrite,
         CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
         OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
         StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
-        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
-        recover_validate_and_commit_stable_authorities,
+        VolumeId, AUTHORITY_RECOVERY_STATE_BYTES,
     };
 
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
@@ -6639,25 +6639,23 @@ mod tests {
             .unwrap();
             let mut denied_file_scratch = [0; STABLE_BLOCK_BYTES];
             let mut denied_export = [0; 512];
-            assert!(
-                prepare_block_stable_configuration(
-                    &configuration,
-                    &capabilities,
-                    root,
-                    &current,
-                    &storage_authority,
-                    file,
-                    stable_principal(),
-                    denied_next,
-                    denied_metadata,
-                    MetadataPointer::new(5, 1).unwrap(),
-                    &[],
-                    &mut denied_export,
-                    &mut denied_volume,
-                    &mut denied_file_scratch,
-                )
-                .is_err()
-            );
+            assert!(prepare_block_stable_configuration(
+                &configuration,
+                &capabilities,
+                root,
+                &current,
+                &storage_authority,
+                file,
+                stable_principal(),
+                denied_next,
+                denied_metadata,
+                MetadataPointer::new(5, 1).unwrap(),
+                &[],
+                &mut denied_export,
+                &mut denied_volume,
+                &mut denied_file_scratch,
+            )
+            .is_err());
         }
         assert_eq!(backend.writes, 0);
 
@@ -6803,11 +6801,9 @@ mod tests {
                 )
                 .unwrap();
             drop(boot_store);
-            assert!(
-                supervisor
-                    .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
-                    .is_ok()
-            );
+            assert!(supervisor
+                .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
+                .is_ok());
             let recovered = prepared_service
                 .commit(authorities, &mut supervisor)
                 .unwrap();
@@ -7854,16 +7850,14 @@ mod tests {
             .admit_service(microvm_required),
             Err(ConfigError::SchemaViolation)
         );
-        assert!(
-            IsolationServiceBounds::new(
-                IsolationPlacement::NativeService,
-                IsolationPlacement::Microvm,
-                IsolationPlacement::Microvm,
-                true,
-                true,
-            )
-            .is_err()
-        );
+        assert!(IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .is_err());
     }
 
     #[test]

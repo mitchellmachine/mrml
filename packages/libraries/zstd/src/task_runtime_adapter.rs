@@ -216,8 +216,12 @@ impl<'a, E, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
     }
 }
 
-impl<E: ServiceAddressSpaceEraser, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
-    IsolationServiceBackend for ZstdNativeServiceBackend<'_, E, TASKS, CAPS, SERVICES>
+impl<
+        E: ServiceAddressSpaceEraser,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+    > IsolationServiceBackend for ZstdNativeServiceBackend<'_, E, TASKS, CAPS, SERVICES>
 {
     type Endpoint = ZstdNativeServiceEndpoint;
     type Error = ZstdNativeServiceError<E::Error>;
@@ -402,13 +406,13 @@ pub struct ZstdTaskRuntimeAdapter<
 }
 
 impl<
-    'a,
-    const TASKS: usize,
-    const CAPS: usize,
-    const MAPPINGS: usize,
-    const BINDINGS: usize,
-    B: IpcSharedBufferBackend,
-> ZstdTaskRuntimeAdapter<'a, TASKS, CAPS, MAPPINGS, BINDINGS, B>
+        'a,
+        const TASKS: usize,
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    > ZstdTaskRuntimeAdapter<'a, TASKS, CAPS, MAPPINGS, BINDINGS, B>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -474,12 +478,12 @@ impl<
 }
 
 unsafe impl<
-    const TASKS: usize,
-    const CAPS: usize,
-    const MAPPINGS: usize,
-    const BINDINGS: usize,
-    B: IpcSharedBufferBackend,
-> ZstdServiceSyscalls for ZstdTaskRuntimeAdapter<'_, TASKS, CAPS, MAPPINGS, BINDINGS, B>
+        const TASKS: usize,
+        const CAPS: usize,
+        const MAPPINGS: usize,
+        const BINDINGS: usize,
+        B: IpcSharedBufferBackend,
+    > ZstdServiceSyscalls for ZstdTaskRuntimeAdapter<'_, TASKS, CAPS, MAPPINGS, BINDINGS, B>
 {
     type Error = ZstdTaskRuntimeAdapterError<B::Error>;
 
@@ -645,14 +649,14 @@ mod tests {
     use super::*;
     use crate::{ZstdServiceLoop, ZstdServiceLoopError};
     use mrml_interface_zstd_v3::{
-        BorrowedReadView, BorrowedWriteView, decode_decompress_response, encode_decompress_request,
+        decode_decompress_response, encode_decompress_request, BorrowedReadView, BorrowedWriteView,
     };
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
-        ArtifactKind, GuestRegion, HostResourceHandle, IsolationAdmissionTable, IsolationMode,
-        IsolationServiceSpec, PhysAddr, PreparedComponentServiceLaunch, Priority, SharedAccess,
-        SharedEndpoint, VmTable, launch_prepared_component_service,
-        prepare_isolation_service_route, route_isolation_service,
+        launch_prepared_component_service, prepare_isolation_service_route,
+        route_isolation_service, ArtifactKind, GuestRegion, HostResourceHandle,
+        IsolationAdmissionTable, IsolationMode, IsolationServiceSpec, PhysAddr,
+        PreparedComponentServiceLaunch, Priority, SharedAccess, SharedEndpoint, VmTable,
     };
 
     const PAGE_BYTES: usize = 4096;
