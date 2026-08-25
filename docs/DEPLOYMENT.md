@@ -22,6 +22,13 @@ identities, empty/oversized graphs, duplicates, and noncanonical order. It does
 not yet resolve, admit, activate, retain, roll back, export, or garbage-collect a
 generation.
 
+The same foundation now also performs bounded exact package resolution: every
+requirement contains one package identity, one version, and one artifact digest,
+and resolution succeeds only for one identical candidate. It rejects missing,
+ambiguous, duplicate/noncanonical, empty, and over-capacity inputs and never
+chooses a range, nearest version, replacement package, or policy-ranked result.
+This is not yet transitive package-graph construction or generation admission.
+
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and
 > SystemGeneration model, not independent mechanisms.

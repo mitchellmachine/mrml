@@ -44,6 +44,12 @@ lookup and fail-closed malformed, zero, duplicate, noncanonical, empty, and
 over-capacity inputs. Package resolution, admission, activation, persistence,
 rollback, and all component-interface milestones remain **PLANNED**.
 
+The prerequisite now includes bounded exact package resolution from canonical
+identity/version/digest requirements to identical immutable candidates. It has
+no version ranges, optimization, backtracking, network/catalog lookup, provider
+substitution, activation, or transitive graph construction; those broader
+package and component mechanisms remain **PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

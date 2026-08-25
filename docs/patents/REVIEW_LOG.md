@@ -3388,3 +3388,34 @@ independently serviced component subsystem remain `TRIGGERED`. Each later
 selected mechanism still requires its own claim and worldwide-family review.
 This technical screen establishes neither clearance nor infringement and does
 not replace independent human dual review.
+
+# 2026-08-25 — Exact identity/version/digest package resolution
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The resolver accepts a
+nonempty bounded canonical list of exact package identity, version, and artifact
+digest requirements, finds one byte-identical candidate for each, rejects zero,
+missing, duplicate, ambiguous, noncanonical, and over-capacity inputs, and
+constructs the already reviewed immutable generation record. It has no version
+ranges, relation operators, constraint desugaring, lowest/highest/preferred
+selection, iterative solving, optimization, replacement packages, vulnerability
+database, policy table, manifest rewriting, network fetch, installation,
+activation, or servicing.
+
+Claim-focused searching reviewed adjacent families including
+[US 12,277,411 B2](https://patents.google.com/patent/US12277411B2), whose claims
+require analyzing and desugaring version relations and determining a lowest
+compatible version; [US 9,558,017 B2](https://patents.google.com/patent/US9558017B2),
+whose claims require declarative constraints, vulnerability data, iterative
+subset optimization, and manifest rewriting; and
+[US 8,060,871 B2](https://patents.google.com/patent/US8060871B2), whose claims
+require an installation service, local dependency table filtered by global
+policy, potential solution sets, and activation. MRML deliberately implements
+none of those limitations. Family discovery was worldwide; the material results
+identified these US rights, whose publications and claims were cross-checked
+through [USPTO Patent Public Search](https://ppubs.uspto.gov/basic/). Non-overlap,
+not assumed legal status, is the design basis.
+
+Transitive graph solving, interface/provider resolution, installation,
+activation, update, and servicing remain `TRIGGERED` and require separate
+mechanism-specific review. This technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.
