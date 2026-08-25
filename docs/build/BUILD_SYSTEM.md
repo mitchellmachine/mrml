@@ -120,8 +120,9 @@ Manifest V2's bounded `[isolation]` table records default, minimum, and
 supported placements as specified in
 [../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md). It is policy metadata,
 not a compile edge or capability grant. Typed parsing and focused fail-closed
-tests are **IMPLEMENTED**; owner-policy resolution and runtime placement remain
-**PLANNED**.
+tests are **IMPLEMENTED**. Host-model owner/Total policy resolution and linear
+generation-bound service launch preparation are **PARTIALLY IMPLEMENTED**;
+runtime activation and capability-authorized placement remain **PLANNED**.
 
 Artifact filenames follow
 [../packages/ARTIFACT_EXTENSIONS.md](../packages/ARTIFACT_EXTENSIONS.md): `.mrp`

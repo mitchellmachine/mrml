@@ -61,16 +61,18 @@ reuse, so stale IDs cannot reach a replacement. This remains host policy-model
 evidence, not capability-authorized runtime loading or execution.
 
 **PARTIALLY IMPLEMENTED placement-composition prerequisite:** the build tool can
-now compose one isolated-service binding, one exact immutable
-`SystemGeneration`, and one already resolved native-service or microVM placement
-into a `GenerationBoundServicePlacement`. Composition rechecks the exact
-consumer and provider package versions/digests in that generation, retains the
-interface generation/fingerprint and generational endpoint, rejects stale
-binding IDs and in-process targets, and refuses a Total-MicroVM exception rather
-than converting it into a native launch. Names and metadata remain identity
-data; the endpoint remains the authority-bearing runtime reference. This is a
-host policy object only: it does not select a provider or placement, grant a
-capability, load code, construct a VM, or transport an interface invocation.
+now prepare one exact immutable `SystemGeneration`, resolved isolated-service
+provider, native-service or microVM placement, and both admitted load plans
+before any endpoint exists. Consuming publication accepts only a backend-
+returned opaque endpoint and then creates the first generational
+`InterfaceBinding`; package/form/artifact mismatch, Total-MicroVM exceptions,
+and table exhaustion publish no new endpoint reference. Existing entries remain
+unchanged, and publication failure returns the complete prepared launch and
+endpoint for backend teardown. Windows and Arch Linux build-tool suites pass 76
+tests. Names and
+metadata remain identity data; only the published endpoint is the runtime
+reference. This is a host policy object only: it does not grant a capability,
+invoke a backend, construct a VM, or transport an interface invocation.
 
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains

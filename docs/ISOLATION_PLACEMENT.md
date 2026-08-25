@@ -169,15 +169,19 @@ wsl.exe -d archlinux -- ./target/mrml-native/linux/release/mrml-kvm-run target/t
 ```
 
 The build tool now has a bounded composition prerequisite between exact package
-resolution and kernel launch routing. A `GenerationBoundServicePlacement`
-rechecks that an isolated-service `InterfaceBinding` retains the exact consumer
-and provider records in one immutable `SystemGeneration`, then binds its
-generational endpoint to an already resolved native-service or microVM
-placement. Stale bindings, package-generation substitution, in-process targets,
-and Total-mode exceptions fail closed. This does not select the provider or
-placement, grant capabilities, create either runtime, or carry interface
-traffic, so the fully resolved and launched dual-placement service remains
-**PLANNED** despite the hosted transport prerequisite below.
+resolution and kernel launch routing. A linear
+`PreparedGenerationBoundServiceLaunch` first retains the exact resolved
+consumer/provider records, immutable `SystemGeneration`, native-service or
+microVM placement, and both admitted load plans without an endpoint. Only after
+the selected backend returns an opaque endpoint can consuming publication create
+the generational `InterfaceBinding`. Package/form/artifact mismatch, Total-mode
+exceptions, and binding-table exhaustion publish no new endpoint reference;
+publication failure returns the complete prepared launch and opaque endpoint
+for backend teardown, while existing entries remain unchanged. This is host
+control-plane ordering, not a kernel runtime handoff: it does not grant
+capabilities, invoke a backend, create
+either runtime, or carry interface traffic, so the fully resolved and launched
+dual-placement service remains **PLANNED**.
 
 > Control planes establish authority; data planes should take the shortest safe
 > path.

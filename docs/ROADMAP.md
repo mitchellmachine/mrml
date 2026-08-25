@@ -192,15 +192,19 @@ service, host-resistant, physical, or general resolver evidence.
 A complementary hosted native-service path creates the Zstd provider as a
 distinct-address-space supervised `TaskRuntime` task, opens the unchanged ABI
 data plane only after exact route commit, completes the same bounded request,
-and retires the
-task only after address-space erasure. Cleanup uncertainty retains the exact
+and retires the task only after address-space erasure. Cleanup uncertainty
+retains the exact
 endpoint for retry, and strict Total admission rejects native placement before
 supervisor launch. This is native-service lifecycle/model evidence on Windows
 and Arch Linux, not standalone MRML-image execution or physical isolation.
-A backend-neutral control-plane admission now binds those two immutable load
-plans to the exact generation/interface placement and rejects either package
-generation mismatch before backend launch. WHP/KVM attachment and execution
-remain **PLANNED**.
+A backend-neutral linear control-plane admission now binds those two immutable
+load plans to the exact generation/interface placement before an endpoint
+exists. Only a subsequently returned backend endpoint can be published into the
+generational binding table. Package/form/artifact mismatch, Total exceptions,
+or table exhaustion publish no new endpoint reference and preserve existing
+bindings; publication failure returns the complete launch and endpoint for
+teardown. Windows and Arch Linux build-tool suites pass 76 tests. Kernel runtime
+handoff and general WHP/KVM invocation from this plan remain **PLANNED**.
 The kernel-side prepared launch handoff now carries the same two digests plus
 the exact interface fingerprint/generation and provider generation while
 retaining the uncommitted fail-closed isolation route. Backend verification of

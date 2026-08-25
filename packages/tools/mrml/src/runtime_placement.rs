@@ -3,6 +3,7 @@ use crate::binding::{BindingError, InterfaceBindingId, InterfaceBindingTable, Pr
 use crate::generation::{SystemGeneration, SystemPackage};
 use crate::isolation::{EffectivePlacement, IsolationPlacement, PlacementSource};
 use crate::loader::ImmutableLoadPlan;
+use crate::resolver::{ProviderForm, ResolvedInterfaceProvider};
 
 /// One exact, immutable handoff from generation-bound interface resolution to
 /// an already selected isolated-service placement. Package and interface names
@@ -157,6 +158,162 @@ impl GenerationBoundServiceLaunch {
 pub enum ServiceLaunchAdmissionError {
     ConsumerArtifactMismatch,
     ProviderArtifactMismatch,
+}
+
+/// Linear pre-launch control-plane result. Resolution, policy, and both
+/// immutable artifacts are fixed before any backend is allowed to construct an
+/// endpoint. Only `publish` can turn a backend-returned opaque endpoint into a
+/// live generation-safe interface binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedGenerationBoundServiceLaunch {
+    system_generation: u64,
+    resolved: ResolvedInterfaceProvider,
+    placement: IsolationPlacement,
+    source: PlacementSource,
+    consumer: ImmutableLoadPlan,
+    provider: ImmutableLoadPlan,
+}
+
+impl PreparedGenerationBoundServiceLaunch {
+    pub fn prepare(
+        system: &SystemGeneration,
+        resolved: ResolvedInterfaceProvider,
+        effective: EffectivePlacement,
+        consumer: ImmutableLoadPlan,
+        provider: ImmutableLoadPlan,
+    ) -> Result<Self, PreparedServiceLaunchError> {
+        if effective.source() == PlacementSource::TotalMicrovmException {
+            return Err(PreparedServiceLaunchError::TotalMicrovmException);
+        }
+        if !matches!(
+            effective.placement(),
+            IsolationPlacement::NativeService | IsolationPlacement::Microvm
+        ) {
+            return Err(PreparedServiceLaunchError::UnsupportedServicePlacement);
+        }
+        if resolved.form() != ProviderForm::IsolatedService {
+            return Err(PreparedServiceLaunchError::ProviderFormMismatch);
+        }
+        if system.package(resolved.consumer().package_id()) != Some(resolved.consumer()) {
+            return Err(PreparedServiceLaunchError::ConsumerGenerationMismatch);
+        }
+        if system.package(resolved.provider().package_id()) != Some(resolved.provider()) {
+            return Err(PreparedServiceLaunchError::ProviderGenerationMismatch);
+        }
+        if consumer.package() != resolved.consumer() {
+            return Err(PreparedServiceLaunchError::ConsumerArtifactMismatch);
+        }
+        if provider.package() != resolved.provider() {
+            return Err(PreparedServiceLaunchError::ProviderArtifactMismatch);
+        }
+        Ok(Self {
+            system_generation: system.generation(),
+            resolved,
+            placement: effective.placement(),
+            source: effective.source(),
+            consumer,
+            provider,
+        })
+    }
+
+    pub const fn system_generation(&self) -> u64 {
+        self.system_generation
+    }
+
+    pub const fn placement(&self) -> IsolationPlacement {
+        self.placement
+    }
+
+    pub fn resolved(&self) -> &ResolvedInterfaceProvider {
+        &self.resolved
+    }
+
+    pub fn consumer(&self) -> &ImmutableLoadPlan {
+        &self.consumer
+    }
+
+    pub fn provider(&self) -> &ImmutableLoadPlan {
+        &self.provider
+    }
+
+    /// Publishes the first live endpoint reference only after the selected
+    /// backend has returned it. All fallible generation/artifact checks happen
+    /// in `prepare`; publication can fail only at the bounded binding table.
+    pub fn publish<const N: usize>(
+        self,
+        bindings: &mut InterfaceBindingTable<N>,
+        endpoint: AbiOpaqueHandle,
+    ) -> Result<(InterfaceBindingId, GenerationBoundServiceLaunch), PreparedServicePublicationError>
+    {
+        let binding_id =
+            match bindings.bind(&self.resolved, ProviderTarget::IsolatedService { endpoint }) {
+                Ok(binding_id) => binding_id,
+                Err(error) => {
+                    return Err(PreparedServicePublicationError {
+                        prepared: self,
+                        endpoint,
+                        error,
+                    });
+                }
+            };
+        let placement = GenerationBoundServicePlacement {
+            system_generation: self.system_generation,
+            binding_id,
+            consumer: self.resolved.consumer().clone(),
+            provider: self.resolved.provider().clone(),
+            interface: self.resolved.interface().clone(),
+            fingerprint: self.resolved.fingerprint(),
+            endpoint,
+            placement: self.placement,
+            source: self.source,
+        };
+        Ok((
+            binding_id,
+            GenerationBoundServiceLaunch {
+                placement,
+                consumer: self.consumer,
+                provider: self.provider,
+            },
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PreparedServiceLaunchError {
+    TotalMicrovmException,
+    UnsupportedServicePlacement,
+    ProviderFormMismatch,
+    ConsumerGenerationMismatch,
+    ProviderGenerationMismatch,
+    ConsumerArtifactMismatch,
+    ProviderArtifactMismatch,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedServicePublicationError {
+    prepared: PreparedGenerationBoundServiceLaunch,
+    endpoint: AbiOpaqueHandle,
+    error: BindingError,
+}
+
+impl PreparedServicePublicationError {
+    pub const fn endpoint(&self) -> AbiOpaqueHandle {
+        self.endpoint
+    }
+
+    pub const fn error(&self) -> BindingError {
+        self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        PreparedGenerationBoundServiceLaunch,
+        AbiOpaqueHandle,
+        BindingError,
+    ) {
+        (self.prepared, self.endpoint, self.error)
+    }
 }
 
 #[cfg(test)]
@@ -399,5 +556,85 @@ mod tests {
             ),
             Err(ServiceLaunchAdmissionError::ProviderArtifactMismatch)
         );
+    }
+
+    #[test]
+    fn resolved_launch_publishes_endpoint_only_after_all_prelaunch_checks() {
+        let system = system(15, 0x2f);
+        let effective = dual_service_policy()
+            .resolve(PlacementRequest::PackageDefault)
+            .unwrap();
+        let prepared = PreparedGenerationBoundServiceLaunch::prepare(
+            &system,
+            resolved(&system, ProviderForm::IsolatedService),
+            effective,
+            load_plan(system.package("org.mrml.zim").unwrap().clone()),
+            load_plan(system.package("org.mrml.zstd").unwrap().clone()),
+        )
+        .unwrap();
+        assert_eq!(prepared.system_generation(), 108);
+        assert_eq!(prepared.placement(), IsolationPlacement::NativeService);
+        assert_eq!(prepared.resolved().provider().version(), 15);
+
+        let mut bindings = InterfaceBindingTable::<1>::new().unwrap();
+        assert_eq!(bindings.bindings().count(), 0);
+        let endpoint = AbiOpaqueHandle::new(7, 11).unwrap();
+        let (binding_id, launch) = prepared.publish(&mut bindings, endpoint).unwrap();
+        assert_eq!(bindings.bindings().count(), 1);
+        assert_eq!(
+            bindings.get(binding_id).unwrap().target(),
+            ProviderTarget::IsolatedService { endpoint }
+        );
+        assert_eq!(launch.placement().binding_id(), binding_id);
+        assert_eq!(launch.placement().endpoint(), endpoint);
+        assert_eq!(launch.provider().package().artifact_digest(), &[0x2f; 64]);
+    }
+
+    #[test]
+    fn failed_prelaunch_checks_publish_no_binding_or_endpoint() {
+        let system = system(15, 0x2f);
+        let effective = dual_service_policy()
+            .resolve(PlacementRequest::TotalMicrovm)
+            .unwrap();
+        let mut bindings = InterfaceBindingTable::<1>::new().unwrap();
+        assert_eq!(
+            PreparedGenerationBoundServiceLaunch::prepare(
+                &system,
+                resolved(&system, ProviderForm::IsolatedService),
+                effective,
+                load_plan(system.package("org.mrml.zim").unwrap().clone()),
+                load_plan(package("org.mrml.zstd", 16, 0x30)),
+            ),
+            Err(PreparedServiceLaunchError::ProviderArtifactMismatch)
+        );
+        assert_eq!(bindings.bindings().count(), 0);
+
+        let prepared = PreparedGenerationBoundServiceLaunch::prepare(
+            &system,
+            resolved(&system, ProviderForm::IsolatedService),
+            effective,
+            load_plan(system.package("org.mrml.zim").unwrap().clone()),
+            load_plan(system.package("org.mrml.zstd").unwrap().clone()),
+        )
+        .unwrap();
+        let occupied = bindings
+            .bind(
+                &resolved(&system, ProviderForm::IsolatedService),
+                ProviderTarget::IsolatedService {
+                    endpoint: AbiOpaqueHandle::new(3, 1).unwrap(),
+                },
+            )
+            .unwrap();
+        let endpoint = AbiOpaqueHandle::new(7, 11).unwrap();
+        let failure = prepared.publish(&mut bindings, endpoint).unwrap_err();
+        assert_eq!(failure.endpoint(), endpoint);
+        assert_eq!(failure.error(), BindingError::CapacityExhausted);
+        let (prepared, returned_endpoint, error) = failure.into_parts();
+        assert_eq!(prepared.system_generation(), 108);
+        assert_eq!(prepared.resolved().provider().version(), 15);
+        assert_eq!(returned_endpoint, endpoint);
+        assert_eq!(error, BindingError::CapacityExhausted);
+        assert_eq!(bindings.bindings().count(), 1);
+        assert_eq!(bindings.get(occupied).unwrap().provider().version(), 15);
     }
 }
