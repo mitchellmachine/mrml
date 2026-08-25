@@ -362,6 +362,14 @@ while reusable key material remains. This is a local tooling invariant, not
 evidence of independent custody, durable deletion, reproducibility, rotation,
 recovery, Secure Boot enrollment, or production security.
 
+**IMPLEMENTED as bounded comparison infrastructure:** canonical build receipts
+omit ambient host identity and paths while binding declared tool versions,
+target/profile, a canonical source archive, dependency lockfile, unsigned boot
+artifacts, and selected configuration by length and SHA3-512. Strict parsing
+and byte-exact comparison detect changed recorded inputs or outputs. The receipt
+is untrusted evidence until independently produced and reviewed; it grants no
+authority and cannot prove that a builder was clean or its declarations honest.
+
 Do not claim verified boot, rollback resistance, DMA isolation, device reset,
 confidential computing, side-channel resistance, formal noninterference,
 physical hardware validation, or production security until the corresponding

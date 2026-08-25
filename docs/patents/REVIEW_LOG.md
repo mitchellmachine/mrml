@@ -2682,3 +2682,14 @@ mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Canonical release build receipts
+
+**Result: NOT_TRIGGERED.** The release signer conventionally serializes bounded
+declared tool metadata plus file lengths and SHA3-512 digests in a fixed textual
+order, and compares independently produced receipts byte-for-byte after strict
+canonical parsing. It omits ambient host identity and grants no authority. This
+adds no optimization, compatibility protocol, host-share mechanism,
+accessibility or browser-semantic interface, JavaScript/WebAssembly runtime, AI
+mechanism, media mechanism, or other patent-candidate mechanism. This agent
+review does not replace the required independent human dual review.

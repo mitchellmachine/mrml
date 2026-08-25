@@ -1440,6 +1440,14 @@ can count as trusted consent.
    host-filesystem ordering does not establish reproducible builds, independent
    custody, durable key erasure, atomic multi-file publication, Secure Boot
    enrollment, recovery, rotation, or physical evidence.
+   A canonical build-receipt command now binds a declared compiler/Cargo
+   version, target/profile, canonical source archive, dependency lockfile,
+   unsigned kernel/service/loader, and selected configuration by exact length
+   and SHA3-512 digest; a second command requires strict canonical parsing and
+   byte equality. Tests cover deterministic path-independent encoding,
+   noncanonical rejection, and changed-artifact disagreement. No independent
+   second build has yet been performed, so this is comparison infrastructure,
+   not a reproducible-build result.
 5. Bind inspectable system-generation metadata to the exact kernel, compositor,
    services, configuration root, and compiler/runtime artifacts.
 6. Implement owner-selectable trust-root enrollment, replacement, owner-build and

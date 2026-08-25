@@ -1992,6 +1992,29 @@ Failed exclusive writes make a best-effort removal of their partial output.
 This is host-filesystem tooling behavior, not proof of independent key custody,
 durable erasure, atomic multi-file publication, or reproducible builds.
 
+Before signing, two independent builders can emit and compare a canonical,
+path-independent build inventory:
+
+```text
+mrml-sign build-receipt first.receipt source.tar "rustc 1.x (...)" \
+  "cargo 1.x (...)" x86_64-unknown-uefi release Cargo.lock \
+  kernel.efi service.efi loader.efi configuration.bin
+mrml-sign compare-build-receipts first.receipt second.receipt
+```
+
+The source archive must itself be created canonically by the release process;
+the receipt does not canonicalize a source tree. The receipt records no time,
+username, hostname, build path, or general environment. It contains exact
+declared Rust/Cargo version strings and target/profile plus byte lengths and
+SHA3-512 digests for the source archive, lockfile, unsigned kernel, service,
+loader, and selected configuration. Comparison accepts only the canonical
+field order, lowercase fixed-width digests, canonical decimal lengths, bounded
+printable metadata, a final newline, and byte-for-byte equality. A receipt can
+be signed as a policy artifact after independent comparison. Matching receipts
+prove equality only for these recorded declarations and bytes; they do not
+prove clean builders, truthful version strings, complete source correspondence,
+independent control, or reproducibility until independent builds actually match.
+
 After generating distinct artifact keys and a next-release root, create and
 sign the canonical 408-byte release manifest:
 
