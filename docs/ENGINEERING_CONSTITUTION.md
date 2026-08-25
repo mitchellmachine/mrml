@@ -14,6 +14,13 @@ need ceremony, but major mechanisms must be tested against these rules.
 Allocation quantity, object ownership, mapping, sharing, pinning, content access,
 and DMA are separate authorities. Execution never implies unlimited RAM.
 
+CPU execution is likewise quantitative authority. Power/performance policy may
+adjust resource behavior within owner policy but never widens capabilities or
+silently disables required security mitigations. CPU age is not vulnerability
+evidence; exact hardware and post-microcode state controls mitigation. The
+canonical platform rules are in
+[platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md).
+
 > Everything meaningful is an object, and authority to an object is represented
 > by capabilities.
 

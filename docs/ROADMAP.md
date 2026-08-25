@@ -16,6 +16,13 @@ remain independently attributable.
 
 ## Current priority
 
+The modern x86-64 platform lane is defined in
+[platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Do not begin its broad
+implementation ahead of the current foundational dependency gate. When reached,
+split it into discovery/support-floor, vendor microcode and post-update security
+state, scheduler constraints/CPU budgets, power/telemetry/thermal safety, system
+monitor, and physical-device milestones rather than one cross-cutting patch.
+
 **PARTIALLY IMPLEMENTED:** the kernel has bounded IPC, blocking receive/wakeup,
 two-message inbox backpressure, attenuated capability transfer with rollback,
 generational revocation, bounded exact-generation IPC delegation tracking,

@@ -322,6 +322,12 @@ capabilities.
 
 ## Authority and security UX
 
+The planned semantic system monitor follows
+[CPU_PLATFORM.md](platform/CPU_PLATFORM.md): CPU, resource, power, sensor, and
+thermal observation is capability-scoped and does not imply budget changes,
+process-memory access, task termination, or hardware control. The native
+terminal remains an ordinary bounded application, not an authority shortcut.
+
 **PLANNED:** trusted file pickers delegate object capabilities, not path strings.
 An open request yields only the selected file and requested rights, not its
 containing directory. Save delegates only the create/replace authority required

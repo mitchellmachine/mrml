@@ -48,6 +48,11 @@ capability. MRML is not currently a production operating system.
 
 ## Current architecture
 
+CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
+quantitative CPU authority, power, telemetry, and thermal policy are canonical
+in [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Those mechanisms are
+**PLANNED** unless the implementation/evidence ledger below says otherwise.
+
 **IMPLEMENTED:** an experimental x86_64 PE32+ microkernel, original UEFI loader,
 bounded firmware handoff and allocator, W^X page tables, GDT/IDT/TSS, guarded
 privilege stacks, CPL3 domains, APIC timer preemption, SMP startup, IPIs,

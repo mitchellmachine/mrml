@@ -104,6 +104,12 @@ Architectural invariants:
 - follow `docs/memory/MEMORY_RESOURCE_MODEL.md`: RAM allocation is explicit
   quantitative authority; pools cannot amplify; objects, mappings, sharing,
   pinning, content access, DMA, and guest projection remain separate;
+- follow `docs/platform/CPU_PLATFORM.md`: the initial modern x86-64 references
+  are i9-13900K and Ryzen 9 7950X3D, not permanent product allowlists; discover
+  exact identity/topology, use distinct Intel/AMD microcode backends, re-evaluate
+  vulnerabilities after update, never equate age with safety, expose scheduler
+  security constraints, attenuate CPU budgets, and keep power/telemetry/control
+  authorities separate; do not claim physical support without exact evidence;
 - applications submit capability-bound surfaces/buffers to the trusted
   compositor and never render directly to GOP, VGPU, native GPU, or scanout;
   surfaces, buffers, render devices, display outputs, fences, rendering, and

@@ -101,6 +101,11 @@ explicitly and downgrade the status rather than guessing.
 
 - Kernel mechanisms: `crates/mrml-kernel/src/`
 - x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `crates/mrml-kernel/src/arch/x86_64/`
+- CPU support floor, Intel/AMD microcode, post-update vulnerability state,
+  heterogeneous scheduling, CPU budgets, power, telemetry, thermal safety,
+  monitor, and hardware milestones: `docs/platform/CPU_PLATFORM.md`. These are
+  planned unless exact code and focused evidence establish otherwise; CPU age
+  never substitutes for affectedness evaluation.
 - Boot image and loader: `crates/mrml-kernel-image/`, `crates/mrml-uefi/`
 - CPL3 service image: `crates/mrml-service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`

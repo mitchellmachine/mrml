@@ -18,6 +18,11 @@ drop-in replacement for mature codec and inference ecosystems.
 
 ## Project scope
 
+The planned modern x86-64 support floor, Intel/AMD microcode policy,
+heterogeneous scheduling, CPU budgets, power, sensors, and thermal safety are
+defined in [docs/platform/CPU_PLATFORM.md](docs/platform/CPU_PLATFORM.md). The
+reference CPUs are targets, not current physical-hardware support claims.
+
 | Area | Repository-owned implementation | Current maturity |
 | --- | --- | --- |
 | Local inference | GGUF loading, tokenizer, Gemma-family execution, CPU kernels, Rust-to-PTX CUDA kernels, KV cache, sampling, CLI, JSONL automation, and HTTPS/SSE service | Functional but narrower and less tuned than established runtimes |

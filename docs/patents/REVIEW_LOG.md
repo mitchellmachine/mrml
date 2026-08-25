@@ -1,5 +1,13 @@
 # Patent review log
 
+## 2026-08-25 — CPU platform, microcode, scheduler, power, and thermal documentation
+
+**Result: NOT_TRIGGERED.** The documentation selects no novel implementation
+mechanism. It records conventional feature/topology discovery, vendor-defined
+microcode handling, data-driven vulnerability policy, resource-aware scheduling,
+power profiles, sensor separation, and graded thermal safety. Concrete future
+mechanisms require their own claim-focused worldwide review.
+
 ## 2026-08-23 — initial worldwide repository landscape
 
 ### Implemented areas inventoried

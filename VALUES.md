@@ -67,6 +67,8 @@ the underlying semantic truth and redaction policy must not privilege AI.
 
 ## Durable project commitments
 
+> **MRML targets modern hardware deliberately rather than carrying unlimited historical CPU compatibility.**
+
 > **The ability to execute does not imply an unlimited right to consume memory.**
 
 > **RAM is an explicitly budgeted, accountable resource.**

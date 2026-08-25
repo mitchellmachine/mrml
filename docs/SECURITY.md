@@ -33,6 +33,13 @@ first- and third-party software, accessibility software, and local or remote AI.
 
 ## Trust boundaries
 
+CPU age, generation, or marketing identity does not establish vulnerability
+status. Final mitigation policy derives from exact identity, capabilities, and
+resulting microcode state after an approved vendor-specific update attempt;
+unknown security-sensitive state fails conservatively. Power profiles cannot
+silently disable required mitigations. See
+[platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md).
+
 Hosted WHP/KVM is for development, compatibility, and measurement. A compromised
 host controls guest RAM, CPU state, clocks, devices, entropy, keys, and results;
 therefore it is not a security boundary against that host.
