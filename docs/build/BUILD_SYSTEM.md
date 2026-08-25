@@ -3,12 +3,13 @@
 **Status: PARTIALLY IMPLEMENTED.** `tools/mrml` now parses the versioned root
 `MRML.workspace`, emits typed list/doctor/audit/build/test results, resolves and
 validates the declared dependency graph natively, inventories unusual build
-inputs, uses a locked Cargo/upstream-rustc compilation bridge, selects current-
+inputs, directly invokes upstream rustc for the first exact native leaf while
+using a locked Cargo/upstream-rustc compilation bridge for remaining nodes, selects current-
 host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
 toolchain checks, and rejects unimplemented package/release/image/publish
 commands. All tracked components have semantic homes outside generic `crates/`.
-Direct rustc, Linux execution evidence, package/release/image builders,
+Direct rustc graph coverage, Linux execution evidence, package/release/image builders,
 sandboxing, and publication remain planned. See
 [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
 
@@ -118,6 +119,17 @@ separate driver lives at `compiler/driver`.
 bridge remain unchanged.
 `mrml-tools` now lives at `tools/host`; its input-policy counts, feature
 behavior, and Cargo bridge remain unchanged.
+
+The first explicit `rust-action` belongs to dependency-free `mrml-math` and
+binds crate name `mrml_math`, crate type `lib`, and its repository-relative
+source root. `mrml build mrml-math` now emits a deterministic native rlib and
+`mrml test mrml-math` compiles and executes its test harness directly through
+the pinned rustc. Action paths and crate names are validated before invocation;
+the frontend resolves the exact dated Windows GNU/LLVM or Linux GNU toolchain
+through rustup rather than inheriting the caller's active default. There is no
+Cargo fallback for a declared native action. Remaining nodes are
+honestly labeled `cargo-transition` until their extern, feature, target, and
+build-action declarations are exact.
 
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in

@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component as PathComponent, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
 const MAX_COMPONENTS: usize = 256;
+const PINNED_NIGHTLY: &str = "nightly-2026-08-24";
 
 #[derive(Clone, Debug)]
 struct Component {
@@ -19,6 +20,14 @@ struct Component {
     features: Vec<String>,
     outputs: Vec<String>,
     input_policy: InputCounts,
+    rust_action: Option<RustAction>,
+}
+
+#[derive(Clone, Debug)]
+struct RustAction {
+    crate_name: String,
+    crate_type: String,
+    source: String,
 }
 
 #[derive(Debug)]
@@ -63,7 +72,7 @@ fn run() -> Result<(), String> {
 }
 
 fn print_help() {
-    println!("mrml - canonical MRML repository build frontend (Cargo bridge stage)");
+    println!("mrml - canonical MRML repository build frontend (native migration stage)");
     println!("usage: mrml <list|doctor|audit|build|test> [component] [options]");
     println!("  --all                 select every host-compatible component");
     println!("  --target <family>     native|windows|linux|uefi-x86_64|cuda-nvidia");
@@ -100,6 +109,7 @@ fn load_workspace() -> Result<Workspace, String> {
         .map_err(|e| format!("WorkspaceReadError {{ detail: {e} }}"))?;
     let mut version = None;
     let mut components = Vec::new();
+    let mut rust_actions = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -132,7 +142,7 @@ fn load_workspace() -> Result<Workspace, String> {
                         index + 1
                     ));
                 }
-                if !root.join(path).join("Cargo.toml").is_file() {
+                if !safe_relative_path(path) || !root.join(path).join("Cargo.toml").is_file() {
                     return Err(format!(
                         "ComponentPathMissing {{ line: {}, path: {path} }}",
                         index + 1
@@ -149,7 +159,24 @@ fn load_workspace() -> Result<Workspace, String> {
                     features: split_declaration(features),
                     outputs: split_declaration(outputs),
                     input_policy: parse_input_policy(input_policy, index + 1)?,
+                    rust_action: None,
                 });
+            }
+            ["rust-action", component, crate_name, crate_type, source] => {
+                if rust_actions.iter().any(
+                    |(existing, _, _, _): &(String, String, String, String)| existing == component,
+                ) {
+                    return Err(format!(
+                        "DuplicateRustAction {{ line: {}, component: {component} }}",
+                        index + 1
+                    ));
+                }
+                rust_actions.push((
+                    (*component).into(),
+                    (*crate_name).into(),
+                    (*crate_type).into(),
+                    (*source).into(),
+                ));
             }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
@@ -160,7 +187,56 @@ fn load_workspace() -> Result<Workspace, String> {
     if components.is_empty() {
         return Err("EmptyWorkspace".into());
     }
+    for (component_id, crate_name, crate_type, source) in rust_actions {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| format!("RustActionComponentMissing {{ component: {component_id} }}"))?;
+        if crate_type != "lib" {
+            return Err(format!(
+                "UnsupportedRustActionType {{ component: {component_id}, crate_type: {crate_type} }}"
+            ));
+        }
+        if !rust_identifier(&crate_name) {
+            return Err(format!(
+                "RustActionCrateNameInvalid {{ component: {component_id}, crate_name: {crate_name} }}"
+            ));
+        }
+        if !component.dependencies.is_empty() {
+            return Err(format!(
+                "RustActionExternsMissing {{ component: {component_id} }}"
+            ));
+        }
+        let component_root = root.join(&component.path);
+        let source_path = root.join(&source);
+        if !safe_relative_path(&source)
+            || !source_path.is_file()
+            || !source_path.starts_with(&component_root)
+        {
+            return Err(format!(
+                "RustActionSourceInvalid {{ component: {component_id}, source: {source} }}"
+            ));
+        }
+        component.rust_action = Some(RustAction {
+            crate_name,
+            crate_type,
+            source,
+        });
+    }
     Ok(Workspace { root, components })
+}
+
+fn safe_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, PathComponent::Normal(_)))
+}
+
+fn rust_identifier(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
 }
 
 fn parse_input_policy(value: &str, line: usize) -> Result<InputCounts, String> {
@@ -225,7 +301,7 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     for component in &workspace.components {
         if mode == OutputMode::Structured {
             println!(
-                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|bridge=cargo",
+                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|builder={}",
                 component.id,
                 component.path,
                 component.class,
@@ -233,7 +309,12 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 component.dependencies.join(","),
                 component.features.join(","),
                 component.outputs.join(","),
-                component.input_policy.structured()
+                component.input_policy.structured(),
+                if component.rust_action.is_some() {
+                    "native-rustc"
+                } else {
+                    "cargo-transition"
+                }
             );
         } else {
             println!(
@@ -335,43 +416,157 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 "metadata|target=CUDA|gpu_arch={gpu_arch}|artifact=PTX|toolchain=upstream-rustc-nvptx|runtime_authority=none"
             );
         }
-        let mut command = Command::new("cargo");
-        command
-            .current_dir(&workspace.root)
-            .arg(operation)
-            .arg("--locked")
-            .arg("-p")
-            .arg(&component.cargo_package);
-        if release {
-            command.arg("--release");
+        let builder = if component.rust_action.is_some() {
+            "native-rustc"
+        } else {
+            "cargo-transition"
+        };
+        emit(mode, operation, component, &target, builder, "START");
+        if let Some(action) = &component.rust_action {
+            run_rust_action(workspace, component, action, operation, &target, release)?;
+        } else {
+            run_cargo_transition(workspace, component, operation, &target, release)?;
         }
-        if component.cargo_package == "mrml-whp-run" {
-            command.arg("--no-default-features");
-        }
-        if target == "MRML_NATIVE" {
-            command.args(["--target", "x86_64-unknown-none"]);
-        }
-        if target == "UEFI" {
-            command.args([
-                "--target",
-                "x86_64-unknown-uefi",
-                "--features",
-                "kernel-image",
-            ]);
-        }
-        if target == "CUDA" {
-            command.args(["--features", "cuda"]);
-        }
-        emit(mode, operation, component, &target, "START");
-        let status = command.status().map_err(|e| format!("ToolchainUnavailable {{ target: {target}, required_component: cargo, detail: {e} }}"))?;
+        emit(mode, operation, component, &target, builder, "PASS");
+    }
+    Ok(())
+}
+
+fn run_cargo_transition(
+    workspace: &Workspace,
+    component: &Component,
+    operation: &str,
+    target: &str,
+    release: bool,
+) -> Result<(), String> {
+    let cargo = pinned_tool("cargo")?;
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(&workspace.root)
+        .arg(operation)
+        .arg("--locked")
+        .arg("-p")
+        .arg(&component.cargo_package);
+    if release {
+        command.arg("--release");
+    }
+    if component.cargo_package == "mrml-whp-run" {
+        command.arg("--no-default-features");
+    }
+    if target == "MRML_NATIVE" {
+        command.args(["--target", "x86_64-unknown-none"]);
+    } else if target == "UEFI" {
+        command.args([
+            "--target",
+            "x86_64-unknown-uefi",
+            "--features",
+            "kernel-image",
+        ]);
+    } else if target == "CUDA" {
+        command.args(["--features", "cuda"]);
+    }
+    let status = command.status().map_err(|error| {
+        format!(
+            "ToolchainUnavailable {{ target: {target}, required_component: cargo, detail: {error} }}"
+        )
+    })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "BuildFailed {{ component: {}, target: {target}, builder: cargo-transition, status: {:?} }}",
+            component.id,
+            status.code()
+        ))
+    }
+}
+
+fn run_rust_action(
+    workspace: &Workspace,
+    component: &Component,
+    action: &RustAction,
+    operation: &str,
+    target: &str,
+    release: bool,
+) -> Result<(), String> {
+    let profile = if release { "release" } else { "debug" };
+    let output_dir = workspace
+        .root
+        .join("target")
+        .join("mrml")
+        .join(target.to_ascii_lowercase())
+        .join(profile);
+    fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))?;
+    let extension = if operation == "test" && target == "WINDOWS" {
+        ".exe"
+    } else {
+        ""
+    };
+    let output = if operation == "test" {
+        output_dir.join(format!("{}_tests{extension}", action.crate_name))
+    } else {
+        output_dir.join(format!("lib{}.rlib", action.crate_name))
+    };
+    let rustc = pinned_tool("rustc")?;
+    let mut command = Command::new(rustc);
+    command
+        .current_dir(&workspace.root)
+        .args(["--crate-name", &action.crate_name])
+        .args(["--edition", "2024"])
+        .arg(&action.source)
+        .args(["--crate-type", &action.crate_type])
+        .args(["-C", "panic=abort"])
+        .arg("-o")
+        .arg(&output);
+    if operation == "test" {
+        command.arg("--test").arg("-Zpanic-abort-tests");
+    }
+    if target == "WINDOWS" {
+        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
+    } else if target == "LINUX" {
+        command.args(["--target", "x86_64-unknown-linux-gnu"]);
+    } else {
+        return Err(format!(
+            "RustActionTargetUnsupported {{ component: {}, target: {target} }}",
+            component.id
+        ));
+    }
+    if release {
+        command.args([
+            "-C",
+            "opt-level=3",
+            "-C",
+            "lto=thin",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "strip=symbols",
+        ]);
+    }
+    let status = command.status().map_err(|error| {
+        format!(
+            "ToolchainUnavailable {{ target: {target}, required_component: rustc, detail: {error} }}"
+        )
+    })?;
+    if !status.success() {
+        return Err(format!(
+            "BuildFailed {{ component: {}, target: {target}, builder: native-rustc, status: {:?} }}",
+            component.id,
+            status.code()
+        ));
+    }
+    if operation == "test" {
+        let status = Command::new(&output)
+            .status()
+            .map_err(|error| format!("TestExecutionUnavailable {{ detail: {error} }}"))?;
         if !status.success() {
             return Err(format!(
-                "BuildFailed {{ component: {}, target: {target}, status: {:?} }}",
+                "TestFailed {{ component: {}, status: {:?} }}",
                 component.id,
                 status.code()
             ));
         }
-        emit(mode, operation, component, &target, "PASS");
     }
     Ok(())
 }
@@ -401,7 +596,8 @@ fn check_cuda(args: &[String]) -> Result<(), String> {
         .find(|pair| pair[0] == "--gpu-arch")
         .map(|pair| pair[1].as_str())
         .ok_or("MissingTargetMetadata { target: CUDA, required: gpu_arch }")?;
-    let output = Command::new("rustc")
+    let rustc = pinned_tool("rustc")?;
+    let output = Command::new(rustc)
         .args(["--print", "target-list"])
         .output()
         .map_err(|e| {
@@ -421,10 +617,17 @@ fn check_cuda(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn emit(mode: OutputMode, operation: &str, component: &Component, target: &str, status: &str) {
+fn emit(
+    mode: OutputMode,
+    operation: &str,
+    component: &Component,
+    target: &str,
+    builder: &str,
+    status: &str,
+) {
     if mode == OutputMode::Structured {
         println!(
-            "result|operation={operation}|component={}|target={target}|compiler=upstream-rustc|bridge=cargo|status={status}",
+            "result|operation={operation}|component={}|target={target}|compiler=upstream-rustc|builder={builder}|status={status}",
             component.id
         );
     } else {
@@ -435,7 +638,8 @@ fn emit(mode: OutputMode, operation: &str, component: &Component, target: &str, 
 fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let mode = output_mode(args);
     let host = host_family()?;
-    let rustc = tool_version("rustc")?;
+    let rustc_path = pinned_tool("rustc")?;
+    let rustc = tool_version(&rustc_path, "rustc")?;
     let graph = verify_native_graph(workspace)?;
     if mode == OutputMode::Structured {
         println!(
@@ -851,12 +1055,43 @@ fn record_input(
     Ok(())
 }
 
-fn tool_version(tool: &str) -> Result<String, String> {
+fn pinned_tool(tool: &str) -> Result<PathBuf, String> {
+    let host = host_family()?;
+    let toolchain = match host {
+        "WINDOWS" => format!("{PINNED_NIGHTLY}-x86_64-pc-windows-gnullvm"),
+        "LINUX" => format!("{PINNED_NIGHTLY}-x86_64-unknown-linux-gnu"),
+        _ => unreachable!(),
+    };
+    let output = Command::new("rustup")
+        .args(["which", "--toolchain", &toolchain, tool])
+        .output()
+        .map_err(|error| {
+            format!(
+                "ToolchainUnavailable {{ required_component: rustup, toolchain: {toolchain}, detail: {error} }}"
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "ToolchainUnavailable {{ required_component: {tool}, toolchain: {toolchain} }}"
+        ));
+    }
+    let path =
+        String::from_utf8(output.stdout).map_err(|_| "ToolchainPathInvalidUtf8".to_owned())?;
+    let path = PathBuf::from(path.trim());
+    if !path.is_file() {
+        return Err(format!(
+            "ToolchainPathMissing {{ required_component: {tool}, toolchain: {toolchain} }}"
+        ));
+    }
+    Ok(path)
+}
+
+fn tool_version(tool: &Path, name: &str) -> Result<String, String> {
     let output = Command::new(tool).arg("--version").output().map_err(|e| {
-        format!("ToolchainUnavailable {{ required_component: {tool}, detail: {e} }}")
+        format!("ToolchainUnavailable {{ required_component: {name}, detail: {e} }}")
     })?;
     if !output.status.success() {
-        return Err(format!("ToolchainFailed {{ tool: {tool} }}"));
+        return Err(format!("ToolchainFailed {{ tool: {name} }}"));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -881,6 +1116,7 @@ mod tests {
             features: Vec::new(),
             outputs: vec![format!("{package}:lib")],
             input_policy: InputCounts::default(),
+            rust_action: None,
         }
     }
 
@@ -917,6 +1153,16 @@ mod tests {
     fn native_declarations_are_canonicalized() {
         assert_eq!(split_declaration("z,a,z"), ["a", "z"]);
         assert!(split_declaration("").is_empty());
+    }
+    #[test]
+    fn rust_actions_reject_escaping_paths_and_invalid_crate_names() {
+        assert!(safe_relative_path("packages/libraries/math/src/lib.rs"));
+        assert!(!safe_relative_path(
+            "packages/libraries/math/../crypto/src/lib.rs"
+        ));
+        assert!(!safe_relative_path("C:/outside.rs"));
+        assert!(rust_identifier("mrml_math"));
+        assert!(!rust_identifier("../mrml-math"));
     }
     #[test]
     fn input_policy_requires_every_unique_kind() {

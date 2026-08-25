@@ -29,7 +29,7 @@ The 2026-08-25 Windows gnullvm result is:
 9 native-link source sites
 31 compile-time environment source sites
 1 included-file source site
-42 external-command source sites
+45 external-command source sites
 ```
 
 The structured output emits every native component, dependency list, feature
@@ -59,7 +59,9 @@ All 42 tracked components now live in semantic `apps/`, `compiler/`, `packages/`
 `services/`, `system/`, `tests/`, or `tools/` homes; no tracked component remains
 under generic `crates/`. The next gate makes source roots, crate types, editions,
 target cfgs, feature activation, extern names/artifacts, build actions, compiler
-flags, and lock/digest inputs exact enough for direct rustc. Cargo must then be
+flags, and lock/digest inputs exact enough for direct rustc. The dependency-free
+`mrml-math` leaf is the first exact native build/test action and does not invoke
+Cargo. Cargo must then be
 confined to clean-source stage-zero bootstrap only after Windows/Linux build
 equivalence is demonstrated. Treat input-policy changes as explicit review items,
 never automatically accepted count updates.

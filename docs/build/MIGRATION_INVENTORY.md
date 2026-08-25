@@ -21,6 +21,10 @@ that direct-rustc migration or Cargo bridge removal is complete.
   identities, local dependencies, features, outputs, build scripts, procedural
   macros, and direct source-input sites; see
   [BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md);
+- explicit dependency-free `mrml-math` native rustc build/test action with a
+  validated crate name/type/source, deterministic artifact path, pinned target
+  flags, exact dated rustup tool resolution independent of the caller's default,
+  and no Cargo fallback;
 - stage1 `mrml` selection, `mrml-rustc-driver`, current-host WHP/KVM selection,
   x86-64 UEFI routing, and lazy CUDA/PTX routing;
 - duplicate `mrml-opus` root workspace member removed.
@@ -609,9 +613,10 @@ second inventory.
 - Dependency, feature, output, and source-input facts are persisted and fail
   closed on Cargo metadata or lexical-audit drift. Lexical discovery still
   cannot prove that arbitrary macro expansion introduces no additional input.
-- Direct-rustc graph construction needs target-aware resolved externs, features,
-  build order, lock/digest validation, and cycle diagnostics before Cargo can be
-  removed behind migrated nodes.
+- Native graph construction now provides dependency-first ordering and cycle
+  diagnostics. Direct-rustc expansion still needs target-aware resolved externs,
+  features, lock/digest validation, and explicit non-library actions before
+  Cargo can be removed behind the remaining nodes.
 - Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,
   and CI together and verifying both Windows/WHP and Linux/KVM. The present task
   intentionally establishes the graph before that high-churn move.

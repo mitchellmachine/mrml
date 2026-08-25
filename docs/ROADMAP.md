@@ -139,7 +139,8 @@ outputs, self-dependencies, and cycles fail closed. Dependency, feature, output,
 and per-component input-policy facts are native version-3 declarations that fail
 on graph or lexical-audit drift. The first
 semantic leaf move is complete: dependency-free `mrml-math` now resides under
-`packages/libraries/math` with its Cargo bridge retained. The next leaf,
+`packages/libraries/math`; its explicit build/test action now invokes pinned
+rustc directly with no Cargo fallback. The next leaf,
 `mrml-percent-encoding`, now resides under `packages/libraries/percent-encoding`
 with its runtime edge and Cargo bridge retained. Continue one dependency-light
 leaf at a time before group moves; `mrml-tokenizer` is now the third migrated
