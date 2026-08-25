@@ -25,7 +25,7 @@ eligibility class, and placement; commit requires matching native, microVM, or
 platform backend-ready evidence. In Total mode it rejects eligible native
 placement and active unsupported blockers, and a typed resource or transport
 failure cancels preparation without creating a native fallback. Six focused
-tests are included in the 483-test Windows and Arch Linux hosted kernel suites.
+tests are included in the Windows and Arch Linux hosted kernel suites.
 This mechanism does not create VMs, select providers, allocate resources, or
 provide the first dual-placement service, so Total MicroVM remains **PLANNED**.
 
@@ -37,19 +37,31 @@ retry clears the older record only after capacity, policy, placement, and next
 generation all preflight successfully; bounded retention evicts only the oldest
 failure. The Total report exposes the number of unavailable eligible domains but
 does not miscount them as running native fallback. This behavior adds one focused
-test; both hosted suites pass all 483 tests.
+focused tests in both hosted suites.
+
+A bounded service-routing prerequisite now composes that admission table with
+distinct native-service and microVM backend entry points. Its typed specification
+preserves exact interface, interface-generation, provider-generation, and policy-
+generation identity across either placement. It rejects Total-mode native service
+before invoking a backend, records microVM launch failure as unavailable, and
+never retries through the native entry. This is **PARTIALLY IMPLEMENTED** kernel
+mechanism and focused simulation evidence only: it does not yet choose a provider
+or placement, instantiate a concrete configuration-service backend, transport an
+interface call, allocate VM resources, or complete the representative
+dual-placement-service milestone.
 
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1
 before constructing the guest. They commit only `MicrovmReady` after the signed
 guest and service mappings exist, reject any unsatisfied report, and emit the
 requested/effective counts only after the full existing probe succeeds. Both
-native launchers compile through the canonical `mrml` frontend. Fresh execution
-attempts on 2026-08-25 did not reach the success report: KVM stopped at the
-existing first service-stage expectation, and the available WHP invocation
-returned failure without diagnostic output. Therefore this entry records build
-and admission-composition evidence only, not a fresh successful hosted probe,
-backend parity, a native-versus-microVM resolver, or Total-system satisfaction.
+native launchers compile through the canonical `mrml` frontend. After the
+service setup capability was separated from its least-authority data capability
+and retired backing was erased, fresh one-time-signed KVM and WHP executions on
+2026-08-25 completed the service exchange, cleanup, reprovision, restart, and
+zero-fallback report. These remain hosted controlled probes of the existing
+microVM form, not a native-versus-microVM resolver, cross-placement transport,
+host-resistant isolation, or Total-system satisfaction.
 
 Likewise, QEMU `virtio-rng-pci` and debug-console devices in recorded boot
 commands belong to the external QEMU test machine. MRML does not currently

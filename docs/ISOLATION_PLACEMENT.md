@@ -26,6 +26,17 @@ structured zero-fallback report only after the complete service probe succeeds.
 This is launch-admission integration, not completion of a dual-placement runtime
 or proof that the required system satisfies Total mode.
 
+The kernel also has a bounded caller-selected routing prerequisite for service
+placements. One typed service specification binds the domain, interface and
+exact interface/provider/policy generations to either `NATIVE_SERVICE` or
+`MICROVM`; the router invokes only that backend entry and commits only matching
+readiness evidence. Total mode rejects a native-service request before backend
+launch, and microVM failure is retained as unavailable without native fallback.
+This composition does not select a provider or placement, create a VM, carry an
+interface invocation, assign resources, persist policy, or provide transparent
+cross-placement transport. Those mechanisms and the representative concrete
+dual-placement service remain **PLANNED**.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and

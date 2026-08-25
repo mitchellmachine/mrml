@@ -4,6 +4,21 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Caller-selected dual-placement service routing prerequisite
+
+Patent review: **NOT_TRIGGERED** for this bounded composition increment. One
+caller-selected typed specification carries exact interface, provider, policy,
+and placement generations into distinct existing native-service or microVM
+backend entry points; matching admission evidence commits the result and failure
+does not select an alternate backend. It performs no automated provider or
+placement selection, VM construction, resource assignment, workload
+classification, application publication, or cross-placement interface
+transport. Screening considered those limitations in US9921860B1, US8931037B2,
+and EP2587375A1; register status is not relied upon and no clearance conclusion
+is recorded. Concrete automated placement/provider/VM/resource selection and
+transparent cross-placement transport remain **TRIGGERED** under the adaptive-
+isolation entry below.
+
 ## 2026-08-25 — Bounded isolation-unavailability ledger
 
 Patent review: **NOT_TRIGGERED**. This is conventional fixed-capacity ordered
