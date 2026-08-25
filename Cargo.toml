@@ -34,7 +34,7 @@ members = [
     "system/vmm/kvm",
     "tools/vmm/kvm-run",
     "system/vmm/whp",
-    "crates/mrml-whp-run",
+    "tools/vmm/whp-run",
     "packages/libraries/json",
     "packages/libraries/zim",
     "packages/libraries/zstd",

@@ -459,6 +459,21 @@ on a Windows host without changing launcher source behavior:
 No Linux host/runtime, CUDA, `/dev/kvm`, VM launch, nested virtualization, or
 physical-hardware execution was exercised by this path-only move.
 
+The WHP-runner move from `crates/mrml-whp-run` to `tools/vmm/whp-run` was checked
+on a Windows host without changing launcher source behavior:
+
+- workspace metadata, formatting, no-default-feature strict Clippy,
+  `mrml doctor`, and `mrml audit` — PASS;
+- pinned-nightly tests both with `--no-default-features` and with default CUDA
+  enabled — PASS, 7 tests in each configuration; the default build compiled
+  Rust CUDA PTX but did not execute it;
+- `.\target\debug\mrml.exe build mrml-whp-run` — FAIL because the selected MSVC
+  target could not find `link.exe` on this host;
+- stale exact `crates/mrml-whp-run/` path scan — PASS.
+
+No GPU execution, VM launch, nested virtualization, physical hardware, VTL1,
+TPM, IOMMU, or remote-attestation evidence was established by this move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
