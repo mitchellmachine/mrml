@@ -1,3 +1,8 @@
+use crate::boot_release_core::{
+    BootPackageRole, MAX_BOOT_RELEASE_BYTES, RELEASE_FORMAT_VERSION, RELEASE_HEADER_BYTES,
+    RELEASE_MAGIC, RELEASE_PACKAGE_COUNT, RELEASE_RECORD_BYTES, parse_release, release_digest,
+    release_statement,
+};
 use crate::package_lamport::{
     LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES,
     lamport_public_key, lamport_sign, lamport_verify,
@@ -58,6 +63,84 @@ pub struct BuildPayload<'a> {
     pub architecture: &'a str,
     pub compress: bool,
     pub bytes: &'a [u8],
+}
+
+pub fn build_release(
+    version: u64,
+    bootloader: &[u8],
+    kernel: &[u8],
+    configuration: &[u8],
+    private: &[u8],
+) -> Result<Vec<u8>, Error> {
+    if version == 0 || private.len() != LAMPORT_PRIVATE_KEY_BYTES {
+        return Err(Error::Signature);
+    }
+    let packages = [
+        (
+            BootPackageRole::Bootloader,
+            "org.mrml.library.uefi",
+            "bootloader",
+            "uefi-loader",
+            bootloader,
+        ),
+        (
+            BootPackageRole::Kernel,
+            "org.mrml.system.kernel",
+            "kernel",
+            "kernel",
+            kernel,
+        ),
+        (
+            BootPackageRole::Configuration,
+            "org.mrml.service.config",
+            "configuration",
+            "configuration",
+            configuration,
+        ),
+    ];
+    let mut records = [(BootPackageRole::Bootloader, 0, [0; 64]); RELEASE_PACKAGE_COUNT];
+    for (index, (role, id, class, purpose, bytes)) in packages.into_iter().enumerate() {
+        let package = parse(bytes, true)?;
+        if package.id != id
+            || package.class != class
+            || package
+                .payloads
+                .iter()
+                .filter(|payload| payload.purpose == purpose && payload.architecture == "x86_64")
+                .count()
+                != 1
+        {
+            return Err(Error::Architecture);
+        }
+        records[index] = (role, package.version, Sha3_512::digest(bytes));
+    }
+    let mut output = vec![0; MAX_BOOT_RELEASE_BYTES];
+    output[..16].copy_from_slice(&RELEASE_MAGIC);
+    put_u16(&mut output, 16, RELEASE_FORMAT_VERSION)?;
+    put_u16(&mut output, 18, 1)?;
+    put_u32(&mut output, 20, RELEASE_HEADER_BYTES as u32)?;
+    put_u64(&mut output, 24, version)?;
+    put_u64(&mut output, 32, MAX_BOOT_RELEASE_BYTES as u64)?;
+    put_u32(&mut output, 40, RELEASE_PACKAGE_COUNT as u32)?;
+    let mut public = vec![0; LAMPORT_PUBLIC_KEY_BYTES];
+    lamport_public_key(private, &mut public).map_err(|_| Error::Signature)?;
+    output[112..176].copy_from_slice(&Sha3_512::digest(&public));
+    for (index, (role, package_version, digest)) in records.into_iter().enumerate() {
+        let offset = 176 + index * RELEASE_RECORD_BYTES;
+        output[offset] = role as u8;
+        output[offset + 1] = 1;
+        put_u64(&mut output, offset + 8, package_version)?;
+        output[offset + 16..offset + 80].copy_from_slice(&digest);
+    }
+    let digest = release_digest(&output[..RELEASE_HEADER_BYTES]);
+    output[48..112].copy_from_slice(&digest);
+    let mut signature = vec![0; LAMPORT_SIGNATURE_BYTES];
+    lamport_sign(private, &release_statement(&digest), &mut signature)
+        .map_err(|_| Error::Signature)?;
+    output[RELEASE_HEADER_BYTES..RELEASE_HEADER_BYTES + public.len()].copy_from_slice(&public);
+    output[RELEASE_HEADER_BYTES + public.len()..].copy_from_slice(&signature);
+    parse_release(&output, true).map_err(|_| Error::Signature)?;
+    Ok(output)
 }
 
 pub fn build(
@@ -535,6 +618,51 @@ mod tests {
         (0..LAMPORT_PRIVATE_KEY_BYTES)
             .map(|i| (i as u64 * 131 + 17) as u8)
             .collect()
+    }
+
+    fn release_package(id: &str, class: &str, purpose: &str, version: u64) -> Vec<u8> {
+        build(
+            id,
+            class,
+            version,
+            &[BuildPayload {
+                name: purpose,
+                purpose,
+                architecture: "x86_64",
+                compress: true,
+                bytes: purpose.as_bytes(),
+            }],
+            Some(&private_key()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn system_release_binds_three_exact_signed_boot_packages() {
+        let bootloader = release_package("org.mrml.library.uefi", "bootloader", "uefi-loader", 2);
+        let kernel = release_package("org.mrml.system.kernel", "kernel", "kernel", 3);
+        let configuration = release_package(
+            "org.mrml.service.config",
+            "configuration",
+            "configuration",
+            4,
+        );
+        let release =
+            build_release(9, &bootloader, &kernel, &configuration, &private_key()).unwrap();
+        let decoded = parse_release(&release, true).unwrap();
+        assert_eq!(decoded.version, 9);
+        assert_eq!(
+            decoded.package(BootPackageRole::Kernel).package_digest,
+            Sha3_512::digest(&kernel)
+        );
+        let mut tampered = release.clone();
+        tampered[200] ^= 1;
+        assert!(parse_release(&tampered, true).is_err());
+        let wrong = release_package("org.mrml.system.kernel", "kernel", "wrong", 3);
+        assert_eq!(
+            build_release(9, &bootloader, &wrong, &configuration, &private_key()),
+            Err(Error::Architecture)
+        );
     }
 
     #[test]

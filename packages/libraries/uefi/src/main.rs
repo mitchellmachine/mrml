@@ -3,6 +3,8 @@
 
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
+#[cfg(feature = "package-boot")]
+use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
     ArtifactKind, BOOTSTRAP_STATE_BYTES, BuildReceipt, FramebufferInfo,
@@ -19,7 +21,10 @@ use mrml_kernel::{
     encode_handoff_with_smp_service_and_recovery,
 };
 #[cfg(feature = "package-boot")]
-use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, parse as parse_package};
+use mrml_package_format::{
+    BootPackageRecord, BootPackageRole, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES,
+    parse as parse_package, parse_release,
+};
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore,
     decode_canonical_authority_recovery_state,
@@ -66,6 +71,21 @@ const KERNEL_PATH: &[u16] = &[
 const KERNEL_PACKAGE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 75, 69, 82, 78, 69, 76, 46, 80, 65, 67, 75, 65, 71, 69,
     0,
+];
+#[cfg(feature = "package-boot")]
+const SYSTEM_RELEASE_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 83, 89, 83, 84, 69, 77, 46, 82, 69, 76, 69, 65, 83, 69,
+    0,
+];
+#[cfg(feature = "package-boot")]
+const BOOTLOADER_PACKAGE_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 66, 79, 79, 84, 76, 79, 65, 68, 69, 82, 46, 80, 65, 67,
+    75, 65, 71, 69, 0,
+];
+#[cfg(feature = "package-boot")]
+const CONFIGURATION_PACKAGE_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 67, 79, 78, 70, 73, 71, 85, 82, 65, 84, 73, 79, 78, 46,
+    80, 65, 67, 75, 65, 71, 69, 0,
 ];
 const SERVICE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 83, 69, 82, 86, 73, 67, 69, 46, 83, 73, 71, 78, 69, 68,
@@ -820,6 +840,11 @@ fn embedded_kernel_package_root() -> Option<[u8; 64]> {
     parse_root_digest(option_env!("MRML_KERNEL_PACKAGE_ROOT_DIGEST_HEX")?.as_bytes())
 }
 
+#[cfg(feature = "package-boot")]
+fn embedded_system_release_root() -> Option<[u8; 64]> {
+    parse_root_digest(option_env!("MRML_SYSTEM_RELEASE_ROOT_DIGEST_HEX")?.as_bytes())
+}
+
 fn embedded_minimum_version() -> Option<u64> {
     parse_nonzero_version(option_env!("MRML_KERNEL_MIN_VERSION")?.as_bytes())
 }
@@ -1201,33 +1226,112 @@ unsafe fn load_kernel_package(
     services: &BootServices,
     framebuffer: Framebuffer,
 ) -> Result<LoadedFile, Status> {
-    let package_file = unsafe {
+    let release_file = unsafe {
         load_file(
             image,
             services,
             framebuffer,
-            KERNEL_PACKAGE_PATH,
-            MAX_BOOT_PACKAGE_BYTES,
+            SYSTEM_RELEASE_PATH,
+            MAX_BOOT_RELEASE_BYTES,
         )
     }?;
-    loader_trace(0xb0);
+    let release_bytes = unsafe {
+        core::slice::from_raw_parts(release_file.address as *const u8, release_file.length)
+    };
+    let release = parse_release(release_bytes, true).map_err(|_| LOAD_ERROR)?;
+    if release.key_id != embedded_system_release_root().ok_or(LOAD_ERROR)? {
+        return Err(LOAD_ERROR);
+    }
+    loader_trace(0xc8);
+    let _bootloader = unsafe {
+        load_release_package(
+            image,
+            services,
+            framebuffer,
+            BOOTLOADER_PACKAGE_PATH,
+            release.package(BootPackageRole::Bootloader),
+            "org.mrml.library.uefi",
+            "bootloader",
+            "uefi-loader",
+            16 * 1024 * 1024,
+            None,
+        )
+    }?;
+    let _configuration = unsafe {
+        load_release_package(
+            image,
+            services,
+            framebuffer,
+            CONFIGURATION_PACKAGE_PATH,
+            release.package(BootPackageRole::Configuration),
+            "org.mrml.service.config",
+            "configuration",
+            "configuration",
+            1024 * 1024,
+            None,
+        )
+    }?;
+    loader_trace(0xc9);
+    let kernel = unsafe {
+        load_release_package(
+            image,
+            services,
+            framebuffer,
+            KERNEL_PACKAGE_PATH,
+            release.package(BootPackageRole::Kernel),
+            "org.mrml.system.kernel",
+            "kernel",
+            "kernel",
+            MAX_KERNEL_IMAGE_BYTES as usize + SIGNED_ARTIFACT_OVERHEAD_BYTES,
+            Some(embedded_kernel_package_root().ok_or(LOAD_ERROR)?),
+        )
+    }?;
+    let kernel_bytes =
+        unsafe { core::slice::from_raw_parts(kernel.address as *const u8, kernel.length) };
+    let signed = SignedArtifact::decode(kernel_bytes).map_err(|_| LOAD_ERROR)?;
+    if signed.kind() != ArtifactKind::Kernel
+        || signed.version() != release.package(BootPackageRole::Kernel).version
+    {
+        return Err(LOAD_ERROR);
+    }
+    loader_trace(0xb2);
+    Ok(kernel)
+}
+
+#[cfg(feature = "package-boot")]
+unsafe fn load_release_package(
+    image: Handle,
+    services: &BootServices,
+    framebuffer: Framebuffer,
+    path: &[u16],
+    record: BootPackageRecord,
+    expected_id: &str,
+    expected_class: &str,
+    purpose: &str,
+    maximum_raw: usize,
+    expected_key: Option<[u8; 64]>,
+) -> Result<LoadedFile, Status> {
+    let package_file =
+        unsafe { load_file(image, services, framebuffer, path, MAX_BOOT_PACKAGE_BYTES) }?;
     let package_bytes = unsafe {
         core::slice::from_raw_parts(package_file.address as *const u8, package_file.length)
     };
+    if Sha3_512::digest(package_bytes) != record.package_digest {
+        return Err(LOAD_ERROR);
+    }
     let package = parse_package(package_bytes, true, true).map_err(|_| LOAD_ERROR)?;
-    if package.id != "org.mrml.system.kernel"
-        || package.class != "kernel"
-        || package.key_id != embedded_kernel_package_root().ok_or(LOAD_ERROR)?
+    if package.id != expected_id
+        || package.class != expected_class
+        || package.version != record.version
+        || expected_key.is_some_and(|key| package.key_id != key)
     {
         return Err(LOAD_ERROR);
     }
-    let payload = package.select("kernel", "x86_64").map_err(|_| LOAD_ERROR)?;
-    if payload.raw_len == 0
-        || payload.raw_len > MAX_KERNEL_IMAGE_BYTES as usize + SIGNED_ARTIFACT_OVERHEAD_BYTES
-    {
+    let payload = package.select(purpose, "x86_64").map_err(|_| LOAD_ERROR)?;
+    if payload.raw_len == 0 || payload.raw_len > maximum_raw {
         return Err(LOAD_ERROR);
     }
-    loader_trace(0xb1);
+    loader_trace(0xb0);
     let pages = payload.raw_len.checked_add(4095).ok_or(LOAD_ERROR)? / 4096;
     let allocation_bytes = pages.checked_mul(4096).ok_or(LOAD_ERROR)?;
     let mut address = 0_u64;
@@ -1241,10 +1345,6 @@ unsafe fn load_kernel_package(
     payload
         .decode(&mut allocation[..payload.raw_len])
         .map_err(|_| LOAD_ERROR)?;
-    let signed = SignedArtifact::decode(&allocation[..payload.raw_len]).map_err(|_| LOAD_ERROR)?;
-    if signed.kind() != ArtifactKind::Kernel || signed.version() != package.version {
-        return Err(LOAD_ERROR);
-    }
     loader_trace(0xb2);
     Ok(LoadedFile {
         address,

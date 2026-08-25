@@ -153,6 +153,9 @@ name = "MRML_SERVICE_MIN_VERSION"
 name = "MRML_SERVICE_ROOT_DIGEST_HEX"
 
 [[absent_compile_env]]
+name = "MRML_SYSTEM_RELEASE_ROOT_DIGEST_HEX"
+
+[[absent_compile_env]]
 name = "MRML_TPM_NV_INDEX_HEX"
 
 [[build_input]]
@@ -206,6 +209,12 @@ reason = "reviewed repository build input"
 [[build_input]]
 kind = "compile-env"
 line = 833
+path = "packages/libraries/uefi/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 845
 path = "packages/libraries/uefi/src/main.rs"
 reason = "reviewed repository build input"
 

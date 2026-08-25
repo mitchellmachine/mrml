@@ -29,6 +29,9 @@ pub use package_lamport::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, lam
 #[path = "../../../libraries/package-format/src/core.rs"]
 #[allow(dead_code)]
 mod boot_package_core;
+#[path = "../../../libraries/package-format/src/release.rs"]
+#[allow(dead_code)]
+mod boot_release_core;
 use schema::InterfaceSchema;
 
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
@@ -226,6 +229,65 @@ fn print_help() {
 
 fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("release-create") if args.len() == 7 => {
+            let version = args[1]
+                .parse::<u64>()
+                .map_err(|_| "ReleaseVersionInvalid".to_owned())?;
+            let bootloader = fs::read(&args[2]).map_err(|error| {
+                format!("ReleasePackageReadError {{ role: bootloader, detail: {error} }}")
+            })?;
+            let kernel = fs::read(&args[3]).map_err(|error| {
+                format!("ReleasePackageReadError {{ role: kernel, detail: {error} }}")
+            })?;
+            let configuration = fs::read(&args[4]).map_err(|error| {
+                format!("ReleasePackageReadError {{ role: configuration, detail: {error} }}")
+            })?;
+            let mut private = fs::read(&args[5])
+                .map_err(|error| format!("ReleaseKeyReadError {{ detail: {error} }}"))?;
+            let encoded =
+                package::build_release(version, &bootloader, &kernel, &configuration, &private)
+                    .map_err(|error| format!("ReleaseBuildError {{ detail: {error:?} }}"))?;
+            private.fill(0);
+            fs::remove_file(&args[5])
+                .map_err(|error| format!("ReleaseKeyConsumeError {{ detail: {error} }}"))?;
+            let mut output = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&args[6])
+                .map_err(|error| format!("ReleaseOutputCreateError {{ detail: {error} }}"))?;
+            output
+                .write_all(&encoded)
+                .and_then(|_| output.sync_all())
+                .map_err(|error| format!("ReleaseOutputWriteError {{ detail: {error} }}"))?;
+            println!(
+                "system-release|operation=create|status=PASS|version={version}|packages=3|bytes={}",
+                encoded.len()
+            );
+            Ok(())
+        }
+        Some("release-verify") if args.len() == 3 => {
+            let bytes = fs::read(&args[1])
+                .map_err(|error| format!("ReleaseReadError {{ detail: {error} }}"))?;
+            let public = fs::read(&args[2])
+                .map_err(|error| format!("ReleaseRootReadError {{ detail: {error} }}"))?;
+            let release = boot_release_core::parse_release(&bytes, true)
+                .map_err(|error| format!("ReleaseVerifyError {{ detail: {error:?} }}"))?;
+            if public.len() != LAMPORT_PUBLIC_KEY_BYTES
+                || Sha3_512::digest(&public) != release.key_id
+            {
+                return Err("ReleaseTrustRootMismatch".into());
+            }
+            println!(
+                "system-release|operation=verify|status=PASS|version={}|packages=3|digest={}",
+                release.version,
+                release
+                    .digest
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            );
+            Ok(())
+        }
         Some("create") if args.len() >= 8 => {
             let id = &args[1];
             if !workspace
