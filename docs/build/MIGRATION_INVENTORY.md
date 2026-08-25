@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-six
+  explicit. Twenty-seven
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -761,6 +761,13 @@ Both exact dated host toolchains pass doctor/audit, cross-build the library for
 `x86_64-unknown-none`, and run all 31 projected host tests. Twenty-five
 components are native and 17 remain transitional; no signed service or target
 runtime was exercised.
+
+Kernel-bench is now a native host action over the exact kernel/runtime artifacts.
+Doctor, audit, build, and test pass on both exact dated toolchains. Windows
+registers 14 tests and Linux 13; every test remains explicitly ignored as a
+manual performance gate, so no benchmark executed and no performance or
+physical-core evidence is claimed. Twenty-seven components are native and 15
+remain transitional.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

@@ -95,3 +95,4 @@ rust-action|org.mrml.system.service-image|mrml_service_image|none|-|mrml-config=
 rust-binary|org.mrml.system.service-image|mrml-service-pe|mrml_service_pe|system/service-image/src/main.rs|false
 rust-feature-set|org.mrml.system.service-image|MRML_NATIVE|
 rust-target-triple|org.mrml.system.service-image|MRML_NATIVE|x86_64-unknown-uefi
+rust-action|org.mrml.system.kernel-bench|mrml_kernel_bench|lib|tests/kernel-bench/src/lib.rs|mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*

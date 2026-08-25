@@ -245,6 +245,12 @@ release modes. Repeated same-host hashes are stable, but Windows/Linux hashes
 differ, so cross-host reproducibility is not established. Twenty-six of 42
 components are native; 16 remain transitional. No UEFI or service runtime ran.
 
+The kernel benchmark harness now has a native action over the host-projected
+kernel and runtime. Windows discovers 14 tests and Linux 13; all are explicitly
+ignored manual performance gates, and none ran. This is compile/registration
+evidence only, not benchmark or physical-core evidence. Twenty-seven of 42
+components are native; 15 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

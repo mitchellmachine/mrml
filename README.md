@@ -387,6 +387,12 @@ Windows and Arch Linux WSL2 and repeat deterministically per host; cross-host
 hashes differ and are not claimed reproducible. Twenty-six components are native
 and 16 remain transitional. No UEFI runtime or signed-service execution occurred.
 
+`mrml-kernel-bench` now compiles directly against native kernel and runtime
+artifacts on both hosts. Its harness discovers 14 Windows and 13 Linux tests;
+all remain deliberately ignored manual performance gates, so this verifies
+compilation and ignore policy but records no benchmark result. Twenty-seven
+components are native and 15 remain transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

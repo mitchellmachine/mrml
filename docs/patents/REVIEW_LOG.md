@@ -3180,3 +3180,10 @@ security semantics. It establishes neither clearance nor infringement, and any
 material release resolver/cache mechanism still requires the recorded worldwide
 authoritative-register review. Agent review does not replace independent human
 dual review.
+
+# 2026-08-25 — Native kernel benchmark action
+
+**Result: NOT_TRIGGERED.** This increment applies the existing native resolver
+and host projection to an existing benchmark harness. It changes no measured
+mechanism and runs none of the deliberately ignored performance gates. Agent
+review does not replace independent human dual review.

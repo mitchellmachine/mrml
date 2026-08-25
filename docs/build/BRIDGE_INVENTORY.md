@@ -129,6 +129,11 @@ PE32+ EFI application in debug and release profiles. Same-host repeated hashes
 are stable; cross-host hashes differ and are not claimed reproducible. Twenty-
 six components are native; 16 remain transitional.
 
+`mrml-kernel-bench` directly compiles against kernel and runtime on both hosts.
+The harness registers 14 tests on Windows and 13 on Linux, all deliberately
+ignored manual performance gates. No performance or physical-core claim follows.
+Twenty-seven components are native; 15 remain transitional.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.
