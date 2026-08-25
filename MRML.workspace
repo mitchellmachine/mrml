@@ -70,6 +70,7 @@ rust-example|org.mrml.library.av1|decode_ivf|packages/libraries/av1/examples/dec
 rust-action|org.mrml.library.crypto|mrml_crypto|lib|packages/libraries/crypto/src/lib.rs|mrml-runtime=mrml_runtime@*?runtime
 rust-feature-set|org.mrml.library.crypto|WINDOWS,LINUX|runtime
 rust-feature-set|org.mrml.library.crypto|MRML_NATIVE|
+rust-feature-profile|org.mrml.library.crypto|core|MRML_NATIVE,WINDOWS,LINUX|
 rust-action|org.mrml.library.tls|mrml_tls|lib|packages/libraries/tls/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.library.http|mrml_http|lib|packages/libraries/http/src/lib.rs|mrml-runtime=mrml_runtime@*;mrml-tls=mrml_tls@*
 rust-action|org.mrml.library.ssh|mrml_ssh|lib|packages/libraries/ssh/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*
@@ -81,6 +82,6 @@ rust-feature-set|org.mrml.tool.host|WINDOWS,LINUX|runtime
 rust-compile-env|org.mrml.tool.host|CARGO_MANIFEST_DIR|tools/host
 rust-action|org.mrml.compiler.driver|mrml_rustc_driver|none|-|mrml-error=mrml_error@*;mrml-runtime=mrml_runtime@*;mrml-rustc=mrml_rustc@*
 rust-binary|org.mrml.compiler.driver|mrml-rustc|mrml_rustc_driver|compiler/driver/src/main.rs|false
-rust-action|org.mrml.system.kernel|mrml_kernel|lib|system/kernel/src/lib.rs|mrml-crypto=mrml_crypto@*
+rust-action|org.mrml.system.kernel|mrml_kernel|lib|system/kernel/src/lib.rs|mrml-crypto=mrml_crypto@*#core
 rust-host-tests|org.mrml.system.kernel|WINDOWS,LINUX
 rust-test-policy|org.mrml.system.kernel|67108864

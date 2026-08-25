@@ -37,10 +37,18 @@ struct RustAction {
     binaries: Vec<RustBinary>,
     compile_env: Vec<(String, String)>,
     feature_sets: Vec<RustFeatureSet>,
+    feature_profiles: Vec<RustFeatureProfile>,
 }
 
 #[derive(Clone, Debug)]
 struct RustFeatureSet {
+    targets: Vec<String>,
+    features: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RustFeatureProfile {
+    name: String,
     targets: Vec<String>,
     features: Vec<String>,
 }
@@ -51,6 +59,7 @@ struct RustExtern {
     crate_name: String,
     targets: Vec<String>,
     feature: Option<String>,
+    provider_profile: String,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +170,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_binaries = Vec::new();
     let mut rust_compile_env = Vec::new();
     let mut rust_feature_sets = Vec::new();
+    let mut rust_feature_profiles = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -297,6 +307,14 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*features).to_owned(),
                 ));
             }
+            ["rust-feature-profile", component, name, targets, features] => {
+                rust_feature_profiles.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*targets).to_owned(),
+                    (*features).to_owned(),
+                ));
+            }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
@@ -370,6 +388,7 @@ fn load_workspace() -> Result<Workspace, String> {
             binaries: Vec::new(),
             compile_env: Vec::new(),
             feature_sets: Vec::new(),
+            feature_profiles: Vec::new(),
         });
     }
     for (component_id, targets, features) in rust_feature_sets {
@@ -409,6 +428,49 @@ fn load_workspace() -> Result<Workspace, String> {
         action
             .feature_sets
             .push(RustFeatureSet { targets, features });
+    }
+    for (component_id, name, targets, features) in rust_feature_profiles {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustFeatureProfileComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component.rust_action.as_mut().ok_or_else(|| {
+            format!("RustFeatureProfileActionMissing {{ component: {component_id} }}")
+        })?;
+        let features = split_declaration(&features);
+        let targets = if targets == "*" {
+            component.targets.clone()
+        } else {
+            split_declaration(&targets)
+        };
+        if name == "default"
+            || !rust_identifier(&name)
+            || features.iter().any(|feature| {
+                feature == "default" || !component.features.iter().any(|known| known == feature)
+            })
+            || targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !TARGET_FAMILIES.contains(&target.as_str()))
+            || action.feature_profiles.iter().any(|profile| {
+                profile.name == name
+                    && profile
+                        .targets
+                        .iter()
+                        .any(|existing| targets.iter().any(|target| target == existing))
+            })
+        {
+            return Err(format!(
+                "RustFeatureProfileInvalid {{ component: {component_id}, profile: {name} }}"
+            ));
+        }
+        action.feature_profiles.push(RustFeatureProfile {
+            name,
+            targets,
+            features,
+        });
     }
     for (component_id, stack_bytes) in rust_test_policies {
         let component = components
@@ -621,6 +683,24 @@ fn load_workspace() -> Result<Workspace, String> {
                         component.id, external.package
                     ));
                 }
+                if external.provider_profile != "default" {
+                    for target in component
+                        .targets
+                        .iter()
+                        .chain(action.host_test_targets.iter())
+                        .filter(|target| external.targets.contains(target))
+                    {
+                        if !dependency.feature_profiles.iter().any(|profile| {
+                            profile.name == external.provider_profile
+                                && profile.targets.contains(target)
+                        }) {
+                            return Err(format!(
+                                "RustExternProviderProfileMissing {{ component: {}, dependency: {}, profile: {}, target: {} }}",
+                                component.id, external.package, external.provider_profile, target
+                            ));
+                        }
+                    }
+                }
             }
             let mut declared: Vec<_> = component
                 .outputs
@@ -724,6 +804,15 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
                 "RustExternIdentityInvalid {{ declaration: {declaration} }}"
             ));
         }
+        let (target_and_feature, provider_profile) = target_and_feature
+            .split_once('#')
+            .map(|(declaration, profile)| (declaration, profile.to_owned()))
+            .unwrap_or((target_and_feature, "default".to_owned()));
+        if !rust_identifier(&provider_profile) {
+            return Err(format!(
+                "RustExternProviderProfileInvalid {{ declaration: {declaration} }}"
+            ));
+        }
         let (targets, feature) = target_and_feature
             .split_once('?')
             .map(|(targets, feature)| (targets, Some(feature.to_owned())))
@@ -765,27 +854,44 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
             crate_name: crate_name.into(),
             targets,
             feature,
+            provider_profile,
         });
     }
     result.sort_by(|left, right| left.package.cmp(&right.package));
     Ok(result)
 }
 
-fn rust_extern_active(external: &RustExtern, action: &RustAction, target: &str) -> bool {
+fn rust_extern_active(
+    external: &RustExtern,
+    action: &RustAction,
+    target: &str,
+    profile: &str,
+) -> bool {
     external.targets.iter().any(|family| family == target)
         && external
             .feature
             .as_ref()
-            .is_none_or(|feature| rust_features(action, target).contains(feature))
+            .is_none_or(|feature| rust_features(action, target, profile).contains(feature))
 }
 
-fn rust_features<'a>(action: &'a RustAction, target: &str) -> &'a [String] {
-    action
-        .feature_sets
-        .iter()
-        .find(|set| set.targets.iter().any(|candidate| candidate == target))
-        .map(|set| set.features.as_slice())
-        .unwrap_or(&[])
+fn rust_features<'a>(action: &'a RustAction, target: &str, profile: &str) -> &'a [String] {
+    if profile == "default" {
+        action
+            .feature_sets
+            .iter()
+            .find(|set| set.targets.iter().any(|candidate| candidate == target))
+            .map(|set| set.features.as_slice())
+            .unwrap_or(&[])
+    } else {
+        action
+            .feature_profiles
+            .iter()
+            .find(|set| {
+                set.name == profile && set.targets.iter().any(|candidate| candidate == target)
+            })
+            .map(|set| set.features.as_slice())
+            .unwrap_or(&[])
+    }
 }
 
 fn apply_rust_features(
@@ -793,8 +899,9 @@ fn apply_rust_features(
     component: &Component,
     action: &RustAction,
     target: &str,
+    profile: &str,
 ) {
-    for feature in rust_features(action, target) {
+    for feature in rust_features(action, target, profile) {
         command.arg("--cfg").arg(format!("feature=\"{feature}\""));
     }
     let values = component
@@ -1067,7 +1174,9 @@ fn run_rust_action(
     release: bool,
 ) -> Result<(), String> {
     let mut built = BTreeSet::new();
-    compile_rust_component(workspace, component, target, release, false, &mut built)?;
+    compile_rust_component(
+        workspace, component, target, release, false, "default", &mut built,
+    )?;
     let action = component
         .rust_action
         .as_ref()
@@ -1095,6 +1204,7 @@ fn run_rust_action(
             test_target,
             release,
             true,
+            "default",
             &mut test_built,
         )?;
         for test in &action.tests {
@@ -1124,9 +1234,11 @@ fn compile_rust_component(
     target: &str,
     release: bool,
     test: bool,
+    feature_profile: &str,
     built: &mut BTreeSet<String>,
 ) -> Result<(), String> {
-    if !test && built.contains(&component.id) {
+    let build_key = format!("{}#{target}#{feature_profile}", component.id);
+    if !test && built.contains(&build_key) {
         return Ok(());
     }
     let action = component.rust_action.as_ref().ok_or_else(|| {
@@ -1138,7 +1250,7 @@ fn compile_rust_component(
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target))
+        .filter(|external| rust_extern_active(external, action, target, feature_profile))
     {
         let dependency = workspace
             .components
@@ -1156,12 +1268,20 @@ fn compile_rust_component(
                 component.id, dependency.id
             ));
         }
-        compile_rust_component(workspace, dependency, target, release, false, built)?;
+        compile_rust_component(
+            workspace,
+            dependency,
+            target,
+            release,
+            false,
+            &external.provider_profile,
+            built,
+        )?;
     }
 
     if action.crate_type == "none" {
         if !test {
-            built.insert(component.id.clone());
+            built.insert(build_key);
         }
         return Ok(());
     }
@@ -1183,7 +1303,7 @@ fn compile_rust_component(
     let output = if test {
         output_dir.join(format!("{}_tests{extension}", action.crate_name))
     } else {
-        native_artifact(workspace, action, target, release)
+        native_artifact(workspace, action, target, release, feature_profile)
     };
     let rustc = pinned_tool("rustc")?;
     let mut command = Command::new(rustc);
@@ -1198,12 +1318,12 @@ fn compile_rust_component(
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
-    apply_rust_features(&mut command, component, action, target);
+    apply_rust_features(&mut command, component, action, target, feature_profile);
     apply_rust_compile_env(&mut command, action);
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target))
+        .filter(|external| rust_extern_active(external, action, target, feature_profile))
     {
         let dependency = workspace
             .components
@@ -1217,7 +1337,14 @@ fn compile_rust_component(
         command.arg("--extern").arg(format!(
             "{}={}",
             external.crate_name,
-            native_artifact(workspace, dependency_action, target, release).display()
+            native_artifact(
+                workspace,
+                dependency_action,
+                target,
+                release,
+                &external.provider_profile,
+            )
+            .display()
         ));
     }
     if test {
@@ -1263,7 +1390,7 @@ fn compile_rust_component(
     if test {
         execute_test(&output, component, action.test_stack_bytes)?;
     } else {
-        built.insert(component.id.clone());
+        built.insert(build_key);
     }
     Ok(())
 }
@@ -1298,20 +1425,20 @@ fn run_declared_test(
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
-    apply_rust_features(&mut command, component, action, target);
+    apply_rust_features(&mut command, component, action, target, "default");
     apply_rust_compile_env(&mut command, action);
     if test.self_extern {
         command.arg("--extern").arg(format!(
             "{}={}",
             action.crate_name,
-            native_artifact(workspace, action, target, release).display()
+            native_artifact(workspace, action, target, release, "default").display()
         ));
     }
     apply_test_stack(&mut command, action, target);
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target))
+        .filter(|external| rust_extern_active(external, action, target, "default"))
     {
         let dependency = workspace
             .components
@@ -1325,7 +1452,14 @@ fn run_declared_test(
         command.arg("--extern").arg(format!(
             "{}={}",
             external.crate_name,
-            native_artifact(workspace, dependency_action, target, release).display()
+            native_artifact(
+                workspace,
+                dependency_action,
+                target,
+                release,
+                &external.provider_profile,
+            )
+            .display()
         ));
     }
     if target == "WINDOWS" {
@@ -1383,16 +1517,16 @@ fn compile_declared_example(
         .arg(format!(
             "{}={}",
             action.crate_name,
-            native_artifact(workspace, action, target, release).display()
+            native_artifact(workspace, action, target, release, "default").display()
         ))
         .arg("-o")
         .arg(&output);
-    apply_rust_features(&mut command, component, action, target);
+    apply_rust_features(&mut command, component, action, target, "default");
     apply_rust_compile_env(&mut command, action);
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target))
+        .filter(|external| rust_extern_active(external, action, target, "default"))
     {
         let dependency = workspace
             .components
@@ -1406,7 +1540,14 @@ fn compile_declared_example(
         command.arg("--extern").arg(format!(
             "{}={}",
             external.crate_name,
-            native_artifact(workspace, dependency_action, target, release).display()
+            native_artifact(
+                workspace,
+                dependency_action,
+                target,
+                release,
+                &external.provider_profile,
+            )
+            .display()
         ));
     }
     if target == "WINDOWS" {
@@ -1486,19 +1627,19 @@ fn compile_declared_binary(
     } else {
         command.args(["--crate-type", "bin"]);
     }
-    apply_rust_features(&mut command, component, action, target);
+    apply_rust_features(&mut command, component, action, target, "default");
     apply_rust_compile_env(&mut command, action);
     if binary.self_extern {
         command.arg("--extern").arg(format!(
             "{}={}",
             action.crate_name,
-            native_artifact(workspace, action, target, release).display()
+            native_artifact(workspace, action, target, release, "default").display()
         ));
     }
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target))
+        .filter(|external| rust_extern_active(external, action, target, "default"))
     {
         let dependency = workspace
             .components
@@ -1512,7 +1653,14 @@ fn compile_declared_binary(
         command.arg("--extern").arg(format!(
             "{}={}",
             external.crate_name,
-            native_artifact(workspace, dependency_action, target, release).display()
+            native_artifact(
+                workspace,
+                dependency_action,
+                target,
+                release,
+                &external.provider_profile,
+            )
+            .display()
         ));
     }
     if target == "WINDOWS" {
@@ -1639,14 +1787,20 @@ fn native_artifact(
     action: &RustAction,
     target: &str,
     release: bool,
+    feature_profile: &str,
 ) -> PathBuf {
+    let profile_suffix = if feature_profile == "default" {
+        String::new()
+    } else {
+        format!("__{feature_profile}")
+    };
     workspace
         .root
         .join("target")
         .join("mrml")
         .join(target.to_ascii_lowercase())
         .join(if release { "release" } else { "debug" })
-        .join(format!("lib{}.rlib", action.crate_name))
+        .join(format!("lib{}{profile_suffix}.rlib", action.crate_name))
 }
 
 fn find_component<'a>(workspace: &'a Workspace, cargo: &str) -> Result<&'a Component, String> {
@@ -2253,9 +2407,15 @@ mod tests {
         assert_eq!(externs[0].package, "mrml-linux");
         assert_eq!(externs[0].targets, ["LINUX"]);
         assert_eq!(externs[0].feature.as_deref(), Some("nvidia"));
+        assert_eq!(externs[0].provider_profile, "default");
         assert_eq!(externs[1].feature, None);
+        assert_eq!(externs[1].provider_profile, "default");
+        let profiled = parse_rust_externs("mrml-crypto=mrml_crypto@*?core#kernel").unwrap();
+        assert_eq!(profiled[0].feature.as_deref(), Some("core"));
+        assert_eq!(profiled[0].provider_profile, "kernel");
         assert!(parse_rust_externs("mrml-runtime=bad-name@*").is_err());
         assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*?").is_err());
+        assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*#bad-name").is_err());
         assert!(
             parse_rust_externs(
                 "mrml-runtime=mrml_runtime@WINDOWS;mrml-runtime=runtime_again@LINUX"

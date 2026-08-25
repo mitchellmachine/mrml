@@ -101,9 +101,13 @@ for `x86_64-unknown-none` without activating `mrml-runtime`.
 
 Cross-target actions may declare an exact set of approved host-test families.
 Without that declaration, test mode refuses to execute a non-host artifact.
-`mrml-kernel` cross-builds for `x86_64-unknown-none` on both hosts, then uses a
-fresh host dependency graph and 64 MiB harness for 474 passing tests. Twenty-
-three components are native; 19 remain transitional.
+Named provider profiles are explicit on extern edges, have independently
+validated target/feature coverage, and produce profile-qualified artifacts and
+build-cache identities. `mrml-kernel` binds crypto's empty `core` profile for
+both target and host graphs; it cannot reuse crypto's host-default `runtime`
+artifact. The kernel cross-builds for `x86_64-unknown-none` on both hosts, then
+uses a fresh host dependency graph and 64 MiB harness for 474 passing tests.
+Twenty-three components are native; 19 remain transitional.
 
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,

@@ -214,7 +214,10 @@ Native feature profiles now cover every component target exactly once.
 `MRML_NATIVE`; both hosts cross-build the latter as an `x86_64-unknown-none`
 rlib without a runtime extern. This is cross-build evidence, not execution.
 
-The kernel is the first `MRML_NATIVE` action. Both hosts cross-build its
+Named provider profiles now resolve, cache, and name nondefault dependency
+artifacts independently. The kernel binds crypto's empty `core` profile on
+`MRML_NATIVE` and in its host harness, so host verification cannot silently
+activate crypto's default `runtime` feature. Both hosts cross-build its
 `x86_64-unknown-none` rlib, then independently compile and run the explicitly
 declared 64 MiB host harness with 474 passing tests. Twenty-three of 42
 components are native; 19 remain transitional. This does not establish target,

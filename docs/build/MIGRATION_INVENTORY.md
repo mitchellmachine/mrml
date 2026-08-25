@@ -736,6 +736,17 @@ second inventory.
   and CI together and verifying both Windows/WHP and Linux/KVM. The present task
   intentionally establishes the graph before that high-churn move.
 
+Named provider feature profiles close a host-projection gap in that resolver.
+An extern may select a validated nondefault provider profile; the selected
+profile participates in recursive-build identity and the rlib filename. The
+kernel now binds crypto's empty `core` profile for `MRML_NATIVE`, Windows, and
+Linux instead of acquiring crypto's host-default `runtime` feature during host
+tests. Verification with the exact dated toolchains passed `mrml`'s 11 unit
+tests and clippy, `mrml doctor`, `mrml audit`, the native kernel cross-build,
+and all 474 kernel host tests on Windows gnullvm and Arch Linux WSL2. The
+separate `libmrml_crypto__core.rlib` artifact was observed; this remains hosted
+and cross-build evidence only.
+
 ## Next safe migration order
 
 1. Move the next dependency-light leaf into `packages/libraries/`, update every

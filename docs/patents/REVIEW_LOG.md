@@ -3141,3 +3141,13 @@ registers. Prefer conventional non-overlapping designs and applicable verified
 royalty-free grants or design around unresolved claims. This documentation does
 not establish clearance or infringement, and agent review does not replace
 independent human dual review.
+
+# 2026-08-25 — Native provider feature profiles
+
+**Result: TRIGGERED.** The native resolver now validates an extern-selected
+provider feature profile and separates recursive-build identity and artifacts
+by that profile. This is part of the existing package/cache/resolver risk area;
+it does not establish patent clearance or infringement. Search and worldwide
+authoritative-register verification remain required for any material selected
+resolver or cache mechanism before release. Agent review does not replace
+independent human dual review.

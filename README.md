@@ -355,9 +355,12 @@ declared target exactly once. `mrml-crypto` selects `runtime` for Windows/Linux
 host tests but selects no features or runtime extern for its `MRML_NATIVE`
 `x86_64-unknown-none` rlib. Both hosts cross-build that profile successfully.
 
-`mrml-kernel` now cross-builds that native crypto profile into an
-`x86_64-unknown-none` rlib on Windows and Arch Linux WSL2. Its separately
-declared 64 MiB host harness passes all 474 tests on each host. Twenty-three
+Named provider profiles keep a dependency's nondefault feature resolution
+distinct from its ordinary target default, including in cache keys and artifact
+names. `mrml-kernel` binds `mrml-crypto`'s empty `core` profile for both its
+`x86_64-unknown-none` build and separately declared 64 MiB host harness, rather
+than silently acquiring the host-default `runtime` feature. Windows and Arch
+Linux WSL2 cross-build the kernel and pass all 474 host tests. Twenty-three
 components are native and 19 remain transitional; no target execution or
 physical-hardware verification is implied.
 
