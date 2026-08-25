@@ -274,6 +274,14 @@ host-default crypto dependency to coexist with kernel's crypto-core dependency.
 42 components are native; 12 remain transitional. No live key, enrollment,
 firmware, or hardware signing operation occurred.
 
+Native extern scope now distinguishes production from test-only direct edges.
+KVM's direct crypto-core dev edge is active only in its harness, while kernel's
+transitive production crypto-core edge remains. On Arch Linux WSL2, `/dev/kvm`
+was usable and 18 tests passed, including conditional API and signed-guest
+probes; one manual live-mapping performance gate remained ignored. Thirty-one of
+42 components are native; 11 remain transitional. This is nested KVM evidence,
+not bare-metal, IOMMU, TPM, or physical-hardware evidence.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

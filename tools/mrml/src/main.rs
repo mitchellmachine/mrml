@@ -70,6 +70,7 @@ struct RustExtern {
     targets: Vec<String>,
     feature: Option<String>,
     provider_profile: String,
+    test_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -985,7 +986,11 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
     }
     let mut result = Vec::new();
     for declaration in value.split(';') {
-        let (binding, target_and_feature) = declaration
+        let (declaration_body, test_only) = declaration
+            .strip_suffix("!test")
+            .map(|body| (body, true))
+            .unwrap_or((declaration, false));
+        let (binding, target_and_feature) = declaration_body
             .split_once('@')
             .ok_or_else(|| format!("RustExternSyntaxError {{ declaration: {declaration} }}"))?;
         let (package, crate_name) = binding
@@ -1047,6 +1052,7 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
             targets,
             feature,
             provider_profile,
+            test_only,
         });
     }
     result.sort_by(|left, right| left.package.cmp(&right.package));
@@ -1058,8 +1064,10 @@ fn rust_extern_active(
     action: &RustAction,
     target: &str,
     profile: &str,
+    test: bool,
 ) -> bool {
-    external.targets.iter().any(|family| family == target)
+    (!external.test_only || test)
+        && external.targets.iter().any(|family| family == target)
         && external
             .feature
             .as_ref()
@@ -1067,7 +1075,7 @@ fn rust_extern_active(
 }
 
 fn rust_binary_active(binary: &RustBinary, action: &RustAction, target: &str) -> bool {
-    binary.targets.contains(&target.to_owned())
+    binary.targets.iter().any(|candidate| candidate == target)
         && binary
             .feature
             .as_ref()
@@ -1502,7 +1510,7 @@ fn compile_rust_component(
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target, feature_profile))
+        .filter(|external| rust_extern_active(external, action, target, feature_profile, test))
     {
         let dependency = workspace
             .components
@@ -1597,7 +1605,7 @@ fn compile_rust_component(
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target, feature_profile))
+        .filter(|external| rust_extern_active(external, action, target, feature_profile, test))
     {
         let dependency = workspace
             .components
@@ -1706,7 +1714,7 @@ fn run_declared_test(
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target, "default"))
+        .filter(|external| rust_extern_active(external, action, target, "default", true))
     {
         let dependency = workspace
             .components
@@ -1799,7 +1807,7 @@ fn compile_declared_example(
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target, "default"))
+        .filter(|external| rust_extern_active(external, action, target, "default", false))
     {
         let dependency = workspace
             .components
@@ -1920,7 +1928,7 @@ fn compile_declared_binary(
     for external in action
         .externs
         .iter()
-        .filter(|external| rust_extern_active(external, action, target, "default"))
+        .filter(|external| rust_extern_active(external, action, target, "default", test))
     {
         let dependency = workspace
             .components
@@ -2795,6 +2803,9 @@ mod tests {
         let profiled = parse_rust_externs("mrml-crypto=mrml_crypto@*?core#kernel").unwrap();
         assert_eq!(profiled[0].feature.as_deref(), Some("core"));
         assert_eq!(profiled[0].provider_profile, "kernel");
+        let test_only = parse_rust_externs("mrml-crypto=mrml_crypto@*#core!test").unwrap();
+        assert!(test_only[0].test_only);
+        assert_eq!(test_only[0].provider_profile, "core");
         assert!(parse_rust_externs("mrml-runtime=bad-name@*").is_err());
         assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*?").is_err());
         assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*#bad-name").is_err());

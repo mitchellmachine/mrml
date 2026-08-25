@@ -417,6 +417,14 @@ mixed graph, builds on both hosts, and passes all eight temporary-file tests.
 Thirty components are native and 12 remain transitional. No live signing key,
 Secure Boot enrollment, firmware, or hardware was used.
 
+Extern edges can now be test-only: KVM's direct crypto-core dev dependency is
+absent from its production extern set while remaining available to its harness
+(crypto-core is still transitively required by kernel). `mrml-kvm` builds on
+Arch Linux WSL2 and passes 18 tests with one manual mapping-performance test
+ignored. `/dev/kvm` was usable, so conditional API and signed-guest probes ran.
+Thirty-one components are native and 11 remain transitional; this is nested WSL2
+KVM evidence, not bare-metal or physical-hardware verification.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

@@ -157,6 +157,14 @@ signing binary builds and passes all eight temporary-file tests on Windows and
 Arch Linux WSL2. Thirty components are native; 12 remain transitional. No real
 key or signing deployment was touched.
 
+Extern declarations can now mark a direct edge test-only. `mrml-kvm` uses that
+scope for its crypto-core dev dependency; production still receives crypto-core
+transitively through kernel. The library builds on Arch Linux WSL2 and passes 18
+tests with one manual mapping-performance gate ignored. `/dev/kvm` was usable,
+so conditional API and signed-guest probes exercised nested KVM. Thirty-one
+components are native; 11 remain transitional. No bare-metal or physical KVM
+hardware was verified.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

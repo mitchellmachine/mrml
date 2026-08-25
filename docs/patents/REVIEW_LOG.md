@@ -3219,3 +3219,13 @@ mechanism changed. It establishes neither clearance nor infringement. Material
 release resolver/cache mechanisms remain subject to the recorded worldwide
 authoritative-register review, and agent review does not replace independent
 human dual review.
+
+# 2026-08-25 — Test-only native extern scope and KVM action
+
+**Result: TRIGGERED.** The native resolver now distinguishes a direct test-only
+extern from production externs and applies that scope to the existing KVM graph.
+This extends the package/cache/resolver risk area but changes no KVM, guest,
+mapping, or virtualization mechanism. It establishes neither clearance nor
+infringement; material release resolver/cache mechanisms remain subject to the
+recorded worldwide authoritative-register review. Agent review does not replace
+independent human dual review.

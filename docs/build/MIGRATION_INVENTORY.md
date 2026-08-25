@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty
+  explicit. Thirty-one
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -793,6 +793,15 @@ that corrected, both exact dated host toolchains build `mrml-sign` and pass all
 eight temporary-file tests. Thirty components are native and 12 remain
 transitional. No live key, Secure Boot enrollment, firmware, or hardware signing
 operation occurred.
+
+Direct externs now distinguish production and test-only scope. KVM's direct
+crypto-core dev edge is supplied only to its test harness; kernel continues to
+bring crypto-core transitively into production. The exact Arch Linux toolchain
+passes doctor/audit, builds the library, and runs 18 tests with one manual live-
+mapping performance gate ignored. `/dev/kvm` was usable, so conditional API and
+signed-guest probes ran under nested WSL2 KVM. Thirty-one components are native
+and 11 remain transitional. This is not bare-metal, IOMMU, TPM, or physical-
+hardware evidence.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is
