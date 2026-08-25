@@ -49,6 +49,10 @@ The fourth semantic move relocates `mrml-zstd` and updates its runtime,
 Wikipedia, and patent-review paths without changing compression behavior.
 **Result: NOT_TRIGGERED.** The existing Zstandard review remains in force.
 
+The fifth semantic move relocates `mrml-zim` and updates its runtime and
+Wikipedia paths without changing archive behavior. **Result: NOT_TRIGGERED.**
+This is repository organization, not a new archive mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

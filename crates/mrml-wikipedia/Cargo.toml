@@ -7,5 +7,5 @@ license.workspace = true
 
 [dependencies]
 mrml-runtime = { path = "../mrml-runtime" }
-mrml-zim = { path = "../mrml-zim" }
+mrml-zim = { path = "../../packages/libraries/zim" }
 mrml-zstd = { path = "../../packages/libraries/zstd" }

@@ -136,6 +136,9 @@ leaf with its trainer edge retained. See
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.
 
+`mrml-zim` is the fifth migrated leaf; its Wikipedia edge now resolves to
+`packages/libraries/zim` without changing archive semantics.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,
