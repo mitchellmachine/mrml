@@ -36,8 +36,8 @@ component|org.mrml.tool.vmm-kvm-run|packages/tools/vmm/kvm-run|mrml-kvm-run|HOST
 component|org.mrml.system.vmm-whp|packages/system/vmm/whp|mrml-whp|HOST_WINDOWS_LINUX|WINDOWS|false|mrml-crypto,mrml-kernel,mrml-runtime||mrml_whp:lib|build-script:0,proc-macro:0,native-link:1,compile-env:0,included-file:0,external-command:0
 component|org.mrml.tool.vmm-whp-run|packages/tools/vmm/whp-run|mrml-whp-run|HOST_WINDOWS_LINUX|WINDOWS|false|mrml-crypto,mrml-error,mrml-kernel,mrml-runtime,mrml-tensor,mrml-whp|cuda,default|mrml-whp-run:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.library.json|packages/libraries/json|mrml-json|SHARED|WINDOWS,LINUX|false|mrml-runtime||mrml_json:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
-component|org.mrml.library.zim|packages/libraries/zim|mrml-zim|SHARED|WINDOWS,LINUX|false|mrml-runtime||mrml_zim:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
-component|org.mrml.library.zstd|packages/libraries/zstd|mrml-zstd|SHARED|WINDOWS,LINUX|false|mrml-runtime||mrml_zstd:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
+component|org.mrml.zim|packages/libraries/zim|mrml-zim|SHARED|WINDOWS,LINUX|false|mrml-runtime||mrml_zim:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
+component|org.mrml.zstd|packages/libraries/zstd|mrml-zstd|SHARED|WINDOWS,LINUX|false|mrml-runtime||mrml_zstd:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.library.wikipedia|packages/libraries/wikipedia|mrml-wikipedia|SHARED|WINDOWS,LINUX|false|mrml-runtime,mrml-zim,mrml-zstd||mrml_wikipedia:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.library.tokenizer|packages/libraries/tokenizer|mrml-tokenizer|SHARED|WINDOWS,LINUX|false|mrml-runtime||mrml_tokenizer:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.tool.trainer|packages/tools/trainer|mrml-trainer|HOST_WINDOWS_LINUX|WINDOWS,LINUX|false|mrml-math,mrml-runtime,mrml-tensor,mrml-tokenizer,mrml-wikipedia||mrml-trainer:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
@@ -51,8 +51,8 @@ rust-action|org.mrml.library.linux|mrml_linux|lib|packages/libraries/linux/src/l
 rust-action|org.mrml.library.runtime|mrml_runtime|lib|packages/libraries/runtime/src/lib.rs|mrml-linux=mrml_linux@LINUX;mrml-windows=mrml_windows@WINDOWS
 rust-action|org.mrml.library.percent-encoding|mrml_percent_encoding|lib|packages/libraries/percent-encoding/src/lib.rs|mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.library.tokenizer|mrml_tokenizer|lib|packages/libraries/tokenizer/src/lib.rs|mrml-runtime=mrml_runtime@*
-rust-action|org.mrml.library.zstd|mrml_zstd|lib|packages/libraries/zstd/src/lib.rs|mrml-runtime=mrml_runtime@*
-rust-action|org.mrml.library.zim|mrml_zim|lib|packages/libraries/zim/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.zstd|mrml_zstd|lib|packages/libraries/zstd/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.zim|mrml_zim|lib|packages/libraries/zim/src/lib.rs|mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.library.json|mrml_json|lib|packages/libraries/json/src/lib.rs|mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.library.wikipedia|mrml_wikipedia|lib|packages/libraries/wikipedia/src/lib.rs|mrml-runtime=mrml_runtime@*;mrml-zim=mrml_zim@*;mrml-zstd=mrml_zstd@*
 rust-action|org.mrml.library.error|mrml_error|lib|packages/libraries/error/src/lib.rs|mrml-json=mrml_json@*;mrml-runtime=mrml_runtime@*

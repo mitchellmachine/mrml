@@ -252,6 +252,12 @@ fn load_workspace() -> Result<Workspace, String> {
                 if components.len() >= MAX_COMPONENTS {
                     return Err(format!("ComponentCountLimit {{ limit: {MAX_COMPONENTS} }}"));
                 }
+                if !mrml_package_identifier(id) {
+                    return Err(format!(
+                        "InvalidPackageIdentity {{ line: {}, package: {id} }}",
+                        index + 1
+                    ));
+                }
                 if components.iter().any(|item: &Component| {
                     item.id == *id || item.path == *path || item.cargo_package == *cargo
                 }) {
@@ -2626,6 +2632,24 @@ fn native_output_dir(
         .join(if release { "release" } else { "debug" }))
 }
 
+fn mrml_package_identifier(value: &str) -> bool {
+    value.starts_with("org.mrml.")
+        && value.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && segment
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_lowercase)
+                && segment
+                    .as_bytes()
+                    .last()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
 fn ensure_artifact_directory(output_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(output_dir)
         .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))
@@ -3252,6 +3276,15 @@ mod tests {
         assert!(!rust_identifier("../mrml-math"));
         assert!(rust_output_name("mrml-git"));
         assert!(!rust_output_name("../mrml-git"));
+    }
+    #[test]
+    fn package_identity_is_distinct_from_cargo_and_crate_identity() {
+        assert!(mrml_package_identifier("org.mrml.zstd"));
+        assert!(mrml_package_identifier("org.mrml.system.vmm-kvm"));
+        assert!(!mrml_package_identifier("mrml-zstd"));
+        assert!(!mrml_package_identifier("org.mrml.mrml_zstd"));
+        assert!(!mrml_package_identifier("org.mrml.Zstd"));
+        assert!(!mrml_package_identifier("org.mrml.zstd-"));
     }
     #[test]
     fn rust_target_variants_are_allowlisted_and_extension_exact() {
