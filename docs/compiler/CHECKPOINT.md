@@ -597,6 +597,11 @@ moved into a local and returned. Local-backed reachable origins fail with the
 bounded outlives diagnostic, all-parameter origins pass, and a disconnected
 post-`break` local write remains excluded. Both hosts pass 766 compiler tests.
 
+Projected identity-call return evidence covers a conditional mutable-reference
+tuple field returned directly through the call and through one stored call
+result. ORACLE-0002 and MRML reject the mixed local/parameter origin set and
+accept the all-parameter set. Both hosts pass 766 compiler tests.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

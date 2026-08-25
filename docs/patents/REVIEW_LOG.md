@@ -3877,6 +3877,12 @@ dispatch mechanism. Existing `TRIGGERED` reviews for those implementation paths
 remain unchanged; this evidence/metadata tooling selects no additional patent
 mechanism.
 
+# 2026-08-25 — Projected identity-call return evidence
+
+**Result: NOT_TRIGGERED.** Independently authored probes compose the existing
+bounded projected-origin and identity-call outlives relations. This evidence
+increment selects no new compiler algorithm or runtime mechanism.
+
 # 2026-08-25 — Moved projected-return ancestry evidence
 
 **Result: NOT_TRIGGERED.** This evidence increment exercises the existing

@@ -3814,6 +3814,13 @@ returns. Windows gnullvm and native Arch Linux WSL each pass the same 766
 compiler tests. This is independently authored oracle and MRML evidence for the
 existing bounded moved-loan relation, not general alias analysis or regions.
 
+Projected identity-call return evidence composes the conditional mutable tuple-
+field origin set with the existing bounded call-argument relation. Both a direct
+identity-call tail and one stored call result reject a possible local-backed
+origin and accept all parameter-backed branches. Windows gnullvm and native Arch
+Linux WSL each pass the same 766 compiler tests. This is bounded composition of
+existing facts, not general interprocedural lifetime inference or regions.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

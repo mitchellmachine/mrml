@@ -29882,6 +29882,8 @@ mod tests {
         for rejected in [
             "fn value(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { return identity(&mut local); } input }",
             "fn value(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { let returned = identity(&mut local); return returned; } input }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; let holder = (if choose { &mut *input } else { &mut local },); identity(holder.0) }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; let holder = (if choose { &mut *input } else { &mut local },); let returned = identity(holder.0); returned }",
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -29891,6 +29893,8 @@ mod tests {
         for accepted in [
             "fn value(input: &mut u16) -> &mut u16 { identity(input) }",
             "fn value(input: &mut u16) -> &mut u16 { let returned = identity(input); returned }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { let holder = (if choose { &mut *input } else { &mut *input },); identity(holder.0) }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { let holder = (if choose { &mut *input } else { &mut *input },); let returned = identity(holder.0); returned }",
         ] {
             analyze(accepted).unwrap();
         }

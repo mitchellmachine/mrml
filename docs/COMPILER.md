@@ -772,6 +772,10 @@ The same exact-origin set survives a projected field move into a reference local
 before return. Direct initialization, conditional initialization, branch-local
 assignments, and disconnected loop suffixes therefore retain the same outlives
 result through the additional local generation.
+Projected mutable tuple-field origins also survive an identity call at the
+return boundary and through one stored call result. A local-backed conditional
+origin fails outlives validation while all parameter-backed origins remain
+accepted, reusing the same call-argument and projected-origin facts.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,
