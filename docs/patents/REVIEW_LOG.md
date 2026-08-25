@@ -3904,3 +3904,17 @@ bounded parent relation to group nested conditional effects for the existing
 outlives check. It selects no new runtime, allocation, reclamation,
 synchronization, enforcement, hardware, protocol, cryptographic, or executable
 mechanism.
+
+# 2026-08-25 — Hosted service-resource lifecycle correction
+
+**Result: NOT_TRIGGERED.** This correction separates an existing setup-only
+control capability from exact read/write data capabilities, retires that
+temporary authority before userspace launch, uses the already specified hosted
+resource-page mapping, erases a direct backing range before its existing
+retirement operation succeeds, and adds failure-state diagnostics to the KVM
+probe. These are conventional capability separation, bounded memory erasure,
+and diagnostic changes to the already reviewed shared-buffer/service-lifecycle
+mechanism; they select no new transport, placement, reclamation, cryptographic,
+hardware, or synchronization mechanism. The existing `TRIGGERED` review for
+actual IPC/shared-memory transport and isolated-service supervision remains in
+force.

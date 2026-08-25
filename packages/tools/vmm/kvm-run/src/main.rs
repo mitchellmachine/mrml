@@ -2047,7 +2047,21 @@ fn application_main() -> Result<()> {
                 value: 1,
             })
         {
-            return Err(anyhow!("isolated receiver did not block: {:?}", exit));
+            let state = guest.snapshot().map_err(|error| {
+                anyhow!(
+                    "isolated receiver did not block ({:?}) and state capture failed: {:?}",
+                    exit,
+                    error
+                )
+            })?;
+            return Err(anyhow!(
+                "isolated receiver did not block: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
+                exit,
+                state.instruction_pointer(),
+                state.stack_pointer(),
+                state.page_table_root(),
+                state.fault_address()
+            ));
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution during service send failed: {:?}", error))?;
@@ -2092,10 +2106,22 @@ fn application_main() -> Result<()> {
                     value: stage,
                 })
             {
+                let state = guest.snapshot().map_err(|error| {
+                    anyhow!(
+                        "KVM configuration response stage {} mismatch ({:?}) and state capture failed: {:?}",
+                        stage,
+                        exit,
+                        error
+                    )
+                })?;
                 return Err(anyhow!(
-                    "KVM configuration response stage {} mismatch: {:?}",
+                    "KVM configuration response stage {} mismatch: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
                     stage,
-                    exit
+                    exit,
+                    state.instruction_pointer(),
+                    state.stack_pointer(),
+                    state.page_table_root(),
+                    state.fault_address()
                 ));
             }
             exit = VmBackend::run(&mut guest, 0).map_err(|error| {
@@ -2264,7 +2290,21 @@ fn application_main() -> Result<()> {
                 value: 0x20,
             })
         {
-            return Err(anyhow!("KVM receiver cleanup request mismatch: {:?}", exit));
+            let state = guest.snapshot().map_err(|error| {
+                anyhow!(
+                    "KVM receiver cleanup request mismatch ({:?}) and state capture failed: {:?}",
+                    exit,
+                    error
+                )
+            })?;
+            return Err(anyhow!(
+                "KVM receiver cleanup request mismatch: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
+                exit,
+                state.instruction_pointer(),
+                state.stack_pointer(),
+                state.page_table_root(),
+                state.fault_address()
+            ));
         }
         complete_kvm_service_cleanup(
             &mut guest,
@@ -2340,10 +2380,22 @@ fn application_main() -> Result<()> {
                     value: stage,
                 })
             {
+                let state = guest.snapshot().map_err(|error| {
+                    anyhow!(
+                        "restarted KVM service IPC stage {} failed ({:?}) and state capture failed: {:?}",
+                        stage,
+                        exit,
+                        error
+                    )
+                })?;
                 return Err(anyhow!(
-                    "restarted KVM service IPC stage {} failed: {:?}",
+                    "restarted KVM service IPC stage {} failed: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
                     stage,
-                    exit
+                    exit,
+                    state.instruction_pointer(),
+                    state.stack_pointer(),
+                    state.page_table_root(),
+                    state.fault_address()
                 ));
             }
             exit = VmBackend::run(&mut guest, 0).map_err(|error| {

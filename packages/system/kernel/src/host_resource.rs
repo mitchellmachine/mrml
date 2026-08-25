@@ -123,7 +123,12 @@ unsafe impl HostResourceMemory for DirectHostResourceMemory {
         Ok(())
     }
 
-    unsafe fn retire(&mut self, _resource: u64, _bytes: u64) -> Result<(), Self::Error> {
+    unsafe fn retire(&mut self, resource: u64, bytes: u64) -> Result<(), Self::Error> {
+        let length = usize::try_from(bytes).map_err(|_| DirectHostResourceError::AddressOverflow)?;
+        let address = Self::address(resource, 0, length)?;
+        // SAFETY: required by the trait caller; the complete registered range
+        // remains exclusively live until this retirement operation succeeds.
+        unsafe { ptr::write_bytes(address as *mut u8, 0, length) };
         Ok(())
     }
 }
@@ -463,5 +468,8 @@ mod tests {
         // SAFETY: source is live and both requested ranges are in bounds.
         unsafe { memory.write(resource, 2, &[8, 9]) }.unwrap();
         assert_eq!(source, [1, 2, 8, 9]);
+        // SAFETY: source remains live and exclusively owned for retirement.
+        unsafe { memory.retire(resource, source.len() as u64) }.unwrap();
+        assert_eq!(source, [0; 4]);
     }
 }

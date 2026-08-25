@@ -3613,7 +3613,8 @@ unsafe fn provision_service_resource(
     peer: Option<mrml_kernel::TaskId>,
 ) -> ([Capability; 2], Option<[Capability; 3]>) {
     let resource_address = unsafe { core::ptr::addr_of_mut!(SERVICE_RESOURCE_PAGE.0) as u64 };
-    let write = runtime
+    let resource_physical = PhysAddr::new(0x00f0_1000).unwrap_or_else(|_| halt());
+    let controller = runtime
         .capabilities_mut(task)
         .and_then(|space| {
             space
@@ -3623,6 +3624,17 @@ unsafe fn provision_service_resource(
                         .union(Rights::READ)
                         .union(Rights::WRITE)
                         .union(Rights::CONTROL),
+                )
+                .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+        })
+        .unwrap_or_else(|_| halt());
+    let write = runtime
+        .capabilities_mut(task)
+        .and_then(|space| {
+            space
+                .insert(
+                    ObjectId(0x94),
+                    Rights::MAP.union(Rights::READ).union(Rights::WRITE),
                 )
                 .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
         })
@@ -3688,7 +3700,7 @@ unsafe fn provision_service_resource(
     let memory = unsafe { (*memory_pointer).as_mut().unwrap_or_else(|| halt()) };
     let region = GuestRegion::new(
         SERVICE_RESOURCE_VIRTUAL,
-        PhysAddr::new(resource_address).unwrap_or_else(|_| halt()),
+        resource_physical,
         1,
         true,
         false,
@@ -3720,7 +3732,7 @@ unsafe fn provision_service_resource(
         .share(
             source_binding,
             runtime.capabilities(task).unwrap_or_else(|_| halt()),
-            write,
+            controller,
             SharedEndpointRequest::new(
                 runtime.capabilities(task).unwrap_or_else(|_| halt()),
                 read,
@@ -3737,7 +3749,7 @@ unsafe fn provision_service_resource(
             .share(
                 source_binding,
                 runtime.capabilities(task).unwrap_or_else(|_| halt()),
-                write,
+                controller,
                 SharedEndpointRequest::new(
                     runtime.capabilities(peer).unwrap_or_else(|_| halt()),
                     peer_write,
@@ -3750,7 +3762,7 @@ unsafe fn provision_service_resource(
             .share(
                 source_binding,
                 runtime.capabilities(task).unwrap_or_else(|_| halt()),
-                write,
+                controller,
                 SharedEndpointRequest::new(
                     runtime.capabilities(peer).unwrap_or_else(|_| halt()),
                     peer_read,
@@ -3760,15 +3772,17 @@ unsafe fn provision_service_resource(
             )
             .unwrap_or_else(|_| halt());
     }
+    runtime
+        .revoke_capability(task, controller)
+        .unwrap_or_else(|_| halt());
     ([write, read], peer_access)
 }
 
 #[cfg(feature = "service-probe")]
 unsafe fn service_resource_mapping(virtual_address: u64) -> Mapping {
-    let resource_address = unsafe { core::ptr::addr_of_mut!(SERVICE_RESOURCE_PAGE.0) as u64 };
     Mapping::new(
         VirtAddr::new(virtual_address).unwrap_or_else(|_| halt()),
-        PhysAddr::new(resource_address).unwrap_or_else(|_| halt()),
+        PhysAddr::new(0x00f0_1000).unwrap_or_else(|_| halt()),
         1,
         PagePermissions::USER_READ_WRITE,
     )

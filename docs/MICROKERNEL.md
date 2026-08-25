@@ -5444,10 +5444,10 @@ internal resource token through buffer I/O. Every transfer independently
 rejects empty, overflowing, stale, or out-of-range requests before backend
 access. Removal makes a handle stale; registering the same resource later
 produces a different handle. The table implements the existing final-reference
-retirement hook. Its direct supervisor-memory adapter checks address arithmetic
-and performs exact copies behind an unsafe boundary; backend uncertainty is
-preserved. This is unit-tested mechanism, not kernel-image integration or
-hosted/physical device evidence.
+retirement hook. Its direct supervisor-memory adapter checks address arithmetic,
+performs exact copies behind an unsafe boundary, and erases the complete
+registered range before retirement can succeed; backend uncertainty is
+preserved. Unit tests cover exact transfer and retirement erasure.
 
 Kernel-service cleanup no longer needs to impersonate a complete VMM backend.
 `GuestMappingRevoker` is the minimal native teardown contract consumed before a
@@ -5481,7 +5481,9 @@ live, then installs the exact leaf; reset failure cannot publish stale content.
 KVM/WHP unit and strict compile gates cover the changed backends. The KVM and
 WHP runners attach an independently backed page only to receiver slot zero. The
 kernel image gives only that receiver separate exact non-delegable `MAP|READ`
-and `MAP|READ|WRITE` capabilities and retains the corresponding VM identity,
+and `MAP|READ|WRITE` capabilities. A distinct setup-only controller authorizes
+binding projection and is revoked before userspace starts; it is never reused as
+a data-plane write capability. The kernel retains the corresponding VM identity,
 mapping, binding, and opaque resource internally. Binding selection permits the
 read capability to attenuate a read/write endpoint but still requires the exact
 per-operation capability shape; write cannot amplify read-only authority.
@@ -5494,10 +5496,14 @@ then emits the host cleanup transition. The runners therefore observe the
 already absent resource leaf rather than unmapping it twice, restore only after
 zeroing, and revoke again at final retirement. Sender cleanup never operates on
 that resource slot. Service source reads zero state before writing and reading a
-generation value. Fresh one-time signed runs completed this path on KVM and WHP.
-KVM reported `verify=20816us prepare=2469us execute=1449us total=49915us`; WHP
-reported `verify=18522us prepare=3679us execute=799us total=26838us`. These are
-hosted controlled probes, not host-resistant isolation, bare-metal, or physical-
+generation value. Fresh one-time signed runs on 2026-08-25 completed this path
+on KVM and WHP, including generation-1 shared-buffer I/O, receiver cleanup,
+complete backing erasure, resource reprovision, and generation-2 service
+re-entry. KVM reported
+`verify=22291us prepare=3336us execute=1608us total=70759us`; WHP reported
+`verify=19026us prepare=5344us execute=971us total=49010us`. Both runners retain
+bounded register/CR3/CR2 diagnostics on a stage mismatch. These are hosted
+controlled probes, not host-resistant isolation, bare-metal, or physical-
 hardware evidence.
 
 Allocation metadata now distinguishes its own image allocation from ordinary
