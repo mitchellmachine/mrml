@@ -128,6 +128,14 @@ release floor; the inactive slot is written before one exact counter advance.
 The state also binds the SHA3-512 digest of the installed manifest. A committed
 release can therefore reconstruct exact artifact authority on later boots
 without replaying its one-time root transition; genesis has no such receipt.
+The host release tool can now construct that canonical genesis state from any
+explicitly selected Lamport public key and nonzero minimum release, without an
+embedded project or vendor root. A separate inspector reports the public root
+digest, rollback floor, and optional installed-manifest digest while explicitly
+reporting that file authentication was not verified. The safe genesis
+constructor rejects a zero root or release floor. This is provisioning input
+tooling only: it does not authenticate owner consent, enroll TPM objects,
+replace a live root, authorize development mode, or provide accessible recovery.
 The UEFI TPM command layer now has a distinct release-state layout and adapter:
 one exact counter and two exact 200-byte full-write slots, with recomputed TPM
 Names, shared owner-policy admission, fresh operation-bound sessions, verified

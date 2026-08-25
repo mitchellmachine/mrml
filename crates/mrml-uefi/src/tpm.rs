@@ -2070,8 +2070,8 @@ mod tests {
     #[test]
     fn release_backend_publishes_exact_bootstrap_state_through_200_byte_objects() {
         let policy = [0x6d; 32];
-        let original = BootstrapState::genesis([0x31; 64], 7).encode();
-        let replacement = BootstrapState::genesis([0x52; 64], 8).encode();
+        let original = BootstrapState::genesis([0x31; 64], 7).unwrap().encode();
+        let replacement = BootstrapState::genesis([0x52; 64], 8).unwrap().encode();
         let backend = TpmReleaseStateJournalBackend::new(
             ReleaseJournalTransport::new(policy, original),
             release_layout(policy),

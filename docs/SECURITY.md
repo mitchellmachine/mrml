@@ -374,6 +374,16 @@ while reusable key material remains. This is a local tooling invariant, not
 evidence of independent custody, durable deletion, reproducibility, rotation,
 recovery, Secure Boot enrollment, or production security.
 
+**IMPLEMENTED as owner-selectable provisioning input:** `mrml-sign
+bootstrap-state` derives the initial manifest-root digest from an exact
+caller-selected public key, requires a nonzero rollback floor, validates the
+canonical state, and exclusively creates the output. No project/vendor key is
+implicit. `inspect-bootstrap-state` performs structural parsing only and emits
+`authentication=not-verified`; it cannot turn a file into authenticated state.
+These commands handle no private key and grant no boot authority. They do not
+prove owner consent, provision TPM NV, replace or revoke a live root, authorize
+development mode, or provide accessible recovery.
+
 **IMPLEMENTED as bounded comparison infrastructure:** canonical build receipts
 omit ambient host identity and paths while binding declared tool versions,
 target/profile, a canonical source archive, dependency lockfile, unsigned boot

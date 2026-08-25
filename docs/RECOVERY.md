@@ -356,6 +356,13 @@ explicitly and downgrade the status rather than guessing.
   existing VMX-root lifecycle. No recovery variables were embedded because the
   environment has no software TPM, so this does not provision indices or
   policy, execute the recovery journal, or provide physical evidence.
+  The host release tool now constructs a canonical genesis release bootstrap
+  state from an exact owner-selected public key and nonzero rollback floor and
+  can inspect its public fields with an explicit `authentication=not-verified`
+  result. This supplies bounded provisioning data without an implicit vendor
+  root. It is not owner-consent evidence, TPM enrollment, live key replacement,
+  compromised-key revocation, development authorization, or accessible
+  recovery, and the ordinary output file carries no boot authority.
   The canonical epoch, handle generation, optional volume, and root generation
   now cross into early kernel decoding through a separately flagged 40-byte
   handoff record. Exact length, reserved bytes, nonzero generations, and the

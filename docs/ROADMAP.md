@@ -1479,6 +1479,18 @@ can count as trusted consent.
    TPM evidence.
 6. Implement owner-selectable trust-root enrollment, replacement, owner-build and
    development authorization, compromised-key revocation, and accessible recovery.
+   **PARTIALLY IMPLEMENTED as provisioning input only:** the release tool can
+   exclusively create a canonical genesis bootstrap state from any explicitly
+   supplied owner public key and nonzero minimum release. It embeds no vendor
+   fallback. Structural inspection exposes only the public root digest,
+   rollback floor, and optional installed-manifest digest and explicitly labels
+   authentication as unverified. Safe construction rejects zero root/floor;
+   focused tests cover exact key/floor binding, substitution, wrong key length,
+   and zero floor. This does not authenticate owner consent, provision TPM NV,
+   replace or revoke a live root, authorize development mode, or deliver
+   accessible recovery. Verification on 2026-08-24 passed all 456 kernel, 121
+   storage, 8 signer, and 24 UEFI library tests plus strict scoped Clippy and an
+   optimized native UEFI loader build.
 7. Add scoped remote-attestation capabilities with verifier/claim/lifetime
    binding and privacy-limited identities.
 8. Verify authenticated update and recovery cannot silently replace owner trust

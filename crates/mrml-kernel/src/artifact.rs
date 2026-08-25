@@ -363,12 +363,18 @@ pub trait MonotonicStateStore {
 }
 
 impl BootstrapState {
-    pub const fn genesis(current_root_digest: [u8; 64], minimum_release: u64) -> Self {
-        Self {
+    pub fn genesis(
+        current_root_digest: [u8; 64],
+        minimum_release: u64,
+    ) -> Result<Self, ArtifactError> {
+        if current_root_digest.iter().all(|byte| *byte == 0) || minimum_release == 0 {
+            return Err(ArtifactError::MalformedBootstrapState);
+        }
+        Ok(Self {
             current_root_digest,
             minimum_release,
             installed_manifest_digest: [0; 64],
-        }
+        })
     }
 
     pub fn verify_release(
@@ -428,6 +434,18 @@ impl BootstrapState {
         self.minimum_release
     }
 
+    pub const fn current_root_digest(&self) -> [u8; 64] {
+        self.current_root_digest
+    }
+
+    pub fn installed_manifest_digest(&self) -> Option<[u8; 64]> {
+        if self.installed_manifest_digest == [0; 64] {
+            None
+        } else {
+            Some(self.installed_manifest_digest)
+        }
+    }
+
     pub fn encode(self) -> [u8; BOOTSTRAP_STATE_BYTES] {
         let mut output = [0u8; BOOTSTRAP_STATE_BYTES];
         output[..16].copy_from_slice(b"MRML-BOOTSTATE1\0");
@@ -437,7 +455,9 @@ impl BootstrapState {
         output
     }
 
-    pub fn decode_authenticated(input: &[u8]) -> Result<Self, ArtifactError> {
+    /// Parses the canonical state bytes without asserting anything about their
+    /// storage or provenance. The returned value is data, not boot authority.
+    pub fn decode_canonical(input: &[u8]) -> Result<Self, ArtifactError> {
         if input.len() != BOOTSTRAP_STATE_BYTES
             || &input[..16] != b"MRML-BOOTSTATE1\0"
             || input[24..88].iter().all(|byte| *byte == 0)
@@ -453,6 +473,12 @@ impl BootstrapState {
             minimum_release,
             installed_manifest_digest: input[88..152].try_into().unwrap(),
         })
+    }
+
+    /// Decodes bytes supplied by an independently authenticated monotonic
+    /// store. Calling this function does not itself authenticate ordinary data.
+    pub fn decode_authenticated(input: &[u8]) -> Result<Self, ArtifactError> {
+        Self::decode_canonical(input)
     }
 
     pub fn verify_and_commit<S: MonotonicStateStore>(
@@ -772,12 +798,16 @@ mod tests {
             Sha3_512::digest(&manifest),
         );
         lamport_sign(&private, &statement, &mut signature).unwrap();
-        let state = BootstrapState::genesis(Sha3_512::digest(&public), 7);
+        let state = BootstrapState::genesis(Sha3_512::digest(&public), 7).unwrap();
         let (release, next) = state
             .verify_release(&manifest, &public, &signature)
             .unwrap();
         assert_eq!(release.release(), 7);
         assert_eq!(next.minimum_release(), 8);
+        assert_eq!(
+            next.installed_manifest_digest(),
+            Some(Sha3_512::digest(&manifest))
+        );
         assert_eq!(
             next.admit_installed_release(&manifest).unwrap().release(),
             7
@@ -798,7 +828,9 @@ mod tests {
         );
 
         let mut store = TestStateStore {
-            state: BootstrapState::genesis(Sha3_512::digest(&public), 7).encode(),
+            state: BootstrapState::genesis(Sha3_512::digest(&public), 7)
+                .unwrap()
+                .encode(),
             force_conflict: false,
         };
         let committed =
@@ -903,7 +935,9 @@ mod tests {
         kernel_private.fill(0);
         service_private.fill(0);
 
-        let initial = BootstrapState::genesis(Sha3_512::digest(&transition_public), 7).encode();
+        let initial = BootstrapState::genesis(Sha3_512::digest(&transition_public), 7)
+            .unwrap()
+            .encode();
         let mut store = TestStateStore {
             state: initial,
             force_conflict: false,
@@ -1052,6 +1086,7 @@ mod tests {
 
         assert_eq!(
             BootstrapState::genesis(current_root, 7)
+                .unwrap()
                 .verify_release(&manifest, &public, &signature)
                 .err(),
             Some(ArtifactError::ReusedTrustRoot)
@@ -1061,12 +1096,18 @@ mod tests {
     #[test]
     fn bootstrap_state_rejects_corruption_and_atomic_conflicts() {
         let root = [7; 64];
-        let encoded = BootstrapState::genesis(root, 3).encode();
+        let encoded = BootstrapState::genesis(root, 3).unwrap().encode();
+        let decoded = BootstrapState::decode_authenticated(&encoded).unwrap();
+        assert_eq!(decoded.minimum_release(), 3);
+        assert_eq!(decoded.current_root_digest(), root);
+        assert_eq!(decoded.installed_manifest_digest(), None);
         assert_eq!(
-            BootstrapState::decode_authenticated(&encoded)
-                .unwrap()
-                .minimum_release(),
-            3
+            BootstrapState::genesis([0; 64], 3).err(),
+            Some(ArtifactError::MalformedBootstrapState)
+        );
+        assert_eq!(
+            BootstrapState::genesis(root, 0).err(),
+            Some(ArtifactError::MalformedBootstrapState)
         );
 
         let mut corrupt = encoded;
@@ -1087,16 +1128,19 @@ mod tests {
             force_conflict: true,
         };
         assert_eq!(
-            store.compare_and_store(&encoded, &BootstrapState::genesis([8; 64], 4).encode()),
+            store.compare_and_store(
+                &encoded,
+                &BootstrapState::genesis([8; 64], 4).unwrap().encode(),
+            ),
             Err(ArtifactError::StateConflict)
         );
         assert_eq!(store.state, encoded);
         store.force_conflict = false;
-        let substituted_root = BootstrapState::genesis([6; 64], 3).encode();
+        let substituted_root = BootstrapState::genesis([6; 64], 3).unwrap().encode();
         assert_eq!(
             store.compare_and_store(
                 &substituted_root,
-                &BootstrapState::genesis([8; 64], 4).encode(),
+                &BootstrapState::genesis([8; 64], 4).unwrap().encode(),
             ),
             Err(ArtifactError::StateConflict)
         );

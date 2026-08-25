@@ -245,7 +245,9 @@ mod tests {
     }
 
     fn state(root: u8, release: u64) -> [u8; BOOTSTRAP_STATE_BYTES] {
-        BootstrapState::genesis([root; 64], release).encode()
+        BootstrapState::genesis([root; 64], release)
+            .unwrap()
+            .encode()
     }
 
     #[test]

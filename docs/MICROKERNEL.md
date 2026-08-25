@@ -1992,6 +1992,23 @@ Failed exclusive writes make a best-effort removal of their partial output.
 This is host-filesystem tooling behavior, not proof of independent key custody,
 durable erasure, atomic multi-file publication, or reproducible builds.
 
+Before provisioning the release journal, an owner-selected public key and
+nonzero rollback floor can be encoded as the exact canonical genesis state:
+
+```text
+mrml-sign bootstrap-state 1 BOOTSTRAP.STATE owner.public
+mrml-sign inspect-bootstrap-state BOOTSTRAP.STATE
+```
+
+Creation uses exclusive output publication and rejects wrong public-key length,
+zero floor, zero derived root, or noncanonical state. Inspection reports the
+minimum release, public root digest, optional installed-manifest digest, and the
+literal status `authentication=not-verified`. This separation matters: an
+ordinary file is provisioning data and gains authority only through a future
+owner-authorized authenticated provisioning operation. The commands neither
+enroll TPM objects nor establish trusted consent, live root replacement,
+compromise revocation, development authorization, or accessible recovery.
+
 Before signing, two independent builders can emit and compare a canonical,
 path-independent build inventory:
 
