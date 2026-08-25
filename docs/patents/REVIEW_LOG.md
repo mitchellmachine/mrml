@@ -4774,3 +4774,12 @@ unifier while treating projection nodes as opaque potential matches. It adds no
 projection equation solver, search order, specialization, cache, parser,
 runtime mechanism, allocation, synchronization, protocol, cryptography, or
 hardware behavior.
+
+# 2026-08-25 — Mixed projected-premise scheduling
+
+**Result: NOT_TRIGGERED.** This compiler-only increment extends an existing
+fixed predicate retry loop to existing bounded term-bearing predicates, copying
+and restoring the same fixed inference state around ambiguous attempts. It adds
+no candidate backtracking, coherence rule, specialization, cache, parser,
+runtime mechanism, allocation, synchronization, protocol, cryptography, or
+hardware behavior.

@@ -4245,11 +4245,16 @@ predicates are now proved first so their root-state constraints can make a
 term-bearing predicate uniquely normalizable in the second phase. Windows
 gnullvm and native Arch Linux WSL each pass 529 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 875 compiler
-tests per host. Direct leaf positions now use the fixed equality unifier during
+tests per host. A mixed fixed-capacity scheduler now retries ambiguous flat and
+term-bearing premises after any sibling proves, rolls back each ambiguous
+attempt, and returns ambiguity when a pass makes no progress. Windows gnullvm
+and native Arch Linux WSL each pass 530 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 876 compiler tests per
+host; focused tests cover refinement in both directions. Direct leaf positions now use the fixed equality unifier during
 coherence admission, allowing repeated parameters and conflicting concrete
 tuples to prove disjointness against peer, exact, and flat-generic heads while
 projection positions remain opaque. Both hosts pass the same 875 compiler
-tests. Reverse dependency scheduling, complete projection-equation coherence, higher-ranked term
+tests. Complete projection-equation coherence, higher-ranked term
 binders, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 

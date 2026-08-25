@@ -2494,59 +2494,10 @@ fn elaborate_projection_bearing_clause(
             &instantiated_arguments[..clause.parameter_count],
         )?)?;
     }
-    if !premises.predicates().is_empty() {
-        let result = solve_projection_clause_flat_premises(
-            normalized,
-            premises,
-            query,
-            environment,
-            projection_clauses,
-            projection_implementations,
-            state,
-            stack,
-            depth,
-        )?;
-        if result != TraitProofSolution::Proven {
-            return Ok(result);
-        }
-    }
-    let mut term_premises = ImplementedTraitPredicates::EMPTY;
-    for premise in clause.projection_bearing_premises() {
-        let premise = instantiate_bound_term_goal(
-            &clause.arena,
-            premise
-                .as_ref()
-                .copied()
-                .ok_or(TraitGoalError::InvalidGoal)?,
-            &instantiated_arguments[..clause.parameter_count],
-        )?;
-        let normalized = match environment.normalize_projection_bearing_goal(
-            &premise.arena,
-            premise.goal,
-            state,
-        )? {
-            ProjectionBearingGoalNormalizationSolution::Unique(goal) => goal,
-            ProjectionBearingGoalNormalizationSolution::Ambiguous => {
-                return Ok(TraitProofSolution::Ambiguous);
-            }
-            ProjectionBearingGoalNormalizationSolution::NoSolution => {
-                return Ok(TraitProofSolution::NoSolution);
-            }
-            ProjectionBearingGoalNormalizationSolution::Cycle => {
-                return Ok(TraitProofSolution::Cycle);
-            }
-            ProjectionBearingGoalNormalizationSolution::Overflow => {
-                return Ok(TraitProofSolution::Overflow);
-            }
-        };
-        term_premises.push(normalized)?;
-    }
-    if term_premises.predicates().is_empty() {
-        return Ok(TraitProofSolution::Proven);
-    }
-    solve_projection_clause_flat_premises(
-        normalized,
-        term_premises,
+    solve_projection_clause_mixed_premises(
+        clause,
+        &instantiated_arguments[..clause.parameter_count],
+        premises,
         query,
         environment,
         projection_clauses,
@@ -2557,9 +2508,10 @@ fn elaborate_projection_bearing_clause(
     )
 }
 
-fn solve_projection_clause_flat_premises(
-    consequence: ImplementedTraitGoal,
-    premises: ImplementedTraitPredicates,
+fn solve_projection_clause_mixed_premises(
+    clause: ProjectionBearingTraitClause,
+    arguments: &[TraitGoalType],
+    flat_premises: ImplementedTraitPredicates,
     query: ImplementedTraitGoal,
     environment: TraitProjectionEnvironment<'_>,
     projection_clauses: Option<&ProjectionBearingTraitClauseDatabase>,
@@ -2568,25 +2520,112 @@ fn solve_projection_clause_flat_premises(
     stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
     depth: usize,
 ) -> Result<TraitProofSolution, TraitGoalError> {
-    let instantiated = InstantiatedTraitWhereClause {
-        consequence,
-        premises,
-        projection_premises: InferredTraitProjectionPredicates::EMPTY,
+    if flat_premises.predicates().is_empty() && clause.projection_bearing_premises().is_empty() {
+        return Ok(TraitProofSolution::Proven);
+    }
+    let goal = state.apply_goal(query)?;
+    if stack[..depth].contains(&Some(goal)) {
+        return Ok(TraitProofSolution::Cycle);
+    }
+    if depth >= MAX_TRAIT_PROOF_DEPTH {
+        return Ok(TraitProofSolution::Overflow);
+    }
+    stack[depth] = Some(goal);
+    let mut pending_flat = flat_premises;
+    let mut pending_terms = clause.term_premises;
+    let mut pending_term_count = clause.term_premise_count;
+    let result = 'solve: loop {
+        if pending_flat.predicates().is_empty() && pending_term_count == 0 {
+            break TraitProofSolution::Proven;
+        }
+        let mut next_flat = ImplementedTraitPredicates::EMPTY;
+        let mut next_terms = [None; MAX_TRAIT_PREDICATES];
+        let mut next_term_count = 0usize;
+        let mut proven_count = 0usize;
+        for premise in pending_flat.predicates() {
+            let premise = premise
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            let saved = *state;
+            match solve_inferred_trait_goal_inner(
+                environment.exact_implementations,
+                environment.generic_implementations,
+                environment.clauses,
+                projection_clauses,
+                projection_implementations,
+                Some(environment),
+                0,
+                premise,
+                state,
+                stack,
+                depth + 1,
+            )? {
+                TraitProofSolution::Proven => proven_count += 1,
+                TraitProofSolution::Ambiguous => {
+                    *state = saved;
+                    next_flat.push(premise)?;
+                }
+                other => break 'solve other,
+            }
+        }
+        for premise in pending_terms[..pending_term_count].iter().copied() {
+            let premise = premise.ok_or(TraitGoalError::InvalidGoal)?;
+            let saved = *state;
+            let instantiated = instantiate_bound_term_goal(&clause.arena, premise, arguments)?;
+            let normalized = match environment.normalize_projection_bearing_goal(
+                &instantiated.arena,
+                instantiated.goal,
+                state,
+            )? {
+                ProjectionBearingGoalNormalizationSolution::Unique(goal) => goal,
+                ProjectionBearingGoalNormalizationSolution::Ambiguous => {
+                    *state = saved;
+                    next_terms[next_term_count] = Some(premise);
+                    next_term_count += 1;
+                    continue;
+                }
+                ProjectionBearingGoalNormalizationSolution::NoSolution => {
+                    break 'solve TraitProofSolution::NoSolution;
+                }
+                ProjectionBearingGoalNormalizationSolution::Cycle => {
+                    break 'solve TraitProofSolution::Cycle;
+                }
+                ProjectionBearingGoalNormalizationSolution::Overflow => {
+                    break 'solve TraitProofSolution::Overflow;
+                }
+            };
+            match solve_inferred_trait_goal_inner(
+                environment.exact_implementations,
+                environment.generic_implementations,
+                environment.clauses,
+                projection_clauses,
+                projection_implementations,
+                Some(environment),
+                0,
+                normalized,
+                state,
+                stack,
+                depth + 1,
+            )? {
+                TraitProofSolution::Proven => proven_count += 1,
+                TraitProofSolution::Ambiguous => {
+                    *state = saved;
+                    next_terms[next_term_count] = Some(premise);
+                    next_term_count += 1;
+                }
+                other => break 'solve other,
+            }
+        }
+        if proven_count == 0 {
+            break TraitProofSolution::Ambiguous;
+        }
+        pending_flat = next_flat;
+        pending_terms = next_terms;
+        pending_term_count = next_term_count;
     };
-    solve_inferred_premises(
-        environment.exact_implementations,
-        environment.generic_implementations,
-        environment.clauses,
-        projection_clauses,
-        projection_implementations,
-        Some(environment),
-        0,
-        query,
-        instantiated,
-        state,
-        stack,
-        depth,
-    )
+    stack[depth] = None;
+    Ok(result)
 }
 
 fn bind_direct_bound_term(
@@ -6752,6 +6791,106 @@ mod tests {
             .unwrap()
         else {
             panic!("flat premise should refine projected premise");
+        };
+        assert_eq!(
+            answer
+                .substitution
+                .binding(TraitInferenceVariableId::in_universe(universe, 0)),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+    }
+
+    #[test]
+    fn projection_bearing_premises_refine_flat_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = BoundTraitGoalTermArena::EMPTY;
+        let term = arena
+            .intern_type(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let projection = arena
+            .intern_projection(
+                BoundProjectionBearingTraitGoal::new(TraitId::new(1403), term),
+                associated,
+            )
+            .unwrap();
+        let mut implementation = ProjectionBearingTraitClause::new(
+            1,
+            arena,
+            BoundProjectionBearingTraitGoal::new(TraitId::new(1400), term),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(1401),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        implementation
+            .push_projection_bearing_premise(BoundProjectionBearingTraitGoal::new(
+                TraitId::new(1402),
+                projection,
+            ))
+            .unwrap();
+        let mut implementations = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(GenericTraitImplementationId::new(360), implementation)
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        for (id, self_type) in [(270, 10), (271, 11)] {
+            exact
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(id),
+                    TraitId::new(1401),
+                    TraitTypeId::new(self_type),
+                ))
+                .unwrap();
+        }
+        let projection_id = TraitImplementationId::new(272);
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_id,
+                TraitId::new(1403),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(273),
+                TraitId::new(1402),
+                TraitTypeId::new(20),
+            ))
+            .unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(projection_id, associated, TraitTypeId::new(20)),
+            )
+            .unwrap();
+        let universe = TraitUniverseIndex::new(27);
+        let InferredTraitGoalSolution::Unique(answer) =
+            solve_exists_trait_goal_with_projection_implementations(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &ProjectionBearingTraitClauseDatabase::EMPTY,
+                &implementations,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                universe,
+                ExistsImplementedTraitGoal::new(
+                    1,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(1400),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        else {
+            panic!("projected premise should refine flat premise");
         };
         assert_eq!(
             answer
