@@ -182,6 +182,13 @@ profile. The selected provider profile remains part of recursive build identity
 and the exact artifact name, preventing feature-forwarded dependencies from
 aliasing their default artifacts.
 
+Generated PTX is evaluated at the native component where it is declared, even
+when that component is reached recursively through a provider profile. The PTX
+declaration includes a validated default GPU architecture; an explicit
+`--gpu-arch` overrides it for the complete build graph. This removes hidden
+ordering on an earlier top-level CUDA build while keeping `OUT_DIR`, feature,
+source, output, target, and architecture inputs exact.
+
 `mrml-crypto` exercises the enabled side of the same rule. Its action records
 the resolved effective default set as `runtime`, which activates exactly the
 optional runtime extern; both supported hosts pass all 27 inline tests directly.

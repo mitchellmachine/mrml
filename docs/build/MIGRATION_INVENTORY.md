@@ -730,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-seven
+  explicit. Thirty-nine
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -892,6 +892,16 @@ inactive. The pinned Windows gnullvm toolchain passes doctor/audit, native
 build, and matching native/Cargo seven-test suites. Thirty-seven components are
 native and five remain transitional. No VM, VBS/VTL1, IOMMU, CUDA-runner path,
 or physical hardware ran.
+
+CLI and machine are exact bin-only native actions with default `auto` forwarding
+through agent and model to tensor's host `cuda` profile. Generated PTX is now a
+recursive dependency action with the declaration's validated `sm_120` default,
+while an explicit command architecture still overrides it. Both exact hosts
+pass frontend tests, strict Clippy, doctor/audit, native builds, and matching
+Cargo baselines (zero CLI tests and four machine tests). Their PTX SHA-256 is
+`83ad662cd1f6cb6f7736ddb817da1d12fa022394fa0bf415152c302e8e09c920`.
+Thirty-nine components are native and three remain transitional. No CUDA device,
+model inference, live provider, or production workload ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

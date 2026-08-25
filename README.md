@@ -470,6 +470,14 @@ set. Its native and Cargo `--no-default-features` suites both pass seven tests.
 Thirty-seven components are native and five remain transitional. No CUDA
 runner feature, VM launch, VBS/VTL1, IOMMU, or physical hardware was exercised.
 
+Default `auto` feature forwarding is now explicit from CLI/machine through
+agent and model to tensor's host `cuda` profile. The native resolver generates
+tensor's declared `sm_120` PTX transitively rather than relying on a prior Cargo
+build. Both exact hosts match Cargo at zero CLI tests and four machine tests,
+and emit PTX hash `83ad662cd1f6cb6f7736ddb817da1d12fa022394fa0bf415152c302e8e09c920`.
+Thirty-nine components are native and three remain transitional. No CUDA device,
+model inference, live provider, or production workload ran.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

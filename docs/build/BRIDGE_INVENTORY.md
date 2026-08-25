@@ -211,6 +211,13 @@ bridge. Native and Cargo `--no-default-features` suites pass seven tests.
 Thirty-seven components are native; five remain transitional. Its CUDA/tensor
 edge remains declared but inactive; no VM or physical hardware ran.
 
+`mrml-cli` and `mrml-machine` now bind the exact default `auto` chain through
+agent/model profiles to tensor's host `cuda` profile. Tensor's declared
+`sm_120` PTX action executes recursively, so neither node depends on a prior
+Cargo artifact. Windows gnullvm and Arch Linux WSL2 match Cargo at zero CLI and
+four machine tests, and their PTX hashes match. Thirty-nine components are
+native; three remain transitional. No CUDA device or inference path ran.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

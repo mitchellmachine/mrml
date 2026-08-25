@@ -104,6 +104,7 @@ struct RustPtx {
     source: String,
     feature: String,
     compile_env: String,
+    default_gpu_arch: String,
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +130,7 @@ struct RustCompileMode<'a> {
     compile_target: &'a str,
     release: bool,
     test: bool,
+    gpu_arch: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -350,13 +352,22 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*self_extern).to_owned(),
                 ));
             }
-            ["rust-ptx", component, output, source, feature, compile_env] => {
+            [
+                "rust-ptx",
+                component,
+                output,
+                source,
+                feature,
+                compile_env,
+                default_gpu_arch,
+            ] => {
                 rust_ptx.push((
                     (*component).to_owned(),
                     (*output).to_owned(),
                     (*source).to_owned(),
                     (*feature).to_owned(),
                     (*compile_env).to_owned(),
+                    (*default_gpu_arch).to_owned(),
                 ));
             }
             [
@@ -910,7 +921,7 @@ fn load_workspace() -> Result<Workspace, String> {
             self_extern: self_extern == "true",
         });
     }
-    for (component_id, output, source, feature, compile_env) in rust_ptx {
+    for (component_id, output, source, feature, compile_env, default_gpu_arch) in rust_ptx {
         let component = components
             .iter_mut()
             .find(|component| component.id == component_id)
@@ -926,6 +937,7 @@ fn load_workspace() -> Result<Workspace, String> {
             || !root.join(&source).starts_with(root.join(&component.path))
             || !component.features.contains(&feature)
             || compile_env != "OUT_DIR"
+            || !valid_gpu_architecture(&default_gpu_arch)
             || action.ptx.is_some()
         {
             return Err(format!(
@@ -937,6 +949,7 @@ fn load_workspace() -> Result<Workspace, String> {
             source,
             feature,
             compile_env,
+            default_gpu_arch,
         });
     }
     for (component_id, output, crate_name, source, self_extern, targets, feature) in rust_binaries {
@@ -1703,26 +1716,6 @@ fn run_rust_action(
         .rust_action
         .as_ref()
         .ok_or("NativeActionDisappeared")?;
-    if let Some(ptx) = action
-        .ptx
-        .as_ref()
-        .filter(|ptx| rust_features(action, target, "default").contains(&ptx.feature))
-    {
-        compile_declared_ptx(
-            workspace,
-            component,
-            ptx,
-            target,
-            &compile_target,
-            release,
-            gpu_arch.ok_or_else(|| {
-                format!(
-                    "MissingTargetMetadata {{ component: {}, target: {target}, required: gpu_arch }}",
-                    component.id
-                )
-            })?,
-        )?;
-    }
     let mut built = BTreeSet::new();
     compile_rust_component(
         workspace,
@@ -1732,6 +1725,7 @@ fn run_rust_action(
             compile_target: &compile_target,
             release,
             test: false,
+            gpu_arch,
         },
         "default",
         &mut built,
@@ -1751,6 +1745,7 @@ fn run_rust_action(
                 compile_target: &compile_target,
                 release,
                 test: false,
+                gpu_arch,
             },
         )?;
     }
@@ -1777,6 +1772,7 @@ fn run_rust_action(
                 compile_target: &test_compile_target,
                 release,
                 test: true,
+                gpu_arch,
             },
             "default",
             &mut test_built,
@@ -1799,6 +1795,7 @@ fn run_rust_action(
                     compile_target: &test_compile_target,
                     release,
                     test: true,
+                    gpu_arch,
                 },
             )?;
         }
@@ -1832,6 +1829,9 @@ fn compile_declared_ptx(
     release: bool,
     gpu_arch: &str,
 ) -> Result<(), String> {
+    if !valid_gpu_architecture(gpu_arch) {
+        return Err(format!("InvalidGpuArchitecture {{ value: {gpu_arch} }}"));
+    }
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     fs::create_dir_all(&output_dir)
         .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))?;
@@ -1889,6 +1889,7 @@ fn compile_rust_component(
         compile_target,
         release,
         test,
+        gpu_arch,
     } = *mode;
     let build_key = format!(
         "{}#{target}#{compile_target}#{feature_profile}",
@@ -1903,6 +1904,21 @@ fn compile_rust_component(
             component.id
         )
     })?;
+    if let Some(ptx) = action
+        .ptx
+        .as_ref()
+        .filter(|ptx| rust_features(action, target, feature_profile).contains(&ptx.feature))
+    {
+        compile_declared_ptx(
+            workspace,
+            component,
+            ptx,
+            target,
+            compile_target,
+            release,
+            gpu_arch.unwrap_or(&ptx.default_gpu_arch),
+        )?;
+    }
     for external in action.externs.iter().filter(|external| {
         rust_extern_active(
             external,
@@ -2369,6 +2385,7 @@ fn compile_declared_binary(
         compile_target,
         release,
         test,
+        gpu_arch: _,
     } = *mode;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     let extension = rust_binary_extension(compile_target);

@@ -327,6 +327,14 @@ seven tests. Thirty-seven of 42 components are native; five remain
 transitional. The declared CUDA edge remains inactive, and no VM, VBS/VTL1,
 IOMMU, or physical-hardware execution occurred.
 
+CLI and machine now preserve their default `auto` chain through named agent,
+model, and tensor profiles. Recursive native compilation generates the declared
+`sm_120` PTX input at tensor instead of depending on Cargo or a prior build.
+Windows and Linux match Cargo at zero CLI tests and four machine tests, with an
+identical PTX hash. Thirty-nine of 42 components are native; three remain
+transitional. No CUDA device, inference, live provider, or production workload
+ran.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

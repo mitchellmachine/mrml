@@ -3291,3 +3291,14 @@ package/cache/resolver risk area and establishes neither clearance nor
 infringement; material release resolver/cache mechanisms remain subject to the
 recorded worldwide authoritative-register review. Agent review does not replace
 independent human dual review.
+
+# 2026-08-25 — Recursive PTX inputs and native auto applications
+
+**Result: TRIGGERED.** Generated PTX now executes at its declaring component
+when reached recursively, using a validated declared architecture unless an
+explicit graph-wide override is supplied. CLI and machine apply this resolver
+path without changing application, model, CUDA, or training mechanisms. The
+resolver/generated-input extension establishes neither clearance nor
+infringement; material release resolver/cache mechanisms remain subject to the
+recorded worldwide authoritative-register review. Agent review does not replace
+independent human dual review.
