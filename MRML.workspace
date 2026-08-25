@@ -159,3 +159,5 @@ rust-feature-set|org.mrml.library.model|runtime
 rust-action|org.mrml.library.agent|mrml_agent|lib|packages/libraries/agent/src/lib.rs|mrml-crypto=mrml_crypto@*?runtime;mrml-error=mrml_error@*?runtime;mrml-http=mrml_http@*?runtime;mrml-json=serde_json@*?runtime;mrml-model=mrml_model@*?runtime;mrml-runtime=mrml_runtime@*;mrml-terminal-style=mrml_terminal_style@*?runtime;mrml-tools=mrml_tools@*?runtime
 rust-feature-set|org.mrml.library.agent|runtime
 rust-compile-env|org.mrml.library.agent|CARGO_PKG_VERSION|0.0.1|2
+rust-action|org.mrml.tool.trainer|mrml_trainer_action|none|-|mrml-math=mrml_math@*;mrml-runtime=mrml_runtime@*;mrml-tensor=mrml_tensor@*;mrml-tokenizer=mrml_tokenizer@*;mrml-wikipedia=mrml_wikipedia@*
+rust-binary|org.mrml.tool.trainer|mrml-trainer|mrml_trainer|tools/trainer/src/main.rs|false
