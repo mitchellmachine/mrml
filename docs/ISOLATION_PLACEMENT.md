@@ -14,6 +14,12 @@ rejects eligible native placement and active unsupported blockers in Total mode,
 and reports typed resource or transport unavailability without native fallback.
 It does not select providers, create a VM, allocate resources, persist policy,
 or implement boot/runtime transport. Those mechanisms remain **PLANNED**.
+The existing signed configuration-service probes on both hosted VMM runners now
+prepare that exact Total-mode record before guest construction, commit it only
+after the backend has produced the requested microVM container, and emit a
+structured zero-fallback report only after the complete service probe succeeds.
+This is launch-admission integration, not completion of a dual-placement runtime
+or proof that the required system satisfies Total mode.
 
 ## One policy, several placements
 

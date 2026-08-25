@@ -11,10 +11,12 @@ use mrml_kernel::{
     ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    IsolationAdmissionTable, IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode,
+    IsolationPlacement, ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
     VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
     VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
@@ -1482,6 +1484,32 @@ fn application_main() -> Result<()> {
     let system = KvmSystem::open()
         .map_err(|error| anyhow!("KVM is unavailable or incompatible: {:?}", error))?;
     let preparation_started = Instant::now();
+    let total_service_mode = mode == LaunchMode::ServiceProbe;
+    let mut isolation_admission = if total_service_mode {
+        Some(
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1)
+                .map_err(|error| anyhow!("KVM isolation admission failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
+    let isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+        Some(
+            admission
+                .prepare(
+                    IsolationLaunchRequest::new(
+                        ObjectId(0x434f_4e46_4947),
+                        1,
+                        TotalMicrovmClass::MicrovmEligible,
+                        IsolationPlacement::Microvm,
+                    )
+                    .map_err(|error| anyhow!("KVM isolation request failed: {:?}", error))?,
+                )
+                .map_err(|error| anyhow!("KVM isolation preparation failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     let queue_layout = GpuSharedQueueLayout::new(0x00b0_0000, 0x00b0_1000, 1)
         .map_err(|_| anyhow!("invalid fixed GPU queue layout"))?;
     let block_layout = VirtualBlockQueueLayout::new(0x0060_0000, 0x0060_2000, 2)
@@ -1668,6 +1696,16 @@ fn application_main() -> Result<()> {
             &service_entry.to_le_bytes(),
         )
         .map_err(|_| anyhow!("failed to publish KVM service entry"))?;
+    }
+    if let (Some(admission), Some(prepared)) =
+        (isolation_admission.as_mut(), isolation_preparation.as_ref())
+    {
+        admission
+            .commit(prepared, IsolationLaunchEvidence::MicrovmReady)
+            .map_err(|error| anyhow!("KVM isolation commit failed: {:?}", error))?;
+        if !admission.total_microvm_report().satisfied() {
+            return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
+        }
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
@@ -2490,6 +2528,16 @@ fn application_main() -> Result<()> {
             ));
         }
         _ => {}
+    }
+    if let Some(admission) = isolation_admission.as_ref() {
+        let report = admission.total_microvm_report();
+        println!(
+            "isolation|requested=total-microvm|status=satisfied|backend=kvm|policy_generation={}|eligible={}|microvm={}|native_fallback={}",
+            admission.policy_generation(),
+            report.running_microvm_eligible,
+            report.running_in_microvm,
+            report.native_fallback
+        );
     }
     println!(
         "verified {:?} kernel reached its expected halt under KVM: verify={}us prepare={}us execute={}us total={}us",

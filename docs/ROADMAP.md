@@ -36,6 +36,8 @@ Three new persistent deltas are documented before implementation:
   rejects Total-mode native downgrades or active blockers. A representative
   dual-placement service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
+  The existing hosted KVM/WHP configuration-service probes are wired to this
+  admission record, but do not yet constitute native-versus-microVM resolution.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.

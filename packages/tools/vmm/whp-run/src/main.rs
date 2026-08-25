@@ -14,10 +14,12 @@ use mrml_kernel::{
     ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    IsolationAdmissionTable, IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode,
+    IsolationPlacement, ObjectId, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
     VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
     VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
@@ -1421,6 +1423,31 @@ fn application_main() -> Result<()> {
     let system = WhpSystem::open()
         .map_err(|error| anyhow!("Windows Hypervisor Platform is unavailable: {:?}", error))?;
     let preparation_started = Instant::now();
+    let mut isolation_admission = if service_mode {
+        Some(
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1)
+                .map_err(|error| anyhow!("WHP isolation admission failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
+    let isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+        Some(
+            admission
+                .prepare(
+                    IsolationLaunchRequest::new(
+                        ObjectId(0x434f_4e46_4947),
+                        1,
+                        TotalMicrovmClass::MicrovmEligible,
+                        IsolationPlacement::Microvm,
+                    )
+                    .map_err(|error| anyhow!("WHP isolation request failed: {:?}", error))?,
+                )
+                .map_err(|error| anyhow!("WHP isolation preparation failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     let mut guest = if boot_mode {
         system.prepare_boot_kernel(&executable, handoff.as_slice(), layout)
     } else if pci_configuration_mode {
@@ -1576,6 +1603,16 @@ fn application_main() -> Result<()> {
             &service_entry.to_le_bytes(),
         )
         .map_err(|_| anyhow!("failed to publish WHP service entry"))?;
+    }
+    if let (Some(admission), Some(prepared)) =
+        (isolation_admission.as_mut(), isolation_preparation.as_ref())
+    {
+        admission
+            .commit(prepared, IsolationLaunchEvidence::MicrovmReady)
+            .map_err(|error| anyhow!("WHP isolation commit failed: {:?}", error))?;
+        if !admission.total_microvm_report().satisfied() {
+            return Err(anyhow!("WHP Total MicroVM admission was not satisfied"));
+        }
     }
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
@@ -2319,6 +2356,16 @@ fn application_main() -> Result<()> {
             })
         {
             return Err(anyhow!("restarted WHP service proof mismatch: {:?}", exit));
+        }
+        if let Some(admission) = isolation_admission.as_ref() {
+            let report = admission.total_microvm_report();
+            println!(
+                "isolation|requested=total-microvm|status=satisfied|backend=whp|policy_generation={}|eligible={}|microvm={}|native_fallback={}",
+                admission.policy_generation(),
+                report.running_microvm_eligible,
+                report.running_in_microvm,
+                report.native_fallback
+            );
         }
         // The authenticated value-four marker is terminal proof that the
         // rebuilt generation executed and was retired. The kernel deliberately

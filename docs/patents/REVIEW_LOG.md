@@ -4,6 +4,21 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Existing hosted service-probe admission binding
+
+Patent review: **NOT_TRIGGERED** for this integration increment. The KVM/WHP
+runners already constructed the exact signed guest and configuration-service
+probe. The added code records the caller-selected `MICROVM` placement before
+that existing construction, accepts only matching backend-ready evidence, and
+reports the already-admitted result after success. It does not automatically
+select or instantiate a VM from application identity or policy, determine guest
+resources, select templates/providers, publish/unpublish applications, classify
+workloads by security thresholds, or add cross-placement transport. Screening
+considered those limitations in US9921860B1, US8931037B2, and EP2587375A1;
+register status is not relied upon and no clearance conclusion is recorded.
+Automated placement, new VM/resource selection, transparent transport, boot
+composition, and system-wide enforcement remain **TRIGGERED**.
+
 ## 2026-08-25 — Repeated projected compiler-loan sources
 
 Patent review: **NOT_TRIGGERED**. The compiler conventionally reuses its

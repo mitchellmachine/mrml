@@ -132,6 +132,11 @@ features = ["pci-configuration-probe"]
 name = "pci_configuration_probe"
 targets = ["UEFI"]
 
+[[feature_profile]]
+features = ["service-probe"]
+name = "service_probe"
+targets = ["UEFI"]
+
 [[absent_compile_env]]
 name = "MRML_EMULATED_TSC_HZ"
 
