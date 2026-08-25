@@ -3722,3 +3722,13 @@ service creation and supervision, resource charging, batching, queues, and
 native dispatch remain `TRIGGERED` for separate selected-mechanism review. This
 technical screen establishes neither clearance nor infringement and does not
 replace independent human dual review.
+
+# 2026-08-25 — Component-interface cross-compiler conformance probe
+
+**Result: NOT_TRIGGERED.** This increment adds only an independently authored
+test of four public numeric descriptor constants. Pinned upstream rustc executes
+the reference expression and the existing MRML compiler emits its normal COFF
+and ELF objects for the same scalar projection. It introduces no compiler
+algorithm, ABI lowering, binding generator, loader, dispatch, update, transport,
+or reclamation mechanism. The mechanism-specific reviews above remain in force;
+no additional patent mechanism was selected by this evidence-only change.

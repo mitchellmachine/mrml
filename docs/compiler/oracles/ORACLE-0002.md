@@ -49,3 +49,15 @@ Generation 0002 is accepted as the current build/oracle for the documented
 subset on the verified host. Future generations must preserve both prior
 records, rerun the corpus, classify observed deltas, and retain independently
 authored regression probes.
+
+## Component-interface follow-up
+
+On 2026-08-25, the canonical native MRML action added and passed one independently
+authored component-interface probe on Windows gnullvm and Arch Linux. Pinned
+upstream rustc executed the explicit Zstd ABI-3 generation/operation/size
+identity check, while `mrml-rustc` emitted nonempty COFF and ELF objects for the
+same bounded scalar projection. The full core action passed 420 library, one
+component-interface, 10 conformance, and 335 nightly-replacement tests on each
+host. This does not revise the earlier Linux release-build regression, claim
+full binding-source compatibility, compare object semantics byte-for-byte, or
+make Rust/C ABI part of the stable MRML interface.

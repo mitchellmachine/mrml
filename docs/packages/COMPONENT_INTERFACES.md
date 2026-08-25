@@ -385,8 +385,10 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    (**PARTIALLY IMPLEMENTED** for incompatible-generation rejection and denial
    of new prohibited-provider bindings only);
 9. cross-compiler, performance, fuzzing, and optional service-provider evidence
-   (**PARTIALLY IMPLEMENTED** for a bounded hosted isolated-endpoint adapter;
-   compiler, performance, fuzzing, and real isolation evidence remain);
+   (**PARTIALLY IMPLEMENTED** for a bounded hosted isolated-endpoint adapter
+   and one explicit descriptor scalar projection compiled by `mrml-rustc` to
+   COFF/ELF while pinned upstream rustc executes the reference; full binding,
+   performance, fuzzing, and real isolation evidence remain);
 10. selective migration of further high-value components.
 
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,
@@ -438,3 +440,10 @@ connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for tests. This
 does not establish dynamic loading, service isolation, update-without-rebuild,
 retention/GC, performance, fuzzing, or physical-system evidence.
+
+The cross-compiler probe is deliberately narrower than binding compatibility.
+Pinned upstream `nightly-2026-08-24` executes the exact generation, operation,
+request-size, and response-size identity check; `mrml-rustc` emits bounded COFF
+and ELF objects for the independently authored scalar projection. It does not
+show that `mrml-rustc` can compile the generated binding crate, that either
+compiler lowers native component calls, or that C/Rust ABI layout is stable.

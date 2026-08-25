@@ -111,6 +111,14 @@ identity and package metadata grant no authority. No IPC, process isolation,
 capability projection, supervision, CPU/RAM charging, or native service call
 was exercised.
 
+Cross-compiler evidence is **PARTIALLY IMPLEMENTED** for one narrow descriptor
+identity projection. On both Windows gnullvm and Arch Linux, the canonical MRML
+test action passed the 420 compiler-core tests, one component-interface test,
+10 general conformance tests, and 335 nightly-replacement tests. The new test
+executes the upstream-rustc reference and requires `mrml-rustc` to emit both
+COFF and ELF objects. It does not establish full generated-binding support,
+native MRML call lowering, object equivalence, or stable Rust/C component ABI.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per
