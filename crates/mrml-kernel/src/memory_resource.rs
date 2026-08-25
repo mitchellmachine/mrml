@@ -31,6 +31,39 @@ pub struct MemoryObjectId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryMappingId {
+    slot: u16,
+    generation: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryMapping {
+    object: MemoryObjectId,
+    virtual_page: u64,
+    object_page: u64,
+    pages: u64,
+    access: Rights,
+}
+
+impl MemoryMapping {
+    pub const fn object(self) -> MemoryObjectId {
+        self.object
+    }
+    pub const fn virtual_page(self) -> u64 {
+        self.virtual_page
+    }
+    pub const fn object_page(self) -> u64 {
+        self.object_page
+    }
+    pub const fn pages(self) -> u64 {
+        self.pages
+    }
+    pub const fn access(self) -> Rights {
+        self.access
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryBackingKind {
     Anonymous,
     Shared,
@@ -44,6 +77,7 @@ pub struct MemoryUsage {
     child_reserved_pages: u64,
     mapping_limit: u32,
     child_mapping_reservations: u32,
+    active_mappings: u32,
     active_children: u16,
     child_limit: u16,
     live_objects: u32,
@@ -70,6 +104,9 @@ impl MemoryUsage {
     }
     pub const fn child_mapping_reservations(self) -> u32 {
         self.child_mapping_reservations
+    }
+    pub const fn active_mappings(self) -> u32 {
+        self.active_mappings
     }
     pub const fn active_children(self) -> u16 {
         self.active_children
@@ -113,6 +150,10 @@ pub enum MemoryResourceError {
     InvalidPool,
     InvalidObject,
     WrongPool,
+    InvalidMapping,
+    MappingOverlap,
+    MappingsActive,
+    ObjectRange,
     GenerationExhausted,
     Arithmetic,
     Capability(CapabilityError),
@@ -134,6 +175,7 @@ struct PoolEntry {
     child_reserved_pages: u64,
     mapping_limit: u32,
     child_mapping_reservations: u32,
+    active_mappings: u32,
     child_limit: u16,
     active_children: u16,
     live_objects: u32,
@@ -150,6 +192,7 @@ impl PoolEntry {
         child_reserved_pages: 0,
         mapping_limit: 0,
         child_mapping_reservations: 0,
+        active_mappings: 0,
         child_limit: 0,
         active_children: 0,
         live_objects: 0,
@@ -171,6 +214,34 @@ struct ObjectEntry {
     occupied: bool,
 }
 
+#[derive(Clone, Copy)]
+struct MappingEntry {
+    generation: u32,
+    object: MemoryObjectId,
+    target: ObjectId,
+    virtual_page: u64,
+    object_page: u64,
+    pages: u64,
+    access: Rights,
+    occupied: bool,
+}
+
+impl MappingEntry {
+    const EMPTY: Self = Self {
+        generation: 1,
+        object: MemoryObjectId {
+            slot: 0,
+            generation: 0,
+        },
+        target: ObjectId(0),
+        virtual_page: 0,
+        object_page: 0,
+        pages: 0,
+        access: Rights::NONE,
+        occupied: false,
+    };
+}
+
 impl ObjectEntry {
     const EMPTY: Self = Self {
         generation: 1,
@@ -187,23 +258,27 @@ impl ObjectEntry {
 
 /// Fixed-capacity quantitative memory authority and commitment accounting.
 ///
-/// This policy core records commitments; it does not allocate frames or grant
-/// mappings. Those later operations must consume the resulting exact object and
-/// separate mapping/content authority.
-pub struct MemoryPoolTable<const P: usize, const O: usize> {
+/// This policy core records commitments and mapping reservations; it does not
+/// allocate frames, edit page tables, or grant hardware mappings. Those later
+/// operations must consume the exact object plus separate target authority and
+/// retain the reservation until teardown and invalidation complete.
+pub struct MemoryPoolTable<const P: usize, const O: usize, const M: usize = O> {
     namespace: u16,
     pools: [PoolEntry; P],
     objects: [ObjectEntry; O],
+    mappings: [MappingEntry; M],
 }
 
-impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
+impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
     pub fn new(namespace: u16) -> Result<Self, MemoryResourceError> {
         if namespace == 0
             || namespace > 0x7fff
             || P == 0
             || O == 0
+            || M == 0
             || P > u16::MAX as usize
             || O > u16::MAX as usize
+            || M > u16::MAX as usize
         {
             return Err(MemoryResourceError::InvalidNamespace);
         }
@@ -211,6 +286,7 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             namespace,
             pools: array::from_fn(|_| PoolEntry::EMPTY),
             objects: array::from_fn(|_| ObjectEntry::EMPTY),
+            mappings: array::from_fn(|_| MappingEntry::EMPTY),
         })
     }
 
@@ -240,6 +316,7 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             child_reserved_pages: 0,
             mapping_limit,
             child_mapping_reservations: 0,
+            active_mappings: 0,
             child_limit,
             active_children: 0,
             live_objects: 0,
@@ -281,9 +358,12 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
         if parent_entry.active_children >= parent_entry.child_limit {
             return Err(MemoryResourceError::ChildLimitExceeded);
         }
-        let mapping_total = parent_entry
+        let mapping_reservations = parent_entry
             .child_mapping_reservations
             .checked_add(mapping_limit)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        let mapping_total = mapping_reservations
+            .checked_add(parent_entry.active_mappings)
             .ok_or(MemoryResourceError::Arithmetic)?;
         if mapping_total > parent_entry.mapping_limit {
             return Err(MemoryResourceError::MappingLimitExceeded);
@@ -301,7 +381,7 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             .child_reserved_pages
             .checked_add(limit_pages)
             .ok_or(MemoryResourceError::Arithmetic)?;
-        parent_mut.child_mapping_reservations = mapping_total;
+        parent_mut.child_mapping_reservations = mapping_reservations;
         parent_mut.active_children = parent_mut
             .active_children
             .checked_add(1)
@@ -315,6 +395,7 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             child_reserved_pages: 0,
             mapping_limit,
             child_mapping_reservations: 0,
+            active_mappings: 0,
             child_limit,
             active_children: 0,
             live_objects: 0,
@@ -409,6 +490,13 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             .live_objects
             .checked_sub(1)
             .ok_or(MemoryResourceError::Arithmetic)?;
+        if self
+            .mappings
+            .iter()
+            .any(|mapping| mapping.occupied && mapping.object == object)
+        {
+            return Err(MemoryResourceError::MappingsActive);
+        }
         capabilities.revoke(capability)?;
         let pool_mut = self.pool_mut(entry.pool)?;
         pool_mut.object_pages = next_pages;
@@ -418,6 +506,143 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             ..ObjectEntry::EMPTY
         };
         Ok(entry.pages)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_mapping<const C: usize>(
+        &mut self,
+        object: MemoryObjectId,
+        object_capability: Capability,
+        target_capability: Capability,
+        virtual_page: u64,
+        object_page: u64,
+        pages: u64,
+        access: Rights,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<MemoryMappingId, MemoryResourceError> {
+        let allowed_access = Rights::READ.union(Rights::WRITE).union(Rights::EXECUTE);
+        if pages == 0
+            || access.bits() == 0
+            || !allowed_access.contains(access)
+            || (access.contains(Rights::WRITE) && access.contains(Rights::EXECUTE))
+        {
+            return Err(MemoryResourceError::InvalidRights);
+        }
+        let object_entry = *self.object(object)?;
+        if capabilities.authorize(object_capability, Rights::MAP.union(access))?
+            != object_entry.authority
+        {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let target = capabilities.authorize(target_capability, Rights::MAP)?;
+        let object_end = object_page
+            .checked_add(pages)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        if object_end > object_entry.pages {
+            return Err(MemoryResourceError::ObjectRange);
+        }
+        let virtual_end = virtual_page
+            .checked_add(pages)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        if self.mappings.iter().any(|mapping| {
+            mapping.occupied
+                && mapping.target == target
+                && ranges_overlap(
+                    virtual_page,
+                    virtual_end,
+                    mapping.virtual_page,
+                    mapping.virtual_page + mapping.pages,
+                )
+        }) {
+            return Err(MemoryResourceError::MappingOverlap);
+        }
+        let pool = *self.pool(object_entry.pool)?;
+        let used = pool
+            .child_mapping_reservations
+            .checked_add(pool.active_mappings)
+            .and_then(|value| value.checked_add(1))
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        if used > pool.mapping_limit {
+            return Err(MemoryResourceError::MappingLimitExceeded);
+        }
+        let slot = self.free_mapping_slot()?;
+        let generation = self.mappings[slot].generation;
+        let id = MemoryMappingId {
+            slot: slot as u16,
+            generation,
+        };
+        self.pool_mut(object_entry.pool)?.active_mappings = pool.active_mappings + 1;
+        self.mappings[slot] = MappingEntry {
+            generation,
+            object,
+            target,
+            virtual_page,
+            object_page,
+            pages,
+            access,
+            occupied: true,
+        };
+        Ok(id)
+    }
+
+    /// Retires one reservation only after its actual page-table/backend mapping
+    /// has been removed and every required invalidation has completed.
+    ///
+    /// # Safety
+    ///
+    /// The caller must prove that no CPU, device, VMM backend, cached
+    /// translation, or peer can still use the represented mapping.
+    pub unsafe fn release_mapping<const C: usize>(
+        &mut self,
+        mapping: MemoryMappingId,
+        target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(), MemoryResourceError> {
+        let entry = *self.mapping(mapping)?;
+        if capabilities.authorize(target_capability, Rights::CONTROL)? != entry.target {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let next_generation = entry
+            .generation
+            .checked_add(1)
+            .ok_or(MemoryResourceError::GenerationExhausted)?;
+        let object = *self.object(entry.object)?;
+        let pool = *self.pool(object.pool)?;
+        let next_mappings = pool
+            .active_mappings
+            .checked_sub(1)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        self.pool_mut(object.pool)?.active_mappings = next_mappings;
+        self.mappings[mapping.slot as usize] = MappingEntry {
+            generation: next_generation,
+            ..MappingEntry::EMPTY
+        };
+        Ok(())
+    }
+
+    pub fn mapping_info<const C: usize>(
+        &self,
+        mapping: MemoryMappingId,
+        target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<MemoryMapping, MemoryResourceError> {
+        let entry = *self.mapping(mapping)?;
+        if capabilities.authorize(target_capability, Rights::INSPECT)? != entry.target {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        Ok(MemoryMapping {
+            object: entry.object,
+            virtual_page: entry.virtual_page,
+            object_page: entry.object_page,
+            pages: entry.pages,
+            access: entry.access,
+        })
     }
 
     pub fn usage<const C: usize>(
@@ -438,6 +663,7 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             child_reserved_pages: entry.child_reserved_pages,
             mapping_limit: entry.mapping_limit,
             child_mapping_reservations: entry.child_mapping_reservations,
+            active_mappings: entry.active_mappings,
             active_children: entry.active_children,
             child_limit: entry.child_limit,
             live_objects: entry.live_objects,
@@ -485,6 +711,13 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
                     .ok_or(MemoryResourceError::Arithmetic)?;
                 *affected = true;
             }
+        }
+        if self
+            .mappings
+            .iter()
+            .any(|mapping| mapping.occupied && affected_objects[mapping.object.slot as usize])
+        {
+            return Err(MemoryResourceError::MappingsActive);
         }
         summary.pools = u32::try_from(affected_pools.iter().filter(|value| **value).count())
             .map_err(|_| MemoryResourceError::Arithmetic)?;
@@ -568,6 +801,13 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
             .ok_or(MemoryResourceError::InvalidObject)
     }
 
+    fn mapping(&self, id: MemoryMappingId) -> Result<&MappingEntry, MemoryResourceError> {
+        self.mappings
+            .get(id.slot as usize)
+            .filter(|entry| entry.occupied && entry.generation == id.generation)
+            .ok_or(MemoryResourceError::InvalidMapping)
+    }
+
     fn free_pool_slot(&self) -> Result<usize, MemoryResourceError> {
         self.pools
             .iter()
@@ -577,6 +817,13 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
 
     fn free_object_slot(&self) -> Result<usize, MemoryResourceError> {
         self.objects
+            .iter()
+            .position(|entry| !entry.occupied && entry.generation != u32::MAX)
+            .ok_or(MemoryResourceError::CapacityExhausted)
+    }
+
+    fn free_mapping_slot(&self) -> Result<usize, MemoryResourceError> {
+        self.mappings
             .iter()
             .position(|entry| !entry.occupied && entry.generation != u32::MAX)
             .ok_or(MemoryResourceError::CapacityExhausted)
@@ -611,6 +858,10 @@ impl<const P: usize, const O: usize> MemoryPoolTable<P, O> {
         }
         Err(MemoryResourceError::Arithmetic)
     }
+}
+
+const fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
+    a_start < b_end && b_start < a_end
 }
 
 fn validate_pool_shape(
@@ -862,6 +1113,233 @@ mod tests {
             Err(MemoryResourceError::Capability(
                 CapabilityError::PermissionDenied
             ))
+        );
+    }
+
+    #[test]
+    fn mappings_enforce_dual_authority_ranges_wx_overlap_and_budget() {
+        let mut table = MemoryPoolTable::<2, 1, 3>::new(11).unwrap();
+        let mut caps = CapabilitySpace::<6>::new();
+        let (root, root_cap) = table.create_root(5, 2, 1, ROOT_RIGHTS, &mut caps).unwrap();
+        let (object, object_cap) = table
+            .allocate_object(
+                root,
+                root_cap,
+                4,
+                MemoryBackingKind::Anonymous,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let target = caps
+            .insert(
+                ObjectId(77),
+                Rights::MAP.union(Rights::CONTROL).union(Rights::INSPECT),
+            )
+            .unwrap();
+        let non_target = caps.insert(ObjectId(78), Rights::CONTROL).unwrap();
+        assert!(matches!(
+            table.reserve_mapping(
+                object,
+                object_cap,
+                non_target,
+                10,
+                0,
+                1,
+                Rights::READ,
+                &caps,
+            ),
+            Err(MemoryResourceError::Capability(_))
+        ));
+        assert!(matches!(
+            table.reserve_mapping(object, target, target, 10, 0, 1, Rights::READ, &caps,),
+            Err(MemoryResourceError::Capability(_))
+        ));
+        assert_eq!(
+            table.reserve_mapping(
+                object,
+                object_cap,
+                target,
+                u64::MAX,
+                0,
+                1,
+                Rights::READ,
+                &caps,
+            ),
+            Err(MemoryResourceError::Arithmetic)
+        );
+        let mapping = table
+            .reserve_mapping(
+                object,
+                object_cap,
+                target,
+                10,
+                1,
+                2,
+                Rights::READ.union(Rights::WRITE),
+                &caps,
+            )
+            .unwrap();
+        let info = table.mapping_info(mapping, target, &caps).unwrap();
+        assert_eq!(
+            (
+                info.object(),
+                info.virtual_page(),
+                info.object_page(),
+                info.pages(),
+                info.access()
+            ),
+            (object, 10, 1, 2, Rights::READ.union(Rights::WRITE))
+        );
+        assert_eq!(
+            table.reserve_mapping(object, object_cap, target, 11, 0, 1, Rights::READ, &caps),
+            Err(MemoryResourceError::MappingOverlap)
+        );
+        assert_eq!(
+            table.reserve_mapping(
+                object,
+                object_cap,
+                target,
+                20,
+                0,
+                1,
+                Rights::WRITE.union(Rights::EXECUTE),
+                &caps,
+            ),
+            Err(MemoryResourceError::InvalidRights)
+        );
+        assert_eq!(
+            table.reserve_mapping(object, object_cap, target, 20, 4, 1, Rights::READ, &caps),
+            Err(MemoryResourceError::ObjectRange)
+        );
+        let second = table
+            .reserve_mapping(object, object_cap, target, 20, 0, 1, Rights::READ, &caps)
+            .unwrap();
+        assert_eq!(
+            table.reserve_mapping(object, object_cap, target, 30, 0, 1, Rights::READ, &caps),
+            Err(MemoryResourceError::MappingLimitExceeded)
+        );
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            2
+        );
+        let mut child_space = CapabilitySpace::<1>::new();
+        assert_eq!(
+            table.derive_pool(
+                root,
+                root_cap,
+                &caps,
+                1,
+                1,
+                0,
+                CHILD_RIGHTS,
+                &mut child_space,
+            ),
+            Err(MemoryResourceError::MappingLimitExceeded)
+        );
+        unsafe { table.release_mapping(mapping, target, &caps) }.unwrap();
+        table
+            .derive_pool(
+                root,
+                root_cap,
+                &caps,
+                1,
+                1,
+                0,
+                CHILD_RIGHTS,
+                &mut child_space,
+            )
+            .unwrap();
+        assert_eq!(
+            table.mapping_info(mapping, target, &caps),
+            Err(MemoryResourceError::InvalidMapping)
+        );
+        assert_eq!(
+            table.release_object(object, object_cap, &mut caps),
+            Err(MemoryResourceError::MappingsActive)
+        );
+        assert_eq!(
+            table.mapping_info(second, target, &caps).unwrap().object(),
+            object
+        );
+        unsafe { table.release_mapping(second, target, &caps) }.unwrap();
+        table.release_object(object, object_cap, &mut caps).unwrap();
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+    }
+
+    #[test]
+    fn pool_revocation_requires_prior_mapping_teardown_without_partial_mutation() {
+        let mut table = MemoryPoolTable::<2, 1, 1>::new(12).unwrap();
+        let mut root_space = CapabilitySpace::<3>::new();
+        let (root, root_cap) = table
+            .create_root(8, 2, 1, ROOT_RIGHTS, &mut root_space)
+            .unwrap();
+        let mut child_space = CapabilitySpace::<5>::new();
+        let (child, child_cap) = table
+            .derive_pool(
+                root,
+                root_cap,
+                &root_space,
+                4,
+                1,
+                0,
+                CHILD_RIGHTS,
+                &mut child_space,
+            )
+            .unwrap();
+        let (object, object_cap) = table
+            .allocate_object(
+                child,
+                child_cap,
+                1,
+                MemoryBackingKind::Shared,
+                OBJECT_OWNER,
+                &mut child_space,
+            )
+            .unwrap();
+        let target = child_space
+            .insert(
+                ObjectId(88),
+                Rights::MAP.union(Rights::CONTROL).union(Rights::INSPECT),
+            )
+            .unwrap();
+        let mapping = table
+            .reserve_mapping(
+                object,
+                object_cap,
+                target,
+                40,
+                0,
+                1,
+                Rights::READ,
+                &child_space,
+            )
+            .unwrap();
+        assert_eq!(
+            table.revoke_pool(root, root_cap, &mut root_space),
+            Err(MemoryResourceError::MappingsActive)
+        );
+        assert_eq!(
+            table
+                .mapping_info(mapping, target, &child_space)
+                .unwrap()
+                .object(),
+            object
+        );
+        unsafe { table.release_mapping(mapping, target, &child_space) }.unwrap();
+        let summary = table.revoke_pool(root, root_cap, &mut root_space).unwrap();
+        assert_eq!(
+            (summary.pools(), summary.objects(), summary.pages()),
+            (2, 1, 1)
         );
     }
 }

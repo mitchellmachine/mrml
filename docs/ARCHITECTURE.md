@@ -77,7 +77,14 @@ and objects, attenuated child page/mapping/count reservations, content-free
 usage inspection, exact capability checks, and recursive pool revocation. This
 accounts commitments only; frame allocation, mapping, sharing, pinning, DMA,
 cache charging, VMM projection, and userspace policy integration remain
-incomplete. An opt-in accounted configuration-service wrapper now commits its
+incomplete. The policy table now also represents fixed-capacity generational
+mapping reservations. Reservation requires exact source-object MAP plus access
+rights and independently derives the target address-space identity from a MAP
+capability; W^X, object bounds, target-range overlap, and pool/child mapping
+budgets are checked before publication. These are accounting records, not page-
+table or backend mappings. Object and pool retirement fail closed while a
+reservation is live; unsafe reservation release requires prior real teardown
+and invalidation. An opt-in accounted configuration-service wrapper now commits its
 complete fixed settings and audit state for fresh, empty, and checkpoint-
 recovered construction; live service-image composition has not adopted it. An
 opt-in accounted supervisor separately commits all fixed service/task bindings,

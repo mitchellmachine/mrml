@@ -179,9 +179,14 @@ identities. Root creation and child delegation bound page commitments, mapping
 reservations, child counts, and rights; exact allocation limits fail locally;
 content-free usage inspection is independent from control; release and
 recursive pool revocation stale object and descendant-pool identities. This is
-accounting rather than frame allocation. Mapping, sharing, pinning, DMA,
-resize/COW, cache charging, VMM guest projection, userspace policy, and hardware
-evidence remain pending before this prerequisite is complete. The first page-
+accounting rather than frame allocation. Fixed-capacity mapping reservations
+now consume the pool's quantitative mapping budget under separate source-object
+and target-address-space capabilities, enforce W^X/bounds/non-overlap, and block
+object or pool retirement until real mapping teardown and invalidation are
+proven. They do not edit page tables or VMM backends. Physical mapping,
+sharing, pinning, DMA, resize/COW, cache charging, VMM guest projection,
+userspace policy, and hardware evidence remain pending before this prerequisite
+is complete. The first page-
 table charge foundation is **PARTIALLY IMPLEMENTED**: an opt-in wrapper commits
 the complete validated preallocated arena capacity before exposing a usable
 store, and unsafe release requires the caller to prove every table unreachable

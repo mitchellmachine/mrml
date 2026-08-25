@@ -7258,6 +7258,63 @@ mechanism. Planned scopes recorded as `TRIGGERED` in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
 
+### Capability-bound mapping reservations
+
+The quantitative memory prerequisite is **PARTIALLY IMPLEMENTED** with a
+fixed-capacity generational mapping-reservation table. Each reservation binds
+one exact `MemoryObject` subrange to one target address-space authority and
+virtual page range. The source capability must carry `MAP` plus every requested
+READ/WRITE/EXECUTE right; a separate target capability supplies `MAP`, so a
+caller-provided name cannot select an address space. Admission rejects zero or
+overflowing ranges, object-range escape, writable-executable access, overlap in
+the same target, table exhaustion, and use beyond the pool's mapping limit after
+child reservations and active mappings are counted. Derived child mapping
+budgets and direct parent reservations cannot amplify one another.
+
+`MemoryMappingId` supplies bounded identity and lifetime but no authority.
+Inspection separately requires target `INSPECT` and returns only the object ID,
+page ranges, and access rights. Retirement requires target `CONTROL`, advances
+the mapping generation, and returns one unit of mapping budget. It is unsafe:
+the caller must first prove page-table/backend removal and every required CPU,
+device, VMM, and translation-cache invalidation. Object release and recursive
+pool revocation reject live reservations before mutating capabilities,
+generations, or counters. This avoids claiming that accounting performed native
+teardown. No frame allocator, page table, IOMMU, KVM, WHP, hosted probe, or
+physical hardware is exercised by this increment. Because the fixed mapping
+table is part of `MemoryPoolTable`'s concrete layout, existing aggregate
+accounting wrappers automatically include its bounded default capacity.
+
+Engineering Constitution complexity score: complexity impact `MODERATE`, TCB
+impact `LOW`, new parser `NO`, new authority model `NO`, new persistent state
+`NO`, external dependency `NO`, failure isolated `YES`, and existing-object
+reuse `YES` through `MemoryPoolTable`, `MemoryObject`, `CapabilitySpace`, and
+the established `Rights` model.
+
+DIGITAL-RIGHTS REVIEW: reservations add no collection, retention, content
+inspection, remote disclosure, stable user identity, DRM, attestation, vendor,
+publisher, provider, verifier, AI-only, first-party, or accessibility authority.
+They bind only owner-selected local quantitative and address-space authority;
+inspection is separate and content-free. A target name or mapping ID cannot
+authorize an operation.
+
+HOSTILE SECURITY REVIEW: generic capacities, pool/object/mapping generations,
+both capabilities, access rights, child reservations, active counts, page-range
+arithmetic, W^X, overlap, slot reuse, exhaustion, release ordering, and
+recursive revocation are hostile. Every check and counter successor is
+preflighted before publication or retirement. Live mappings block object and
+pool reclamation without partial mutation; stale IDs fail, and unsafe release
+documents the external native-teardown proof that this policy table cannot
+manufacture.
+
+Patent review: `NOT_TRIGGERED` — fixed-capacity generational mapping accounting,
+capability checks, checked ranges, W^X, overlap rejection, and fail-closed
+teardown ordering are conventional local resource-management mechanisms. This
+adds no compatibility transport, host-share protocol, accessibility device,
+browser semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or
+media mechanism. Planned scopes recorded as `TRIGGERED` in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered
