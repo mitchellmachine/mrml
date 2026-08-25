@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `962aedcc`
-  (`compiler: enforce bounded return outlives`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `7f26b9af`. The push was a verified
-  fast-forward containing exactly the three isolated bounded-return-outlives
-  commits; unrelated unstaged OS work was not included.
+- Compiler checkpoint commit: `19e0e124`
+  (`compiler: trace shared return copies`)
+- Remote state when recorded: the compiler checkpoint and its documentation/
+  review commits are pending publication. Unrelated unstaged OS work is not part
+  of the compiler checkpoint.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -165,8 +164,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   bound exhaustion fail closed with `RuntimeReferenceOutlivesFunction` or the
   existing invalid-fact error. The relation preserves direct parameter returns,
   explicit reborrows, moved mutable parameters, latest-generation replacement,
-  cyclic reborrow generations, and exact tuple-field initialization or
-  reassignment origins. Ambiguous nested-loop control values, general regions,
+  cyclic reborrow generations, exact tuple-field initialization or reassignment
+  origins, and one- or multi-hop direct shared-reference copies. Copy ancestry
+  requires the exact immediately preceding local-initialization effect with
+  matching expression identity and reference mutability; mutable references
+  still require a move. Ambiguous nested-loop control values, general regions,
   named lifetime relationships, and complete Polonius outlives reasoning remain
   unimplemented.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner

@@ -696,8 +696,10 @@ outlives slice now rejects a supported returned reference unless its active,
 event-decreasing ancestry reaches parameter-backed storage. It covers exact
 tail, explicit, conditional, and supported loop return-value locations; preserves
 latest-generation replacement, cyclic reborrow ancestry, moved parameters, and
-exact tuple-field initialization/reassignment origins; and fails closed on local
-storage or unclassified ancestry. This is not named-lifetime inference, general
+exact tuple-field initialization/reassignment origins. Direct shared-reference
+copies now retain the same bounded ancestry through successive local bindings;
+mutable references remain move-only. Local storage, mismatched mutability, and
+unclassified ancestry fail closed. This is not named-lifetime inference, general
 regions, or complete Polonius outlives reasoning. The highest-value next major
 implementation task is extending this relation across the remaining exact return
 and indirect-alias forms without collapsing generation or CFG path distinctions.

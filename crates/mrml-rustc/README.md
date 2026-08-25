@@ -3756,3 +3756,16 @@ origins. Unsupported or ambiguous ancestry fails closed. This is the first
 bounded escape/outlives slice, not named lifetime inference, general regions, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan remained
 empty.
+
+The shared-reference return-copy milestone at `19e0e124` passed all 764 compiler
+and driver tests on Windows gnullvm and all 764 in release mode on native Arch
+Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
+rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The pinned
+oracle accepted parameter-backed return ancestry through one and two ordinary
+shared-reference copies and rejected the same copy chain rooted in local storage
+with E0515. The outlives-private trace accepts only an exact immediately
+preceding `Copy` or `Move` at the matching initialization expression; reference
+mutability must match, and mutable references still require `Move`. Missing or
+ambiguous ancestry remains fail-closed. This is bounded direct copy ancestry,
+not general alias analysis, named lifetime inference, or complete Polonius
+semantics. The `no_std`/allocation/unsafe hygiene scan remained empty.
