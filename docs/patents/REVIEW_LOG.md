@@ -4527,3 +4527,13 @@ non-projection-aware proof reject the premise. It adds no solving algorithm,
 term grammar, branching search, specialization order, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Bounded inferred projection-premise proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment feeds the existing
+projection-equality operation through the existing fixed root constraint state,
+rollback scheduler, implementation proof, and associated-value tables. A fixed
+nesting counter bounds projection-to-proof recursion. It adds no new term
+grammar, branching search, specialization order, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.

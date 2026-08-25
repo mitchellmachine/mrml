@@ -4156,6 +4156,20 @@ Projection-aware recursive premise proof, general projection-bearing type
 terms, backtracking, caching, coinduction, source syntax, and general
 normalization remain unsupported.
 
+The projection-aware inferred-proof milestone schedules instantiated trait and
+projection-equality premises under one shared root constraint state. Ambiguous
+premises roll back tentative constraints and retry after another premise proves.
+Projection normalization may recursively prove projection-bearing generic
+implementations through the same associated-value environment; a separate
+16-transition nesting budget bounds that projection-to-proof recursion. Direct
+refinement, contradiction, deferred mixed premises, generic premises, nested
+proof, and adversarial overflow have focused tests. Windows gnullvm and native
+Arch Linux WSL each pass 513 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 859 compiler tests per host.
+Concrete/rigid projection-premise proof, general projection-bearing type terms,
+backtracking, caching, coinduction, source syntax, and general normalization
+remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
