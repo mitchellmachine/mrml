@@ -169,6 +169,22 @@ struct RustCompileMode<'a> {
 struct Workspace {
     root: PathBuf,
     components: Vec<Component>,
+    interface_bindings: Vec<InterfaceBindingLock>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InterfaceBindingLock {
+    consumer: String,
+    interface: String,
+    generation: u64,
+    fingerprint: String,
+    provider: String,
+    targets: Vec<String>,
+}
+
+struct ManifestDeclarations {
+    records: Vec<Vec<String>>,
+    interface_bindings: Vec<InterfaceBindingLock>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -488,7 +504,7 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
     let mut components = workspace.components.iter().collect::<Vec<_>>();
     components.sort_by(|left, right| left.id.cmp(&right.id));
     let mut encoded = String::from(
-        "[lock]\nformat = \"mrml-workspace-lock\"\nversion = 1\ntoolchain = \"nightly-2026-08-24\"\n\n",
+        "[lock]\nformat = \"mrml-workspace-lock\"\nversion = 2\ntoolchain = \"nightly-2026-08-24\"\n\n",
     );
     for component in components {
         let mut dependencies = component
@@ -523,6 +539,24 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
         }
         encoded.push_str("]\n\n");
     }
+    for binding in &workspace.interface_bindings {
+        encoded.push_str("[[interface_binding]]\n");
+        encoded.push_str(&format!("consumer = \"{}\"\n", binding.consumer));
+        encoded.push_str(&format!("interface = \"{}\"\n", binding.interface));
+        encoded.push_str(&format!("generation = {}\n", binding.generation));
+        encoded.push_str(&format!("fingerprint = \"{}\"\n", binding.fingerprint));
+        encoded.push_str(&format!("provider = \"{}\"\n", binding.provider));
+        encoded.push_str("targets = [");
+        for (index, target) in binding.targets.iter().enumerate() {
+            if index != 0 {
+                encoded.push_str(", ");
+            }
+            encoded.push('"');
+            encoded.push_str(target);
+            encoded.push('"');
+        }
+        encoded.push_str("]\n\n");
+    }
     let canonical = encoded;
     let path = workspace.root.join("mrml.lock");
     let current = fs::read_to_string(&path).ok();
@@ -542,8 +576,9 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
             .map_err(|error| format!("WorkspaceLockWriteError {{ detail: {error} }}"))?;
     }
     println!(
-        "manifest-lock|status=PASS|packages={}|check={check}",
-        workspace.components.len()
+        "manifest-lock|status=PASS|packages={}|interfaces={}|check={check}",
+        workspace.components.len(),
+        workspace.interface_bindings.len()
     );
     Ok(())
 }
@@ -615,7 +650,7 @@ fn read_bounded_manifest(path: &Path, label: &str) -> Result<String, String> {
         .map_err(|error| format!("ManifestReadError {{ file: {label}, detail: {error} }}"))
 }
 
-fn load_manifest_declarations(root: &Path) -> Result<Vec<Vec<String>>, String> {
+fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, String> {
     let root_text = read_bounded_manifest(&root.join("mrml.toml"), "mrml.toml")?;
     let root_document = ManifestDocument::parse(root_text.as_bytes())
         .map_err(|error| manifest_error("mrml.toml", error))?;
@@ -757,7 +792,43 @@ fn load_manifest_declarations(root: &Path) -> Result<Vec<Vec<String>>, String> {
             ));
         }
     }
-    Ok(declarations)
+    let mut interface_bindings = Vec::new();
+    for (consumer, interface, generation, fingerprint, targets) in requirements {
+        let matching = providers
+            .iter()
+            .filter(
+                |(_, provided, provider_generation, provider_fingerprint, provider_targets)| {
+                    provided == &interface
+                        && provider_generation == &generation
+                        && provider_fingerprint == &fingerprint
+                        && targets
+                            .iter()
+                            .all(|target| provider_targets.contains(target))
+                },
+            )
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(format!(
+                "InterfaceProviderAmbiguous {{ consumer: {consumer}, interface: {interface}, providers: {} }}",
+                matching.len()
+            ));
+        }
+        interface_bindings.push(InterfaceBindingLock {
+            consumer,
+            interface,
+            generation,
+            fingerprint,
+            provider: matching[0].0.clone(),
+            targets: targets.into_iter().map(str::to_owned).collect(),
+        });
+    }
+    interface_bindings.sort_by(|left, right| {
+        (&left.consumer, &left.interface).cmp(&(&right.consumer, &right.interface))
+    });
+    Ok(ManifestDeclarations {
+        records: declarations,
+        interface_bindings,
+    })
 }
 
 fn manifest_error(file: &str, error: manifest::Error) -> String {
@@ -1218,7 +1289,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_feature_profiles = Vec::new();
     let mut rust_extern_profiles = Vec::new();
     let mut rust_target_triples = Vec::new();
-    for (index, record) in declarations.iter().enumerate() {
+    for (index, record) in declarations.records.iter().enumerate() {
         let fields: Vec<&str> = record.iter().map(String::as_str).collect();
         match fields.as_slice() {
             [
@@ -2265,7 +2336,11 @@ fn load_workspace() -> Result<Workspace, String> {
             component.id
         ));
     }
-    Ok(Workspace { root, components })
+    Ok(Workspace {
+        root,
+        components,
+        interface_bindings: declarations.interface_bindings,
+    })
 }
 
 fn safe_relative_path(value: &str) -> bool {
@@ -4318,6 +4393,7 @@ mod tests {
         Workspace {
             root: PathBuf::new(),
             components,
+            interface_bindings: Vec::new(),
         }
     }
 
