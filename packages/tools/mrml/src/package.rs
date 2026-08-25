@@ -861,11 +861,30 @@ mod tests {
             let offset = (state as usize) % canonical.len();
             let mut mutated = canonical.clone();
             mutated[offset] ^= 1 << ((state >> 32) & 7);
-            if let Ok(package) = parse(&mutated, true) {
+            let host = parse(&mutated, true);
+            let boot = crate::boot_package_core::parse(&mutated, true, true);
+            assert_eq!(host.is_ok(), boot.is_ok());
+            if let (Ok(package), Ok(boot)) = (host, boot) {
+                assert_eq!(package.id, boot.id);
+                assert_eq!(package.class, boot.class);
+                assert_eq!(package.version, boot.version);
+                assert_eq!(package.content_digest, boot.content_digest);
+                assert_eq!(package.payloads.len(), boot.payload_count());
                 for payload in package.payloads {
                     let mut decoded = vec![0; payload.raw_len];
                     let result = payload.decode(&mut decoded);
                     assert!(result.is_ok() || result == Err(Error::Compression));
+                    let boot_payload = boot
+                        .select(payload.purpose, payload.architecture)
+                        .expect("boot parser must expose the same accepted payload");
+                    let mut boot_decoded = vec![0; boot_payload.raw_len];
+                    assert_eq!(
+                        result.is_ok(),
+                        boot_payload.decode(&mut boot_decoded).is_ok()
+                    );
+                    if result.is_ok() {
+                        assert_eq!(decoded, boot_decoded);
+                    }
                 }
             }
         }
