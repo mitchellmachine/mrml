@@ -110,6 +110,10 @@ verified. The first eighteen library components, `mrml-math`,
 bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
 location. Do not create empty speculative directories.
 
+The dependency-free `mrml-rustc` core now lives at `compiler/core`; its
+driver remains a separate transitional component until its own dependency gate
+is migrated.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

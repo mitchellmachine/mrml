@@ -2,7 +2,7 @@
 
 This file is the short recovery record for the independent compiler lane. It
 does not replace `docs/COMPILER.md`, the oracle records, or the detailed
-evidence ledger in `crates/mrml-rustc/README.md`. If chat history or a local
+evidence ledger in `compiler/core/README.md`. If chat history or a local
 worktree is lost, recover this checkpoint first and verify every claim against
 the named commit and current source.
 
@@ -555,7 +555,7 @@ generation retains the last complete Windows/Linux evidence.
 The hygiene scan must remain empty:
 
 ```sh
-rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" crates/mrml-rustc/src crates/mrml-rustc-driver/src
+rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" compiler/core/src crates/mrml-rustc-driver/src
 ```
 
 Format only the compiler packages, preserve unrelated worktree changes, stage

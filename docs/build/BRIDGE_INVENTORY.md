@@ -78,6 +78,9 @@ graph/audit. Do not remove Cargo bridge entries until Windows/Linux build
 equivalence is demonstrated. Treat input-policy changes as explicit review items,
 never automatically accepted count updates.
 
+The compiler lane has also moved dependency-free `mrml-rustc` to
+`compiler/core`; the Cargo bridge and separate driver remain.
+
 Patent review: `NOT_TRIGGERED`. This increment adds conventional bounded metadata
 parsing, graph consistency checks, and lexical source inventory. It does not
 implement the future cache, package, resolver, provenance, or publication

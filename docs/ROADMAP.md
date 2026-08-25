@@ -199,6 +199,10 @@ consumers resolve to its semantic home without changing terminal behavior.
 edges are sibling semantic-package references without changing codec,
 conformance, or feature behavior.
 
+The compiler lane has moved dependency-free `mrml-rustc` to
+`compiler/core`; its driver edge and durable recovery/oracle/review references
+now resolve there without changing compiler semantics.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

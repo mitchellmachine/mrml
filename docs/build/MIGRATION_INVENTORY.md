@@ -75,6 +75,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
 - `mrml-av1` moved after its platform/runtime dependencies, with all three
   dependency paths updated; its codec implementation, conformance evidence,
   feature behavior, review status, and Cargo bridge remain unchanged.
+- dependency-free `mrml-rustc` moved to `compiler/core`, with its driver,
+  recovery, oracle, checkpoint, hygiene-command, and patent-review paths
+  updated; compiler semantics and its Cargo bridge remain unchanged.
 
 The runtime move was checked on a Windows host:
 
@@ -183,6 +186,22 @@ The AV1 move was checked on a Windows host:
 No Linux host, NVIDIA feature path, conformance corpus, or physical decoder was
 exercised by this move.
 
+The compiler-core move was checked on a Windows host with
+`RUSTFLAGS=-C link-arg=/stack:16777216`:
+
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-rustc -- --check`
+  and `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-rustc --all-targets --no-deps -- -D warnings`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-rustc`
+  — PASS, 765 tests (420 library, 10 conformance, 335 replacement);
+- `.\target\debug\mrml.exe doctor`, `.\target\debug\mrml.exe audit`, and
+  `.\target\debug\mrml.exe build mrml-rustc` — PASS;
+- `rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\\s*\\{" compiler/core/src`
+  — PASS with no matches.
+
+No Linux compiler-core execution was exercised by this move; the existing
+oracle records retain their exact historical Linux evidence and limitations.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -192,7 +211,7 @@ were not exercised by the Windows implementation environment.
 | Class | Current components/direction |
 | --- | --- |
 | `BOOTSTRAP_ONLY` | `tools/mrml`; Cargo stage zero, then self-build graph |
-| `COMPILER` | `mrml-rustc`, driver; future clear `compiler/` hierarchy |
+| `COMPILER` | `mrml-rustc` at `compiler/core`; driver still transitional |
 | `MRML_NATIVE` | kernel, service image, configuration, storage |
 | `UEFI` | kernel-image bootloader artifact; `mrml-uefi` is shared support |
 | `HOST_WINDOWS_LINUX` | CLI/server/tools/sign/Git/trainer and VMM launchers |
@@ -205,9 +224,10 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the eighteen moved
-  libraries and stage-zero remain beneath `crates/`. The root Cargo workspace
-  still contains every component so the bridge resolves today’s exact graph.
+- Every component still has Cargo dependency metadata; all except the eighteen
+  moved libraries, compiler core, and stage-zero remain beneath `crates/`. The
+  root Cargo workspace still contains every component so the bridge resolves
+  today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current
   build script. It must become an explicit structured build action.
 - Dependency, feature, output, and source-input facts are persisted and fail

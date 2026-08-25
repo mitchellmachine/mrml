@@ -113,6 +113,11 @@ dependencies without changing codec or feature behavior. **Result:
 NOT_TRIGGERED.** The existing worldwide AV1 mechanism and license review remains
 in force.
 
+The compiler-core semantic move relocates dependency-free `mrml-rustc` to
+`compiler/core` and updates its driver and durable documentation paths without
+changing compiler semantics. **Result: NOT_TRIGGERED.** Existing compiler-
+mechanism reviews remain in force.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
@@ -157,7 +162,7 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 | High | Zstandard FSE/Huffman/sequences | `packages/libraries/zstd/src/` | Compression and upstream grant review required. |
 | High | Hybrid X25519/ML-KEM TLS and AEAD | `packages/libraries/tls/`, `packages/libraries/crypto/` | Standards/IPR and exact protocol-version review required. |
 | Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `crates/mrml-kernel/src/protected_*.rs`, `crates/mrml-whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
-| Medium | Rust-subset lowering/object generation | `crates/mrml-rustc/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
+| Medium | Rust-subset lowering/object generation | `compiler/core/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
 
 ### Discovery performed
 
@@ -188,7 +193,7 @@ Patent review: `TRIGGERED` — persistent worldwide policy and initial landscape
 
 ## 2026-08-23 — fixed-array reference helper signatures
 
-MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 The compiler now carries existing fixed-array element, count, and mutability
 information through its bounded descriptor for inlined safe Rust-ABI helper
@@ -201,7 +206,7 @@ lowering within the review log's existing Rust-subset compiler category.
 
 ## 2026-08-23 — slice and string reference helper signatures
 
-MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 The compiler now carries existing slice element, string, and mutability
 information through bounded descriptors for inlined safe Rust-ABI helper calls.
@@ -217,7 +222,7 @@ category.
 
 ## 2026-08-23 — value-producing loop helper tails
 
-MRML source: `crates/mrml-rustc/src/{parser,codegen,pipeline}.rs`.
+MRML source: `compiler/core/src/{parser,codegen,pipeline}.rs`.
 
 The helper-body parser now preserves a tail value-producing loop when the
 existing bounded expression parser accepts the complete remainder. Existing
@@ -232,7 +237,7 @@ category.
 
 ## 2026-08-23 — by-value fixed-array helper signatures
 
-MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 The compiler now carries existing fixed-array element and count information
 through bounded descriptors for inlined safe Rust-ABI helper calls. Arguments
@@ -377,7 +382,7 @@ test-harness verification.
 
 ## 2026-08-23 — diverging Rust helper signatures
 
-MRML source: `crates/mrml-rustc/src/{expression,codegen,pipeline}.rs`.
+MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 Safe inlined Rust helpers may declare the never return type when their existing
 bounded body representation proves an unconditional diverging loop. Call-site
@@ -391,7 +396,7 @@ existing bounded compiler control flow.
 ## 2026-08-23 — bounded heterogeneous scalar tuples
 
 MRML source:
-`crates/mrml-rustc/src/{expression,ir,semantics,codegen,pipeline}.rs`.
+`compiler/core/src/{expression,ir,semantics,codegen,pipeline}.rs`.
 
 The compiler now represents up to four heterogeneous built-in scalar tuple
 elements in fixed arrays, materializes them in existing checked stack slots,
@@ -483,7 +488,7 @@ syscall descriptor parsing.
 
 ## 2026-08-23 — lazy tuple-valued compiler control flow
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Tuple-valued conditionals and bounded value-producing loops now select one
 existing branch and materialize its fixed stack slots once. This reuses
@@ -495,7 +500,7 @@ Patent review: `NOT_TRIGGERED` — ordinary aggregate control-flow lowering.
 
 ## 2026-08-23 — ordered tuple expression sequencing
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Tuple materialization and field projection now evaluate an existing scalar
 statement prefix once before consuming the tuple tail. This reuses conventional
@@ -506,8 +511,8 @@ Patent review: `NOT_TRIGGERED` — ordinary expression sequencing.
 
 ## 2026-08-23 — bounded mutable tuple places
 
-MRML source: `crates/mrml-rustc/src/parser.rs` and
-`crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/parser.rs` and
+`compiler/core/src/codegen.rs`.
 
 Numeric fields of mutable bounded scalar-tuple locals can now be assigned in
 their existing fixed stack slots. This reuses conventional place parsing,
@@ -521,8 +526,8 @@ Patent review: `NOT_TRIGGERED` — ordinary aggregate-place assignment.
 
 ## 2026-08-23 — structured bounded assignment places
 
-MRML source: `crates/mrml-rustc/src/parser.rs` and
-`crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/parser.rs` and
+`compiler/core/src/codegen.rs`.
 
 Assignment targets now retain a base binding and an explicit bounded direct,
 dereference, index, or numeric tuple-field projection instead of repeatedly
@@ -534,7 +539,7 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler place representation.
 
 ## 2026-08-23 — monotonic runtime local identities
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Runtime locals receive checked monotonic identities that remain distinct when
 scope cleanup permits a fixed storage index to be reused. Assignment lowering
@@ -547,7 +552,7 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler local/place identity.
 
 ## 2026-08-23 — explicit runtime place access intent
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Resolved assignment places now distinguish a plain write from a
 read-modify-write, and existing assignment emitters consume that classification
@@ -575,7 +580,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded IPC and context switchin
 
 ## 2026-08-23 — bounded runtime body fact tables
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Runtime emission now retains fixed-capacity monotonic local facts across stack-
 slot reuse and source-ordered assignment-place access facts through final
@@ -588,7 +593,7 @@ validation within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — stable runtime identifier-read facts
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Runtime identifier loads now append conventional read facts to the existing
 bounded local/place table, reusing stable local or parameter identity across
@@ -600,7 +605,7 @@ within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — bounded source-independent place projections
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Runtime place facts now retain a four-step fixed-capacity list of conventional
 dereference, index, tuple-field, or subslice projections and validate each step
@@ -613,7 +618,7 @@ and type validation within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — bounded runtime read-place discovery
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Runtime read syntax now peels conventional identifier, dereference, index,
 tuple-field, subslice, and transparent expression forms into the existing
@@ -626,7 +631,7 @@ within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — standalone typed runtime body facts
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 Local and place-access facts now occupy a conventional fixed-capacity object
 separate from machine-code buffers. A bounded pre-emission pass assigns types,
@@ -702,7 +707,7 @@ and defensive recovery validation.
 
 ## 2026-08-23 — scoped conditional compiler fact identities
 
-MRML source: `crates/mrml-rustc`.
+MRML source: `compiler/core`.
 
 The bounded compiler prepass uses conventional lexical-scope copies and a
 monotonic local-identity counter while visiting mutually exclusive conditional
@@ -715,7 +720,7 @@ bookkeeping.
 
 ## 2026-08-23 — bounded assignment access expectations
 
-MRML source: `crates/mrml-rustc`.
+MRML source: `compiler/core`.
 
 The compiler records conventional pre-resolved assignment use/definition facts
 in a fixed-capacity table and compares them with assignment sites during its
@@ -728,7 +733,7 @@ and defensive invariant checking.
 
 ## 2026-08-23 — assignment root-place read expectations
 
-MRML source: `crates/mrml-rustc`.
+MRML source: `compiler/core`.
 
 The compiler applies its existing bounded place-syntax discovery to assignment
 RHS roots, resolves conventional symbol-table identities, and compares fixed-
@@ -741,7 +746,7 @@ invariant checking.
 
 ## 2026-08-23 — bounded loop-scope compiler declaration facts
 
-MRML source: `crates/mrml-rustc`.
+MRML source: `compiler/core`.
 
 The compiler mirrors its existing bounded emission traversal to perform
 conventional symbol-table preanalysis across loop, nested-loop, conditional-arm,
@@ -755,7 +760,7 @@ bookkeeping.
 
 ## 2026-08-23 — sequential top-level compiler declaration facts
 
-MRML source: `crates/mrml-rustc`.
+MRML source: `compiler/core`.
 
 The compiler continues conventional bounded symbol-table preanalysis across
 ordinary top-level statements and repeated lexical conditional scopes until its
@@ -966,7 +971,7 @@ Patent review: `NOT_TRIGGERED` — conventional transactional metadata staging.
 
 ## 2026-08-23 — bounded assignment-expression read traversal
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 The compiler performs a conventional bounded recursive syntax traversal in the
 same operand order as code emission and stores resolved reads in fixed-capacity
@@ -977,7 +982,7 @@ Patent review: `NOT_TRIGGERED` — conventional compiler fact collection.
 
 ## 2026-08-23 — typed assignment-index read planning
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 The compiler uses conventional expression typing and constant evaluation to
 select the same fixed-capacity read-fact order as its existing reference and
@@ -1236,7 +1241,7 @@ metadata.
 
 ## 2026-08-23 — scalar initializer and expression-statement read planning
 
-MRML source: `crates/mrml-rustc/src/codegen.rs`.
+MRML source: `compiler/core/src/codegen.rs`.
 
 The compiler applies its existing bounded recursive expression visitor before
 binding activation and across supported scoped expression statements, retaining
