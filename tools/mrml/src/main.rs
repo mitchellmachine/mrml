@@ -72,6 +72,7 @@ struct RustExtern {
     targets: Vec<String>,
     feature: Option<String>,
     provider_profile: String,
+    provider_profiles: BTreeMap<String, String>,
     test_only: bool,
 }
 
@@ -223,6 +224,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_absent_compile_env = Vec::new();
     let mut rust_feature_sets = Vec::new();
     let mut rust_feature_profiles = Vec::new();
+    let mut rust_extern_profiles = Vec::new();
     let mut rust_target_triples = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
@@ -436,6 +438,20 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*features).to_owned(),
                 ));
             }
+            [
+                "rust-extern-profile",
+                component,
+                package,
+                consumer,
+                provider,
+            ] => {
+                rust_extern_profiles.push((
+                    (*component).to_owned(),
+                    (*package).to_owned(),
+                    (*consumer).to_owned(),
+                    (*provider).to_owned(),
+                ));
+            }
             ["rust-target-triple", component, target, triple] => {
                 rust_target_triples.push((
                     (*component).to_owned(),
@@ -605,6 +621,66 @@ fn load_workspace() -> Result<Workspace, String> {
             targets,
             features,
         });
+    }
+    for (component_id, package, consumer_profile, provider_profile) in rust_extern_profiles {
+        let component_index = components
+            .iter()
+            .position(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustExternProfileComponentMissing {{ component: {component_id} }}")
+            })?;
+        let dependency_profiles = components
+            .iter()
+            .find(|component| component.cargo_package == package)
+            .and_then(|component| component.rust_action.as_ref())
+            .map(|action| action.feature_profiles.clone())
+            .ok_or_else(|| {
+                format!(
+                    "RustExternProfileDependencyMissing {{ component: {component_id}, dependency: {package} }}"
+                )
+            })?;
+        let component_targets = components[component_index].targets.clone();
+        let action = components[component_index]
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| {
+                format!("RustExternProfileActionMissing {{ component: {component_id} }}")
+            })?;
+        let consumer = action
+            .feature_profiles
+            .iter()
+            .find(|profile| profile.name == consumer_profile)
+            .ok_or_else(|| {
+                format!(
+                    "RustExternConsumerProfileMissing {{ component: {component_id}, profile: {consumer_profile} }}"
+                )
+            })?;
+        let external = action
+            .externs
+            .iter_mut()
+            .find(|external| external.package == package)
+            .ok_or_else(|| {
+                format!(
+                    "RustExternProfileBindingMissing {{ component: {component_id}, dependency: {package} }}"
+                )
+            })?;
+        if !rust_identifier(&provider_profile)
+            || external.provider_profiles.contains_key(&consumer_profile)
+            || consumer.targets.iter().any(|target| {
+                component_targets.contains(target)
+                    && external.targets.contains(target)
+                    && !dependency_profiles.iter().any(|profile| {
+                        profile.name == provider_profile && profile.targets.contains(target)
+                    })
+            })
+        {
+            return Err(format!(
+                "RustExternProfileInvalid {{ component: {component_id}, dependency: {package}, consumer: {consumer_profile}, provider: {provider_profile} }}"
+            ));
+        }
+        external
+            .provider_profiles
+            .insert(consumer_profile, provider_profile);
     }
     for (component_id, target, triple) in rust_target_triples {
         let component = components
@@ -1258,6 +1334,7 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
             targets,
             feature,
             provider_profile,
+            provider_profiles: BTreeMap::new(),
             test_only,
         });
     }
@@ -1318,6 +1395,14 @@ fn rust_features<'a>(action: &'a RustAction, target: &str, profile: &str) -> &'a
             .map(|set| set.features.as_slice())
             .unwrap_or(&[])
     }
+}
+
+fn rust_extern_provider_profile<'a>(external: &'a RustExtern, profile: &str) -> &'a str {
+    external
+        .provider_profiles
+        .get(profile)
+        .map(String::as_str)
+        .unwrap_or(&external.provider_profile)
 }
 
 fn apply_rust_features(
@@ -1870,7 +1955,7 @@ fn compile_rust_component(
                 test: false,
                 ..*mode
             },
-            &external.provider_profile,
+            rust_extern_provider_profile(external, feature_profile),
             built,
         )?;
     }
@@ -1951,7 +2036,7 @@ fn compile_rust_component(
                 target,
                 compile_target,
                 release,
-                &external.provider_profile,
+                rust_extern_provider_profile(external, feature_profile),
             )?
             .display()
         ));
@@ -3241,6 +3326,15 @@ mod tests {
         let test_only = parse_rust_externs("mrml-crypto=mrml_crypto@*#core!test").unwrap();
         assert!(test_only[0].test_only);
         assert_eq!(test_only[0].provider_profile, "core");
+        let mut forwarded = parse_rust_externs("mrml-model=mrml_model@*").unwrap();
+        forwarded[0]
+            .provider_profiles
+            .insert("auto".into(), "auto".into());
+        assert_eq!(rust_extern_provider_profile(&forwarded[0], "auto"), "auto");
+        assert_eq!(
+            rust_extern_provider_profile(&forwarded[0], "runtime"),
+            "default"
+        );
         assert!(parse_rust_externs("mrml-runtime=bad-name@*").is_err());
         assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*?").is_err());
         assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*#bad-name").is_err());

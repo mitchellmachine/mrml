@@ -175,6 +175,13 @@ Windows/Linux externs are not. Its library and declared example build on both
 hosts; a 32 MiB executable-stack policy leaves the same two source failures as
 the pinned Cargo baseline rather than sixteen additional stack failures.
 
+An extern may also declare a bounded consumer-profile-to-provider-profile
+mapping. Both names and every overlapping target are validated before planning;
+an undeclared consumer profile retains the extern's explicit base provider
+profile. The selected provider profile remains part of recursive build identity
+and the exact artifact name, preventing feature-forwarded dependencies from
+aliasing their default artifacts.
+
 `mrml-crypto` exercises the enabled side of the same rule. Its action records
 the resolved effective default set as `runtime`, which activates exactly the
 optional runtime extern; both supported hosts pass all 27 inline tests directly.

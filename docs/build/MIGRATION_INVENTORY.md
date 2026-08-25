@@ -749,6 +749,14 @@ and all 474 kernel host tests on Windows gnullvm and Arch Linux WSL2. The
 separate `libmrml_crypto__core.rlib` artifact was observed; this remains hosted
 and cross-build evidence only.
 
+Provider profiles may now vary with a named consumer profile through an exact
+`rust-extern-profile` declaration. The parser rejects missing components,
+externs, consumer profiles, provider profiles, target coverage, and duplicate
+mappings; unspecified consumer profiles retain the extern's base profile.
+Windows gnullvm and Arch Linux WSL2 each pass all 12 frontend tests and strict
+Clippy. No application feature graph is claimed migrated by this resolver-only
+increment.
+
 The next bounded action adds explicit host-build projections without widening a
 provider's public target declaration. Kernel permits Windows/Linux projection;
 storage binds that artifact and crypto's empty `core` profile. With both exact

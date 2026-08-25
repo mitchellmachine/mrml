@@ -3281,3 +3281,13 @@ feature gating, and bin-only action model to the unchanged WHP launcher under
 its pre-existing no-default-features build. It adds no hypervisor, VM, mapping,
 CUDA, resolver, cache, or runtime mechanism. Agent review does not replace
 independent human dual review.
+
+# 2026-08-25 — Consumer-selected provider profiles
+
+**Result: TRIGGERED.** The native resolver now selects an exact provider
+feature profile from a bounded, validated consumer-profile mapping while
+retaining the base profile as the explicit fallback. This extends the existing
+package/cache/resolver risk area and establishes neither clearance nor
+infringement; material release resolver/cache mechanisms remain subject to the
+recorded worldwide authoritative-register review. Agent review does not replace
+independent human dual review.
