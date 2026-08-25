@@ -48,6 +48,24 @@ capability. MRML is not currently a production operating system.
 
 ## Current architecture
 
+> Control planes establish authority; data planes should take the shortest safe
+> path.
+
+Policy, capability derivation, exact-generation resolution, admission, resource
+accounting, queue creation, mapping, and revocation setup belong to control
+planes. After that control plane has established an immutable bounded binding,
+steady-state data should use the most direct safe transport for that binding,
+such as an in-process call, native IPC, or a capability-bound shared queue. A
+short data path never means ambient authority: data-plane bytes cannot mint
+capabilities, select or substitute objects or providers, change placement or
+policy, exceed admitted budgets, or bypass validation, accounting, lifecycle,
+and revocation.
+
+For example, VirtualGPU policy and the GPU broker establish the exact domain,
+queues, mappings, budgets, and generations once. The App VM and GPU backend may
+then exchange bounded authenticated commands and completions through the
+established shared queues without routing every command back through policy.
+
 Canonical packages, coherent `SystemRelease` graphs, immutable local
 `SystemGeneration` state, Store transport, system images, servicing, installation,
 and typed administration are **PLANNED** in [DEPLOYMENT.md](DEPLOYMENT.md).
