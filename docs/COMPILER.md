@@ -1064,8 +1064,11 @@ Existential selection copies the root constraint state per admitted candidate,
 normalizes the complete head through the associated-value environment, proves
 flat premises, and returns the stable generic implementation identity plus the
 recovered substitution. Missing premises reject the candidate; ambiguity,
-cycles, and overflow remain explicit. Recursive use of this implementation
-table is not yet wired into general trait proof. Projection terms in premise type positions,
+cycles, and overflow remain explicit. An opt-in general solver threads this
+table through nested implemented-trait premises alongside projection-bearing
+logical clauses. Admitted implementations are tried before logical clauses,
+one successful copied state is committed, and the shared 16-frame stack reports
+cycles and depth overflow. Legacy entry points remain closed. Projection terms in premise type positions,
 complete projection-equation coherence, higher-ranked term binders,
 backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.

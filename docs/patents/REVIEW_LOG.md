@@ -4716,3 +4716,12 @@ normalizing through the existing associated-value environment, and proving
 existing bounded flat premises. It adds no coherence rule, search order,
 specialization, cache, parser, runtime mechanism, allocation, synchronization,
 protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Recursive projection-bearing implementation proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment threads the already
+admitted fixed implementation table through the existing bounded predicate
+proof before logical-clause fallback, reusing copied inference state and the
+existing cycle/depth stack. It adds no coherence rule, search order,
+specialization, cache, parser, runtime mechanism, allocation, synchronization,
+protocol, cryptography, or hardware behavior.

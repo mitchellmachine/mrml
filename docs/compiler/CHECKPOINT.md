@@ -1007,8 +1007,13 @@ selection now normalizes one admitted head in a copied root state, proves its
 flat premises, and returns the stable implementation identity and inferred
 substitution. Windows gnullvm and native Arch Linux WSL each pass 527 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
-tests: 873 compiler tests per host. Recursive implementation-table proof,
-complete projection-equation coherence, higher-ranked term binders, projection
+tests: 873 compiler tests per host. The recursive integration entry point
+threads the admitted implementation table through nested premises before
+logical-clause fallback, using the same copied root state and 16-frame proof
+stack. Windows gnullvm and native Arch Linux WSL each pass 528 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+874 compiler tests per host. Nested proof, cycles, and depth overflow have
+focused tests. Complete projection-equation coherence, higher-ranked term binders, projection
 terms in premise type positions, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 
