@@ -318,8 +318,12 @@ then checks an authenticated package projection of preferred, minimum, maximum,
 and supported native-service/microVM forms. It produces an exact generational
 `IsolationServiceSpec`; unsupported strict Total requests and owner requests
 below the mandatory floor fail without alternate placement. This is **PARTIALLY
-IMPLEMENTED** control-plane application, not a general package-policy resolver,
-Settings, shell, effective runtime placement, or Total-mode completion.
+IMPLEMENTED** control-plane application. The configuration service now composes
+that sequence into one route which revalidates policy, bounds, kernel mode and
+policy generation, and exact interface/provider generations before calling only
+the selected native-service or microVM backend. Stale policy and mismatched
+admission tables reach neither launcher. This is not a general package-policy
+resolver, Settings, shell, broad interface transport, or Total-mode completion.
 
 The planned Settings application and object shell project that one typed policy
 service. They distinguish configured default, requested boot mode, effective
@@ -330,13 +334,14 @@ transactional, auditable, recoverable, capability-controlled, and semantically
 available through keyboard, Braille, speech, automation, and authorized AI.
 Configuration expresses desired policy; it does not prove current placement.
 
-Focused Windows and Arch Linux runs each pass all 39 configuration-service
+Focused Windows and Arch Linux runs each pass all 40 configuration-service
 tests, including typed persistence, exact capability enforcement, canonical
 decoding, scope separation, authenticated checkpoint recovery, reauthorization,
 stale-plan rejection, native-class substitution denial, package-bound floor and
-supported-form checks, no-fallback Total rejection, and policy-generation
-handoff to kernel admission. These are unit tests on hosted build targets, not
-boot, VMM, or physical-hardware evidence.
+supported-form checks, no-fallback Total rejection, policy-generation handoff,
+stale route rejection, and proof that control-plane mismatches call no backend.
+These are unit tests on hosted build targets, not boot, VMM, or physical-
+hardware evidence.
 
 The planned boot menu is `MRML`, `MRML — Total MicroVM Isolation`, `MRML
 Recovery`, and an independently discovered `Windows Boot Manager` where

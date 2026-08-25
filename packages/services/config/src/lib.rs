@@ -18,12 +18,12 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
-    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceSpec,
-    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority, RestartPolicy, Rights,
-    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
-    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
-    TaskRuntimeError,
+    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
+    IsolationServiceSpec, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority,
+    RestartPolicy, Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError,
+    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
+    TaskRuntime, TaskRuntimeError, route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -879,6 +879,7 @@ pub enum ConfigError {
     NonCanonical,
     InvalidAuthorityEnvelope,
     InvalidCheckpoint,
+    IsolationPolicyMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2285,6 +2286,91 @@ impl AdmittedIsolationServicePolicy {
         )
         .map_err(|_| ConfigError::InvalidValue)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationServiceIdentity {
+    domain: ObjectId,
+    interface: ObjectId,
+    interface_generation: u32,
+    provider_generation: u64,
+    class: mrml_kernel::TotalMicrovmClass,
+}
+
+impl IsolationServiceIdentity {
+    pub const fn new(
+        domain: ObjectId,
+        interface: ObjectId,
+        interface_generation: u32,
+        provider_generation: u64,
+        class: mrml_kernel::TotalMicrovmClass,
+    ) -> Result<Self, ConfigError> {
+        if domain.0 == 0
+            || interface.0 == 0
+            || interface_generation == 0
+            || provider_generation == 0
+        {
+            return Err(ConfigError::InvalidValue);
+        }
+        Ok(Self {
+            domain,
+            interface,
+            interface_generation,
+            provider_generation,
+            class,
+        })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ConfiguredIsolationRouteError<E, Endpoint> {
+    Configuration(ConfigError),
+    Route(IsolationServiceRouteError<E, Endpoint>),
+}
+
+/// Revalidates persistent policy, package bounds, kernel policy generation,
+/// and the exact interface/provider identity before invoking one selected
+/// backend. No backend is called on any control-plane mismatch, and backend
+/// failure is never retried through the other placement.
+pub fn route_configured_isolation_service<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const DOMAINS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: IsolationServiceBackend,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    plan: IsolationPolicyApplicationPlan,
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    backend: &mut B,
+) -> Result<RoutedIsolationService<B::Endpoint>, ConfiguredIsolationRouteError<B::Error, B::Endpoint>>
+{
+    let applied = plan
+        .apply(configuration, capabilities)
+        .map_err(ConfiguredIsolationRouteError::Configuration)?;
+    if admission.mode() != applied.mode()
+        || admission.policy_generation() != applied.policy_generation()
+    {
+        return Err(ConfiguredIsolationRouteError::Configuration(
+            ConfigError::IsolationPolicyMismatch,
+        ));
+    }
+    let admitted = applied
+        .admit_service(bounds)
+        .map_err(ConfiguredIsolationRouteError::Configuration)?;
+    let spec = admitted
+        .service_spec(
+            identity.domain,
+            identity.interface,
+            identity.interface_generation,
+            identity.provider_generation,
+            identity.class,
+        )
+        .map_err(ConfiguredIsolationRouteError::Configuration)?;
+    route_isolation_service(admission, backend, spec).map_err(ConfiguredIsolationRouteError::Route)
 }
 
 impl<const UPDATES: usize> ConfigTransaction<UPDATES> {
@@ -7727,5 +7813,171 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn configured_route_revalidates_policy_binding_before_backend_launch() {
+        let root_object = ObjectId(601);
+        let component_object = ObjectId(602);
+        let system_object = ObjectId(603);
+        let component = IsolationPolicySetting::component(
+            SettingId::new(60).unwrap(),
+            component_object,
+            IsolationPlacement::NativeService,
+        )
+        .unwrap();
+        let system =
+            IsolationPolicySetting::system(SettingId::new(61).unwrap(), system_object).unwrap();
+        let mut configuration = ConfigurationService::<2, 4>::new(
+            root_object,
+            &[component.schema().unwrap(), system.schema().unwrap()],
+        )
+        .unwrap();
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let root = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let component_access = capabilities
+            .insert(component_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let system_access = capabilities
+            .insert(system_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let mut initial = ConfigTransaction::<2>::new(0);
+        component
+            .stage(
+                &mut initial,
+                component_access,
+                OwnerIsolationSelection::Microvm,
+            )
+            .unwrap();
+        system
+            .stage(
+                &mut initial,
+                system_access,
+                OwnerIsolationSelection::TotalMicrovm,
+            )
+            .unwrap();
+        configuration.commit(&capabilities, root, &initial).unwrap();
+        let plan = IsolationPolicyApplicationPlan::load(
+            &configuration,
+            &capabilities,
+            system,
+            system_access,
+            component,
+            component_access,
+        )
+        .unwrap();
+        let bounds = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .unwrap();
+        let identity = IsolationServiceIdentity::new(
+            ObjectId(604),
+            ObjectId(605),
+            3,
+            19,
+            TotalMicrovmClass::MicrovmEligible,
+        )
+        .unwrap();
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
+        let mut backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        let routed = route_configured_isolation_service(
+            &configuration,
+            &capabilities,
+            plan,
+            bounds,
+            identity,
+            &mut admission,
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(routed.placement(), IsolationPlacement::Microvm);
+        assert_eq!(routed.interface(), ObjectId(605));
+        assert_eq!(routed.interface_generation(), 3);
+        assert_eq!(routed.provider_generation(), 19);
+        let (native, microvm) = backend.into_parts();
+        assert_eq!((native.launches, microvm.launches), (0, 1));
+
+        let stale_plan = IsolationPolicyApplicationPlan::load(
+            &configuration,
+            &capabilities,
+            system,
+            system_access,
+            component,
+            component_access,
+        )
+        .unwrap();
+        let mut replacement = ConfigTransaction::<1>::new(1);
+        component
+            .stage(
+                &mut replacement,
+                component_access,
+                OwnerIsolationSelection::Default,
+            )
+            .unwrap();
+        configuration
+            .commit(&capabilities, root, &replacement)
+            .unwrap();
+        let mut stale_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
+        let mut stale_backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        assert!(matches!(
+            route_configured_isolation_service(
+                &configuration,
+                &capabilities,
+                stale_plan,
+                bounds,
+                identity,
+                &mut stale_admission,
+                &mut stale_backend,
+            ),
+            Err(ConfiguredIsolationRouteError::Configuration(
+                ConfigError::RevisionConflict { current: 2 }
+            ))
+        ));
+        let (native, microvm) = stale_backend.into_parts();
+        assert_eq!((native.launches, microvm.launches), (0, 0));
+
+        let current_plan = IsolationPolicyApplicationPlan::load(
+            &configuration,
+            &capabilities,
+            system,
+            system_access,
+            component,
+            component_access,
+        )
+        .unwrap();
+        let mut wrong_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 2).unwrap();
+        let mut wrong_backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        assert!(matches!(
+            route_configured_isolation_service(
+                &configuration,
+                &capabilities,
+                current_plan,
+                bounds,
+                identity,
+                &mut wrong_admission,
+                &mut wrong_backend,
+            ),
+            Err(ConfiguredIsolationRouteError::Configuration(
+                ConfigError::IsolationPolicyMismatch
+            ))
+        ));
+        let (native, microvm) = wrong_backend.into_parts();
+        assert_eq!((native.launches, microvm.launches), (0, 0));
     }
 }

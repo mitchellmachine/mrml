@@ -4128,3 +4128,14 @@ selection. It performs no workload classification, provider/template/resource
 selection, VM construction, transport, or application publication. Automated
 adaptive selection and cross-placement transport remain `TRIGGERED` under the
 existing worldwide-review entry.
+
+# 2026-08-25 — Composed configured-service isolation route
+
+**Result: NOT_TRIGGERED.** This increment conventionally composes existing
+capability revalidation, revision comparison, caller-supplied package-bound
+checks, exact interface/provider identifiers, kernel admission, and the existing
+caller-selected two-backend route. A mismatch calls no backend and backend
+failure does not select an alternate. It adds no workload classification,
+provider/template/resource selection, VM construction, queue or interface
+transport, or application publication. Automated adaptive selection and broad
+cross-placement transport remain `TRIGGERED`.

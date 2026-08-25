@@ -62,8 +62,11 @@ Three new persistent deltas are documented before implementation:
   runtime projection of authenticated package preference, floor, ceiling, and
   supported forms before producing a generational `IsolationServiceSpec`;
   unsupported Total or below-floor requests fail without fallback. It does not
-  yet provide the general package resolver, resolve a provider, or grant
-  placement.
+  yet provide the general package resolver or grant placement. One composed
+  configuration-service route now repeats live policy authorization, checks the
+  kernel admission mode/generation and exact interface/provider identity, and
+  invokes only the admitted backend. Stale policy or admission mismatch reaches
+  neither launcher. Broad cross-placement interface transport remains planned.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.
   A one-use typed service transaction now preserves exact binding identity from

@@ -2910,9 +2910,13 @@ checks the exact package bounds and emits a caller-consumable
 requests require microVM support; explicit native requests below a microVM floor
 and malformed bounds are rejected. No alternate form is selected after failure.
 This bounded check neither classifies workloads nor selects providers, VM
-templates, or resources. Windows and Arch Linux each pass all 39 focused
-configuration tests; this remains unit/simulation evidence and not the complete
-general package resolver or cross-placement runtime.
+templates, or resources. A composed route now repeats the policy reads, package
+checks, kernel mode/generation match, and exact interface/provider binding in
+one call before dispatching only to the selected native-service or microVM
+launcher. Revision drift and admission mismatch invoke neither backend; backend
+failure is not retried through the other form. Windows and Arch Linux each pass
+all 40 focused configuration tests. This remains unit/simulation evidence and
+not the complete general package resolver or broad cross-placement runtime.
 
 The fixed supervision protocol binds request identity, opaque generational
 `ServiceId`, operation, and restart time while likewise resolving authority
