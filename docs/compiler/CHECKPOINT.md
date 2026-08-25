@@ -1017,7 +1017,12 @@ focused tests. Projection-bearing implemented-trait premises now reuse each
 head's validated term arena, instantiate in the selected substitution, and
 normalize in the shared root state before flat recursive proof. Both hosts pass
 the same 874 compiler tests, including a projected premise and its missing flat
-dependency. Mixed premise deferral, complete projection-equation coherence,
+dependency. The dependency-ordered premise milestone proves flat predicates
+first and then normalizes term-bearing predicates in the refined root state.
+Windows gnullvm and native Arch Linux WSL each pass 529 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 875
+compiler tests per host. A two-candidate projection becomes unique only after a
+flat premise constrains its parameter. Reverse dependency scheduling, complete projection-equation coherence,
 higher-ranked term binders, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 

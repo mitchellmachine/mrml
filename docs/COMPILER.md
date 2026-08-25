@@ -1072,9 +1072,11 @@ cycles and depth overflow. Legacy entry points remain closed. Projection-
 bearing clauses and implementations may also retain bounded implemented-trait
 premises whose self and argument positions reference the same validated term
 arena as the head. Selection instantiates and normalizes those premises in the
-shared root state before the existing flat premise scheduler proves them.
-Projection-premise normalization ambiguity currently fails closed immediately;
-mixed deferral with flat premises is not implemented. Complete projection-
+shared root state before the existing flat premise scheduler proves them. Flat
+premises are proved first, so their constraints can make a previously ambiguous
+projection-bearing premise uniquely normalizable; term-bearing premises are
+then normalized and proved as a second bounded phase. Reverse dependencies and
+general bidirectional premise scheduling remain unsupported. Complete projection-
 equation coherence, higher-ranked term binders,
 backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.

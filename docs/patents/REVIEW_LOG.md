@@ -4726,10 +4726,30 @@ existing cycle/depth stack. It adds no coherence rule, search order,
 specialization, cache, parser, runtime mechanism, allocation, synchronization,
 protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Verified component-image resource accounting
+
+**Result: NOT_TRIGGERED.** This bounded increment classifies the repository's
+already verified PE load regions into conventional read-only, executable, and
+private writable page commitments, preserves W^X, charges allocation gaps, and
+uses distinct capability-selected address-space targets before hosted guest
+construction. It adds no loader algorithm, relocation mechanism, content
+deduplication, provider-resolution algorithm, queue/ring transport, device
+projection, compression, cryptography, or hardware mechanism. The broader
+independently serviced component subsystem remains `TRIGGERED` under its
+existing review entry.
+
 # 2026-08-25 — Projection-bearing implemented-trait premises
 
 **Result: NOT_TRIGGERED.** This compiler-only increment reuses an existing fixed
 term arena to instantiate and normalize bounded implemented-trait premises
 before the existing flat proof scheduler. It adds no new term graph, coherence
+rule, search order, specialization, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Dependency-ordered projected premise proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment proves existing bounded
+flat predicates before normalizing existing bounded term-bearing predicates in
+the same fixed inference state. It adds no worklist, backtracking, coherence
 rule, search order, specialization, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.

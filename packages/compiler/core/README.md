@@ -4240,8 +4240,12 @@ conformance tests, and 335 replacement tests: 874 compiler tests per host.
 Nested proof, cycles, and depth overflow have focused tests. Projection-bearing
 implemented-trait premises reuse the head's validated term arena, instantiate
 from the selected substitution, normalize in the shared root state, and then
-enter flat recursive proof. Both hosts pass the same 874 compiler tests. Mixed
-premise deferral, complete projection-equation coherence, higher-ranked term
+enter flat recursive proof. Both hosts pass the same 874 compiler tests. Flat
+predicates are now proved first so their root-state constraints can make a
+term-bearing predicate uniquely normalizable in the second phase. Windows
+gnullvm and native Arch Linux WSL each pass 529 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 875 compiler
+tests per host. Reverse dependency scheduling, complete projection-equation coherence, higher-ranked term
 binders, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 
