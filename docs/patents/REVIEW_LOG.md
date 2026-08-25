@@ -118,6 +118,11 @@ The compiler-core semantic move relocates dependency-free `mrml-rustc` to
 changing compiler semantics. **Result: NOT_TRIGGERED.** Existing compiler-
 mechanism reviews remain in force.
 
+The compiler-driver semantic move relocates `mrml-rustc-driver` to
+`compiler/driver` after its core/error/runtime dependencies without changing
+driver behavior. **Result: NOT_TRIGGERED.** This is repository organization,
+not a new compiler mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

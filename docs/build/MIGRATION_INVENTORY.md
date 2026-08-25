@@ -78,6 +78,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
 - dependency-free `mrml-rustc` moved to `compiler/core`, with its driver,
   recovery, oracle, checkpoint, hygiene-command, and patent-review paths
   updated; compiler semantics and its Cargo bridge remain unchanged.
+- `mrml-rustc-driver` moved to `compiler/driver` after its core, error, and
+  runtime dependencies; its three dependency paths, recovery/checkpoint paths,
+  command behavior, and Cargo bridge remain unchanged.
 
 The runtime move was checked on a Windows host:
 
@@ -202,6 +205,22 @@ The compiler-core move was checked on a Windows host with
 No Linux compiler-core execution was exercised by this move; the existing
 oracle records retain their exact historical Linux evidence and limitations.
 
+The compiler-driver move was checked on a Windows host with
+`RUSTFLAGS=-C link-arg=/stack:16777216`:
+
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-rustc-driver -- --check`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-rustc-driver --all-targets --no-deps -- -D warnings`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-rustc-driver`
+  — PASS, 2 tests;
+- `rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\\s*\\{" compiler/core/src compiler/driver/src`
+  — PASS with no matches;
+- `.\target\debug\mrml.exe build mrml-rustc-driver` — FAIL because the
+  selected MSVC target could not find `link.exe`.
+
+No Linux compiler-driver execution was exercised by this move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -211,7 +230,7 @@ were not exercised by the Windows implementation environment.
 | Class | Current components/direction |
 | --- | --- |
 | `BOOTSTRAP_ONLY` | `tools/mrml`; Cargo stage zero, then self-build graph |
-| `COMPILER` | `mrml-rustc` at `compiler/core`; driver still transitional |
+| `COMPILER` | `mrml-rustc` at `compiler/core`; driver at `compiler/driver` |
 | `MRML_NATIVE` | kernel, service image, configuration, storage |
 | `UEFI` | kernel-image bootloader artifact; `mrml-uefi` is shared support |
 | `HOST_WINDOWS_LINUX` | CLI/server/tools/sign/Git/trainer and VMM launchers |
@@ -225,7 +244,7 @@ second inventory.
 ## Cargo-removal blockers
 
 - Every component still has Cargo dependency metadata; all except the eighteen
-  moved libraries, compiler core, and stage-zero remain beneath `crates/`. The
+  moved libraries, compiler core/driver, and stage-zero remain beneath `crates/`. The
   root Cargo workspace still contains every component so the bridge resolves
   today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

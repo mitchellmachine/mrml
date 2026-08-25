@@ -159,7 +159,7 @@ explicitly and downgrade the status rather than guessing.
   `AuthenticatedAdmission`, `receipt`, and `sealed` across the workspace.
 - Capabilities/IPC/lifecycle: `capability.rs`, `ipc.rs`, `shared_memory.rs`,
   `scheduler.rs`, `task_runtime.rs`, `service_lifecycle.rs`.
-- Compiler: `compiler/core/`, `crates/mrml-rustc-driver/`; never infer a
+- Compiler: `compiler/core/`, `compiler/driver/`; never infer a
   complete compiler or application ABI from supported subset code generation.
   Read `docs/COMPILER.md` and every record under `docs/compiler/oracles/` before
   selecting compiler work. Recover the future-Rust direction, not an assumed

@@ -203,6 +203,9 @@ The compiler lane has moved dependency-free `mrml-rustc` to
 `compiler/core`; its driver edge and durable recovery/oracle/review references
 now resolve there without changing compiler semantics.
 
+The compiler driver now resides at `compiler/driver`; its core/error/runtime
+edges resolve to semantic homes without changing command behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

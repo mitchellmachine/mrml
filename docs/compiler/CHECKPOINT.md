@@ -562,7 +562,7 @@ generation retains the last complete Windows/Linux evidence.
 The hygiene scan must remain empty:
 
 ```sh
-rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" compiler/core/src crates/mrml-rustc-driver/src
+rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" compiler/core/src compiler/driver/src
 ```
 
 Format only the compiler packages, preserve unrelated worktree changes, stage

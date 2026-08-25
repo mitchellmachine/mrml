@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "tools/mrml",
     "compiler/core",
-    "crates/mrml-rustc-driver",
+    "compiler/driver",
     "crates/mrml-kernel-image",
     "crates/mrml-service-image",
     "crates/mrml-config",
