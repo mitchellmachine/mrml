@@ -199,6 +199,12 @@ compile-time environment records replace Cargo-provided ambient values.
 `mrml-git` exercises the complete path: both hosts build its library and binary,
 then pass 51 library tests and one binary test.
 
+`mrml-tools` combines exact feature, compile-environment, universal-extern, and
+target-extern records. Linux passes 32 direct tests; Windows reproduces the
+existing installed-Edge DevTools failure after 31 passes. Neither result alone
+establishes physical browser, desktop/audio-route, or accessibility-hardware
+coverage.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

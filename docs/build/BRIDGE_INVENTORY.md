@@ -129,6 +129,12 @@ values. `mrml-git` builds its library and executable on Windows and Arch Linux
 WSL2 and passes 51 library tests plus one binary test on each. No live remote
 operation was exercised. Twenty components are native; 22 remain transitional.
 
+`mrml-tools` resolves `default` to the explicit `runtime` set, records the
+repository-relative `CARGO_MANIFEST_DIR` value, activates six universal externs,
+and selects only the host platform extern. Arch Linux WSL2 passes 32 tests;
+Windows reproduces the Cargo baseline at 31 passed and one installed-Edge
+DevTools failure. Twenty-one components are native; 21 remain transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

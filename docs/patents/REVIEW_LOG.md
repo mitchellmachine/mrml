@@ -160,6 +160,10 @@ eight dependencies and updates all four inbound Cargo paths without changing
 browser, desktop, executor, media, MCP, or web behavior. **Result:
 NOT_TRIGGERED.** This is repository organization, not a new tool mechanism.
 
+The later native host-tool action changes only exact feature, environment, and
+extern selection. **Result: NOT_TRIGGERED.** Existing browser, media, tooling,
+and package-resolver reviews remain in force.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

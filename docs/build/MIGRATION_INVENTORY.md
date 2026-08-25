@@ -333,6 +333,15 @@ The host-tool move was checked on a Windows host:
 No Linux host-tool execution, live remote web service, physical desktop/audio
 route, or accessibility hardware was exercised by this move.
 
+The later native host-tool action was checked with the exact dated 2026-08-24
+toolchains. It records the resolved `runtime` set, repository-relative
+`CARGO_MANIFEST_DIR=tools/host`, six universal externs, and one host platform
+extern. Arch Linux WSL2 passed all 32 tests. Windows reproduced the Cargo
+baseline at 31 passed and one installed-Edge DevTools-port failure. `mrml doctor`,
+`mrml audit`, and native build passed on both hosts. No live remote web service,
+physical browser, desktop/audio route, accessibility hardware, KVM, or bare
+metal was established by this evidence.
+
 The kernel move from `crates/mrml-kernel` to `system/kernel` was checked on a
 Windows host without changing kernel source behavior:
 
@@ -694,7 +703,7 @@ second inventory.
   nodes. Native integration-test outputs and bounded test-process stacks are
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
-  test harnesses, and compile-time environment values are explicit. Twenty
+  test harnesses, and compile-time environment values are explicit. Twenty-one
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.

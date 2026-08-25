@@ -75,3 +75,6 @@ rust-action|org.mrml.library.ssh|mrml_ssh|lib|packages/libraries/ssh/src/lib.rs|
 rust-action|org.mrml.tool.git|mrml_git|lib|tools/git/src/lib.rs|mrml-error=mrml_error@*;mrml-runtime=mrml_runtime@*;mrml-ssh=mrml_ssh@*;mrml-terminal-style=mrml_terminal_style@*
 rust-binary|org.mrml.tool.git|mrml-git|mrml_git_cli|tools/git/src/main.rs|true
 rust-compile-env|org.mrml.tool.git|CARGO_PKG_VERSION|0.0.1
+rust-action|org.mrml.tool.host|mrml_tools|lib|tools/host/src/lib.rs|mrml-error=mrml_error@*?runtime;mrml-http=mrml_http@*?runtime;mrml-json=serde_json@*?runtime;mrml-linux=mrml_linux@LINUX?runtime;mrml-percent-encoding=mrml_percent_encoding@*?runtime;mrml-runtime=mrml_runtime@*?runtime;mrml-terminal-style=mrml_terminal_style@*?runtime;mrml-windows=mrml_windows@WINDOWS?runtime
+rust-feature-set|org.mrml.tool.host|runtime
+rust-compile-env|org.mrml.tool.host|CARGO_MANIFEST_DIR|tools/host

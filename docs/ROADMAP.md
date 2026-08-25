@@ -198,6 +198,12 @@ implemented. `mrml-git` builds its library and executable on both hosts, then
 passes 51 library tests plus one binary test. No live remote operation was
 exercised. Twenty of 42 components are native; 22 remain transitional.
 
+`mrml-tools` now has an exact resolved `runtime` feature set, stable manifest
+path input, six universal externs, and one target-selected platform extern.
+Arch Linux WSL2 passes 32 direct tests; Windows matches its Cargo baseline at
+31 passed and one installed-Edge DevTools failure. Twenty-one of 42 components
+are native; 21 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

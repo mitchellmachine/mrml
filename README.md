@@ -339,6 +339,12 @@ library tests plus its binary test on Windows and Arch Linux WSL2. No live
 remote operation was exercised. Twenty components are native and 22 remain
 transitional.
 
+`mrml-tools` now records its resolved `runtime` feature, stable manifest path,
+six universal externs, and one host-selected platform extern. Linux passes all
+32 direct tests; Windows reproduces the Cargo baseline at 31 passed and one
+installed-Edge DevTools failure. Twenty-one components are native and 21 remain
+transitional; no physical browser or accessibility hardware coverage is claimed.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
