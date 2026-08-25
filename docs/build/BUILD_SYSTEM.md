@@ -134,6 +134,14 @@ Cargo fallback for a declared native action. Remaining nodes are
 honestly labeled `cargo-transition` until their extern, feature, target, and
 build-action declarations are exact.
 
+`mrml-runtime` is the first dependent native node. Its action declares the
+package identity, Rust crate name, and target family for each platform extern:
+only `mrml_windows` is built/wired on Windows and only `mrml_linux` on Linux.
+The native planner recursively compiles declared extern providers first, rejects
+missing native actions and target mismatches, and passes exact deterministic rlib
+paths through `--extern`. Windows passed 38 runtime tests and Arch Linux WSL2
+passed 37; the one-test difference is the Windows-only argument parser.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

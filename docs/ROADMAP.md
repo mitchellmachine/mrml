@@ -150,6 +150,10 @@ leaf at a time before group moves; `mrml-tokenizer` is now the third migrated
 leaf with its trainer edge retained. See
 [build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
 
+`mrml-runtime` is now the first dependent direct-rustc node: the native planner
+builds and wires only the target-active platform extern. Windows passed 38 tests
+and Arch Linux WSL2 passed 37 without Cargo compilation for those nodes.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

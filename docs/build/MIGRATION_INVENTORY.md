@@ -35,6 +35,10 @@ toolchains:
   `audit` — PASS, 42 components and 118 dependency edges;
 - Arch Linux WSL2: direct `mrml-math` build/test — PASS, 1 test;
 - Arch Linux WSL2: direct `mrml-linux` build/test — PASS, 4 tests.
+- Windows GNU/LLVM: dependency-first direct `mrml-runtime` build/test with only
+  the Windows platform extern — PASS, 38 tests;
+- Arch Linux WSL2: dependency-first direct `mrml-runtime` build/test with only
+  the Linux platform extern — PASS, 37 tests.
 
 This is hosted WSL2 evidence. No KVM, bare-metal Linux, or physical hardware was
 exercised by this increment.
@@ -626,9 +630,10 @@ second inventory.
 - Dependency, feature, output, and source-input facts are persisted and fail
   closed on Cargo metadata or lexical-audit drift. Lexical discovery still
   cannot prove that arbitrary macro expansion introduces no additional input.
-- Native graph construction now provides dependency-first ordering and cycle
-  diagnostics. Direct-rustc expansion still needs target-aware resolved externs,
-  features, lock/digest validation, and explicit non-library actions before
+- Native graph construction now provides dependency-first ordering, cycle
+  diagnostics, and target-scoped exact extern artifacts for migrated library
+  nodes. Direct-rustc expansion still needs features, lock/digest validation,
+  and explicit non-library actions before
   Cargo can be removed behind the remaining nodes.
 - Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,
   and CI together and verifying both Windows/WHP and Linux/KVM. The present task

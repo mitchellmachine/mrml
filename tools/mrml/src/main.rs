@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Component as PathComponent, Path, PathBuf};
@@ -7,6 +7,7 @@ use std::process::{Command, ExitCode};
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
 const MAX_COMPONENTS: usize = 256;
 const PINNED_NIGHTLY: &str = "nightly-2026-08-24";
+const TARGET_FAMILIES: [&str; 5] = ["WINDOWS", "LINUX", "MRML_NATIVE", "UEFI", "CUDA"];
 
 #[derive(Clone, Debug)]
 struct Component {
@@ -28,6 +29,14 @@ struct RustAction {
     crate_name: String,
     crate_type: String,
     source: String,
+    externs: Vec<RustExtern>,
+}
+
+#[derive(Clone, Debug)]
+struct RustExtern {
+    package: String,
+    crate_name: String,
+    targets: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -162,9 +171,18 @@ fn load_workspace() -> Result<Workspace, String> {
                     rust_action: None,
                 });
             }
-            ["rust-action", component, crate_name, crate_type, source] => {
+            [
+                "rust-action",
+                component,
+                crate_name,
+                crate_type,
+                source,
+                externs,
+            ] => {
                 if rust_actions.iter().any(
-                    |(existing, _, _, _): &(String, String, String, String)| existing == component,
+                    |(existing, _, _, _, _): &(String, String, String, String, String)| {
+                        existing == component
+                    },
                 ) {
                     return Err(format!(
                         "DuplicateRustAction {{ line: {}, component: {component} }}",
@@ -176,6 +194,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*crate_name).into(),
                     (*crate_type).into(),
                     (*source).into(),
+                    (*externs).into(),
                 ));
             }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
@@ -187,7 +206,7 @@ fn load_workspace() -> Result<Workspace, String> {
     if components.is_empty() {
         return Err("EmptyWorkspace".into());
     }
-    for (component_id, crate_name, crate_type, source) in rust_actions {
+    for (component_id, crate_name, crate_type, source, externs) in rust_actions {
         let component = components
             .iter_mut()
             .find(|component| component.id == component_id)
@@ -202,9 +221,17 @@ fn load_workspace() -> Result<Workspace, String> {
                 "RustActionCrateNameInvalid {{ component: {component_id}, crate_name: {crate_name} }}"
             ));
         }
-        if !component.dependencies.is_empty() {
+        let externs = parse_rust_externs(&externs)?;
+        let mut extern_packages: Vec<_> = externs
+            .iter()
+            .map(|external| external.package.clone())
+            .collect();
+        extern_packages.sort();
+        if component.dependencies != extern_packages {
             return Err(format!(
-                "RustActionExternsMissing {{ component: {component_id} }}"
+                "RustActionExternDrift {{ component: {component_id}, dependencies: {}, externs: {} }}",
+                component.dependencies.join(","),
+                extern_packages.join(",")
             ));
         }
         let component_root = root.join(&component.path);
@@ -221,6 +248,7 @@ fn load_workspace() -> Result<Workspace, String> {
             crate_name,
             crate_type,
             source,
+            externs,
         });
     }
     Ok(Workspace { root, components })
@@ -237,6 +265,57 @@ fn rust_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+}
+
+fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut result = Vec::new();
+    for declaration in value.split(';') {
+        let (binding, targets) = declaration
+            .split_once('@')
+            .ok_or_else(|| format!("RustExternSyntaxError {{ declaration: {declaration} }}"))?;
+        let (package, crate_name) = binding
+            .split_once('=')
+            .ok_or_else(|| format!("RustExternSyntaxError {{ declaration: {declaration} }}"))?;
+        if package.is_empty() || !rust_identifier(crate_name) {
+            return Err(format!(
+                "RustExternIdentityInvalid {{ declaration: {declaration} }}"
+            ));
+        }
+        let targets = if targets == "*" {
+            TARGET_FAMILIES
+                .iter()
+                .map(|target| (*target).into())
+                .collect()
+        } else {
+            split_declaration(targets)
+        };
+        if targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !TARGET_FAMILIES.contains(&target.as_str()))
+        {
+            return Err(format!(
+                "RustExternTargetInvalid {{ declaration: {declaration} }}"
+            ));
+        }
+        if result.iter().any(|external: &RustExtern| {
+            external.package == package || external.crate_name == crate_name
+        }) {
+            return Err(format!(
+                "RustExternDuplicate {{ declaration: {declaration} }}"
+            ));
+        }
+        result.push(RustExtern {
+            package: package.into(),
+            crate_name: crate_name.into(),
+            targets,
+        });
+    }
+    result.sort_by(|left, right| left.package.cmp(&right.package));
+    Ok(result)
 }
 
 fn parse_input_policy(value: &str, line: usize) -> Result<InputCounts, String> {
@@ -422,8 +501,8 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
             "cargo-transition"
         };
         emit(mode, operation, component, &target, builder, "START");
-        if let Some(action) = &component.rust_action {
-            run_rust_action(workspace, component, action, operation, &target, release)?;
+        if component.rust_action.is_some() {
+            run_rust_action(workspace, component, operation, &target, release)?;
         } else {
             run_cargo_transition(workspace, component, operation, &target, release)?;
         }
@@ -484,11 +563,62 @@ fn run_cargo_transition(
 fn run_rust_action(
     workspace: &Workspace,
     component: &Component,
-    action: &RustAction,
     operation: &str,
     target: &str,
     release: bool,
 ) -> Result<(), String> {
+    let mut built = BTreeSet::new();
+    compile_rust_component(
+        workspace,
+        component,
+        target,
+        release,
+        operation == "test",
+        &mut built,
+    )
+}
+
+fn compile_rust_component(
+    workspace: &Workspace,
+    component: &Component,
+    target: &str,
+    release: bool,
+    test: bool,
+    built: &mut BTreeSet<String>,
+) -> Result<(), String> {
+    if !test && built.contains(&component.id) {
+        return Ok(());
+    }
+    let action = component.rust_action.as_ref().ok_or_else(|| {
+        format!(
+            "NativeDependencyActionMissing {{ component: {} }}",
+            component.id
+        )
+    })?;
+    for external in action
+        .externs
+        .iter()
+        .filter(|external| external.targets.iter().any(|family| family == target))
+    {
+        let dependency = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or_else(|| {
+                format!(
+                    "NativeDependencyMissing {{ component: {}, dependency: {} }}",
+                    component.id, external.package
+                )
+            })?;
+        if !dependency.targets.iter().any(|family| family == target) {
+            return Err(format!(
+                "NativeDependencyTargetMismatch {{ component: {}, dependency: {}, target: {target} }}",
+                component.id, dependency.id
+            ));
+        }
+        compile_rust_component(workspace, dependency, target, release, false, built)?;
+    }
+
     let profile = if release { "release" } else { "debug" };
     let output_dir = workspace
         .root
@@ -498,15 +628,15 @@ fn run_rust_action(
         .join(profile);
     fs::create_dir_all(&output_dir)
         .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))?;
-    let extension = if operation == "test" && target == "WINDOWS" {
+    let extension = if test && target == "WINDOWS" {
         ".exe"
     } else {
         ""
     };
-    let output = if operation == "test" {
+    let output = if test {
         output_dir.join(format!("{}_tests{extension}", action.crate_name))
     } else {
-        output_dir.join(format!("lib{}.rlib", action.crate_name))
+        native_artifact(workspace, action, target, release)
     };
     let rustc = pinned_tool("rustc")?;
     let mut command = Command::new(rustc);
@@ -519,7 +649,27 @@ fn run_rust_action(
         .args(["-C", "panic=abort"])
         .arg("-o")
         .arg(&output);
-    if operation == "test" {
+    for external in action
+        .externs
+        .iter()
+        .filter(|external| external.targets.iter().any(|family| family == target))
+    {
+        let dependency = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or("NativeDependencyDisappeared")?;
+        let dependency_action = dependency
+            .rust_action
+            .as_ref()
+            .ok_or("NativeDependencyActionDisappeared")?;
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            external.crate_name,
+            native_artifact(workspace, dependency_action, target, release).display()
+        ));
+    }
+    if test {
         command.arg("--test").arg("-Zpanic-abort-tests");
     }
     if target == "WINDOWS" {
@@ -556,7 +706,7 @@ fn run_rust_action(
             status.code()
         ));
     }
-    if operation == "test" {
+    if test {
         let status = Command::new(&output)
             .status()
             .map_err(|error| format!("TestExecutionUnavailable {{ detail: {error} }}"))?;
@@ -567,8 +717,25 @@ fn run_rust_action(
                 status.code()
             ));
         }
+    } else {
+        built.insert(component.id.clone());
     }
     Ok(())
+}
+
+fn native_artifact(
+    workspace: &Workspace,
+    action: &RustAction,
+    target: &str,
+    release: bool,
+) -> PathBuf {
+    workspace
+        .root
+        .join("target")
+        .join("mrml")
+        .join(target.to_ascii_lowercase())
+        .join(if release { "release" } else { "debug" })
+        .join(format!("lib{}.rlib", action.crate_name))
 }
 
 fn find_component<'a>(workspace: &'a Workspace, cargo: &str) -> Result<&'a Component, String> {
@@ -666,14 +833,13 @@ struct NativeGraph {
 }
 
 fn verify_native_graph(workspace: &Workspace) -> Result<NativeGraph, String> {
-    const TARGETS: [&str; 5] = ["WINDOWS", "LINUX", "MRML_NATIVE", "UEFI", "CUDA"];
     let mut packages = BTreeMap::new();
     for (index, component) in workspace.components.iter().enumerate() {
         if component.targets.is_empty()
             || component
                 .targets
                 .iter()
-                .any(|target| !TARGETS.contains(&target.as_str()))
+                .any(|target| !TARGET_FAMILIES.contains(&target.as_str()))
         {
             return Err(format!(
                 "InvalidComponentTarget {{ component: {}, targets: {} }}",
@@ -1163,6 +1329,22 @@ mod tests {
         assert!(!safe_relative_path("C:/outside.rs"));
         assert!(rust_identifier("mrml_math"));
         assert!(!rust_identifier("../mrml-math"));
+    }
+    #[test]
+    fn rust_externs_are_target_scoped_and_unique() {
+        let externs =
+            parse_rust_externs("mrml-linux=mrml_linux@LINUX;mrml-windows=mrml_windows@WINDOWS")
+                .unwrap();
+        assert_eq!(externs.len(), 2);
+        assert_eq!(externs[0].package, "mrml-linux");
+        assert_eq!(externs[0].targets, ["LINUX"]);
+        assert!(parse_rust_externs("mrml-runtime=bad-name@*").is_err());
+        assert!(
+            parse_rust_externs(
+                "mrml-runtime=mrml_runtime@WINDOWS;mrml-runtime=runtime_again@LINUX"
+            )
+            .is_err()
+        );
     }
     #[test]
     fn input_policy_requires_every_unique_kind() {

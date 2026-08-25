@@ -43,6 +43,7 @@ component|org.mrml.library.tokenizer|packages/libraries/tokenizer|mrml-tokenizer
 component|org.mrml.tool.trainer|tools/trainer|mrml-trainer|HOST_WINDOWS_LINUX|WINDOWS,LINUX|false|mrml-math,mrml-runtime,mrml-tensor,mrml-tokenizer,mrml-wikipedia||mrml-trainer:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.library.opus|packages/libraries/opus|mrml-opus|SHARED|MRML_NATIVE,WINDOWS,LINUX|false|mrml-math||inspect_range:example,mrml_opus:lib,opus_range_diff:example,rfc8251_audit:example|build-script:0,proc-macro:0,native-link:1,compile-env:0,included-file:0,external-command:0
 component|org.mrml.library.av1|packages/libraries/av1|mrml-av1|SHARED|MRML_NATIVE,WINDOWS,LINUX|false|mrml-linux,mrml-runtime,mrml-windows|default,nvidia|decode_ivf:example,mrml_av1:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
-rust-action|org.mrml.library.math|mrml_math|lib|packages/libraries/math/src/lib.rs
-rust-action|org.mrml.library.windows|mrml_windows|lib|packages/libraries/windows/src/lib.rs
-rust-action|org.mrml.library.linux|mrml_linux|lib|packages/libraries/linux/src/lib.rs
+rust-action|org.mrml.library.math|mrml_math|lib|packages/libraries/math/src/lib.rs|
+rust-action|org.mrml.library.windows|mrml_windows|lib|packages/libraries/windows/src/lib.rs|
+rust-action|org.mrml.library.linux|mrml_linux|lib|packages/libraries/linux/src/lib.rs|
+rust-action|org.mrml.library.runtime|mrml_runtime|lib|packages/libraries/runtime/src/lib.rs|mrml-linux=mrml_linux@LINUX;mrml-windows=mrml_windows@WINDOWS

@@ -68,6 +68,11 @@ confined to clean-source stage-zero bootstrap only after Windows/Linux build
 equivalence is demonstrated. Treat input-policy changes as explicit review items,
 never automatically accepted count updates.
 
+`mrml-runtime` is the first dependent native action. Its two declared package/
+crate extern bindings are target-scoped, dependency-first, and wired by exact
+native artifact path. Windows passed 38 direct runtime tests; Arch Linux WSL2
+passed 37 direct runtime tests. No inactive platform rlib is supplied to rustc.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

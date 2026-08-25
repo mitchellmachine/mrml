@@ -290,6 +290,10 @@ and are reported as `builder=native-rustc`. Other components remain visibly
 `builder=cargo-transition` until their exact
 extern, feature, target, and build-action declarations migrate.
 
+`mrml-runtime` is the first dependent native node. Its Windows and Linux externs
+are target-scoped; `mrml` builds the active platform leaf first and supplies its
+exact rlib path directly to rustc.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
