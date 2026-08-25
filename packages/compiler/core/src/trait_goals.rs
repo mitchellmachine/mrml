@@ -5569,6 +5569,7 @@ fn solve_rigid_trait_predicate(
     generic_implementations: &GenericTraitImplementationDatabase,
     clauses: &TraitWhereClauseDatabase,
     environment: TraitProjectionEnvironment<'_>,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     predicate: InferredTraitPredicate,
 ) -> Result<TraitProofSolution, TraitGoalError> {
     let mut proof_stack = [None; MAX_TRAIT_PROOF_DEPTH];
@@ -5578,7 +5579,7 @@ fn solve_rigid_trait_predicate(
             generic_implementations,
             clauses,
             Some(environment),
-            None,
+            coinductive_traits,
             goal,
             &mut proof_stack,
             0,
@@ -5642,6 +5643,7 @@ pub fn solve_for_all_trait_predicate_conjunction(
             generic_implementations,
             clauses,
             environment,
+            None,
             predicate,
         )?;
         if result != TraitProofSolution::Proven {
@@ -5657,6 +5659,50 @@ pub fn solve_nested_for_all_trait_predicate_conjunction(
     clauses: &TraitWhereClauseDatabase,
     exact_values: &TraitAssociatedTypeDatabase,
     generic_values: &GenericTraitAssociatedTypeDatabase,
+    parent_universe: TraitUniverseIndex,
+    query: NestedForAllTraitPredicateConjunction,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    solve_nested_for_all_trait_predicate_conjunction_inner(
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+        None,
+        parent_universe,
+        query,
+    )
+}
+
+pub fn solve_nested_for_all_trait_predicate_conjunction_with_coinduction(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    parent_universe: TraitUniverseIndex,
+    query: NestedForAllTraitPredicateConjunction,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    solve_nested_for_all_trait_predicate_conjunction_inner(
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+        Some(coinductive_traits),
+        parent_universe,
+        query,
+    )
+}
+
+fn solve_nested_for_all_trait_predicate_conjunction_inner(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     parent_universe: TraitUniverseIndex,
     query: NestedForAllTraitPredicateConjunction,
 ) -> Result<TraitProofSolution, TraitGoalError> {
@@ -5681,11 +5727,46 @@ pub fn solve_nested_for_all_trait_predicate_conjunction(
             generic_implementations,
             clauses,
             environment,
+            coinductive_traits,
             predicate,
         )?;
         if result != TraitProofSolution::Proven {
             return Ok(result);
         }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
+pub fn solve_for_all_trait_predicate_branch_forest_with_coinduction(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    parent_universe: TraitUniverseIndex,
+    forest: ForAllTraitPredicateBranchForest,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut branch_parent = parent_universe;
+    for branch in forest.branches() {
+        let branch = branch
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let result = solve_nested_for_all_trait_predicate_conjunction_with_coinduction(
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            exact_values,
+            generic_values,
+            coinductive_traits,
+            branch_parent,
+            branch,
+        )?;
+        if result != TraitProofSolution::Proven {
+            return Ok(result);
+        }
+        branch_parent = branch.advance_universe(branch_parent)?;
     }
     Ok(TraitProofSolution::Proven)
 }
@@ -13774,6 +13855,7 @@ mod tests {
             .unwrap();
         let mut cyclic = ForAllTraitPredicateBranchForest::EMPTY;
         cyclic.push_branch(first).unwrap();
+        cyclic.push_branch(second).unwrap();
         cyclic.push_branch(recursive_branch).unwrap();
         assert_eq!(
             solve_for_all_trait_predicate_branch_forest(
@@ -13786,6 +13868,21 @@ mod tests {
                 cyclic,
             ),
             Ok(TraitProofSolution::Cycle)
+        );
+        let mut coinductive = CoinductiveTraitDatabase::EMPTY;
+        coinductive.insert(TraitId::new(793)).unwrap();
+        assert_eq!(
+            solve_for_all_trait_predicate_branch_forest_with_coinduction(
+                &TraitImplementationDatabase::EMPTY,
+                &recursive_generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                &coinductive,
+                TraitUniverseIndex::ROOT,
+                cyclic,
+            ),
+            Ok(TraitProofSolution::Proven)
         );
     }
 

@@ -1082,6 +1082,17 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 890
 compiler tests per host. Inference and source-level coinduction remain
 unsupported.
 
+The universal coinduction-composition milestone applies the explicit
+classification to implemented-trait predicates inside nested universal branch
+forests. Each branch still receives its disjoint universe segment, projection
+equalities still normalize rigidly, and only the repeated classified trait cycle
+changes from `Cycle` to `Proven`. The existing mixed branch test covers an
+ordinary implemented predicate, a rigid projection equality, and a later
+coinductive cycle. Windows gnullvm and native Arch Linux WSL each pass 544
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 890 compiler tests per host. Inference and source integration
+remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

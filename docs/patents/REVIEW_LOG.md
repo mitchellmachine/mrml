@@ -4878,6 +4878,24 @@ of trait identities and changes an existing repeated rigid proof path from
 no new unification, candidate search, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Rigid coinduction with projection premises
+
+**Result: NOT_TRIGGERED.** This compiler-only increment threads the existing
+fixed coinductive classification through an existing rigid projection-premise
+proof path. Projection normalization and exact comparison remain mandatory and
+retain their existing cycle behavior. It adds no new unification, candidate
+search, cache, parser, runtime mechanism, allocation, synchronization, protocol,
+cryptography, or hardware behavior.
+
+# 2026-08-25 — Universal branch coinduction composition
+
+**Result: NOT_TRIGGERED.** This compiler-only increment passes the existing
+fixed coinductive classification through the existing bounded universal branch
+forest. Universe allocation, projection comparison, and capacity rules are
+unchanged. It adds no new unification, candidate search, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.
+
 # 2026-08-25 — Hosted supervised native Zstd service lifecycle
 
 **Result: NOT_TRIGGERED after the existing component-interface review.** This
