@@ -32,7 +32,7 @@ members = [
     "packages/libraries/windows",
     "packages/libraries/linux",
     "system/vmm/kvm",
-    "crates/mrml-kvm-run",
+    "tools/vmm/kvm-run",
     "system/vmm/whp",
     "crates/mrml-whp-run",
     "packages/libraries/json",

@@ -445,6 +445,20 @@ test process does not by itself prove those conditional operations ran. No
 nested-virtualization, physical-hardware, VTL1, TPM, IOMMU, or remote-attestation
 evidence was established by this path-only move.
 
+The KVM-runner move from `crates/mrml-kvm-run` to `tools/vmm/kvm-run` was checked
+on a Windows host without changing launcher source behavior:
+
+- workspace metadata, formatting, strict Clippy, `mrml doctor`, and `mrml audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-kvm-run`
+  — PASS, 5 portable handoff/policy tests;
+- `.\target\debug\mrml.exe build mrml-kvm-run` — FAIL closed with
+  `NoMatchingComponents { target: WINDOWS }` because this runner is Linux-only;
+- stale exact `crates/mrml-kvm-run/` path scan — PASS.
+
+No Linux host/runtime, CUDA, `/dev/kvm`, VM launch, nested virtualization, or
+physical-hardware execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
