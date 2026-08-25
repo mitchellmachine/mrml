@@ -178,6 +178,11 @@ default set selects `runtime`, activating the already-native runtime extern;
 Windows and Arch Linux WSL2 each pass all 27 direct tests. Sixteen of 42
 components are native; 26 remain transitional.
 
+`mrml-tls` now consumes the exact native crypto/runtime artifacts. Windows and
+Arch Linux WSL2 each pass all 11 direct tests; environment-selected live-peer
+and external-fixture paths were not exercised. Seventeen of 42 components are
+native; 25 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

@@ -69,3 +69,4 @@ rust-test-policy|org.mrml.library.av1|33554432
 rust-example|org.mrml.library.av1|decode_ivf|packages/libraries/av1/examples/decode_ivf.rs
 rust-action|org.mrml.library.crypto|mrml_crypto|lib|packages/libraries/crypto/src/lib.rs|mrml-runtime=mrml_runtime@*?runtime
 rust-feature-set|org.mrml.library.crypto|runtime
+rust-action|org.mrml.library.tls|mrml_tls|lib|packages/libraries/tls/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*

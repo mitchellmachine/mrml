@@ -179,6 +179,11 @@ the pinned Cargo baseline rather than sixteen additional stack failures.
 the resolved effective default set as `runtime`, which activates exactly the
 optional runtime extern; both supported hosts pass all 27 inline tests directly.
 
+`mrml-tls` is the next featureless consumer and binds exact crypto/runtime rlibs.
+Both hosts pass its 11 inline tests directly; absent environment-selected live
+peers and certificate fixtures remain absent evidence, not silently claimed
+coverage.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

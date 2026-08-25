@@ -108,6 +108,11 @@ activates the exact `mrml_runtime` extern on both supported hosts. Windows and
 Arch Linux WSL2 each pass all 27 direct cryptography tests. Sixteen components
 are native; 26 remain transitional.
 
+`mrml-tls` directly consumes the native crypto and runtime rlibs. Windows and
+Arch Linux WSL2 each pass all 11 inline tests; configured live-peer and external
+certificate-fixture paths were not supplied. Seventeen components are native;
+25 remain transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

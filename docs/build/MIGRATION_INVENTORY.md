@@ -168,6 +168,12 @@ The TLS move was checked on a Windows host:
 
 No Linux host or runtime execution was exercised by this move.
 
+The later native TLS action was checked with the exact dated 2026-08-24
+toolchains on Windows and Arch Linux WSL2. `mrml doctor`, `mrml audit`,
+`mrml build mrml-tls`, and all 11 direct tests passed on both hosts. The
+environment-selected live peer, external certificate fixtures, KVM, bare metal,
+and independent protocol validation were not exercised.
+
 The HTTP move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-http -- --check`
