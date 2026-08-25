@@ -971,3 +971,12 @@ probe, 10 conformance tests, and 335 replacement tests: 864 compiler tests per
 host. Whole term-bearing goal selection, projection terms in binders,
 concrete/rigid projection-premise proof, backtracking, caching, coinduction, and
 source syntax remain unsupported.
+
+The projection-bearing goal milestone normalizes every self and argument term
+through one shared inference state, then sends the resulting flat goal through
+exact/generic/clause selection and projection-aware premise proof. Windows
+gnullvm and native Arch Linux WSL each pass 519 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 865 compiler
+tests per host. Projection terms in binders, clause heads, and premise type
+positions, concrete/rigid projection-premise proof, backtracking, caching,
+coinduction, and source syntax remain unsupported.

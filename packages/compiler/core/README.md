@@ -4184,6 +4184,17 @@ selection, projection terms in binders, concrete/rigid projection-premise proof,
 backtracking, caching, coinduction, source syntax, and general normalization
 remain unsupported.
 
+The projection-bearing goal milestone normalizes each self and argument term in
+one shared inference state before sending the resulting flat implemented-trait
+goal through exact, generic, or clause selection and projection-aware premise
+proof. A projection nested in an argument can therefore refine a root inference
+variable and determine the selected implementation. Windows gnullvm and native
+Arch Linux WSL each pass 519 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 865 compiler tests per host.
+Projection terms in binders, clause heads, and premise type positions,
+concrete/rigid projection-premise proof, backtracking, caching, coinduction,
+source syntax, and general normalization remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

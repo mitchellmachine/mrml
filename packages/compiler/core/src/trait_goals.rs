@@ -2705,6 +2705,15 @@ enum InferredProjectionValueSolution {
     Overflow,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectionBearingGoalNormalizationSolution {
+    Unique(ImplementedTraitGoal),
+    Ambiguous,
+    NoSolution,
+    Cycle,
+    Overflow,
+}
+
 #[derive(Clone, Copy)]
 struct TraitProjectionEnvironment<'a> {
     exact_implementations: &'a TraitImplementationDatabase,
@@ -3001,6 +3010,64 @@ impl TraitProjectionEnvironment<'_> {
         stack[depth] = None;
         result
     }
+
+    fn normalize_projection_bearing_goal(
+        self,
+        arena: &TraitGoalTermArena,
+        goal: ProjectionBearingTraitGoal,
+        state: &mut InferenceConstraintState,
+    ) -> Result<ProjectionBearingGoalNormalizationSolution, TraitGoalError> {
+        validate_projection_bearing_goal(goal, arena.term_count)?;
+        let mut stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+        let self_type =
+            match self.normalize_goal_term_inner(arena, goal.self_type, state, &mut stack, 0)? {
+                InferredProjectionValueSolution::Unique(value) => value,
+                InferredProjectionValueSolution::Ambiguous => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::Ambiguous);
+                }
+                InferredProjectionValueSolution::NoSolution => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::NoSolution);
+                }
+                InferredProjectionValueSolution::Cycle => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::Cycle);
+                }
+                InferredProjectionValueSolution::Overflow => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::Overflow);
+                }
+            };
+        let mut normalized = ImplementedTraitGoal::new(goal.trait_id, self_type);
+        for argument in goal.arguments() {
+            let mut stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+            let argument = match self.normalize_goal_term_inner(
+                arena,
+                argument
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?,
+                state,
+                &mut stack,
+                0,
+            )? {
+                InferredProjectionValueSolution::Unique(value) => value,
+                InferredProjectionValueSolution::Ambiguous => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::Ambiguous);
+                }
+                InferredProjectionValueSolution::NoSolution => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::NoSolution);
+                }
+                InferredProjectionValueSolution::Cycle => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::Cycle);
+                }
+                InferredProjectionValueSolution::Overflow => {
+                    return Ok(ProjectionBearingGoalNormalizationSolution::Overflow);
+                }
+            };
+            normalized.push_argument(argument)?;
+        }
+        Ok(ProjectionBearingGoalNormalizationSolution::Unique(
+            normalized,
+        ))
+    }
 }
 
 fn instantiate_generic_associated_type(
@@ -3096,6 +3163,62 @@ pub fn normalize_inferred_trait_goal_term(
         InferredProjectionValueSolution::Overflow => {
             Ok(TraitGoalTermNormalizationSolution::Overflow)
         }
+    }
+}
+
+pub fn solve_projection_bearing_trait_goal(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    arena: &TraitGoalTermArena,
+    goal: ProjectionBearingTraitGoal,
+) -> Result<InferredTraitGoalSolution, TraitGoalError> {
+    let mut state = InferenceConstraintState::from_term_arena(arena)?;
+    let environment = TraitProjectionEnvironment {
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    let goal = match environment.normalize_projection_bearing_goal(arena, goal, &mut state)? {
+        ProjectionBearingGoalNormalizationSolution::Unique(goal) => goal,
+        ProjectionBearingGoalNormalizationSolution::Ambiguous => {
+            return Ok(InferredTraitGoalSolution::Ambiguous);
+        }
+        ProjectionBearingGoalNormalizationSolution::NoSolution => {
+            return Ok(InferredTraitGoalSolution::NoSolution);
+        }
+        ProjectionBearingGoalNormalizationSolution::Cycle => {
+            return Ok(InferredTraitGoalSolution::Cycle);
+        }
+        ProjectionBearingGoalNormalizationSolution::Overflow => {
+            return Ok(InferredTraitGoalSolution::Overflow);
+        }
+    };
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    match solve_inferred_trait_goal_inner(
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        Some(environment),
+        0,
+        goal,
+        &mut state,
+        &mut stack,
+        0,
+    )? {
+        TraitProofSolution::Proven => {
+            Ok(InferredTraitGoalSolution::Unique(InferredTraitGoalAnswer {
+                substitution: state.substitution()?,
+            }))
+        }
+        TraitProofSolution::Ambiguous => Ok(InferredTraitGoalSolution::Ambiguous),
+        TraitProofSolution::NoSolution => Ok(InferredTraitGoalSolution::NoSolution),
+        TraitProofSolution::Cycle => Ok(InferredTraitGoalSolution::Cycle),
+        TraitProofSolution::Overflow => Ok(InferredTraitGoalSolution::Overflow),
     }
 }
 
@@ -4416,6 +4539,72 @@ mod tests {
             panic!("projection-bearing argument should normalize");
         };
         assert_eq!(answer.value, TraitGoalType::Concrete(TraitTypeId::new(40)));
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+    }
+
+    #[test]
+    fn solves_implemented_goals_with_projection_bearing_arguments() {
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(17), 0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = TraitGoalTermArena::EMPTY;
+        let inferred = arena
+            .intern_type(TraitGoalType::InferenceVariable(variable))
+            .unwrap();
+        let concrete = arena
+            .intern_type(TraitGoalType::Concrete(TraitTypeId::new(30)))
+            .unwrap();
+        let projection = arena
+            .intern_projection(
+                ProjectionBearingTraitGoal::new(TraitId::new(912), inferred),
+                associated,
+            )
+            .unwrap();
+        let mut goal = ProjectionBearingTraitGoal::new(TraitId::new(913), concrete);
+        goal.push_argument(projection).unwrap();
+
+        let projection_implementation = TraitImplementationId::new(232);
+        let root_implementation = TraitImplementationId::new(233);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_implementation,
+                TraitId::new(912),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let mut root_header = TraitImplementationHeader::new(
+            root_implementation,
+            TraitId::new(913),
+            TraitTypeId::new(30),
+        );
+        root_header.push_argument(TraitTypeId::new(20)).unwrap();
+        exact.insert(root_header).unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation,
+                    associated,
+                    TraitTypeId::new(20),
+                ),
+            )
+            .unwrap();
+        let InferredTraitGoalSolution::Unique(answer) = solve_projection_bearing_trait_goal(
+            &exact,
+            &GenericTraitImplementationDatabase::EMPTY,
+            &TraitWhereClauseDatabase::EMPTY,
+            &values,
+            &GenericTraitAssociatedTypeDatabase::EMPTY,
+            &arena,
+            goal,
+        )
+        .unwrap() else {
+            panic!("projection-bearing implemented goal should prove");
+        };
         assert_eq!(
             answer.substitution.binding(variable),
             Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
