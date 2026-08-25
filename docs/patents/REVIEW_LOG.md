@@ -150,6 +150,11 @@ binary compilation, and inline binary-test execution, then applies them without
 changing compiler semantics. **Result: TRIGGERED** under the existing package/
 resolver review; existing compiler-mechanism reviews remain in force.
 
+Target-specific feature partitions and direct `x86_64-unknown-none` rlib
+compilation are conventional build-resolution mechanisms. **Result: TRIGGERED**
+under the existing package/resolver review; the crypto mechanism and license
+review remains unchanged.
+
 The Git-tool semantic move relocates `mrml-git` to `tools/git` after its
 error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
 diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository

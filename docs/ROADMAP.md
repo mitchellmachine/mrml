@@ -209,6 +209,11 @@ exact binary outputs, and cannot satisfy an extern edge. The compiler driver
 builds `mrml-rustc` and passes both tests on Windows and Arch Linux WSL2.
 Twenty-two of 42 components are native; 20 remain transitional.
 
+Native feature profiles now cover every component target exactly once.
+`mrml-crypto` keeps `runtime` for Windows/Linux and selects the empty set for
+`MRML_NATIVE`; both hosts cross-build the latter as an `x86_64-unknown-none`
+rlib without a runtime extern. This is cross-build evidence, not execution.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

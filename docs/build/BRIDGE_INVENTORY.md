@@ -94,6 +94,11 @@ the first run failed closed when `-lopus` was absent and passed after the explic
 test dependency was installed. Fourteen components are native; 28 remain
 transitional.
 
+Featureful native actions now partition every declared target across exact,
+non-overlapping feature sets. `mrml-crypto` selects `runtime` on Windows/Linux
+and the empty set on `MRML_NATIVE`; both host toolchains cross-build the latter
+for `x86_64-unknown-none` without activating `mrml-runtime`.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

@@ -35,8 +35,13 @@ struct RustAction {
     examples: Vec<RustExample>,
     binaries: Vec<RustBinary>,
     compile_env: Vec<(String, String)>,
+    feature_sets: Vec<RustFeatureSet>,
+}
+
+#[derive(Clone, Debug)]
+struct RustFeatureSet {
+    targets: Vec<String>,
     features: Vec<String>,
-    feature_set_declared: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -274,7 +279,18 @@ fn load_workspace() -> Result<Workspace, String> {
                 ));
             }
             ["rust-feature-set", component, features] => {
-                rust_feature_sets.push(((*component).to_owned(), (*features).to_owned()));
+                rust_feature_sets.push((
+                    (*component).to_owned(),
+                    "*".to_owned(),
+                    (*features).to_owned(),
+                ));
+            }
+            ["rust-feature-set", component, targets, features] => {
+                rust_feature_sets.push((
+                    (*component).to_owned(),
+                    (*targets).to_owned(),
+                    (*features).to_owned(),
+                ));
             }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
@@ -347,11 +363,10 @@ fn load_workspace() -> Result<Workspace, String> {
             examples: Vec::new(),
             binaries: Vec::new(),
             compile_env: Vec::new(),
-            features: Vec::new(),
-            feature_set_declared: false,
+            feature_sets: Vec::new(),
         });
     }
-    for (component_id, features) in rust_feature_sets {
+    for (component_id, targets, features) in rust_feature_sets {
         let component = components
             .iter_mut()
             .find(|component| component.id == component_id)
@@ -363,17 +378,31 @@ fn load_workspace() -> Result<Workspace, String> {
             .as_mut()
             .ok_or_else(|| format!("RustFeatureActionMissing {{ component: {component_id} }}"))?;
         let features = split_declaration(&features);
+        let targets = if targets == "*" {
+            component.targets.clone()
+        } else {
+            split_declaration(&targets)
+        };
         if features.iter().any(|feature| {
             feature == "default" || !component.features.iter().any(|known| known == feature)
-        }) || !action.features.is_empty()
+        }) || targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !component.targets.iter().any(|known| known == target))
+            || action.feature_sets.iter().any(|set| {
+                set.targets
+                    .iter()
+                    .any(|existing| targets.iter().any(|target| target == existing))
+            })
         {
             return Err(format!(
                 "RustFeatureSetInvalid {{ component: {component_id}, features: {} }}",
                 features.join(",")
             ));
         }
-        action.features = features;
-        action.feature_set_declared = true;
+        action
+            .feature_sets
+            .push(RustFeatureSet { targets, features });
     }
     for (component_id, stack_bytes) in rust_test_policies {
         let component = components
@@ -507,11 +536,22 @@ fn load_workspace() -> Result<Workspace, String> {
                     component.input_policy.compile_env
                 ));
             }
-            if !component.features.is_empty() && !action.feature_set_declared {
-                return Err(format!(
-                    "RustFeatureSetMissing {{ component: {} }}",
-                    component.id
-                ));
+            if !component.features.is_empty() {
+                let mut covered: Vec<_> = action
+                    .feature_sets
+                    .iter()
+                    .flat_map(|set| set.targets.iter().cloned())
+                    .collect();
+                let mut required = component.targets.clone();
+                covered.sort();
+                required.sort();
+                if covered != required {
+                    return Err(format!(
+                        "RustFeatureSetMissing {{ component: {}, targets: {} }}",
+                        component.id,
+                        required.join(",")
+                    ));
+                }
             }
             let mut declared_libraries: Vec<_> = component
                 .outputs
@@ -705,11 +745,25 @@ fn rust_extern_active(external: &RustExtern, action: &RustAction, target: &str) 
         && external
             .feature
             .as_ref()
-            .is_none_or(|feature| action.features.iter().any(|active| active == feature))
+            .is_none_or(|feature| rust_features(action, target).contains(feature))
 }
 
-fn apply_rust_features(command: &mut Command, component: &Component, action: &RustAction) {
-    for feature in &action.features {
+fn rust_features<'a>(action: &'a RustAction, target: &str) -> &'a [String] {
+    action
+        .feature_sets
+        .iter()
+        .find(|set| set.targets.iter().any(|candidate| candidate == target))
+        .map(|set| set.features.as_slice())
+        .unwrap_or(&[])
+}
+
+fn apply_rust_features(
+    command: &mut Command,
+    component: &Component,
+    action: &RustAction,
+    target: &str,
+) {
+    for feature in rust_features(action, target) {
         command.arg("--cfg").arg(format!("feature=\"{feature}\""));
     }
     let values = component
@@ -1085,7 +1139,7 @@ fn compile_rust_component(
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
-    apply_rust_features(&mut command, component, action);
+    apply_rust_features(&mut command, component, action, target);
     apply_rust_compile_env(&mut command, action);
     for external in action
         .externs
@@ -1115,6 +1169,8 @@ fn compile_rust_component(
         command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
     } else if target == "LINUX" {
         command.args(["--target", "x86_64-unknown-linux-gnu"]);
+    } else if target == "MRML_NATIVE" {
+        command.args(["--target", "x86_64-unknown-none"]);
     } else {
         return Err(format!(
             "RustActionTargetUnsupported {{ component: {}, target: {target} }}",
@@ -1183,7 +1239,7 @@ fn run_declared_test(
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
-    apply_rust_features(&mut command, component, action);
+    apply_rust_features(&mut command, component, action, target);
     apply_rust_compile_env(&mut command, action);
     if test.self_extern {
         command.arg("--extern").arg(format!(
@@ -1272,7 +1328,7 @@ fn compile_declared_example(
         ))
         .arg("-o")
         .arg(&output);
-    apply_rust_features(&mut command, component, action);
+    apply_rust_features(&mut command, component, action, target);
     apply_rust_compile_env(&mut command, action);
     for external in action
         .externs
@@ -1371,7 +1427,7 @@ fn compile_declared_binary(
     } else {
         command.args(["--crate-type", "bin"]);
     }
-    apply_rust_features(&mut command, component, action);
+    apply_rust_features(&mut command, component, action, target);
     apply_rust_compile_env(&mut command, action);
     if binary.self_extern {
         command.arg("--extern").arg(format!(

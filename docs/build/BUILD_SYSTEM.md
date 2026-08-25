@@ -189,6 +189,12 @@ no `:lib` output, cannot satisfy another action's extern edge, and still require
 exact binary output/source/self-binding records. This migrates the bin-only
 compiler driver: both hosts build `mrml-rustc` and pass its two inline tests.
 
+Feature selection is per target, exhaustive, and non-overlapping. The loader
+rejects an uncovered or multiply covered target. Native library compilation now
+supports the pinned `x86_64-unknown-none` target; the crypto action demonstrates
+an empty `MRML_NATIVE` feature set with no runtime extern while preserving the
+host `runtime` profile.
+
 `mrml-http` is the next featureless consumer and binds exact runtime/TLS rlibs.
 Both hosts pass its three inline tests directly; absent live URL/range inputs
 remain absent network evidence.

@@ -64,11 +64,12 @@ rust-example|org.mrml.library.opus|inspect_range|packages/libraries/opus/example
 rust-example|org.mrml.library.opus|opus_range_diff|packages/libraries/opus/examples/opus_range_diff.rs
 rust-example|org.mrml.library.opus|rfc8251_audit|packages/libraries/opus/examples/rfc8251_audit.rs
 rust-action|org.mrml.library.av1|mrml_av1|lib|packages/libraries/av1/src/lib.rs|mrml-linux=mrml_linux@LINUX?nvidia;mrml-runtime=mrml_runtime@*;mrml-windows=mrml_windows@WINDOWS?nvidia
-rust-feature-set|org.mrml.library.av1|
+rust-feature-set|org.mrml.library.av1|MRML_NATIVE,WINDOWS,LINUX|
 rust-test-policy|org.mrml.library.av1|33554432
 rust-example|org.mrml.library.av1|decode_ivf|packages/libraries/av1/examples/decode_ivf.rs
 rust-action|org.mrml.library.crypto|mrml_crypto|lib|packages/libraries/crypto/src/lib.rs|mrml-runtime=mrml_runtime@*?runtime
-rust-feature-set|org.mrml.library.crypto|runtime
+rust-feature-set|org.mrml.library.crypto|WINDOWS,LINUX|runtime
+rust-feature-set|org.mrml.library.crypto|MRML_NATIVE|
 rust-action|org.mrml.library.tls|mrml_tls|lib|packages/libraries/tls/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.library.http|mrml_http|lib|packages/libraries/http/src/lib.rs|mrml-runtime=mrml_runtime@*;mrml-tls=mrml_tls@*
 rust-action|org.mrml.library.ssh|mrml_ssh|lib|packages/libraries/ssh/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*
@@ -76,7 +77,7 @@ rust-action|org.mrml.tool.git|mrml_git|lib|tools/git/src/lib.rs|mrml-error=mrml_
 rust-binary|org.mrml.tool.git|mrml-git|mrml_git_cli|tools/git/src/main.rs|true
 rust-compile-env|org.mrml.tool.git|CARGO_PKG_VERSION|0.0.1
 rust-action|org.mrml.tool.host|mrml_tools|lib|tools/host/src/lib.rs|mrml-error=mrml_error@*?runtime;mrml-http=mrml_http@*?runtime;mrml-json=serde_json@*?runtime;mrml-linux=mrml_linux@LINUX?runtime;mrml-percent-encoding=mrml_percent_encoding@*?runtime;mrml-runtime=mrml_runtime@*?runtime;mrml-terminal-style=mrml_terminal_style@*?runtime;mrml-windows=mrml_windows@WINDOWS?runtime
-rust-feature-set|org.mrml.tool.host|runtime
+rust-feature-set|org.mrml.tool.host|WINDOWS,LINUX|runtime
 rust-compile-env|org.mrml.tool.host|CARGO_MANIFEST_DIR|tools/host
 rust-action|org.mrml.compiler.driver|mrml_rustc_driver|none|-|mrml-error=mrml_error@*;mrml-runtime=mrml_runtime@*;mrml-rustc=mrml_rustc@*
 rust-binary|org.mrml.compiler.driver|mrml-rustc|mrml_rustc_driver|compiler/driver/src/main.rs|false

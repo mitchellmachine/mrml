@@ -304,6 +304,14 @@ each host, eliminating the earlier MSVC `link.exe` bridge failure. No emitted
 object was executed, no oracle delta was measured, and no KVM, bare metal, or
 physical hardware was exercised.
 
+The target-feature prerequisite was then checked from both Windows and Arch
+Linux WSL2 with the exact dated 2026-08-24 toolchains. The loader requires every
+featureful action target to appear in exactly one feature set. Direct
+`mrml build mrml-crypto --target native` passed on both hosts, selecting no
+features and no runtime extern for `x86_64-unknown-none`; the host `runtime`
+profile continued to pass all 27 tests. No target code was executed and no
+bare-metal or physical-hardware claim follows.
+
 The Git-tool move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-git -- --check`,

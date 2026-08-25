@@ -350,6 +350,11 @@ binary output and test declarations. `mrml-rustc-driver` builds the real
 `mrml-rustc` executable and passes both driver tests on Windows and Arch Linux
 WSL2. Twenty-two components are native and 20 remain transitional.
 
+Feature sets are target-specific: every featureful native action covers each
+declared target exactly once. `mrml-crypto` selects `runtime` for Windows/Linux
+host tests but selects no features or runtime extern for its `MRML_NATIVE`
+`x86_64-unknown-none` rlib. Both hosts cross-build that profile successfully.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
