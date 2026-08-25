@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-one
+  explicit. Thirty-two
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -802,6 +802,17 @@ mapping performance gate ignored. `/dev/kvm` was usable, so conditional API and
 signed-guest probes ran under nested WSL2 KVM. Thirty-one components are native
 and 11 remain transitional. This is not bare-metal, IOMMU, TPM, or physical-
 hardware evidence.
+
+WHP applies that existing test-only extern scope to its corresponding Windows
+graph: kernel and runtime are production externs, and crypto-core is supplied
+only to the harness. The exact Windows gnullvm toolchain passes frontend tests,
+Clippy, doctor, audit, native build, and the native/Cargo test baselines at 22
+passed with one manual live-mapping performance gate ignored. Running the
+ignored executable separately completed 10,000 WHP map/revoke iterations. The
+exact Linux toolchain passes frontend tests, Clippy, doctor, and audit while
+correctly omitting the Windows-only action. Thirty-two components are native
+and 10 remain transitional. This establishes hosted WHP API and mapping
+execution only, not VTL1, TPM, IOMMU, bare-metal, or physical-hardware evidence.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

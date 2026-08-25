@@ -282,6 +282,16 @@ probes; one manual live-mapping performance gate remained ignored. Thirty-one of
 42 components are native; 11 remain transitional. This is nested KVM evidence,
 not bare-metal, IOMMU, TPM, or physical-hardware evidence.
 
+WHP now has the corresponding native Windows action with production kernel and
+runtime externs and a test-only crypto-core dev edge. Native and Cargo baselines
+each pass 22 tests with one manual performance gate ignored. A separate run of
+that gate completed 10,000 WHP map/revoke iterations, directly establishing WHP
+API and hosted-hypervisor mapping execution on this Windows host. The exact Linux
+toolchain passes the declaration frontend tests, Clippy, doctor, and audit but
+does not build or run this Windows-only component. Thirty-two of 42 components
+are native; 10 remain transitional. This is not VTL1, TPM, IOMMU, bare-metal, or
+physical-hardware evidence.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

@@ -425,6 +425,15 @@ ignored. `/dev/kvm` was usable, so conditional API and signed-guest probes ran.
 Thirty-one components are native and 11 remain transitional; this is nested WSL2
 KVM evidence, not bare-metal or physical-hardware verification.
 
+The Windows WHP library now uses the same exact native graph: kernel and runtime
+are production externs, while its direct crypto-core dev dependency exists only
+in the test harness. The pinned Windows gnullvm native and Cargo baselines each
+pass 22 tests with one manual mapping-performance gate ignored. Running that gate
+separately completed 10,000 live WHP map/revoke iterations, so WHP API and hosted
+hypervisor mapping execution are directly evidenced on this host. Thirty-two
+components are native and 10 remain transitional; this is hosted WHP evidence,
+not a VTL1, TPM, IOMMU, bare-metal, or physical-hardware claim.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

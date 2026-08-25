@@ -135,3 +135,4 @@ rust-compile-env-absent|org.mrml.library.uefi|MRML_TPM_NV_INDEX_HEX
 rust-action|org.mrml.tool.sign|mrml_sign_action|none|-|mrml-crypto=mrml_crypto@*;mrml-error=mrml_error@*;mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*
 rust-binary|org.mrml.tool.sign|mrml-sign|mrml_sign|tools/sign/src/main.rs|false
 rust-action|org.mrml.system.vmm-kvm|mrml_kvm|lib|system/vmm/kvm/src/lib.rs|mrml-crypto=mrml_crypto@*#core!test;mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.system.vmm-whp|mrml_whp|lib|system/vmm/whp/src/lib.rs|mrml-crypto=mrml_crypto@*#core!test;mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*

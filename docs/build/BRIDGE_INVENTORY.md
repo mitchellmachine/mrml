@@ -165,6 +165,16 @@ so conditional API and signed-guest probes exercised nested KVM. Thirty-one
 components are native; 11 remain transitional. No bare-metal or physical KVM
 hardware was verified.
 
+The same scoped-extern mechanism now describes `mrml-whp`: kernel and runtime
+are production dependencies, while crypto-core is a direct dev dependency only.
+The pinned Windows gnullvm native and Cargo harnesses each pass 22 tests with one
+manual mapping-performance gate ignored. Running the ignored gate separately
+completed 10,000 live WHP map/revoke iterations. The pinned Linux frontend also
+passes its tests, Clippy, doctor, and audit, but correctly skips the Windows-only
+WHP action. Thirty-two components are native; 10 remain transitional. This is
+hosted WHP API/mapping evidence, not VTL1, TPM, IOMMU, bare-metal, or physical-
+hardware verification.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.
