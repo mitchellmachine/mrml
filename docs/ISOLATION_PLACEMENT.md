@@ -218,6 +218,11 @@ services and cleanup tickets retire, returns both commitments and verifies zero
 remaining object pages and mappings. The same signed kernel passed this gate on
 WHP and nested KVM. Guest RAM, executable/private pages, vCPU time, and device
 projections remain outside this focused pool and are still **PLANNED**.
+The kernel now has the separate capability-bound `MicrovmGuestRam` reservation
+needed for the next step: it charges an exact non-executable `Guest`
+`MemoryObject` before backend allocation and may be returned only after native
+teardown is proven. KVM/WHP do not yet consume that reservation, so this does
+not promote the hosted path or Total mode beyond their existing status.
 
 ## One policy, several placements
 

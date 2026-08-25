@@ -114,6 +114,17 @@ that path. Guest RAM, executable/private pages, vCPU time, and device
 projections are not yet charged through this pool, so complete component/microVM
 resource accounting remains **PLANNED**.
 
+Kernel groundwork now also provides a distinct pre-allocation guest-RAM
+reservation. It creates one exact generational `MemoryObject` with `Guest`
+backing under an existing `MemoryPool` capability. The resulting authority is
+read/write/map/pin/inspect/control only: it grants no execute, sharing,
+delegation, DMA, device, or placement authority. Its unsafe release contract
+requires the VMM adapter to prove that all native backing and mappings are gone
+first. Focused Windows and Linux tests prove exact charging, exhaustion,
+metadata-without-capability rejection, rights separation, and full return.
+KVM/WHP pre-allocation consumption and cleanup binding remain **PLANNED**; this
+groundwork is not evidence that the hosted component probe is RAM-accounted.
+
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact
 object plus device/DMA authority and a valid IOMMU mapping; invalidation completes

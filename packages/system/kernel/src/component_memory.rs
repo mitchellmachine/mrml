@@ -11,6 +11,13 @@ const COMPONENT_EXECUTABLE_RIGHTS: Rights = Rights::READ
     .union(Rights::INSPECT)
     .union(Rights::CONTROL);
 
+const MICROVM_GUEST_RAM_RIGHTS: Rights = Rights::READ
+    .union(Rights::WRITE)
+    .union(Rights::MAP)
+    .union(Rights::PIN)
+    .union(Rights::INSPECT)
+    .union(Rights::CONTROL);
+
 /// Accounted immutable code pages for one independently serviced component.
 ///
 /// This is a memory-resource identity, not a package or interface identity and
@@ -22,6 +29,66 @@ const COMPONENT_EXECUTABLE_RIGHTS: Rights = Rights::READ
 pub struct ComponentExecutablePages {
     object: MemoryObjectId,
     pages: u64,
+}
+
+/// Host-derived RAM commitment for one microVM generation.
+///
+/// Guest-physical addresses remain data. This object and its capability carry
+/// the host commitment that a VMM adapter must consume before allocating or
+/// mapping the corresponding native backing. It deliberately grants neither
+/// execute, share, DMA, delegation, nor device authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MicrovmGuestRam {
+    object: MemoryObjectId,
+    pages: u64,
+}
+
+impl MicrovmGuestRam {
+    pub const fn object(self) -> MemoryObjectId {
+        self.object
+    }
+
+    pub const fn pages(self) -> u64 {
+        self.pages
+    }
+}
+
+/// Reserves an exact private host commitment before a microVM backend allocates
+/// guest RAM. Package metadata, a guest address, or a VMM handle cannot replace
+/// the pool capability.
+pub fn reserve_microvm_guest_ram<const P: usize, const O: usize, const M: usize, const C: usize>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    pool: MemoryPoolId,
+    pool_capability: Capability,
+    pages: u64,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<(MicrovmGuestRam, Capability), MemoryResourceError> {
+    let (object, capability) = table.allocate_object(
+        pool,
+        pool_capability,
+        pages,
+        MemoryBackingKind::Guest,
+        MICROVM_GUEST_RAM_RIGHTS,
+        capabilities,
+    )?;
+    Ok((MicrovmGuestRam { object, pages }, capability))
+}
+
+/// Returns the exact host commitment only after the VMM adapter has proved all
+/// native guest mappings/backing are gone. The caller cannot partially release
+/// a live generation.
+pub unsafe fn release_microvm_guest_ram<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    reservation: MicrovmGuestRam,
+    capability: Capability,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<u64, MemoryResourceError> {
+    table.release_object(reservation.object, capability, capabilities)
 }
 
 impl ComponentExecutablePages {
@@ -223,6 +290,86 @@ mod tests {
                 CapabilityError::PermissionDenied
             ))
         ));
+        assert_eq!(
+            table
+                .usage(pool, pool_capability, &capabilities)
+                .unwrap()
+                .object_pages(),
+            0
+        );
+    }
+
+    #[test]
+    fn microvm_guest_ram_is_exact_private_non_executable_authority() {
+        let mut capabilities = CapabilitySpace::<4>::new();
+        let mut table = MemoryPoolTable::<1, 1>::new(24).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(32, 1, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let (ram, ram_capability) =
+            reserve_microvm_guest_ram(&mut table, pool, pool_capability, 32, &mut capabilities)
+                .unwrap();
+
+        assert_eq!(ram.pages(), 32);
+        assert_eq!(
+            table.object_backing(ram.object()),
+            Ok(MemoryBackingKind::Guest)
+        );
+        assert_eq!(
+            capabilities.authorize(ram_capability, Rights::EXECUTE),
+            Err(CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            capabilities.authorize(ram_capability, Rights::SHARE),
+            Err(CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            capabilities.authorize(ram_capability, Rights::DELEGATE),
+            Err(CapabilityError::PermissionDenied)
+        );
+        assert_eq!(
+            table
+                .usage(pool, pool_capability, &capabilities)
+                .unwrap()
+                .object_pages(),
+            32
+        );
+        assert_eq!(
+            unsafe {
+                release_microvm_guest_ram(&mut table, ram, ram_capability, &mut capabilities)
+            },
+            Ok(32)
+        );
+        assert_eq!(
+            table
+                .usage(pool, pool_capability, &capabilities)
+                .unwrap()
+                .object_pages(),
+            0
+        );
+    }
+
+    #[test]
+    fn microvm_guest_ram_requires_pool_authority_and_never_overcommits() {
+        let mut capabilities = CapabilitySpace::<5>::new();
+        let mut table = MemoryPoolTable::<1, 1>::new(25).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(8, 1, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let metadata = capabilities
+            .insert(ObjectId(0x500), Rights::INSPECT)
+            .unwrap();
+
+        assert!(matches!(
+            reserve_microvm_guest_ram(&mut table, pool, metadata, 8, &mut capabilities),
+            Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        ));
+        assert_eq!(
+            reserve_microvm_guest_ram(&mut table, pool, pool_capability, 9, &mut capabilities,),
+            Err(MemoryResourceError::PoolExhausted)
+        );
         assert_eq!(
             table
                 .usage(pool, pool_capability, &capabilities)

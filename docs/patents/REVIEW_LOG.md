@@ -4105,6 +4105,17 @@ allocation algorithm, update mechanism, or reclamation policy. The broader
 independently serviced component lifecycle remains `TRIGGERED`; agent review
 does not replace independent human dual review.
 
+# 2026-08-25 — Capability-bound microVM guest-RAM reservation
+
+**Result: NOT_TRIGGERED.** This prerequisite allocates the existing
+generational `MemoryObject` with the existing `Guest` backing kind from an
+existing quantitative `MemoryPool`, using conventional exact-limit accounting
+and capability checks. It adds no allocation algorithm, address translation,
+page-sharing method, ballooning, deduplication, migration, placement selector,
+VMM transport, or reclamation policy. Backend consumption and any broader
+microVM resource lifecycle remain subject to the existing `TRIGGERED` review;
+agent review does not replace independent human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified
@@ -4570,3 +4581,12 @@ normalizes them through the existing bounded projection environment. It adds no
 new source type grammar, branching search, specialization order, cache, parser,
 runtime mechanism, allocation, synchronization, protocol, cryptography, or
 hardware behavior.
+
+# 2026-08-25 — Projection-bearing trait-goal selection
+
+**Result: NOT_TRIGGERED.** This compiler-only increment normalizes existing
+bounded arena terms and passes the resulting flat goal through the existing
+exact, generic, clause, and premise proof operations. It adds no new term or
+source grammar, branching search, specialization order, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.

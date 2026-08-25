@@ -215,7 +215,10 @@ binding remain **PLANNED**. The focused hosted component profile now also
 charges its fixed-capacity task runtime and supervisor to one exact memory pool
 and proves both commitments return after supervised cleanup; guest RAM,
 executable/private pages, vCPU, and device projections remain unaccounted in
-that path.
+that path. A separate kernel guest-RAM reservation prerequisite now charges an
+exact non-executable `Guest` `MemoryObject` under a pool capability, rejects
+overcommit or metadata-only allocation, and requires proven native teardown
+before release. Backend pre-allocation consumption remains the next gate.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
