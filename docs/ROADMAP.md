@@ -58,7 +58,8 @@ also **PARTIALLY IMPLEMENTED**: version-1 schemas have deterministic SHA3-256
 fingerprints and pointer-free Rust bindings, with the canonical Zstd ABI-3
 fixture reproducing byte-for-byte on Windows and Arch Linux. Native call
 lowering, compiler-emitted conformance metadata, ABI diffs, runtime loading, and
-provider execution remain **PLANNED**.
+native provider execution remain **PLANNED**. The hosted Zstd ABI-3 byte-call
+adapter now exercises exact generated descriptors on Windows and Arch Linux.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,
@@ -88,6 +89,19 @@ or isolated-service endpoint. Existing entries cannot be retargeted during an
 update, and released slot identities cannot address replacements. Runtime
 capability authorization, executable admission/mapping, call dispatch,
 reference accounting, and process integration remain **PLANNED**.
+
+The canonical `org.mrml.zstd` provider and `org.mrml.zim` consumer migration are
+**PARTIALLY IMPLEMENTED** as hosted code and focused tests. ZIM depends on the
+separate ABI-3 binding package and no longer names a provider crate or path;
+the Wikipedia composition root supplies the current in-process provider. This
+does not prove resolver-to-loader dispatch or update-without-consumer-rebuild.
+
+Servicing retention and inspection are **PARTIALLY IMPLEMENTED** as a bounded
+build-tool model. Exact live bindings and retained system generations, rollback
+roots, snapshots, exports, and disabled package-GC policy independently block
+reclamation. Prohibited providers are denied for new bindings without erasing
+retained content. No package deletion, persistent root discovery, update
+transaction, or running-system integration is implemented.
 
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
@@ -185,7 +199,7 @@ parity, then confine Cargo to clean-source bootstrap. Package/release/image/
 publication remain planned.
 
 The native-resolver audit increment is now implemented: `mrml doctor` validates
-all 42 components and 118 declared edges without invoking Cargo metadata, and
+all 43 components and 120 declared edges without invoking Cargo metadata, and
 `mrml audit` emits dependencies, features, outputs, build scripts, proc macros,
 and bounded source-input sites. Missing dependencies, invalid targets, empty
 outputs, self-dependencies, and cycles fail closed. Dependency, feature, output,

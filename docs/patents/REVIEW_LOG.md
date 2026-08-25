@@ -3652,3 +3652,38 @@ Resolver-to-loader call dispatch, isolated-service transport, provider update,
 retention/GC, rebinding policy, and servicing remain `TRIGGERED` for separate
 selected-mechanism review. This technical screen establishes neither clearance
 nor infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Provider retention eligibility and inspection model
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The implementation makes
+one read-only eligibility decision for one exact provider package record. It
+counts exact live `InterfaceBinding` records and treats each caller-supplied
+retained-system-generation, rollback-root, snapshot, export, or disabled-GC
+count as an independent reason to retain. Only the absence of every reason
+makes the package eligible; this code does not delete, relocate, compact, trace
+an object graph, propagate expiration, choose time intervals, inspect storage,
+or discover persistent roots. A separate security state denies new bindings to
+a prohibited provider while preserving any rooted artifact.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 9,514,137 B2](https://patents.google.com/patent/US9514137B2), whose claims
+concern file-system objects carrying reference counters, expiration times and
+snapshot identifiers with expiration propagation;
+[EP 2 738 697 A1](https://patents.google.com/patent/EP2738697A1/en), whose claims
+use two levels of active snapshot lists and a minimum snapshot timestamp to
+delete database record versions; [US 11,232,026 B2](https://patents.google.com/patent/US11232026B2),
+whose claims concern process restart, backup copies and retained generational
+memory segments for deferred destruction; and
+[US 9,639,432 B2](https://patents.google.com/patent/US9639432B2), whose claims
+acquire timestamped snapshot, memory and I/O streams and re-execute a rolled-back
+computing environment. MRML's bounded Boolean/count report implements none of
+those claim-defining expiration-propagation, two-level timestamp, restart-memory,
+stream acquisition, rollback execution, or deletion combinations. Material
+publications and family records were reviewed through linked national/regional
+register data; non-overlap, not assumed legal status, is the design basis.
+
+Persistent root discovery, Store transactions, physical reclamation, deletion,
+storage compaction, isolated-service lifecycle, and automatic servicing remain
+`TRIGGERED` for separate selected-mechanism review. This technical screen
+establishes neither clearance nor infringement and does not replace independent
+human dual review.

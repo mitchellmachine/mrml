@@ -377,9 +377,13 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    (**PARTIALLY IMPLEMENTED** for the canonical in-process byte-call adapter);
 5. `org.mrml.zim` consuming that interface without provider path knowledge
    (**PARTIALLY IMPLEMENTED** for bounded borrowed views and typed responses);
-6. Store update N to N+1 while old/new ZIM processes retain exact bindings;
-7. lifetime/rollback/snapshot-aware GC and dependency inspection;
-8. ABI-4 coexistence/rejection and vulnerable-provider quarantine/retirement;
+6. Store update N to N+1 while old/new ZIM processes retain exact bindings
+   (**PARTIALLY IMPLEMENTED** as a bounded non-retargeting binding model);
+7. lifetime/rollback/snapshot-aware GC and dependency inspection
+   (**PARTIALLY IMPLEMENTED** as a no-delete eligibility/inspection model);
+8. ABI-4 coexistence/rejection and vulnerable-provider quarantine/retirement
+   (**PARTIALLY IMPLEMENTED** for incompatible-generation rejection and denial
+   of new prohibited-provider bindings only);
 9. cross-compiler, performance, fuzzing, and optional service-provider evidence;
 10. selective migration of further high-value components.
 

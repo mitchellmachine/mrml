@@ -4,6 +4,7 @@ pub mod generation;
 pub mod loader;
 pub mod resolver;
 pub mod schema;
+pub mod servicing;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;

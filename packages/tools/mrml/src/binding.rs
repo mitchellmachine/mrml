@@ -149,6 +149,10 @@ impl<const N: usize> InterfaceBindingTable<N> {
         self.generations[slot] = next;
         Ok(binding)
     }
+
+    pub fn bindings(&self) -> impl Iterator<Item = &InterfaceBinding> {
+        self.slots.iter().filter_map(Option::as_ref)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

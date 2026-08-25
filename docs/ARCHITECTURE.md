@@ -59,9 +59,10 @@ in [packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md). Package
 interface, and Rust crate identity are separate. Bounded foundations now cover
 schema/binding generation, exact in-generation provider resolution, immutable
 load plans and binding records, shared-code accounting reservations, and a
-hosted Zstd ABI-3 provider/ZIM consumer byte-call adapter. No admitted native
-dynamic loader-to-call path, independently serviced activation, isolated-service
-transport, or retention/GC lifecycle is implemented.
+hosted Zstd ABI-3 provider/ZIM consumer byte-call adapter, plus a no-delete
+retention/inspection decision model. No admitted native dynamic loader-to-call
+path, independently serviced activation, isolated-service transport, persistent
+root discovery, or actual reclamation lifecycle is implemented.
 
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical
