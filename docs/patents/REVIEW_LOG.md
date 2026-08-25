@@ -2783,3 +2783,15 @@ host-share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Conditional-loan move chains
+
+**Result: NOT_TRIGGERED.** The compiler conventionally extends its bounded
+conditional-origin loan transfer across precise root reference-move chains. It
+enumerates existing origins by bounded initialization depth, uses checked count
+arithmetic and distinct derived IDs, and rechecks source replacement at each
+hop. It adds no optimization, authority model, compatibility protocol, host-
+share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
