@@ -810,6 +810,16 @@ conformance tests, and 335 replacement tests: 826 compiler tests per host. Mixed
 inference/skolem unification, binder introduction, coinduction, specialization,
 and source higher-ranked syntax remain unsupported.
 
+The universal trait-goal milestone adds an explicit binder over at most eight
+implemented-trait parameters. It advances a caller-relative universe, creates a
+distinct rigid placeholder for each parameter, and proves the instantiated goal
+through rigid generic solving. Invalid indices and universe exhaustion fail;
+unconstrained implementation parameters remain ambiguous. Windows gnullvm and
+native Arch Linux WSL each pass 483 library tests, one component-interface probe,
+10 conformance tests, and 335 replacement tests: 829 compiler tests per host.
+Nested binders, existential goals, leak-aware answer inversion, mixed inference,
+and `for<...>` source syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.

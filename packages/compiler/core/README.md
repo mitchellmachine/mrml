@@ -4061,6 +4061,17 @@ conformance tests, and 335 replacement tests: 826 compiler tests per host. Mixed
 inference/skolem unification, binder introduction, coinduction, specialization,
 source higher-ranked syntax, and mixed inference selection remain unsupported.
 
+The universal trait-goal milestone adds an explicit binder over at most eight
+implemented-trait parameters. Solving advances a caller-relative universe,
+creates a distinct rigid placeholder for each parameter, and proves the
+instantiated goal through rigid generic solving. Invalid indices and universe
+exhaustion fail explicitly; unconstrained implementation parameters remain
+ambiguous. Windows gnullvm and native Arch Linux WSL each pass 483 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+829 compiler tests per host. Nested binders, existential goals, leak-aware answer
+inversion, mixed inference, `for<...>` source syntax, and mixed inference
+selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

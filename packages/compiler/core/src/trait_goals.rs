@@ -287,6 +287,49 @@ impl BoundImplementedTraitGoal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForAllImplementedTraitGoal {
+    parameter_count: usize,
+    pub goal: BoundImplementedTraitGoal,
+}
+
+impl ForAllImplementedTraitGoal {
+    pub fn new(
+        parameter_count: usize,
+        goal: BoundImplementedTraitGoal,
+    ) -> Result<Self, TraitGoalError> {
+        if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        validate_bound_goal(goal, parameter_count)?;
+        Ok(Self {
+            parameter_count,
+            goal,
+        })
+    }
+
+    pub const fn parameter_count(self) -> usize {
+        self.parameter_count
+    }
+
+    pub fn instantiate_in_universe(
+        self,
+        universe: TraitUniverseIndex,
+    ) -> Result<ImplementedTraitGoal, TraitGoalError> {
+        let mut arguments = [TraitGoalType::Placeholder(TraitPlaceholder::new(
+            universe,
+            TraitPlaceholderId::new(0),
+        )); MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments[..self.parameter_count].iter_mut().enumerate() {
+            *argument = TraitGoalType::Placeholder(TraitPlaceholder::new(
+                universe,
+                TraitPlaceholderId::new(index as u32),
+            ));
+        }
+        instantiate_bound_goal(self.goal, &arguments[..self.parameter_count])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstantiatedTraitWhereClause {
     pub consequence: ImplementedTraitGoal,
     pub premises: ImplementedTraitPredicates,
@@ -1178,6 +1221,22 @@ pub fn solve_rigid_trait_goal_with_generics(
         goal,
         &mut stack,
         0,
+    )
+}
+
+pub fn solve_for_all_trait_goal_with_generics(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    parent_universe: TraitUniverseIndex,
+    goal: ForAllImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let universe = parent_universe.next()?;
+    solve_rigid_trait_goal_with_generics(
+        implementations,
+        generic_implementations,
+        clauses,
+        goal.instantiate_in_universe(universe)?,
     )
 }
 
@@ -3494,6 +3553,148 @@ mod tests {
                 ),
             ),
             Ok(TraitProofSolution::Overflow)
+        );
+    }
+
+    #[test]
+    fn universal_goal_instantiation_creates_distinct_fresh_placeholders() {
+        let mut goal = BoundImplementedTraitGoal::new(
+            TraitId::new(320),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+        );
+        goal.push_argument(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+            1,
+        )))
+        .unwrap();
+        let goal = ForAllImplementedTraitGoal::new(2, goal).unwrap();
+        let instantiated = goal
+            .instantiate_in_universe(TraitUniverseIndex::new(6))
+            .unwrap();
+        assert_eq!(
+            instantiated.self_type,
+            TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::new(6),
+                TraitPlaceholderId::new(0),
+            ))
+        );
+        assert_eq!(
+            instantiated.arguments()[0],
+            Some(TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::new(6),
+                TraitPlaceholderId::new(1),
+            )))
+        );
+        assert_eq!(goal.parameter_count(), 2);
+    }
+
+    #[test]
+    fn proves_universal_goal_through_rigid_generic_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut root = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(330),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        root.push_premise(BoundImplementedTraitGoal::new(
+            TraitId::new(331),
+            BoundTraitGoalType::Parameter(parameter),
+        ))
+        .unwrap();
+        let leaf = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(331),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), root)
+            .unwrap();
+        generic
+            .insert(GenericTraitImplementationId::new(2), leaf)
+            .unwrap();
+        let goal = ForAllImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(330),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            solve_for_all_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                goal,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+    }
+
+    #[test]
+    fn universal_goal_preserves_ambiguity_and_universe_overflow() {
+        let mut ambiguous = TraitWhereClause::new(
+            2,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(340),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        ambiguous
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(341),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), ambiguous)
+            .unwrap();
+        let goal = ForAllImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(340),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            solve_for_all_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                goal,
+            ),
+            Ok(TraitProofSolution::Ambiguous)
+        );
+        assert_eq!(
+            solve_for_all_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                TraitUniverseIndex::new(u16::MAX),
+                goal,
+            ),
+            Err(TraitGoalError::UniverseOverflow)
+        );
+        assert_eq!(
+            ForAllImplementedTraitGoal::new(
+                1,
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(340),
+                    BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+                ),
+            ),
+            Err(TraitGoalError::UnboundGenericParameter)
         );
     }
 
