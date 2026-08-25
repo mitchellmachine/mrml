@@ -158,9 +158,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   Once the projected field origin enters a direct local, the existing bounded,
   event-decreasing root-move traversal preserves it through later two- and
   three-hop move chains. Latest-generation selection prevents an intervening
-  reassignment from reviving the tuple field's old owner. Nested projections,
-  another projected source later in the chain, and general aggregate provenance
-  remain unimplemented.
+  reassignment from reviving the tuple field's old owner. A later directly
+  initialized tuple may now consume that local and expose its reference field as
+  another projected source: the same exact tuple-value correlation is followed
+  before the remaining direct move chain continues. Each projected hop still
+  requires one numeric field, exact reference-value count/order and mutability,
+  and no intervening root or field replacement. Nested projections and general
+  aggregate provenance remain unimplemented.
   A separate bounded return-outlives pass now runs for declared reference-return
   functions with complete CFG facts. Exact tail, explicit, conditional, and
   supported loop return-value effects trace reference ancestry through the active
@@ -501,9 +505,9 @@ compatibility gaps:
    move paths until a supported legal operation such as bounded destructuring
    requires them, and never turn summary runtime indexes into exact paths;
 2. extend indirect alias invalidation and full reborrow semantics beyond the
-   direct shared-loan conflict set and bounded multi-level mutable-ancestor
-   suspension, then stage flow-sensitive outlives reasoning with independent accepted/rejected
-   probes.
+   direct shared-loan conflict set, bounded multi-level mutable-ancestor
+   suspension, and bounded repeated direct tuple-field sources, then stage
+   flow-sensitive outlives reasoning with independent accepted/rejected probes.
 
 Return coercion sites now apply the declared shared or mutable reference context
 to direct, projected, and conditional reference places in explicit returns,

@@ -3762,6 +3762,21 @@ chains after one directly initialized tuple-field source, not nested projections
 multiple projected-source hops, aggregate provenance, or general regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
 
+The repeated projected-source loan milestone extends that bounded relation
+across another directly initialized tuple whose selected reference field is
+later moved and reborrowed. The pinned oracle rejects shared and mutable live-
+child owner mutation with E0503 and accepts the equivalent post-last-use case.
+MRML applies the same exact tuple-value count/order, reference-mutability,
+one-step numeric-field, and no-intervening-replacement checks at the later hop;
+failure to prove that origin remains conservative. The Windows native compiler
+suite and native Arch Linux WSL suite each pass 420 library tests, one component-
+interface probe, 10 conformance tests, and 335 original replacement tests; both
+hosts also pass the two driver tests, for 768 compiler and driver tests per host.
+Warnings-denied Clippy was not exercised by the current native frontend. This
+does not claim nested projections, general aggregate provenance, named regions,
+or complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
+remained empty.
+
 The bounded function-return outlives milestone at `962aedcc` passed all 764
 compiler and driver tests on Windows gnullvm and all 764 in release mode on
 native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts

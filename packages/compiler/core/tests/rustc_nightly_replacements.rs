@@ -4258,6 +4258,8 @@ fn rustc_projected_reference_value_move_chains_preserve_tuple_field_loans() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; slot += 1; *child }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let third = second; let child: &mut u16 = &mut *third; slot += 1; *child }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; second += 1; *child }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &u16 = &*moved; slot += 1; *child }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &mut u16 = &mut *moved; slot += 1; *child }",
     ];
     for source in rejected {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
@@ -4274,6 +4276,7 @@ fn rustc_projected_reference_value_move_chains_preserve_tuple_field_loans() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; let copied = *child; slot += 1; copied + slot }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first,); let mut moved = holder.0; moved = &mut second; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &u16 = &*moved; let copied = *child; slot += 1; copied + slot }",
     ];
     for source in accepted {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

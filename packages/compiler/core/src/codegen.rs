@@ -3960,7 +3960,8 @@ impl<'source> RuntimeBodyFacts<'source> {
                 }
             }
         } else {
-            self.direct_tuple_field_loan_origin_before(moved.path, moved.event)?
+            self.direct_tuple_field_loan_origin_before(moved.path, moved.event)
+                .or_else(|| self.direct_tuple_field_value_origin_before(moved.path, moved.event))?
         };
         matches!(
             (mutable, source_loan.kind),
@@ -29229,6 +29230,8 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; slot += 1; *child }",
             "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let third = second; let child: &mut u16 = &mut *third; slot += 1; *child }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; second += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &u16 = &*moved; slot += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &mut u16 = &mut *moved; slot += 1; *child }",
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -29240,6 +29243,7 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let first = holder.0; let second = first; let child: &u16 = &*second; let copied = *child; slot += 1; copied + slot }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first,); let mut moved = holder.0; moved = &mut second; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let first_holder = (&mut slot,); let first = first_holder.0; let second_holder = (first,); let moved = second_holder.0; let child: &u16 = &*moved; let copied = *child; slot += 1; copied + slot }",
         ] {
             analyze(accepted).unwrap();
         }

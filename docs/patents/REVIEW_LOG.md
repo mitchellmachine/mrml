@@ -4,6 +4,18 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Repeated projected compiler-loan sources
+
+Patent review: **NOT_TRIGGERED**. The compiler conventionally reuses its
+existing fixed-capacity, event-decreasing reference-origin traversal when a
+later directly initialized tuple field supplies another exact projected move
+source. Exact field shape, reference-value count/order, mutability, and
+replacement checks fail closed on ambiguity. This adds no optimization, new
+arena, authority model, device or compatibility protocol, host-share mechanism,
+accessibility or browser-semantic interface, JavaScript/WebAssembly runtime, AI
+mechanism, media mechanism, or other patent-candidate mechanism. This agent
+review does not replace required independent human dual review.
+
 ## 2026-08-25 — Bounded kernel isolation launch admission
 
 Patent review: **NOT_TRIGGERED** for this bounded record/commit mechanism. It

@@ -606,9 +606,12 @@ and order, compatible mutability, and no intervening root or field write. It
 refuses ambiguous or malformed shapes rather than guessing. After that field
 origin enters a direct local, the existing bounded event-decreasing move lookup
 preserves it through later direct root-move chains and selects the latest
-assignment generation rather than reviving the field's old owner. Nested
-projections, another projected source later in a chain, general aggregate
-provenance, and general alias/region propagation remain unimplemented.
+assignment generation rather than reviving the field's old owner. The same
+correlation may now cross another directly initialized tuple-field source later
+in the chain before continuing through direct root moves. Every projected hop
+retains the one-step numeric-field, exact effect count/order, matching
+mutability, and no-replacement requirements. Nested projections, general
+aggregate provenance, and general alias/region propagation remain unimplemented.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
@@ -723,7 +726,8 @@ effects are validated without classifying ordinary value effects as reference
 returns. This is not named-lifetime inference, general regions, or complete
 Polonius outlives reasoning. The highest-value next major
 implementation task is extending this relation across the remaining exact return
-and indirect-alias forms without collapsing generation or CFG path distinctions.
+and indirect-alias forms, including nested projections and non-tuple aggregate
+provenance, without collapsing generation or CFG path distinctions.
 Existing loop-result origin proofs do not imply branch-local or loop-local
 mutation dataflow or general regions.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
