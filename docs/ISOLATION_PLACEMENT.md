@@ -42,6 +42,19 @@ provider or placement, carry a general interface invocation, persist policy, or
 provide transparent cross-placement transport. A fully resolved representative
 dual-placement service remains **PLANNED**.
 
+The canonical `org.mrml.zstd`/`org.mrml.zim` manifests now select the
+`isolated-service` interface form, and Zstd permits native-service or microVM
+placement with a native-service floor. Its first bounded data-plane adapter
+uses the unchanged ABI-3 request over authenticated kernel IPC plus exactly one
+attenuated read/write shared-buffer capability. Hosted Windows and Arch Linux
+tests deliver the request through `TaskRuntime`, revalidate the exact VM/task
+binding, copy only bounded input/output through private erased scratch, and
+reject revocation, wrong-task substitution, malformed input, and insufficient
+scratch before output mutation. This is **PARTIALLY IMPLEMENTED** transport
+composition, not a launched native service or microVM: resolver-to-launch
+binding, process syscalls, reply delivery, supervision, and WHP/KVM invocation
+remain **PLANNED**.
+
 The native configuration form now has its first real supervised launcher. It
 preflights one vacant supervisor slot before creating a task, publishes the task
 and `ServiceId` as one kernel-owned transition, and returns a binding-preserving
@@ -132,7 +145,8 @@ generational endpoint to an already resolved native-service or microVM
 placement. Stale bindings, package-generation substitution, in-process targets,
 and Total-mode exceptions fail closed. This does not select the provider or
 placement, grant capabilities, create either runtime, or carry interface
-traffic, so the representative dual-placement service remains **PLANNED**.
+traffic, so the fully resolved and launched dual-placement service remains
+**PLANNED** despite the hosted transport prerequisite below.
 
 > Control planes establish authority; data planes should take the shortest safe
 > path.
@@ -422,7 +436,8 @@ Documentation is not implementation evidence. Implement bounded milestones:
 
 1. policy/object schema, validation, workspace retention, lock output, and
    bounded kernel launch admission/reporting (**PARTIALLY IMPLEMENTED**);
-2. one representative dual-placement service;
+2. one representative dual-placement service (**PARTIALLY IMPLEMENTED** for
+   manifest policy and hosted kernel IPC/shared-buffer dispatch only);
 3. one representative dual-placement GUI application;
 4. monitor placement visibility;
 5. resource and device projections;

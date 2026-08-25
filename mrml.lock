@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 133
+compile_edges = 134
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 129
+package_edges = 130
 system_release_edges = 3
 
 [[package]]
@@ -598,13 +598,13 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.zstd"
 path = "packages/libraries/zstd"
-isolation_default = "in-process"
-isolation_minimum = "in-process"
-isolation_maximum = "in-process"
-isolation_supported = ["in-process"]
-compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime"]
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
-static_runtime = ["org.mrml.library.runtime"]
+static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
 
@@ -614,7 +614,7 @@ interface = "org.mrml.interface.compression.zstd"
 generation = 3
 fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"
 provider = "org.mrml.zstd"
-form = "in-process"
+form = "isolated-service"
 targets = ["WINDOWS", "LINUX"]
 
 [[system_release_package]]

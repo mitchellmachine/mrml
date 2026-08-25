@@ -3,6 +3,7 @@
 mod bits;
 mod fse;
 mod huffman;
+mod kernel_transport;
 mod sequences;
 
 use core::fmt;
@@ -11,6 +12,8 @@ use mrml_interface_zstd_v3::{
     ZstdTransport, decode_decompress_request, encode_decompress_response, encode_output_too_small,
 };
 use mrml_runtime::Vector;
+
+pub use kernel_transport::{ZstdKernelTransport, ZstdKernelTransportError};
 
 pub const FRAME_MAGIC: u32 = 0xfd2f_b528;
 

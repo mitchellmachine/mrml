@@ -49,9 +49,14 @@ Three new persistent deltas are documented before implementation:
   one-time-signed identical artifacts completed the full hosted service probe on
   both backends with one eligible domain, one microVM domain, and zero native
   fallback. This is hosted controlled-probe evidence, not required-system Total
-  readiness. A complete representative dual-placement
-  service, Settings/shell projection of owner policy, VM construction, resource
-  projection, and cross-placement runtime transport remain **PLANNED**.
+  readiness. The canonical Zstd provider/ZIM consumer now use the isolated-
+  service form, and a bounded hosted adapter carries the exact ABI-3 request
+  through `TaskRuntime` plus one attenuated shared-buffer capability under
+  distinct VM/task bindings on Windows and Arch Linux. This is not a launched
+  service or VMM invocation. A complete representative dual-placement service,
+  Settings/shell projection of owner policy, VM construction, resource
+  projection, resolver-to-launch binding, reply delivery, and WHP/KVM runtime
+  transport remain **PLANNED**.
   The configuration service now provides a bounded typed persistence
   prerequisite for component placement preference and system isolation-mode
   selection, using exact setting/root capabilities and its authenticated
@@ -208,9 +213,12 @@ reference accounting, and process integration remain **PLANNED**.
 
 The canonical `org.mrml.zstd` provider and `org.mrml.zim` consumer migration are
 **PARTIALLY IMPLEMENTED** as hosted code and focused tests. ZIM depends on the
-separate ABI-3 binding package and no longer names a provider crate or path;
-the Wikipedia composition root supplies the current in-process provider. This
-does not prove resolver-to-loader dispatch or update-without-consumer-rebuild.
+separate ABI-3 binding package, declares the isolated-service form, and no
+longer names a provider crate or path. Zstd declares native-service or microVM
+placement and supplies a bounded service-side kernel IPC/shared-buffer adapter.
+The existing Wikipedia composition root still directly supplies the provider
+in its host build. This does not prove resolver-to-launch dispatch,
+update-without-consumer-rebuild, or an MRML-target service process.
 
 Servicing retention and inspection are **PARTIALLY IMPLEMENTED** as a bounded
 build-tool model. Exact live bindings and retained system generations, rollback
@@ -219,13 +227,14 @@ reclamation. Prohibited providers are denied for new bindings without erasing
 retained content. No package deletion, persistent root discovery, update
 transaction, or running-system integration is implemented.
 
-The optional isolated-service form is **PARTIALLY IMPLEMENTED** only as a hosted
-transport adapter around the identical ABI-3 byte descriptors. It preserves an
-opaque endpoint generation, enforces an explicit per-call memory ceiling, and
-requires an already-authorized runtime endpoint implementation; the endpoint
-identity and package metadata grant no authority. No IPC, process isolation,
-capability projection, supervision, CPU/RAM charging, or native service call
-was exercised.
+The isolated-service form is **PARTIALLY IMPLEMENTED** as both the existing
+hosted endpoint adapter and one service-side kernel composition around the
+identical ABI-3 byte descriptors. The latter exercises a real `TaskRuntime`
+inbox and one attenuated read/write shared-buffer capability, with exact
+VM/task projection, private erased scratch, and bounded output. Windows and
+Arch Linux host suites pass. No MRML-target service process, syscall receive/
+reply loop, resolver-to-launch binding, supervision, CPU/RAM pool integration,
+WHP/KVM guest call, or physical isolation was exercised.
 
 Cross-compiler evidence is **PARTIALLY IMPLEMENTED** for one narrow descriptor
 identity projection. On both Windows gnullvm and Arch Linux, the canonical MRML

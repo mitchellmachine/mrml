@@ -78,10 +78,12 @@ interface, and Rust crate identity are separate. Bounded foundations now cover
 schema/binding generation, exact in-generation provider resolution, immutable
 load plans and binding records, shared-code accounting reservations, and a
 hosted Zstd ABI-3 provider/ZIM consumer byte-call adapter, a bounded hosted
-isolated-endpoint adapter, plus a no-delete retention/inspection decision model.
-No admitted native dynamic loader-to-call path, independently serviced
-activation, real isolated-service IPC/capability projection, persistent root
-discovery, or actual reclamation lifecycle is implemented.
+isolated-endpoint adapter, a hosted service-side composition through the real
+bounded kernel inbox and one attenuated shared-buffer capability, plus a no-
+delete retention/inspection decision model. No admitted native dynamic loader-
+to-call path, independently serviced activation, launched MRML service or guest,
+resolver-to-launch binding, persistent root discovery, or actual reclamation
+lifecycle is implemented.
 
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical

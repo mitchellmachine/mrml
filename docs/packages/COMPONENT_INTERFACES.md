@@ -77,6 +77,20 @@ The canonical deployment and generation model remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the
 dynamic-component/interface delta to those architectures.
 
+**PARTIALLY IMPLEMENTED transport prerequisite:** the canonical Zstd ABI-3
+provider and ZIM requirement now declare `isolated-service`; the provider
+manifest permits native-service or microVM placement with a native-service
+floor. A service-side adapter composes the unchanged 104-byte ABI request with
+the kernel's existing authenticated inline IPC and exactly one attenuated
+read/write shared-buffer capability. It copies only the declared input into
+private scratch, writes only the exact successful output, and erases scratch on
+every path. Windows and Arch Linux hosted tests exercise delivery through the
+real bounded `TaskRuntime` inbox, capability transfer, distinct VM/task
+projections, revocation, wrong-task rejection, malformed input, and resource
+exhaustion. This is hosted kernel-policy evidence only: no MRML-target service
+binary, process syscall loop, VMM guest invocation, resolver-to-launch binding,
+reply transport, supervision integration, or WHP/KVM service parity is proved.
+
 > Functionality historically embedded in a Rust binary may instead be supplied
 > by an independently signed and serviced MRML component through an explicit,
 > versioned interface.
@@ -212,7 +226,8 @@ Manifest V2 now records this distinction explicitly as `form = "in-process"`
 or `form = "isolated-service"` on both `PROVIDES` and `REQUIRES`. The native
 validator accepts no path/DLL/SO-shaped form, requires the consumer and provider
 forms to match exactly, and retains the form in `mrml.lock`. This is structural
-graph evidence only: the isolated-service runtime remains **PLANNED**.
+graph evidence plus the bounded hosted Zstd transport prerequisite described
+above; the complete isolated-service runtime remains **PLANNED**.
 
 Where it stays simple, a semantic interface may support either location. This is
 not mandatory. Placement preserves semantic interface compatibility where
@@ -415,9 +430,11 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
 3. immutable in-process loader and generation-safe `InterfaceBinding`
    (**PARTIALLY IMPLEMENTED** for immutable binding identity/lifetime only);
 4. `org.mrml.zstd` providing `compression.zstd@3`
-   (**PARTIALLY IMPLEMENTED** for the canonical in-process byte-call adapter);
+   (**PARTIALLY IMPLEMENTED** for the canonical byte-call provider and bounded
+   hosted kernel-IPC/shared-buffer adapter);
 5. `org.mrml.zim` consuming that interface without provider path knowledge
-   (**PARTIALLY IMPLEMENTED** for bounded borrowed views and typed responses);
+   (**PARTIALLY IMPLEMENTED** for an isolated-service manifest requirement,
+   bounded borrowed views, and typed responses);
 6. Store update N to N+1 while old/new ZIM processes retain exact bindings
    (**PARTIALLY IMPLEMENTED** as a bounded non-retargeting binding model);
 7. lifetime/rollback/snapshot-aware GC and dependency inspection
@@ -426,10 +443,11 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    (**PARTIALLY IMPLEMENTED** for incompatible-generation rejection and denial
    of new prohibited-provider bindings only);
 9. cross-compiler, performance, fuzzing, and optional service-provider evidence
-   (**PARTIALLY IMPLEMENTED** for a bounded hosted isolated-endpoint adapter
-   and one explicit descriptor scalar projection compiled by `mrml-rustc` to
-   COFF/ELF while pinned upstream rustc executes the reference; full binding,
-   performance, fuzzing, and real isolation evidence remain);
+   (**PARTIALLY IMPLEMENTED** for bounded hosted kernel IPC/shared-buffer
+   dispatch, an isolated-endpoint adapter, and one explicit descriptor scalar
+   projection compiled by `mrml-rustc` to COFF/ELF while pinned upstream rustc
+   executes the reference; full binding, performance, fuzzing, launched-service,
+   and real isolation evidence remain);
 10. selective migration of further high-value components.
 
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,

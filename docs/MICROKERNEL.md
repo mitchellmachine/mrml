@@ -56,6 +56,23 @@ not yet automatically choose a provider or placement, provide general cross-
 placement transport, or complete the representative dual-placement-service
 milestone.
 
+The first component data-plane prerequisite now composes the canonical Zstd
+ABI-3 request with the existing kernel IPC/shared-memory mechanisms outside the
+privileged kernel. The provider accepts one request delivered through the
+bounded `TaskRuntime` inbox and exactly one attenuated read/write shared-buffer
+capability, revalidates its VM/task binding, copies only the declared compressed
+input into private scratch, invokes the existing provider, writes only the exact
+successful output range, and erases scratch on every return path. The Zstd and
+ZIM manifests now select `isolated-service`; Zstd permits native-service or
+microVM placement with a native-service floor. Thirteen focused Zstd tests pass
+on Windows and Arch Linux, including actual inbox delivery, revocation, wrong-
+task rejection, distinct VM/task projections, invalid-frame no-write, and
+scratch exhaustion. This is hosted unit/simulation evidence. It does not launch
+an MRML service process or guest, send the reply through runtime IPC, connect
+the generation resolver to launch, integrate supervision/resource pools, or
+prove WHP/KVM parity, so the representative dual-placement service remains
+**PARTIALLY IMPLEMENTED**.
+
 The native half is now wired to actual kernel supervision. `ServiceSupervisor`
 preflights object and slot capacity before task creation, then publishes the new
 task and service identity without exposing an intervening reservation. The

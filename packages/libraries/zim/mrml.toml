@@ -12,7 +12,7 @@ profile = "library"
 [[requires]]
 binding = "dynamic"
 fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"
-form = "in-process"
+form = "isolated-service"
 generation = 3
 interface = "org.mrml.interface.compression.zstd"
 
