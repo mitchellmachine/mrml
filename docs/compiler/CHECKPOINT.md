@@ -11,9 +11,10 @@ the named commit and current source.
 - Branch: `main`
 - Compiler checkpoint commit: `6c0a9387`
   (`compiler: preserve projected tuple loan origins`)
-- Remote state when recorded: `origin/main` is at `65c655dc`; the compiler
-  checkpoint and its documentation/review commits are pending publication.
-  Unrelated unstaged OS work is not part of the compiler checkpoint.
+- Remote state when recorded: `origin/main` includes the compiler checkpoint,
+  durable documentation, and review through `215fb02d`. The push was a verified
+  fast-forward containing exactly the three isolated projected-tuple-loan
+  commits; unrelated unstaged OS work was not included.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
