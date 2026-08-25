@@ -290,9 +290,12 @@ version, digest, source, and relevant compiler/tool inputs; system graphs are
 especially strict.
 
 For versioned components, manifests additionally distinguish provided and
-required interface identities/major generations, dependency form, and update
-policy. Runtime locks record the exact provider package generation and digest
-selected for each `InterfaceBinding`. The first canonical schema generator is
+required interface identities/major generations, dynamic binding, exact in-
+process or isolated-service form, and update policy. Runtime locks retain the
+exact provider package, interface generation, fingerprint, target set, and form
+selected for each `InterfaceBinding`; consumer/provider form mismatch fails
+closed. Bootloader and recovery manifests cannot require either ordinary dynamic
+form. The first canonical schema generator is
 implemented as `mrml interface generate-rust SCHEMA OUTPUT`. It bounds input at
 64 KiB, exclusively creates output, accepts only the explicit version-1 policy
 profile, computes a SHA3-256 fingerprint, and emits deterministic pointer-free

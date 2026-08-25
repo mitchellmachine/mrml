@@ -430,6 +430,7 @@ interface = "org.mrml.interface.compression.zstd"
 generation = 3
 fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"
 provider = "org.mrml.zstd"
+form = "in-process"
 targets = ["WINDOWS", "LINUX"]
 
 [[system_release_package]]

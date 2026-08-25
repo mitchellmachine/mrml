@@ -181,7 +181,13 @@ Two primary forms are planned:
 - **in-process component:** immutable executable pages mapped into an admitted
   caller for sufficiently trusted, memory-safe, performance-sensitive code;
 - **service component:** typed IPC to an isolated, supervised provider with its
-  own projected capabilities and resource pool.
+own projected capabilities and resource pool.
+
+Manifest V2 now records this distinction explicitly as `form = "in-process"`
+or `form = "isolated-service"` on both `PROVIDES` and `REQUIRES`. The native
+validator accepts no path/DLL/SO-shaped form, requires the consumer and provider
+forms to match exactly, and retains the form in `mrml.lock`. This is structural
+graph evidence only: the isolated-service runtime remains **PLANNED**.
 
 Where it stays simple, a semantic interface may support either location. This is
 not mandatory. For each candidate, review performance benefit, fault impact,

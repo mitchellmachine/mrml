@@ -81,6 +81,10 @@ Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
 major generation, and schema fingerprint must all be byte-identical; resolved
 records retain exact consumer/provider package versions and artifact digests.
+Manifest V2 and `mrml.lock` also retain the exact in-process versus isolated-
+service form; consumer/provider form mismatch fails closed. Bootloader and
+recovery packages reject ordinary dynamic interface requirements regardless of
+form.
 ABI-4 cannot satisfy ABI-3, ambiguity fails instead of choosing a preferred
 provider, and no path or filename participates. Live generation-safe binding,
 policy preference, activation, and loading remain **PLANNED**.

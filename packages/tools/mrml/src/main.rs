@@ -182,6 +182,7 @@ struct InterfaceBindingLock {
     generation: u64,
     fingerprint: String,
     provider: String,
+    form: String,
     targets: Vec<String>,
 }
 
@@ -702,6 +703,7 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
         encoded.push_str(&format!("generation = {}\n", binding.generation));
         encoded.push_str(&format!("fingerprint = \"{}\"\n", binding.fingerprint));
         encoded.push_str(&format!("provider = \"{}\"\n", binding.provider));
+        encoded.push_str(&format!("form = \"{}\"\n", binding.form));
         encoded.push_str("targets = [");
         for (index, target) in binding.targets.iter().enumerate() {
             if index != 0 {
@@ -956,6 +958,8 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
             }
         }
         for provider in document.array_sections("provides") {
+            let binding = interface_binding(provider, &relative)?;
+            let form = interface_form(provider, &relative)?;
             providers.push((
                 package_id.to_owned(),
                 provider
@@ -969,18 +973,15 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
                     .string("fingerprint")
                     .map_err(|error| manifest_error(&relative, error))?
                     .to_owned(),
+                binding.to_owned(),
+                form.to_owned(),
                 target_families.clone(),
             ));
         }
         for requirement in document.array_sections("requires") {
-            if matches!(package_kind, "bootloader" | "recovery")
-                && requirement
-                    .string("binding")
-                    .map_err(|error| manifest_error(&relative, error))?
-                    == "dynamic"
-            {
-                return Err(format!("BootDependencyInvalid {{ package: {package_id} }}"));
-            }
+            let binding = interface_binding(requirement, &relative)?;
+            let form = interface_form(requirement, &relative)?;
+            validate_dynamic_requirement(package_kind, package_id)?;
             requirements.push((
                 package_id.to_owned(),
                 requirement
@@ -994,6 +995,8 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
                     .string("fingerprint")
                     .map_err(|error| manifest_error(&relative, error))?
                     .to_owned(),
+                binding.to_owned(),
+                form.to_owned(),
                 target_families.clone(),
             ));
         }
@@ -1012,24 +1015,34 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         }
     }
     audit_workspace_admission(root, &seen)?;
-    for (provider, interface, generation, fingerprint, _) in &providers {
+    for (provider, interface, generation, fingerprint, _, _, _) in &providers {
         if interface_definitions.get(interface) != Some(&(*generation, fingerprint.clone())) {
             return Err(format!(
                 "InterfaceProviderInvalid {{ provider: {provider}, interface: {interface}, generation: {generation} }}"
             ));
         }
     }
-    for (consumer, interface, generation, fingerprint, targets) in &requirements {
+    for (consumer, interface, generation, fingerprint, binding, form, targets) in &requirements {
         if interface_definitions.get(interface) != Some(&(*generation, fingerprint.clone())) {
             return Err(format!(
                 "InterfaceRequirementInvalid {{ consumer: {consumer}, interface: {interface}, generation: {generation} }}"
             ));
         }
         if !providers.iter().any(
-            |(_, provided, provider_generation, provider_fingerprint, provider_targets)| {
+            |(
+                _,
+                provided,
+                provider_generation,
+                provider_fingerprint,
+                provider_binding,
+                provider_form,
+                provider_targets,
+            )| {
                 provided == interface
                     && provider_generation == generation
                     && provider_fingerprint == fingerprint
+                    && provider_binding == binding
+                    && provider_form == form
                     && targets
                         .iter()
                         .all(|target| provider_targets.contains(target))
@@ -1041,14 +1054,24 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         }
     }
     let mut interface_bindings = Vec::new();
-    for (consumer, interface, generation, fingerprint, targets) in requirements {
+    for (consumer, interface, generation, fingerprint, binding, form, targets) in requirements {
         let matching = providers
             .iter()
             .filter(
-                |(_, provided, provider_generation, provider_fingerprint, provider_targets)| {
+                |(
+                    _,
+                    provided,
+                    provider_generation,
+                    provider_fingerprint,
+                    provider_binding,
+                    provider_form,
+                    provider_targets,
+                )| {
                     provided == &interface
                         && provider_generation == &generation
                         && provider_fingerprint == &fingerprint
+                        && provider_binding == &binding
+                        && provider_form == &form
                         && targets
                             .iter()
                             .all(|target| provider_targets.contains(target))
@@ -1067,6 +1090,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
             generation,
             fingerprint,
             provider: matching[0].0.clone(),
+            form,
             targets: targets.into_iter().map(str::to_owned).collect(),
         });
     }
@@ -1077,6 +1101,45 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         records: declarations,
         interface_bindings,
     })
+}
+
+fn interface_binding<'a>(
+    section: &'a manifest::Section,
+    relative: &str,
+) -> Result<&'a str, String> {
+    let binding = section
+        .string("binding")
+        .map_err(|error| manifest_error(relative, error))?;
+    if binding != "dynamic" {
+        return Err(format!(
+            "InterfaceBindingInvalid {{ file: {relative}, binding: {binding} }}"
+        ));
+    }
+    Ok(binding)
+}
+
+fn interface_form<'a>(section: &'a manifest::Section, relative: &str) -> Result<&'a str, String> {
+    let form = section
+        .string("form")
+        .map_err(|error| manifest_error(relative, error))?;
+    if !matches!(form, "in-process" | "isolated-service") {
+        return Err(format!(
+            "InterfaceFormInvalid {{ file: {relative}, form: {form} }}"
+        ));
+    }
+    Ok(form)
+}
+
+fn validate_dynamic_requirement(package_kind: &str, package_id: &str) -> Result<(), String> {
+    if package_kind == "bootloader" {
+        return Err(format!("BootDependencyInvalid {{ package: {package_id} }}"));
+    }
+    if package_kind == "recovery" {
+        return Err(format!(
+            "RecoveryDependencyInvalid {{ package: {package_id} }}"
+        ));
+    }
+    Ok(())
 }
 
 fn manifest_error(file: &str, error: manifest::Error) -> String {
@@ -4672,6 +4735,51 @@ mod tests {
         assert!(!mrml_package_identifier("org.mrml.mrml_zstd"));
         assert!(!mrml_package_identifier("org.mrml.Zstd"));
         assert!(!mrml_package_identifier("org.mrml.zstd-"));
+    }
+    #[test]
+    fn interface_binding_form_is_explicit_and_bounded() {
+        let in_process = ManifestDocument::parse(
+            b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[[requires]]\nbinding = \"dynamic\"\nform = \"in-process\"\n",
+        )
+        .unwrap();
+        let section = in_process.array_sections("requires").next().unwrap();
+        assert_eq!(interface_binding(section, "fixture"), Ok("dynamic"));
+        assert_eq!(interface_form(section, "fixture"), Ok("in-process"));
+
+        let isolated = ManifestDocument::parse(
+            b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[[provides]]\nbinding = \"dynamic\"\nform = \"isolated-service\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            interface_form(
+                isolated.array_sections("provides").next().unwrap(),
+                "fixture"
+            ),
+            Ok("isolated-service")
+        );
+
+        for invalid in ["static", "path", "dll", "service.exe"] {
+            let text = format!(
+                "[manifest]\nformat = \"mrml\"\nversion = 2\n\n[[requires]]\nbinding = \"dynamic\"\nform = \"{invalid}\"\n"
+            );
+            let document = ManifestDocument::parse(text.as_bytes()).unwrap();
+            assert!(
+                interface_form(
+                    document.array_sections("requires").next().unwrap(),
+                    "fixture"
+                )
+                .is_err()
+            );
+        }
+        assert!(validate_dynamic_requirement("library", "org.mrml.zim").is_ok());
+        assert_eq!(
+            validate_dynamic_requirement("bootloader", "org.mrml.system.bootloader"),
+            Err("BootDependencyInvalid { package: org.mrml.system.bootloader }".to_owned())
+        );
+        assert_eq!(
+            validate_dynamic_requirement("recovery", "org.mrml.system.recovery"),
+            Err("RecoveryDependencyInvalid { package: org.mrml.system.recovery }".to_owned())
+        );
     }
     #[test]
     fn rust_target_variants_are_allowlisted_and_extension_exact() {
