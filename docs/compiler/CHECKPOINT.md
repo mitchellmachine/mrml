@@ -11,9 +11,10 @@ the named commit and current source.
 - Branch: `main`
 - Compiler checkpoint commit: `f307c1b3`
   (`compiler: validate loop terminal returns`)
-- Remote state when recorded: publication of this compiler checkpoint, its
-  durable documentation, and review is pending. The compiler commit is based on
-  `origin/main` at `2e531f35`; unrelated OS work remains outside this worktree.
+- Remote state when recorded: `origin/main` includes the compiler checkpoint,
+  durable documentation, and review through `ccacb0dc`. The push was a verified
+  fast-forward containing exactly the three isolated loop-terminal-return
+  commits; unrelated OS work remained outside this worktree.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
