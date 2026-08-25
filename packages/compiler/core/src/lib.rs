@@ -60,10 +60,11 @@ pub use semantics::{
 };
 pub use trait_goals::{
     CanonicalImplementedTraitGoal, CanonicalTraitGoalType, CanonicalizedImplementedTraitGoal,
-    ImplementedTraitGoal, MAX_CANONICAL_TRAIT_VARIABLES, MAX_TRAIT_GOAL_ARGUMENTS,
-    MAX_TRAIT_IMPLEMENTATIONS, TraitGoalAnswer, TraitGoalError, TraitGoalSolution,
+    CanonicalizedImplementedTraitPredicates, ImplementedTraitGoal, ImplementedTraitPredicates,
+    MAX_CANONICAL_TRAIT_VARIABLES, MAX_TRAIT_GOAL_ARGUMENTS, MAX_TRAIT_IMPLEMENTATIONS,
+    MAX_TRAIT_PREDICATES, TraitGoalAnswer, TraitGoalError, TraitGoalSolution,
     TraitGoalSubstitution, TraitGoalType, TraitId, TraitImplementationDatabase,
     TraitImplementationHeader, TraitImplementationId, TraitInferenceBinding,
     TraitInferenceVariableId, TraitPlaceholderId, TraitTypeId, canonicalize_implemented_trait_goal,
-    canonicalize_implemented_trait_goal_with_variables,
+    canonicalize_implemented_trait_goal_with_variables, canonicalize_implemented_trait_predicates,
 };

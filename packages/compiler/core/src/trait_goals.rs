@@ -8,6 +8,7 @@
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
 pub const MAX_TRAIT_IMPLEMENTATIONS: usize = 64;
+pub const MAX_TRAIT_PREDICATES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -109,6 +110,33 @@ impl ImplementedTraitGoal {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImplementedTraitPredicates {
+    predicates: [Option<ImplementedTraitGoal>; MAX_TRAIT_PREDICATES],
+    predicate_count: usize,
+}
+
+impl ImplementedTraitPredicates {
+    pub const EMPTY: Self = Self {
+        predicates: [None; MAX_TRAIT_PREDICATES],
+        predicate_count: 0,
+    };
+
+    pub fn push(&mut self, predicate: ImplementedTraitGoal) -> Result<(), TraitGoalError> {
+        let slot = self
+            .predicates
+            .get_mut(self.predicate_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(predicate);
+        self.predicate_count += 1;
+        Ok(())
+    }
+
+    pub fn predicates(&self) -> &[Option<ImplementedTraitGoal>] {
+        &self.predicates[..self.predicate_count]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalImplementedTraitGoal {
     pub trait_id: TraitId,
     pub self_type: CanonicalTraitGoalType,
@@ -130,6 +158,24 @@ impl CanonicalizedImplementedTraitGoal {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalizedImplementedTraitPredicates {
+    predicates: [Option<CanonicalImplementedTraitGoal>; MAX_TRAIT_PREDICATES],
+    predicate_count: usize,
+    variables: [Option<TraitInferenceVariableId>; MAX_CANONICAL_TRAIT_VARIABLES],
+    variable_count: usize,
+}
+
+impl CanonicalizedImplementedTraitPredicates {
+    pub fn predicates(&self) -> &[Option<CanonicalImplementedTraitGoal>] {
+        &self.predicates[..self.predicate_count]
+    }
+
+    pub fn variables(&self) -> &[Option<TraitInferenceVariableId>] {
+        &self.variables[..self.variable_count]
+    }
+}
+
 impl CanonicalImplementedTraitGoal {
     pub fn arguments(&self) -> &[Option<CanonicalTraitGoalType>] {
         &self.arguments[..self.argument_count]
@@ -144,6 +190,7 @@ impl CanonicalImplementedTraitGoal {
 pub enum TraitGoalError {
     TooManyArguments,
     TooManyCanonicalVariables,
+    TooManyPredicates,
     InvalidGoal,
     TooManyImplementations,
     DuplicateImplementationId,
@@ -400,6 +447,55 @@ pub fn canonicalize_implemented_trait_goal(
 pub fn canonicalize_implemented_trait_goal_with_variables(
     goal: ImplementedTraitGoal,
 ) -> Result<CanonicalizedImplementedTraitGoal, TraitGoalError> {
+    let mut variables = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+    let mut variable_count = 0usize;
+    let goal = canonicalize_goal(goal, &mut variables, &mut variable_count)?;
+    Ok(CanonicalizedImplementedTraitGoal {
+        goal,
+        variables,
+        variable_count,
+    })
+}
+
+pub fn canonicalize_implemented_trait_predicates(
+    predicates: ImplementedTraitPredicates,
+) -> Result<CanonicalizedImplementedTraitPredicates, TraitGoalError> {
+    if predicates.predicate_count > predicates.predicates.len()
+        || predicates.predicates[..predicates.predicate_count]
+            .iter()
+            .any(Option::is_none)
+        || predicates.predicates[predicates.predicate_count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return Err(TraitGoalError::InvalidGoal);
+    }
+    let mut variables = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+    let mut variable_count = 0usize;
+    let mut canonical = [None; MAX_TRAIT_PREDICATES];
+    for (index, predicate) in predicates.predicates().iter().enumerate() {
+        canonical[index] = Some(canonicalize_goal(
+            predicate
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            &mut variables,
+            &mut variable_count,
+        )?);
+    }
+    Ok(CanonicalizedImplementedTraitPredicates {
+        predicates: canonical,
+        predicate_count: predicates.predicate_count,
+        variables,
+        variable_count,
+    })
+}
+
+fn canonicalize_goal(
+    goal: ImplementedTraitGoal,
+    variables: &mut [Option<TraitInferenceVariableId>; MAX_CANONICAL_TRAIT_VARIABLES],
+    variable_count: &mut usize,
+) -> Result<CanonicalImplementedTraitGoal, TraitGoalError> {
     if goal.argument_count > goal.arguments.len()
         || goal.arguments[..goal.argument_count]
             .iter()
@@ -410,27 +506,21 @@ pub fn canonicalize_implemented_trait_goal_with_variables(
     {
         return Err(TraitGoalError::InvalidGoal);
     }
-    let mut variables = [None; MAX_CANONICAL_TRAIT_VARIABLES];
-    let mut variable_count = 0usize;
-    let self_type = canonicalize_type(goal.self_type, &mut variables, &mut variable_count)?;
+    let self_type = canonicalize_type(goal.self_type, variables, variable_count)?;
     let mut arguments = [None; MAX_TRAIT_GOAL_ARGUMENTS];
     for (index, argument) in goal.arguments().iter().enumerate() {
         arguments[index] = Some(canonicalize_type(
             argument.ok_or(TraitGoalError::InvalidGoal)?,
-            &mut variables,
-            &mut variable_count,
+            variables,
+            variable_count,
         )?);
     }
-    Ok(CanonicalizedImplementedTraitGoal {
-        goal: CanonicalImplementedTraitGoal {
-            trait_id: goal.trait_id,
-            self_type,
-            arguments,
-            argument_count: goal.argument_count,
-            variable_count,
-        },
-        variables,
-        variable_count,
+    Ok(CanonicalImplementedTraitGoal {
+        trait_id: goal.trait_id,
+        self_type,
+        arguments,
+        argument_count: goal.argument_count,
+        variable_count: *variable_count,
     })
 }
 
@@ -517,6 +607,99 @@ mod tests {
         assert_eq!(
             canonicalize_implemented_trait_goal(left),
             canonicalize_implemented_trait_goal(right)
+        );
+    }
+
+    #[test]
+    fn canonicalizes_predicates_in_one_shared_variable_universe() {
+        let shared = TraitInferenceVariableId::new(70);
+        let distinct = TraitInferenceVariableId::new(4);
+        let first =
+            ImplementedTraitGoal::new(TraitId::new(1), TraitGoalType::InferenceVariable(shared));
+        let mut second =
+            ImplementedTraitGoal::new(TraitId::new(2), TraitGoalType::InferenceVariable(shared));
+        second
+            .push_argument(TraitGoalType::InferenceVariable(distinct))
+            .unwrap();
+        let mut predicates = ImplementedTraitPredicates::EMPTY;
+        predicates.push(first).unwrap();
+        predicates.push(second).unwrap();
+
+        let canonical = canonicalize_implemented_trait_predicates(predicates).unwrap();
+        assert_eq!(canonical.variables(), &[Some(shared), Some(distinct)]);
+        assert_eq!(
+            canonical.predicates(),
+            &[
+                Some(CanonicalImplementedTraitGoal {
+                    trait_id: TraitId::new(1),
+                    self_type: CanonicalTraitGoalType::BoundVariable(0),
+                    arguments: [None; MAX_TRAIT_GOAL_ARGUMENTS],
+                    argument_count: 0,
+                    variable_count: 1,
+                }),
+                Some(CanonicalImplementedTraitGoal {
+                    trait_id: TraitId::new(2),
+                    self_type: CanonicalTraitGoalType::BoundVariable(0),
+                    arguments: [
+                        Some(CanonicalTraitGoalType::BoundVariable(1)),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ],
+                    argument_count: 1,
+                    variable_count: 2,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_predicate_capacity_overflow() {
+        let mut predicates = ImplementedTraitPredicates::EMPTY;
+        for index in 0..MAX_TRAIT_PREDICATES {
+            predicates
+                .push(ImplementedTraitGoal::new(
+                    TraitId::new(index as u32),
+                    TraitGoalType::Concrete(TraitTypeId::new(index as u32)),
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            predicates.push(ImplementedTraitGoal::new(
+                TraitId::new(99),
+                TraitGoalType::Concrete(TraitTypeId::new(99)),
+            )),
+            Err(TraitGoalError::TooManyPredicates)
+        );
+    }
+
+    #[test]
+    fn rejects_shared_variable_capacity_overflow_across_predicates() {
+        let mut first = ImplementedTraitGoal::new(
+            TraitId::new(1),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+        );
+        for variable in 1..MAX_CANONICAL_TRAIT_VARIABLES {
+            first
+                .push_argument(TraitGoalType::InferenceVariable(
+                    TraitInferenceVariableId::new(variable as u32),
+                ))
+                .unwrap();
+        }
+        let second = ImplementedTraitGoal::new(
+            TraitId::new(2),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(99)),
+        );
+        let mut predicates = ImplementedTraitPredicates::EMPTY;
+        predicates.push(first).unwrap();
+        predicates.push(second).unwrap();
+        assert_eq!(
+            canonicalize_implemented_trait_predicates(predicates),
+            Err(TraitGoalError::TooManyCanonicalVariables)
         );
     }
 

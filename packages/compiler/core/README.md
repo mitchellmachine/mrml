@@ -3867,6 +3867,18 @@ conformance tests, and 335 replacement tests: 779 compiler tests per host. This
 does not implement generic unification, nested answer composition, where-clause
 solving, projections, recursive goals, or source-level trait support.
 
+The bounded predicate-conjunction milestone stores up to eight implemented-
+trait predicates and canonicalizes them together in one shared eight-variable
+universe. The same inference identity reused in separate predicates maps to the
+same canonical bound variable; predicate-count and aggregate variable overflow
+fail explicitly. Windows gnullvm and native Arch Linux WSL each pass 436 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 782 compiler tests per host. This does not elaborate or solve where
+clauses, introduce binders or generic impls, recurse, or compose answers. The
+`mrml build mrml-rustc` frontend gate passes on both hosts. The obsolete Cargo
+package selector rejects the documented compiler-only Clippy command before
+compilation, so no new warnings-denied Clippy evidence is claimed.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
