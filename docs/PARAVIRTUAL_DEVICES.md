@@ -13,6 +13,10 @@ it is not MRML's authority or security specification.
 
 ## Common device core
 
+Guest RAM and shared transport pages derive from bounded host memory objects and
+pools defined in [memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md).
+Guest physical addresses and queue mappings never create host allocation authority.
+
 ```text
 guest driver
   -> transport

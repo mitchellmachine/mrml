@@ -1594,6 +1594,14 @@ universal unsafe escape hatch, prefers inference, and keeps Blackwell details
 private. It adds no mechanism or clearance conclusion; the parent GPU review
 remains `TRIGGERED` above.
 
+# 2026-08-24 — Capability-bound RAM resource model
+
+**Result: NOT_TRIGGERED.** This documentation applies conventional quantitative
+resource accounting and existing capability attenuation to RAM allocation,
+mapping, sharing, pinning, DMA, and guest projection. It adds no implementation,
+patent-candidate mechanism, clearance claim, or infringement conclusion. See
+[`docs/memory/MEMORY_RESOURCE_MODEL.md`](../memory/MEMORY_RESOURCE_MODEL.md).
+
 # 2026-08-24 — Read-only virtual-block configuration page
 
 **Result: NOT_TRIGGERED.** The change conventionally validates a page-aligned

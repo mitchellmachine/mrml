@@ -79,6 +79,10 @@ or remote attestation.
 
 ## Capability and isolation invariants
 
+Memory allocation is quantitative authority distinct from mapping and content
+access. The security/acceptance gate is canonical in
+[memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md).
+
 - Object identity is not authority; names and data are not authority.
 - Identity and provenance may select policy but do not grant authority.
 - Capability derivation cannot increase authority.

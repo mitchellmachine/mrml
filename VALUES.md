@@ -67,6 +67,10 @@ the underlying semantic truth and redaction policy must not privilege AI.
 
 ## Durable project commitments
 
+> **The ability to execute does not imply an unlimited right to consume memory.**
+
+> **RAM is an explicitly budgeted, accountable resource.**
+
 > **Interoperability is compatible with least authority.**
 
 People are not telemetry subjects, advertising profiles, security liabilities,

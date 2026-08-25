@@ -71,6 +71,11 @@ must not derail the present CPU ownership/Polonius dependency path.
 
 ## Execution, memory, and synchronization
 
+System RAM and GPU/VRAM follow analogous but distinct resource principles in
+[MEMORY_RESOURCE_MODEL.md](../memory/MEMORY_RESOURCE_MODEL.md): allocation
+quantity, object ownership, CPU/GPU mappings, pinning, DMA, and unified-memory
+residency remain separate authority.
+
 Reusable validated `CommandGraph` is preferred for copy, render, compute, matrix,
 reduction, media, and dependencies. Backends may precompile and repeat graphs,
 eliminate barriers, overlap engines, and place work topologically. Applications

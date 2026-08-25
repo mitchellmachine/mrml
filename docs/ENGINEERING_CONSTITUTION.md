@@ -7,6 +7,13 @@ need ceremony, but major mechanisms must be tested against these rules.
 
 ## Authority and objects
 
+> Resource consumption is authority.
+
+> Resource authority may be delegated only by attenuation, never amplification.
+
+Allocation quantity, object ownership, mapping, sharing, pinning, content access,
+and DMA are separate authorities. Execution never implies unlimited RAM.
+
 > Everything meaningful is an object, and authority to an object is represented
 > by capabilities.
 

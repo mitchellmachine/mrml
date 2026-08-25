@@ -37,6 +37,10 @@ WebAssembly runtime, or CET/IBT application-admission enforcement.
 
 ## Foundational application model
 
+Applications receive explicit quantitative memory pools according to
+[memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md), not ambient
+unlimited allocation. Usage introspection is separate from memory-content access.
+
 The future platform combines memory safety, capability authority, process
 isolation, optional stronger VM isolation, stable application-facing contracts,
 a trusted compositor, machine-readable GUI state, first-class HiDPI, local and

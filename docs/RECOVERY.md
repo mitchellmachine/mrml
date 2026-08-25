@@ -44,6 +44,12 @@ suite. Read `docs/accessibility/BRAILLE_INTERFACE.md` and
 ABI before practical disabled-user feedback or claim hardware compatibility
 without physical tests.
 
+Memory recovery must read `docs/memory/MEMORY_RESOURCE_MODEL.md`: allocation is
+quantitative `MemoryPool` authority; `MemoryObject`, mapping, sharing, pinning,
+content access, and DMA remain separate; child pools cannot amplify; guest RAM
+is host-bounded; introspection reveals no content; RAM and VRAM are analogous but
+distinct. Do not assume ambient allocation or preempt current dependency gates.
+
 Patent research is also durable repository state. Before repeating a search,
 read `docs/patents/README.md`, its status registers, and `REVIEW_LOG.md`.
 Resume from recorded mechanisms, claims, families, jurisdictions, official

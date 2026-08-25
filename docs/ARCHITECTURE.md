@@ -14,6 +14,9 @@ predecessors and deliberately bounded comparison claims are recorded in
 [HISTORY_AND_PRIOR_ART.md](HISTORY_AND_PRIOR_ART.md).
 The native cross-vendor GPU object/security model, VirtualGPU priority, and
 physical-driver strategy are canonical under [gpu/](gpu/GPU_ARCHITECTURE.md).
+Quantitative RAM allocation, ownership, mapping, sharing, pinning, guest-memory,
+and accounting rules are canonical in
+[memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md).
 The browser's canonical accessibility/AI semantic interface, no-JIT script/Wasm
 rules, origin model, and media boundary are in
 [BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md).

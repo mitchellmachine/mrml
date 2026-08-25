@@ -159,6 +159,13 @@ authority; unrelated domains continue.
 
 ## Phase 2 — Minimal userspace system
 
+Add quantitative `MemoryPool`/`MemoryObject` accounting and bounded delegation,
+then IPC/cache charge foundations, as specified in
+[memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md). Preserve the
+current storage/service critical path; VMM guest-pool accounting follows its
+memory dependencies, while resize, NUMA, huge pages, swap/compression, and QoS
+remain later work. This does not displace VirtualGPU or compiler ownership/CFG.
+
 1. Implement the policy/configuration service and service supervision protocol.
    **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed
    schema, exact-object capability checks for reads and every transaction

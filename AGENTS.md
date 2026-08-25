@@ -101,6 +101,9 @@ Architectural invariants:
   expose meaningless internal details as objects merely for uniformity;
 - native storage uses capability-bound stable objects and is not founded on
   FAT32, ext4, NTFS, POSIX permissions, or a universal global namespace;
+- follow `docs/memory/MEMORY_RESOURCE_MODEL.md`: RAM allocation is explicit
+  quantitative authority; pools cannot amplify; objects, mappings, sharing,
+  pinning, content access, DMA, and guest projection remain separate;
 - applications submit capability-bound surfaces/buffers to the trusted
   compositor and never render directly to GOP, VGPU, native GPU, or scanout;
   surfaces, buffers, render devices, display outputs, fences, rendering, and
