@@ -94,7 +94,13 @@ and invalidation. A backend-neutral transaction can now publish a reservation
 only after a privileged mapper confirms exact installation, and retires it only
 after confirmed removal and invalidation; either backend error leaves policy
 state unpublished or retryably live. Only a deterministic protocol backend has
-been exercised, not x86 page tables, KVM/WHP, or hardware. An opt-in accounted configuration-service wrapper now commits its
+been exercised, not x86 page tables, KVM/WHP, or hardware. Exact physical runs
+can now be bound to committed objects only under object `CONTROL|PIN` after a
+privileged backend confirms exclusive zeroed ownership. Overlap is rejected;
+live backing blocks object/pool reclamation; release remains recorded until the
+backend confirms mapping/DMA revocation, invalidation, complete scrub, and safe
+reuse. This is protocol-backend evidence rather than a reusable frame allocator
+or hardware result. An opt-in accounted configuration-service wrapper now commits its
 complete fixed settings and audit state for fresh, empty, and checkpoint-
 recovered construction; live service-image composition has not adopted it. An
 opt-in accounted supervisor separately commits all fixed service/task bindings,

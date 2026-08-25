@@ -196,9 +196,15 @@ proven. A backend-neutral transaction publishes a reservation only after exact
 installation succeeds and retains it across removal failure until exact teardown
 and invalidation succeed. Deterministic protocol tests cover both boundaries;
 no x86 page-table or KVM/WHP adapter is integrated yet. Physical mapping,
-sharing, pinning, DMA, resize/COW, cache charging, VMM guest projection,
+sharing, DMA, resize/COW, cache charging, VMM guest projection,
 userspace policy, and hardware evidence remain pending before this prerequisite
-is complete. The first page-
+is complete. The first physical-backing lifecycle is **PARTIALLY IMPLEMENTED**:
+an exact object-sized run may be published only after a privileged backend
+confirms exclusive zeroed ownership, and remains live until confirmed mapping/
+DMA revocation, invalidation, full scrub, and safe release. Exact `CONTROL|PIN`,
+physical overlap rejection, separate `INSPECT`, and fail-closed object/pool
+retirement are enforced. Only a deterministic protocol backend is tested; no
+reusable frame allocator or physical machine is claimed. The first page-
 table charge foundation is **PARTIALLY IMPLEMENTED**: an opt-in wrapper commits
 the complete validated preallocated arena capacity before exposing a usable
 store, and unsafe release requires the caller to prove every table unreachable

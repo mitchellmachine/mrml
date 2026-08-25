@@ -1,6 +1,6 @@
 use core::array;
 
-use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
+use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, PAGE_SIZE, PhysAddr, Rights};
 
 const POOL_RIGHTS: Rights = Rights::ALLOCATE
     .union(Rights::DELEGATE)
@@ -15,6 +15,7 @@ const OBJECT_RIGHTS: Rights = Rights::READ
     .union(Rights::MAP)
     .union(Rights::SHARE)
     .union(Rights::PIN)
+    .union(Rights::INSPECT)
     .union(Rights::DELEGATE)
     .union(Rights::CONTROL);
 
@@ -110,6 +111,79 @@ pub enum MemoryBackingKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryPhysicalBacking {
+    start: PhysAddr,
+    pages: u64,
+}
+
+impl MemoryPhysicalBacking {
+    pub const fn new(start: PhysAddr, pages: u64) -> Result<Self, MemoryResourceError> {
+        if pages == 0 {
+            return Err(MemoryResourceError::InvalidPhysicalBacking);
+        }
+        let bytes = match pages.checked_mul(PAGE_SIZE) {
+            Some(bytes) => bytes,
+            None => return Err(MemoryResourceError::Arithmetic),
+        };
+        if start.get().checked_add(bytes).is_none() {
+            return Err(MemoryResourceError::Arithmetic);
+        }
+        Ok(Self { start, pages })
+    }
+    pub const fn start(self) -> PhysAddr {
+        self.start
+    }
+    pub const fn pages(self) -> u64 {
+        self.pages
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryBackingBackendRequest {
+    object: MemoryObjectId,
+    physical: MemoryPhysicalBacking,
+    kind: MemoryBackingKind,
+}
+
+impl MemoryBackingBackendRequest {
+    pub const fn object(self) -> MemoryObjectId {
+        self.object
+    }
+    pub const fn physical(self) -> MemoryPhysicalBacking {
+        self.physical
+    }
+    pub const fn kind(self) -> MemoryBackingKind {
+        self.kind
+    }
+}
+
+/// Privileged adapter that owns allocation, zeroing, scrubbing, and release of
+/// exact physical backing.
+///
+/// # Safety
+///
+/// `claim_zeroed` may succeed only when the exact physical run is exclusively
+/// reserved for the object, contains no prior data, and has no CPU/device/VMM
+/// alias. Failure must leave it unclaimed. `release_scrubbed` may succeed only
+/// after every external mapping and DMA path is revoked, all invalidations are
+/// complete, the entire run is scrubbed, and the run is safe for reuse. Failure
+/// must retain exclusive ownership or fail-stop all consumers. The request is
+/// validated data, not authority.
+pub unsafe trait MemoryObjectBackingBackend {
+    type Error;
+
+    fn claim_zeroed(&mut self, request: MemoryBackingBackendRequest) -> Result<(), Self::Error>;
+    fn release_scrubbed(&mut self, request: MemoryBackingBackendRequest)
+    -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryBackingOperationError<E> {
+    Policy(MemoryResourceError),
+    Backend(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MemoryUsage {
     limit_pages: u64,
     object_pages: u64,
@@ -193,6 +267,10 @@ pub enum MemoryResourceError {
     MappingOverlap,
     MappingsActive,
     ObjectRange,
+    InvalidPhysicalBacking,
+    PhysicalBackingActive,
+    PhysicalBackingAbsent,
+    PhysicalOverlap,
     GenerationExhausted,
     Arithmetic,
     Capability(CapabilityError),
@@ -250,6 +328,7 @@ struct ObjectEntry {
     pool: MemoryPoolId,
     pages: u64,
     backing: MemoryBackingKind,
+    physical: Option<MemoryPhysicalBacking>,
     occupied: bool,
 }
 
@@ -299,6 +378,7 @@ impl ObjectEntry {
         },
         pages: 0,
         backing: MemoryBackingKind::Anonymous,
+        physical: None,
         occupied: false,
     };
 }
@@ -507,6 +587,7 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
             pool,
             pages,
             backing,
+            physical: None,
             occupied: true,
         };
         Ok((id, capability))
@@ -544,6 +625,9 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         {
             return Err(MemoryResourceError::MappingsActive);
         }
+        if entry.physical.is_some() {
+            return Err(MemoryResourceError::PhysicalBackingActive);
+        }
         capabilities.revoke(capability)?;
         let pool_mut = self.pool_mut(entry.pool)?;
         pool_mut.object_pages = next_pages;
@@ -553,6 +637,111 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
             ..ObjectEntry::EMPTY
         };
         Ok(entry.pages)
+    }
+
+    pub fn bind_physical_backing<B: MemoryObjectBackingBackend, const C: usize>(
+        &mut self,
+        object: MemoryObjectId,
+        capability: Capability,
+        physical: MemoryPhysicalBacking,
+        capabilities: &CapabilitySpace<C>,
+        backend: &mut B,
+    ) -> Result<(), MemoryBackingOperationError<B::Error>> {
+        let entry = *self
+            .object(object)
+            .map_err(MemoryBackingOperationError::Policy)?;
+        if capabilities
+            .authorize(capability, Rights::CONTROL.union(Rights::PIN))
+            .map_err(MemoryResourceError::from)
+            .map_err(MemoryBackingOperationError::Policy)?
+            != entry.authority
+        {
+            return Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::Capability(CapabilityError::PermissionDenied),
+            ));
+        }
+        if entry.physical.is_some() {
+            return Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::PhysicalBackingActive,
+            ));
+        }
+        if physical.pages != entry.pages {
+            return Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::InvalidPhysicalBacking,
+            ));
+        }
+        let physical_limit = physical_end(physical).map_err(MemoryBackingOperationError::Policy)?;
+        if self.objects.iter().any(|other| {
+            other.occupied
+                && other.physical.is_some_and(|existing| {
+                    physical_end(existing).map_or(true, |existing_end| {
+                        ranges_overlap(
+                            physical.start.get(),
+                            physical_limit,
+                            existing.start.get(),
+                            existing_end,
+                        )
+                    })
+                })
+        }) {
+            return Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::PhysicalOverlap,
+            ));
+        }
+        let request = MemoryBackingBackendRequest {
+            object,
+            physical,
+            kind: entry.backing,
+        };
+        backend
+            .claim_zeroed(request)
+            .map_err(MemoryBackingOperationError::Backend)?;
+        self.objects[object.slot as usize].physical = Some(physical);
+        Ok(())
+    }
+
+    pub fn release_physical_backing<B: MemoryObjectBackingBackend, const C: usize>(
+        &mut self,
+        object: MemoryObjectId,
+        capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+        backend: &mut B,
+    ) -> Result<MemoryPhysicalBacking, MemoryBackingOperationError<B::Error>> {
+        let entry = *self
+            .object(object)
+            .map_err(MemoryBackingOperationError::Policy)?;
+        if capabilities
+            .authorize(capability, Rights::CONTROL)
+            .map_err(MemoryResourceError::from)
+            .map_err(MemoryBackingOperationError::Policy)?
+            != entry.authority
+        {
+            return Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::Capability(CapabilityError::PermissionDenied),
+            ));
+        }
+        if self
+            .mappings
+            .iter()
+            .any(|mapping| mapping.occupied && mapping.object == object)
+        {
+            return Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::MappingsActive,
+            ));
+        }
+        let physical = entry.physical.ok_or(MemoryBackingOperationError::Policy(
+            MemoryResourceError::PhysicalBackingAbsent,
+        ))?;
+        let request = MemoryBackingBackendRequest {
+            object,
+            physical,
+            kind: entry.backing,
+        };
+        backend
+            .release_scrubbed(request)
+            .map_err(MemoryBackingOperationError::Backend)?;
+        self.objects[object.slot as usize].physical = None;
+        Ok(physical)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -736,6 +925,14 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
             }
         }
         if self
+            .objects
+            .iter()
+            .enumerate()
+            .any(|(slot, object)| affected_objects[slot] && object.physical.is_some())
+        {
+            return Err(MemoryResourceError::PhysicalBackingActive);
+        }
+        if self
             .mappings
             .iter()
             .any(|mapping| mapping.occupied && affected_objects[mapping.object.slot as usize])
@@ -801,6 +998,21 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
 
     pub fn object_pool(&self, object: MemoryObjectId) -> Result<MemoryPoolId, MemoryResourceError> {
         Ok(self.object(object)?.pool)
+    }
+
+    pub fn object_physical_backing<const C: usize>(
+        &self,
+        object: MemoryObjectId,
+        capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<Option<MemoryPhysicalBacking>, MemoryResourceError> {
+        let entry = *self.object(object)?;
+        if capabilities.authorize(capability, Rights::INSPECT)? != entry.authority {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        Ok(entry.physical)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1016,6 +1228,17 @@ const fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> b
     a_start < b_end && b_start < a_end
 }
 
+const fn physical_end(backing: MemoryPhysicalBacking) -> Result<u64, MemoryResourceError> {
+    let bytes = match backing.pages.checked_mul(PAGE_SIZE) {
+        Some(bytes) => bytes,
+        None => return Err(MemoryResourceError::Arithmetic),
+    };
+    match backing.start.get().checked_add(bytes) {
+        Some(end) => Ok(end),
+        None => Err(MemoryResourceError::Arithmetic),
+    }
+}
+
 const fn mapping_backend_request(entry: MappingEntry) -> MemoryMappingBackendRequest {
     MemoryMappingBackendRequest {
         mapping: MemoryMapping {
@@ -1104,6 +1327,50 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingBackingBackend {
+        claimed: Option<MemoryBackingBackendRequest>,
+        claim_calls: u32,
+        release_calls: u32,
+        fail_claim: bool,
+        fail_release: bool,
+    }
+
+    // SAFETY: the test backend records only the exact request on successful
+    // claim, leaves no claim on failure, and retains it on release failure.
+    unsafe impl MemoryObjectBackingBackend for RecordingBackingBackend {
+        type Error = &'static str;
+
+        fn claim_zeroed(
+            &mut self,
+            request: MemoryBackingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            self.claim_calls += 1;
+            if self.fail_claim {
+                return Err("claim");
+            }
+            if self.claimed.replace(request).is_some() {
+                return Err("occupied");
+            }
+            Ok(())
+        }
+
+        fn release_scrubbed(
+            &mut self,
+            request: MemoryBackingBackendRequest,
+        ) -> Result<(), Self::Error> {
+            self.release_calls += 1;
+            if self.fail_release {
+                return Err("release");
+            }
+            if self.claimed != Some(request) {
+                return Err("substitution");
+            }
+            self.claimed = None;
+            Ok(())
+        }
+    }
+
     const ROOT_RIGHTS: Rights = Rights::ALLOCATE
         .union(Rights::DELEGATE)
         .union(Rights::CONTROL)
@@ -1114,6 +1381,8 @@ mod tests {
     const OBJECT_OWNER: Rights = Rights::READ
         .union(Rights::WRITE)
         .union(Rights::MAP)
+        .union(Rights::PIN)
+        .union(Rights::INSPECT)
         .union(Rights::CONTROL);
 
     #[test]
@@ -1675,5 +1944,128 @@ mod tests {
                 .active_mappings(),
             0
         );
+    }
+
+    #[test]
+    fn physical_backing_claim_scrub_and_release_are_exact_and_fail_closed() {
+        assert_eq!(
+            MemoryPhysicalBacking::new(PhysAddr::new(0x1000).unwrap(), 0),
+            Err(MemoryResourceError::InvalidPhysicalBacking)
+        );
+        let mut table = MemoryPoolTable::<1, 2, 1>::new(14).unwrap();
+        let mut caps = CapabilitySpace::<8>::new();
+        let (root, root_cap) = table.create_root(4, 1, 0, ROOT_RIGHTS, &mut caps).unwrap();
+        let (first, first_cap) = table
+            .allocate_object(
+                root,
+                root_cap,
+                2,
+                MemoryBackingKind::Anonymous,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let (second, second_cap) = table
+            .allocate_object(
+                root,
+                root_cap,
+                2,
+                MemoryBackingKind::Shared,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let wrong = caps
+            .insert(ObjectId(100), Rights::CONTROL.union(Rights::PIN))
+            .unwrap();
+        let physical = MemoryPhysicalBacking::new(PhysAddr::new(0x20_0000).unwrap(), 2).unwrap();
+        let mut backend = RecordingBackingBackend {
+            fail_claim: true,
+            ..RecordingBackingBackend::default()
+        };
+        assert!(matches!(
+            table.bind_physical_backing(first, wrong, physical, &caps, &mut backend),
+            Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::Capability(_)
+            ))
+        ));
+        assert_eq!(backend.claim_calls, 0);
+        assert_eq!(
+            table.bind_physical_backing(first, first_cap, physical, &caps, &mut backend),
+            Err(MemoryBackingOperationError::Backend("claim"))
+        );
+        assert_eq!(
+            table.object_physical_backing(first, first_cap, &caps),
+            Ok(None)
+        );
+
+        backend.fail_claim = false;
+        table
+            .bind_physical_backing(first, first_cap, physical, &caps, &mut backend)
+            .unwrap();
+        let request = backend.claimed.unwrap();
+        assert_eq!(request.object(), first);
+        assert_eq!(request.physical(), physical);
+        assert_eq!(request.kind(), MemoryBackingKind::Anonymous);
+        assert_eq!(
+            table.object_physical_backing(first, first_cap, &caps),
+            Ok(Some(physical))
+        );
+        assert_eq!(
+            table.release_object(first, first_cap, &mut caps),
+            Err(MemoryResourceError::PhysicalBackingActive)
+        );
+        assert_eq!(
+            table.bind_physical_backing(second, second_cap, physical, &caps, &mut backend),
+            Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::PhysicalOverlap
+            ))
+        );
+        assert_eq!(backend.claim_calls, 2);
+        assert_eq!(
+            table.revoke_pool(root, root_cap, &mut caps),
+            Err(MemoryResourceError::PhysicalBackingActive)
+        );
+
+        let target = caps
+            .insert(
+                ObjectId(101),
+                Rights::MAP.union(Rights::CONTROL).union(Rights::INSPECT),
+            )
+            .unwrap();
+        let mapping = table
+            .reserve_mapping(first, first_cap, target, 0x300, 0, 2, Rights::READ, &caps)
+            .unwrap();
+        assert_eq!(
+            table.release_physical_backing(first, first_cap, &caps, &mut backend),
+            Err(MemoryBackingOperationError::Policy(
+                MemoryResourceError::MappingsActive
+            ))
+        );
+        assert_eq!(backend.release_calls, 0);
+        unsafe { table.release_mapping(mapping, target, &caps) }.unwrap();
+
+        backend.fail_release = true;
+        assert_eq!(
+            table.release_physical_backing(first, first_cap, &caps, &mut backend),
+            Err(MemoryBackingOperationError::Backend("release"))
+        );
+        assert_eq!(backend.claimed, Some(request));
+        assert_eq!(
+            table.object_physical_backing(first, first_cap, &caps),
+            Ok(Some(physical))
+        );
+        backend.fail_release = false;
+        assert_eq!(
+            table.release_physical_backing(first, first_cap, &caps, &mut backend),
+            Ok(physical)
+        );
+        assert_eq!(backend.claimed, None);
+        assert_eq!(backend.release_calls, 2);
+        assert_eq!(
+            table.object_physical_backing(first, first_cap, &caps),
+            Ok(None)
+        );
+        assert_eq!(table.release_object(first, first_cap, &mut caps), Ok(2));
     }
 }

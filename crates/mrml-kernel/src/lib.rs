@@ -80,9 +80,10 @@ pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,
 };
 pub use memory_resource::{
-    MemoryBackingKind, MemoryMapping, MemoryMappingBackend, MemoryMappingBackendRequest,
-    MemoryMappingId, MemoryMappingOperationError, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, MemoryRevocationSummary, MemoryUsage,
+    MemoryBackingBackendRequest, MemoryBackingKind, MemoryBackingOperationError, MemoryMapping,
+    MemoryMappingBackend, MemoryMappingBackendRequest, MemoryMappingId,
+    MemoryMappingOperationError, MemoryObjectBackingBackend, MemoryObjectId, MemoryPhysicalBacking,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, MemoryRevocationSummary, MemoryUsage,
 };
 pub use pe::{
     MAX_PE_IMAGE_BYTES, MAX_PE_RELOCATIONS, MAX_PE_SECTIONS, PeAllocatedRegion, PeAllocationError,

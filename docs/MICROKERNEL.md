@@ -7368,6 +7368,64 @@ JavaScript/WebAssembly runtime, AI mechanism, or media mechanism. All planned
 `TRIGGERED` scopes in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain
 unchanged; agent review does not replace independent human dual review.
 
+### Capability-bound physical backing lifecycle
+
+The physical-backing prerequisite is **PARTIALLY IMPLEMENTED** as a
+backend-neutral lifecycle. `MemoryPhysicalBacking` describes one exact aligned,
+nonempty, checked physical run whose page count must equal its committed
+`MemoryObject`. Binding requires the exact object authority with both `CONTROL`
+and `PIN`; physical ranges are checked against every live object before native
+mutation. Only after the unsafe `MemoryObjectBackingBackend` confirms exclusive
+reservation, complete zeroing, and absence of CPU/device/VMM aliases does the
+policy table publish the backing. Backend failure leaves the object unbacked.
+
+Physical identity is data, not authority. Exact-object `INSPECT` is a separate
+right and returns only that object's optional run. Logical object release and
+recursive pool revocation fail without mutation while backing remains live.
+Backing release independently requires object `CONTROL`, rejects every live
+mapping reservation before the backend call, and clears policy state only after
+the backend confirms external mapping and DMA revocation, all required
+invalidations, complete-run scrubbing, and safe reuse. Failure retains the exact
+binding for retry. A later logical release must still revoke the object
+capability and generation separately.
+
+Deterministic tests cover wrong authority before backend invocation, claim
+failure, exact request binding, cross-object physical alias rejection, mapping-
+gated teardown, pool/object reclamation denial, scrub/release failure retention,
+and successful final release. The backend is a stateful protocol double. This
+does not implement a reusable frame allocator, direct memory zeroing, DMA or TLB
+invalidation, mapping installation, KVM/WHP integration, hosted execution, or
+physical-hardware evidence.
+
+Engineering Constitution complexity score: complexity impact `MODERATE`, TCB
+impact `LOW`, new parser `NO`, new authority model `NO`, new persistent state
+`NO`, external dependency `NO`, failure isolated `YES`, and existing-object
+reuse `YES` through `MemoryObject`, `MemoryPoolTable`, `CapabilitySpace`, and
+the existing rights model.
+
+DIGITAL-RIGHTS REVIEW: backing adds no user identity, content inspection,
+collection, retention, correlation, remote disclosure, DRM, attestation,
+publisher/vendor/provider/verifier, AI-only, first-party, or accessibility
+authority. The owner-selected object capability controls local residency, and
+separate inspection reveals only the exact physical run—not its contents.
+
+HOSTILE SECURITY REVIEW: object/pool generations, capabilities, rights,
+physical start/page arithmetic, object size, kind, aliasing, mappings, backend
+results, zeroing, scrub completeness, DMA/CPU/VMM reachability, invalidation,
+retry, and release ordering are hostile. Every policy check precedes backend
+mutation. Claim failure publishes nothing; release failure retains ownership;
+logical reclamation cannot race a live binding. Unsafe backend implementations
+must independently prove exclusive zeroed claim and scrubbed safe release.
+
+Patent review: `NOT_TRIGGERED` — exact capability-gated frame ownership,
+zero-before-publication, overlap rejection, scrub-before-reuse, and transactional
+publication are conventional memory-management safety mechanisms. This adds no
+deployment/package mechanism, compatibility transport, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, or media mechanism. Planned `TRIGGERED` scopes in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered
