@@ -32,6 +32,7 @@ struct RustAction {
     externs: Vec<RustExtern>,
     tests: Vec<RustTest>,
     test_stack_bytes: Option<usize>,
+    host_test_targets: Vec<String>,
     examples: Vec<RustExample>,
     binaries: Vec<RustBinary>,
     compile_env: Vec<(String, String)>,
@@ -155,6 +156,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_actions = Vec::new();
     let mut rust_tests = Vec::new();
     let mut rust_test_policies = Vec::new();
+    let mut rust_host_tests = Vec::new();
     let mut rust_examples = Vec::new();
     let mut rust_binaries = Vec::new();
     let mut rust_compile_env = Vec::new();
@@ -247,6 +249,9 @@ fn load_workspace() -> Result<Workspace, String> {
             }
             ["rust-test-policy", component, stack_bytes] => {
                 rust_test_policies.push(((*component).to_owned(), (*stack_bytes).to_owned()));
+            }
+            ["rust-host-tests", component, targets] => {
+                rust_host_tests.push(((*component).to_owned(), (*targets).to_owned()));
             }
             ["rust-example", component, name, source] => {
                 rust_examples.push((
@@ -360,6 +365,7 @@ fn load_workspace() -> Result<Workspace, String> {
             externs,
             tests: Vec::new(),
             test_stack_bytes: None,
+            host_test_targets: Vec::new(),
             examples: Vec::new(),
             binaries: Vec::new(),
             compile_env: Vec::new(),
@@ -424,6 +430,31 @@ fn load_workspace() -> Result<Workspace, String> {
                 "RustTestStackInvalid {{ component: {component_id}, bytes: {bytes} }}"
             ));
         }
+    }
+    for (component_id, targets) in rust_host_tests {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustHostTestComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustHostTestActionMissing {{ component: {component_id} }}"))?;
+        let targets = split_declaration(&targets);
+        if targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !matches!(target.as_str(), "WINDOWS" | "LINUX"))
+            || !action.host_test_targets.is_empty()
+        {
+            return Err(format!(
+                "RustHostTestTargetInvalid {{ component: {component_id}, targets: {} }}",
+                targets.join(",")
+            ));
+        }
+        action.host_test_targets = targets;
     }
     for (component_id, name, source, self_extern) in rust_tests {
         let component = components
@@ -1045,15 +1076,43 @@ fn run_rust_action(
         compile_declared_binary(workspace, component, action, binary, target, release, false)?;
     }
     if operation == "test" {
-        compile_rust_component(workspace, component, target, release, true, &mut built)?;
+        let test_target = if matches!(target, "WINDOWS" | "LINUX") {
+            target
+        } else {
+            let host = host_family()?;
+            if !action.host_test_targets.iter().any(|target| target == host) {
+                return Err(format!(
+                    "NativeTestTargetUnavailable {{ component: {}, build_target: {target}, host: {host} }}",
+                    component.id
+                ));
+            }
+            host
+        };
+        let mut test_built = BTreeSet::new();
+        compile_rust_component(
+            workspace,
+            component,
+            test_target,
+            release,
+            true,
+            &mut test_built,
+        )?;
         for test in &action.tests {
-            run_declared_test(workspace, component, action, test, target, release)?;
+            run_declared_test(workspace, component, action, test, test_target, release)?;
         }
         for binary in &action.binaries {
-            compile_declared_binary(workspace, component, action, binary, target, release, true)?;
+            compile_declared_binary(
+                workspace,
+                component,
+                action,
+                binary,
+                test_target,
+                release,
+                true,
+            )?;
         }
         for example in &action.examples {
-            compile_declared_example(workspace, component, action, example, target, release)?;
+            compile_declared_example(workspace, component, action, example, test_target, release)?;
         }
     }
     Ok(())

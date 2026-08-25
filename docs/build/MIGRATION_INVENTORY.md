@@ -382,6 +382,14 @@ Windows host without changing kernel source behavior:
 No Linux, KVM, WHP, nested-virtualization, UEFI, Secure Boot, TPM, IOMMU,
 bare-metal, or physical-hardware execution was exercised by this path-only move.
 
+The later native kernel action was checked from Windows and Arch Linux WSL2
+with the exact dated 2026-08-24 toolchains. Each host directly cross-built the
+kernel and empty-feature crypto dependency for `x86_64-unknown-none`, then used
+a fresh host dependency graph and the explicitly declared 64 MiB test stack.
+All 474 host tests passed on each host. `mrml doctor` and `mrml audit` passed.
+The target rlib was not executed; no KVM, WHP, nested virtualization, UEFI,
+Secure Boot, TPM, IOMMU, bare metal, or physical hardware was verified.
+
 The bootloader move from `crates/mrml-kernel-image` to `system/bootloader` was
 checked on a Windows host without changing bootloader source behavior:
 
@@ -720,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-two
+  explicit. Twenty-three
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.

@@ -155,6 +155,12 @@ compilation are conventional build-resolution mechanisms. **Result: TRIGGERED**
 under the existing package/resolver review; the crypto mechanism and license
 review remains unchanged.
 
+The native kernel action adds conventional cross-target compilation plus an
+explicitly separate host-test policy without changing kernel mechanisms.
+**Result: TRIGGERED** for the generic build-resolution policy under the existing
+resolver review and **NOT_TRIGGERED** for kernel behavior; existing kernel
+mechanism reviews remain in force.
+
 The Git-tool semantic move relocates `mrml-git` to `tools/git` after its
 error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
 diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository

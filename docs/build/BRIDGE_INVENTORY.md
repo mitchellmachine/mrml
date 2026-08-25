@@ -99,6 +99,12 @@ non-overlapping feature sets. `mrml-crypto` selects `runtime` on Windows/Linux
 and the empty set on `MRML_NATIVE`; both host toolchains cross-build the latter
 for `x86_64-unknown-none` without activating `mrml-runtime`.
 
+Cross-target actions may declare an exact set of approved host-test families.
+Without that declaration, test mode refuses to execute a non-host artifact.
+`mrml-kernel` cross-builds for `x86_64-unknown-none` on both hosts, then uses a
+fresh host dependency graph and 64 MiB harness for 474 passing tests. Twenty-
+three components are native; 19 remain transitional.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

@@ -81,3 +81,6 @@ rust-feature-set|org.mrml.tool.host|WINDOWS,LINUX|runtime
 rust-compile-env|org.mrml.tool.host|CARGO_MANIFEST_DIR|tools/host
 rust-action|org.mrml.compiler.driver|mrml_rustc_driver|none|-|mrml-error=mrml_error@*;mrml-runtime=mrml_runtime@*;mrml-rustc=mrml_rustc@*
 rust-binary|org.mrml.compiler.driver|mrml-rustc|mrml_rustc_driver|compiler/driver/src/main.rs|false
+rust-action|org.mrml.system.kernel|mrml_kernel|lib|system/kernel/src/lib.rs|mrml-crypto=mrml_crypto@*
+rust-host-tests|org.mrml.system.kernel|WINDOWS,LINUX
+rust-test-policy|org.mrml.system.kernel|67108864

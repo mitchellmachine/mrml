@@ -195,6 +195,12 @@ supports the pinned `x86_64-unknown-none` target; the crypto action demonstrates
 an empty `MRML_NATIVE` feature set with no runtime extern while preserving the
 host `runtime` profile.
 
+Cross-target test execution is never implicit. An action may enumerate approved
+Windows/Linux host-test families; test mode first builds the requested target,
+then creates a fresh host dependency graph and runs only the host harness. The
+kernel uses this path with a 64 MiB stack: both hosts cross-build the native rlib
+and pass 474 host tests. This is not target execution evidence.
+
 `mrml-http` is the next featureless consumer and binds exact runtime/TLS rlibs.
 Both hosts pass its three inline tests directly; absent live URL/range inputs
 remain absent network evidence.

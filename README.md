@@ -355,6 +355,12 @@ declared target exactly once. `mrml-crypto` selects `runtime` for Windows/Linux
 host tests but selects no features or runtime extern for its `MRML_NATIVE`
 `x86_64-unknown-none` rlib. Both hosts cross-build that profile successfully.
 
+`mrml-kernel` now cross-builds that native crypto profile into an
+`x86_64-unknown-none` rlib on Windows and Arch Linux WSL2. Its separately
+declared 64 MiB host harness passes all 474 tests on each host. Twenty-three
+components are native and 19 remain transitional; no target execution or
+physical-hardware verification is implied.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
