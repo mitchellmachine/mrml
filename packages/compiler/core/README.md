@@ -3911,6 +3911,16 @@ probe, 10 conformance tests, and 335 replacement tests: 789 compiler tests per
 host. The database performs no recursive premise solving, cycle handling,
 projection normalization, or source integration.
 
+The bounded recursive-proof milestone first accepts an exact concrete
+implementation fact, otherwise elaborates one unique clause and proves each of
+its concrete premises. A fixed 16-goal stack returns distinct `Proven`,
+`NoSolution`, `Ambiguous`, `Cycle`, and `Overflow` outcomes; a cycle closing at
+the stack boundary is identified before overflow. Windows gnullvm and native
+Arch Linux WSL each pass 447 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 793 compiler tests per host. This
+does not recurse over inference-bearing goals, cache answers, apply coinduction,
+normalize projections, or integrate source trait syntax.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

@@ -11,6 +11,7 @@ pub const MAX_TRAIT_IMPLEMENTATIONS: usize = 64;
 pub const MAX_TRAIT_PREDICATES: usize = 8;
 pub const MAX_TRAIT_GENERIC_PARAMETERS: usize = 8;
 pub const MAX_TRAIT_WHERE_CLAUSES: usize = 64;
+pub const MAX_TRAIT_PROOF_DEPTH: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -346,6 +347,15 @@ pub enum TraitWhereClauseSolution {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitProofSolution {
+    Proven,
+    Ambiguous,
+    NoSolution,
+    Cycle,
+    Overflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IdentifiedTraitWhereClause {
     id: TraitWhereClauseId,
     clause: TraitWhereClause,
@@ -413,6 +423,64 @@ impl TraitWhereClauseDatabase {
             TraitWhereClauseSolution::Unique,
         ))
     }
+}
+
+pub fn solve_concrete_trait_goal(
+    implementations: &TraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    solve_concrete_trait_goal_inner(implementations, clauses, goal, &mut stack, 0)
+}
+
+fn solve_concrete_trait_goal_inner(
+    implementations: &TraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    validate_concrete_goal(goal)?;
+    match implementations.solve(canonicalize_implemented_trait_goal(goal)?) {
+        TraitGoalSolution::Unique(_) => return Ok(TraitProofSolution::Proven),
+        TraitGoalSolution::Ambiguous => return Ok(TraitProofSolution::Ambiguous),
+        TraitGoalSolution::NoSolution => {}
+    }
+    if stack[..depth].contains(&Some(goal)) {
+        return Ok(TraitProofSolution::Cycle);
+    }
+    if depth >= MAX_TRAIT_PROOF_DEPTH {
+        return Ok(TraitProofSolution::Overflow);
+    }
+    stack[depth] = Some(goal);
+    let solution = match clauses.elaborate(goal)? {
+        TraitWhereClauseSolution::Unique(answer) => {
+            let mut result = TraitProofSolution::Proven;
+            for premise in answer.instantiated.premises.predicates().iter() {
+                let premise = premise
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?;
+                let premise = solve_concrete_trait_goal_inner(
+                    implementations,
+                    clauses,
+                    premise,
+                    stack,
+                    depth + 1,
+                )?;
+                if premise != TraitProofSolution::Proven {
+                    result = premise;
+                    break;
+                }
+            }
+            result
+        }
+        TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
+        TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
+    };
+    stack[depth] = None;
+    Ok(solution)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -969,6 +1037,30 @@ fn canonicalize_type(
 mod tests {
     use super::*;
 
+    fn concrete_clause(
+        trait_id: u32,
+        type_id: u32,
+        premise: Option<(u32, u32)>,
+    ) -> TraitWhereClause {
+        let mut clause = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(trait_id),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(type_id)),
+            ),
+        )
+        .unwrap();
+        if let Some((premise_trait, premise_type)) = premise {
+            clause
+                .push_premise(BoundImplementedTraitGoal::new(
+                    TraitId::new(premise_trait),
+                    BoundTraitGoalType::Concrete(TraitTypeId::new(premise_type)),
+                ))
+                .unwrap();
+        }
+        clause
+    }
+
     #[test]
     fn canonicalizes_inference_variables_by_first_occurrence() {
         let first = TraitInferenceVariableId::new(41);
@@ -1422,6 +1514,159 @@ mod tests {
                 .unwrap(),
             ),
             Err(TraitGoalError::TooManyWhereClauses)
+        );
+    }
+
+    #[test]
+    fn recursively_proves_bounded_clause_premises_from_exact_facts() {
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(30),
+                TraitId::new(3),
+                TraitTypeId::new(9),
+            ))
+            .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses
+            .insert(
+                TraitWhereClauseId::new(1),
+                concrete_clause(1, 9, Some((2, 9))),
+            )
+            .unwrap();
+        clauses
+            .insert(
+                TraitWhereClauseId::new(2),
+                concrete_clause(2, 9, Some((3, 9))),
+            )
+            .unwrap();
+        let root = ImplementedTraitGoal::new(
+            TraitId::new(1),
+            TraitGoalType::Concrete(TraitTypeId::new(9)),
+        );
+        assert_eq!(
+            solve_concrete_trait_goal(&implementations, &clauses, root),
+            Ok(TraitProofSolution::Proven)
+        );
+        assert_eq!(
+            solve_concrete_trait_goal(&TraitImplementationDatabase::EMPTY, &clauses, root,),
+            Ok(TraitProofSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn reports_recursive_trait_cycles_explicitly() {
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses
+            .insert(
+                TraitWhereClauseId::new(1),
+                concrete_clause(1, 4, Some((2, 4))),
+            )
+            .unwrap();
+        clauses
+            .insert(
+                TraitWhereClauseId::new(2),
+                concrete_clause(2, 4, Some((1, 4))),
+            )
+            .unwrap();
+        assert_eq!(
+            solve_concrete_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &clauses,
+                ImplementedTraitGoal::new(
+                    TraitId::new(1),
+                    TraitGoalType::Concrete(TraitTypeId::new(4)),
+                ),
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+    }
+
+    #[test]
+    fn reports_recursive_trait_depth_overflow_explicitly() {
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        for depth in 0..=MAX_TRAIT_PROOF_DEPTH {
+            clauses
+                .insert(
+                    TraitWhereClauseId::new(depth as u32),
+                    concrete_clause(depth as u32, 1, Some(((depth + 1) as u32, 1))),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            solve_concrete_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &clauses,
+                ImplementedTraitGoal::new(
+                    TraitId::new(0),
+                    TraitGoalType::Concrete(TraitTypeId::new(1)),
+                ),
+            ),
+            Ok(TraitProofSolution::Overflow)
+        );
+
+        let mut boundary_cycle = TraitWhereClauseDatabase::EMPTY;
+        for depth in 0..MAX_TRAIT_PROOF_DEPTH {
+            let next = if depth + 1 == MAX_TRAIT_PROOF_DEPTH {
+                0
+            } else {
+                depth + 1
+            };
+            boundary_cycle
+                .insert(
+                    TraitWhereClauseId::new(depth as u32),
+                    concrete_clause(depth as u32, 2, Some((next as u32, 2))),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            solve_concrete_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &boundary_cycle,
+                ImplementedTraitGoal::new(
+                    TraitId::new(0),
+                    TraitGoalType::Concrete(TraitTypeId::new(2)),
+                ),
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+    }
+
+    #[test]
+    fn propagates_recursive_premise_ambiguity() {
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses
+            .insert(
+                TraitWhereClauseId::new(1),
+                concrete_clause(1, 5, Some((2, 5))),
+            )
+            .unwrap();
+        clauses
+            .insert(TraitWhereClauseId::new(2), concrete_clause(2, 5, None))
+            .unwrap();
+        clauses
+            .insert(
+                TraitWhereClauseId::new(3),
+                TraitWhereClause::new(
+                    1,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(2),
+                        BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            solve_concrete_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &clauses,
+                ImplementedTraitGoal::new(
+                    TraitId::new(1),
+                    TraitGoalType::Concrete(TraitTypeId::new(5)),
+                ),
+            ),
+            Ok(TraitProofSolution::Ambiguous)
         );
     }
 
