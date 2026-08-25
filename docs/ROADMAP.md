@@ -41,8 +41,9 @@ canonical MRML package identities separately from Cargo package and Rust crate
 identity and constructs a bounded immutable `SystemGeneration` record with exact
 package versions and artifact digests. Windows and Arch Linux tests cover exact
 lookup and fail-closed malformed, zero, duplicate, noncanonical, empty, and
-over-capacity inputs. Package resolution, admission, activation, persistence,
-rollback, and all component-interface milestones remain **PLANNED**.
+over-capacity inputs. Runtime provider resolution, admission, activation,
+persistence, rollback, and the end-to-end component-interface lane remain
+**PLANNED**; bounded prerequisite increments are recorded below.
 
 The prerequisite now includes bounded exact package resolution from canonical
 identity/version/digest requirements to identical immutable candidates. It has
@@ -52,9 +53,12 @@ package and component mechanisms remain **PLANNED**.
 
 Stable ABI groundwork now includes canonical interface identity/generation,
 bounded borrowed-view validation, opaque generational handles, and a fixed
-little-endian call-header codec. This does not establish a calling convention,
-native layout, schema, generated binding, loader, or provider ABI; those remain
-**PLANNED**.
+little-endian call-header codec. The bounded schema/generator prerequisite is
+also **PARTIALLY IMPLEMENTED**: version-1 schemas have deterministic SHA3-256
+fingerprints and pointer-free Rust bindings, with the canonical Zstd ABI-3
+fixture reproducing byte-for-byte on Windows and Arch Linux. Native call
+lowering, compiler-emitted conformance metadata, ABI diffs, runtime loading, and
+provider execution remain **PLANNED**.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,

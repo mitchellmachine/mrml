@@ -264,10 +264,14 @@ especially strict.
 For versioned components, manifests additionally distinguish provided and
 required interface identities/major generations, dependency form, and update
 policy. Runtime locks record the exact provider package generation and digest
-selected for each `InterfaceBinding`. Canonical schemas eventually drive safe
-generated bindings, ABI fingerprints/conformance checks, and structured ABI
-diffs for both upstream rustc and `mrml-rustc`; neither Rust's native ABI nor a
-package name is the stable interface.
+selected for each `InterfaceBinding`. The first canonical schema generator is
+implemented as `mrml interface generate-rust SCHEMA OUTPUT`. It bounds input at
+64 KiB, exclusively creates output, accepts only the explicit version-1 policy
+profile, computes a SHA3-256 fingerprint, and emits deterministic pointer-free
+Rust types. The Zstd ABI-3 schema and checked-in generated output are the first
+golden fixture. Native call lowering, conformance execution, ABI diffs, and
+`mrml-rustc` emission remain **PLANNED**; neither Rust's native ABI nor a package
+name is the stable interface.
 
 Profiles define compiler restrictions, ABI, unsafe/FFI policy, format, metadata,
 signing, and admission:

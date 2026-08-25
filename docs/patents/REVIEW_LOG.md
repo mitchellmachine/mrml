@@ -3504,3 +3504,46 @@ Physical sharing, executable population/sealing, native mapping, provider
 resolution, lifetime retention/GC, and servicing remain `TRIGGERED` and require
 their own selected-mechanism review. This technical screen establishes neither
 clearance nor infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Canonical interface schema and pointer-free Rust generation
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The implementation parses
+one original, fixed, line-oriented schema profile with bounded operation,
+argument, error, and byte counts; rejects unknown policy and noncanonical order;
+computes the exact schema's SHA3-256 fingerprint; and emits deterministic Rust
+value types, bounds checks, numeric operation constants, and typed error enums.
+It does not inspect compiler debug information or annotated entities, select an
+RPC/marshalling backend at runtime, generate C/C++ or interpreted-language
+callbacks, use a design-pattern/model catalog, create implementation classes,
+load a library, or invoke a provider.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 5,887,172 A](https://patents.google.com/patent/US5887172A), whose claims
+require a mechanism-independent canonical procedure specification usable to
+select arbitrary RPC marshalling at invocation time;
+[US 11,093,222 B2](https://patents.google.com/patent/US11093222B2), whose claims
+concern annotated entity definitions, generated interfaces and implementation
+classes, composition, and IDE provision;
+[CN 113168312 B](https://patents.google.com/patent/CN113168312B/en), whose
+claims concern binding a C/C++ library to interpreted languages, generated C++
+functions, callbacks, compilation, and linking; and
+[US 2010/0058305 A1](https://patents.google.com/patent/US20100058305A1), whose
+family concerns runtime generation of language bindings from compiler debug
+information. MRML's build-time bounded value-source generator implements none
+of those claim-defining combinations. Material publications and family records
+were reviewed through their linked national/regional register data;
+non-overlap, not assumed status, is the design basis.
+
+The fingerprint primitive follows the public
+[NIST FIPS 202 SHA-3 standard](https://doi.org/10.6028/NIST.FIPS.202) and passes
+the published empty-message SHA3-256 vector. This review does not treat
+standardization or independent implementation as patent clearance and makes no
+new general SHA-3 clearance claim. MRML already uses SHA3 throughout its signed
+artifact and identity architecture; this increment adds no new cryptographic
+protocol or use category.
+
+Native call lowering, runtime provider binding, service transport, ABI-diff
+automation, compiler-derived bindings, updates, retention, and servicing remain
+`TRIGGERED` for their selected mechanisms. This technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.

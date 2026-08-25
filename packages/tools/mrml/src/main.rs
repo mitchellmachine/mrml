@@ -1,14 +1,17 @@
 pub mod abi;
 pub mod generation;
 pub mod loader;
+pub mod schema;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use generation::mrml_package_identifier;
+use schema::InterfaceSchema;
 
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
 const MAX_COMPONENTS: usize = 256;
@@ -173,6 +176,7 @@ fn run() -> Result<(), String> {
         "build" | "test" => build_or_test(&workspace, &args),
         "doctor" => doctor(&workspace, &args[1..]),
         "audit" => audit(&workspace, &args[1..]),
+        "interface" => interface_command(&args[1..]),
         command @ ("package" | "release" | "image" | "publish") => Err(format!(
             "UnsupportedOperation {{ command: {command}, status: PLANNED }}"
         )),
@@ -182,12 +186,54 @@ fn run() -> Result<(), String> {
 
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
-    println!("usage: mrml <list|doctor|audit|build|test> [component] [options]");
+    println!("usage: mrml <list|doctor|audit|build|test|interface> [component] [options]");
+    println!("       mrml interface generate-rust SCHEMA OUTPUT");
     println!("  --all                 select every host-compatible component");
     println!("  --target <family>     native|windows|linux|uefi-x86_64|cuda-nvidia");
     println!("  --gpu-arch <name>     required metadata for CUDA target");
     println!("  --release             use release profile");
     println!("  --output structured   emit stable key=value records");
+}
+
+fn interface_command(args: &[String]) -> Result<(), String> {
+    if args.len() != 3 || args[0] != "generate-rust" {
+        return Err("InterfaceUsageError { expected: generate-rust SCHEMA OUTPUT }".into());
+    }
+    let input_path = Path::new(&args[1]);
+    let metadata = fs::metadata(input_path)
+        .map_err(|error| format!("InterfaceSchemaMetadataError {{ detail: {error} }}"))?;
+    if metadata.len() == 0 || metadata.len() > schema::MAX_INTERFACE_SCHEMA_BYTES as u64 {
+        return Err(format!(
+            "InterfaceSchemaLengthError {{ bytes: {} }}",
+            metadata.len()
+        ));
+    }
+    let bytes = fs::read(input_path)
+        .map_err(|error| format!("InterfaceSchemaReadError {{ detail: {error} }}"))?;
+    let schema = InterfaceSchema::parse(&bytes)
+        .map_err(|error| format!("InterfaceSchemaError {{ detail: {error:?} }}"))?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&args[2])
+        .map_err(|error| format!("InterfaceOutputCreateError {{ detail: {error} }}"))?;
+    output
+        .write_all(schema.generate_rust().as_bytes())
+        .map_err(|error| format!("InterfaceOutputWriteError {{ detail: {error} }}"))?;
+    output
+        .sync_all()
+        .map_err(|error| format!("InterfaceOutputSyncError {{ detail: {error} }}"))?;
+    let fingerprint = schema
+        .fingerprint()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    println!(
+        "interface={} generation={} fingerprint={fingerprint}",
+        schema.identity().name(),
+        schema.identity().generation()
+    );
+    Ok(())
 }
 
 fn find_root() -> Result<PathBuf, String> {

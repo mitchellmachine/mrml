@@ -1,15 +1,20 @@
 # MRML versioned component interfaces
 
 **Status: PLANNED.** This document defines package metadata, resolution,
-loading, lifetime, and evidence requirements. It does not claim that an
-interface schema, resolver, dynamic loader, shared executable mapping,
-independently serviced provider, or ZIM integration is implemented.
+loading, lifetime, and evidence requirements. Bounded identity, schema,
+load-plan, and memory-accounting prerequisites are partially implemented as
+recorded below; runtime resolution, dynamic loading, independently serviced
+providers, and ZIM integration are not implemented.
 
 **PARTIALLY IMPLEMENTED prerequisite:** `packages/tools/mrml` now defines
 compiler-independent canonical interface identity/generation validation, bounded
 borrowed views, opaque generational handles, and one fixed little-endian call
-header codec. These are data/validation primitives only: there is no schema,
-binding generator, calling convention, loader, executable mapping, provider,
+header codec. The first bounded schema/generator increment now parses the exact
+version-1 `mrml-call-v1` format, rejects noncanonical or unbounded definitions,
+computes a SHA3-256 ABI fingerprint, and deterministically emits pointer-free
+safe Rust request/error types. The canonical Zstd ABI-3 schema and generated
+binding live under `packages/interfaces/org.mrml.interface.compression.zstd/`.
+This does not implement native call lowering, executable mapping, a provider,
 consumer migration, or runtime interface resolution.
 
 **PARTIALLY IMPLEMENTED loader prerequisite:** the build tool now admits an
@@ -139,6 +144,15 @@ schemas, descriptors, lengths, enum values, layouts, stale handles, generation
 confusion, and negotiation. Parser-heavy providers are fuzzed independently.
 Cross-compiler and cross-architecture tests use canonical values and malformed
 inputs without treating equal source APIs as ABI proof.
+
+The implemented schema version 1 deliberately accepts only one explicit policy
+profile: `mrml-call-v1`, parallel calls, fail-closed behavior, no implicit
+initialization/finalization, and no capability transfer. Operations and typed
+errors have nonzero, canonically ordered numeric identities. Arguments are
+fixed-width scalars, direction-distinct bounded borrowed views, or opaque
+generational handles. Any future ownership, capability-transfer, async,
+streaming, callback, allocator, or exception policy requires a new reviewed
+schema-language version rather than an ignored extension.
 
 ## Component forms and isolation decision
 
@@ -333,7 +347,8 @@ compiler silently falls back or changes interface identity.
 After package identity, generation construction, package resolution, loader
 foundations, stable ABI primitives, and quantitative memory accounting, proceed:
 
-1. versioned canonical interface schema and generated safe bindings;
+1. versioned canonical interface schema and generated safe bindings
+   (**PARTIALLY IMPLEMENTED** for schema version 1 and the Zstd ABI-3 fixture);
 2. typed provides/requires metadata and exact candidate resolution;
 3. immutable in-process loader and generation-safe `InterfaceBinding`;
 4. `org.mrml.zstd` providing `compression.zstd@3`;

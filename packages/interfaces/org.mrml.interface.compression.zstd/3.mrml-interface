@@ -1,0 +1,6 @@
+mrml-interface-schema|1
+interface|org.mrml.interface.compression.zstd|3|mrml-call-v1|parallel|fail-closed|none|none|no-capability-transfer
+operation|1|decompress|input:borrowed-read:16777216,output:borrowed-write:536870912|written:u64:0
+error|1|1|invalid_frame
+error|1|2|output_too_small
+end
