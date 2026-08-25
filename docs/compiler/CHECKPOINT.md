@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `6c0a9387`
-  (`compiler: preserve projected tuple loan origins`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `215fb02d`. The push was a verified
-  fast-forward containing exactly the three isolated projected-tuple-loan
-  commits; unrelated unstaged OS work was not included.
+- Compiler checkpoint commit: `bf91efb9`
+  (`compiler: verify projected tuple loan chains`)
+- Remote state when recorded: `origin/main` is at `c8d598db`; the compiler
+  checkpoint and its documentation/review commits are pending publication.
+  Unrelated unstaged OS work is not part of the compiler checkpoint.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -150,7 +149,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   effects. An intervening root/field write, mismatched mutability, malformed
   path, or ambiguous effect shape refuses derivation. Sibling owners remain
   disjoint and bounded last-use reachability still restores owner access.
-  Nested projections, projected move chains, and general aggregate provenance
+  Once the projected field origin enters a direct local, the existing bounded,
+  event-decreasing root-move traversal preserves it through later two- and
+  three-hop move chains. Latest-generation selection prevents an intervening
+  reassignment from reviving the tuple field's old owner. Nested projections,
+  another projected source later in the chain, and general aggregate provenance
   remain unimplemented.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
@@ -487,8 +490,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 760 tests on each host: 415
-library tests, 10 conformance tests, 333 replacement tests, and 2 driver tests.
+The checkpoint source passed 762 tests on each host: 416
+library tests, 10 conformance tests, 334 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

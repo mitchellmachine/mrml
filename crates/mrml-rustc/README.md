@@ -3727,3 +3727,16 @@ live-child mutation for first and later reference fields while accepting sibling
 owner mutation and post-last-use access. This does not claim nested projected
 moves, projected move chains, aggregate provenance, or general regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The projected tuple-field loan-chain stabilization milestone at `bf91efb9`
+passed all 762 compiler and driver tests on Windows gnullvm and all 762 in
+release mode on native Arch Linux WSL, plus warnings-denied compiler-only Clippy
+on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The existing bounded,
+event-decreasing root-move relation now has explicit evidence that a direct
+tuple-field origin survives two- and three-hop later moves. The pinned oracle
+rejected live shared/mutable descendants with E0503 and accepted post-last-use,
+sibling-owner, and latest-generation replacement controls. This is evidence for
+chains after one directly initialized tuple-field source, not nested projections,
+multiple projected-source hops, aggregate provenance, or general regions. The
+`no_std`/allocation/unsafe hygiene scan remained empty.

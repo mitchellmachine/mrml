@@ -586,9 +586,12 @@ One direct move from a reference-typed field of a directly initialized tuple now
 retains the field's exact loan origin. The bounded correlation requires one
 validated numeric tuple-field projection, the exact expected borrow-effect count
 and order, compatible mutability, and no intervening root or field write. It
-refuses ambiguous or malformed shapes rather than guessing. Nested projections,
-projected move chains, general aggregate provenance, and general alias/region
-propagation remain unimplemented.
+refuses ambiguous or malformed shapes rather than guessing. After that field
+origin enters a direct local, the existing bounded event-decreasing move lookup
+preserves it through later direct root-move chains and selects the latest
+assignment generation rather than reviving the field's old owner. Nested
+projections, another projected source later in a chain, general aggregate
+provenance, and general alias/region propagation remain unimplemented.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
