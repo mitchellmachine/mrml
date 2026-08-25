@@ -57,6 +57,10 @@ The sixth semantic move relocates `mrml-json` and updates its runtime and six
 consumer paths without changing parser behavior. **Result: NOT_TRIGGERED.** This
 is repository organization, not a new serialization mechanism.
 
+The seventh semantic move relocates `mrml-wikipedia` after its ZIM/Zstandard
+dependencies and updates the trainer path without changing extraction behavior.
+**Result: NOT_TRIGGERED.** This is repository organization, not a new parser.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

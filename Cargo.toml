@@ -38,7 +38,7 @@ members = [
     "packages/libraries/json",
     "packages/libraries/zim",
     "packages/libraries/zstd",
-    "crates/mrml-wikipedia",
+    "packages/libraries/wikipedia",
     "packages/libraries/tokenizer",
     "crates/mrml-trainer",
     "crates/mrml-av1",

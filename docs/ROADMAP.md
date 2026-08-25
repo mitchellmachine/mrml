@@ -142,6 +142,9 @@ behavior.
 `mrml-json` is the sixth migrated leaf; its six consumer edges now resolve to
 `packages/libraries/json` without changing parser/writer semantics.
 
+`mrml-wikipedia` is the seventh migrated library component; its ZIM/Zstandard
+edges are now sibling semantic-package references and its trainer edge remains.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

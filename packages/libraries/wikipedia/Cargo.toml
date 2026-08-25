@@ -1,0 +1,12 @@
+[package]
+name = "mrml-wikipedia"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+mrml-runtime = { path = "../../../crates/mrml-runtime" }
+mrml-zim = { path = "../zim" }
+mrml-zstd = { path = "../zstd" }
+
