@@ -58,8 +58,12 @@ Three new persistent deltas are documented before implementation:
   checkpoint recovery path. A revision-bound application plan reauthorizes the
   system and component reads after loading, rejects intervening configuration
   commits, and produces the typed kernel mode, component request, and admission
-  policy generation. It does not itself apply manifest floors, resolve a
-  provider, or grant placement.
+  policy generation. The representative service path now also checks an exact
+  runtime projection of authenticated package preference, floor, ceiling, and
+  supported forms before producing a generational `IsolationServiceSpec`;
+  unsupported Total or below-floor requests fail without fallback. It does not
+  yet provide the general package resolver, resolve a provider, or grant
+  placement.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.
   A one-use typed service transaction now preserves exact binding identity from

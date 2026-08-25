@@ -2902,6 +2902,18 @@ floors or select a provider. Windows and Arch Linux each pass all 38 focused
 configuration tests. This is hosted unit/simulation evidence, not a Settings or
 shell frontend, effective-placement proof, boot evidence, or Total readiness.
 
+The representative service path now accepts one already authenticated runtime
+projection of package preferred/minimum/maximum placement and its supported
+native-service and microVM forms. After revision-bound policy application it
+checks the exact package bounds and emits a caller-consumable
+`IsolationServiceSpec` carrying the same nonzero policy generation. Strict Total
+requests require microVM support; explicit native requests below a microVM floor
+and malformed bounds are rejected. No alternate form is selected after failure.
+This bounded check neither classifies workloads nor selects providers, VM
+templates, or resources. Windows and Arch Linux each pass all 39 focused
+configuration tests; this remains unit/simulation evidence and not the complete
+general package resolver or cross-placement runtime.
+
 The fixed supervision protocol binds request identity, opaque generational
 `ServiceId`, operation, and restart time while likewise resolving authority
 only from the kernel message. `ServiceSupervisor::state_authorized` requires

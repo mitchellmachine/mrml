@@ -4117,3 +4117,14 @@ generation. It adds no placement-selection algorithm, fallback rule, VM
 transport, shared queue, scheduling mechanism, cryptography, or hardware
 protocol. Broader adaptive-placement resolution and cross-placement transport
 remain `TRIGGERED`.
+
+# 2026-08-25 — Exact service placement-bound admission
+
+**Result: NOT_TRIGGERED.** This bounded gate checks caller-supplied canonical
+service preference, floor, ceiling, and supported-form facts against an exact
+owner/default/Total request, then emits the existing generation-bound service
+specification. Unsupported or below-floor requests fail without alternate
+selection. It performs no workload classification, provider/template/resource
+selection, VM construction, transport, or application publication. Automated
+adaptive selection and cross-placement transport remain `TRIGGERED` under the
+existing worldwide-review entry.

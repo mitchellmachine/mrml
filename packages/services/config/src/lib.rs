@@ -2143,6 +2143,148 @@ impl AppliedIsolationPolicy {
         IsolationAdmissionTable::new(self.mode, self.policy_generation)
             .map_err(|_| ConfigError::InvalidValue)
     }
+
+    pub fn admit_service(
+        self,
+        bounds: IsolationServiceBounds,
+    ) -> Result<AdmittedIsolationServicePolicy, ConfigError> {
+        let (placement, source) = if self.mode == IsolationMode::TotalMicrovm {
+            (
+                IsolationPlacement::Microvm,
+                IsolationPolicySource::TotalMicrovm,
+            )
+        } else if let Some(requested) = self.component_request {
+            (requested, IsolationPolicySource::Owner)
+        } else {
+            (bounds.preferred, IsolationPolicySource::PackageDefault)
+        };
+        if !bounds.supports(placement)
+            || service_placement_rank(placement) < service_placement_rank(bounds.minimum)
+            || service_placement_rank(placement) > service_placement_rank(bounds.maximum)
+        {
+            return Err(ConfigError::SchemaViolation);
+        }
+        Ok(AdmittedIsolationServicePolicy {
+            placement,
+            source,
+            policy_generation: self.policy_generation,
+        })
+    }
+}
+
+const fn service_placement_rank(placement: IsolationPlacement) -> u8 {
+    match placement {
+        IsolationPlacement::NativeService => 1,
+        IsolationPlacement::Microvm => 2,
+        _ => 0,
+    }
+}
+
+/// Runtime projection of one already authenticated service package's canonical
+/// placement bounds. This is constraint input, not authority or provider
+/// selection, and supports only the two service forms admitted by this path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationServiceBounds {
+    preferred: IsolationPlacement,
+    minimum: IsolationPlacement,
+    maximum: IsolationPlacement,
+    native_supported: bool,
+    microvm_supported: bool,
+}
+
+impl IsolationServiceBounds {
+    pub fn new(
+        preferred: IsolationPlacement,
+        minimum: IsolationPlacement,
+        maximum: IsolationPlacement,
+        native_supported: bool,
+        microvm_supported: bool,
+    ) -> Result<Self, ConfigError> {
+        if !matches!(
+            preferred,
+            IsolationPlacement::NativeService | IsolationPlacement::Microvm
+        ) || !matches!(
+            minimum,
+            IsolationPlacement::NativeService | IsolationPlacement::Microvm
+        ) || !matches!(
+            maximum,
+            IsolationPlacement::NativeService | IsolationPlacement::Microvm
+        ) || (!native_supported && !microvm_supported)
+            || (preferred == IsolationPlacement::NativeService && !native_supported)
+            || (preferred == IsolationPlacement::Microvm && !microvm_supported)
+            || (minimum == IsolationPlacement::NativeService && !native_supported)
+            || (minimum == IsolationPlacement::Microvm && !microvm_supported)
+            || (maximum == IsolationPlacement::NativeService && !native_supported)
+            || (maximum == IsolationPlacement::Microvm && !microvm_supported)
+            || service_placement_rank(minimum) > service_placement_rank(preferred)
+            || service_placement_rank(preferred) > service_placement_rank(maximum)
+        {
+            return Err(ConfigError::InvalidSchema);
+        }
+        Ok(Self {
+            preferred,
+            minimum,
+            maximum,
+            native_supported,
+            microvm_supported,
+        })
+    }
+
+    pub const fn supports(self, placement: IsolationPlacement) -> bool {
+        match placement {
+            IsolationPlacement::NativeService => self.native_supported,
+            IsolationPlacement::Microvm => self.microvm_supported,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationPolicySource {
+    PackageDefault,
+    Owner,
+    TotalMicrovm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdmittedIsolationServicePolicy {
+    placement: IsolationPlacement,
+    source: IsolationPolicySource,
+    policy_generation: u64,
+}
+
+impl AdmittedIsolationServicePolicy {
+    pub const fn placement(self) -> IsolationPlacement {
+        self.placement
+    }
+
+    pub const fn source(self) -> IsolationPolicySource {
+        self.source
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+
+    pub fn service_spec(
+        self,
+        domain: ObjectId,
+        interface: ObjectId,
+        interface_generation: u32,
+        provider_generation: u64,
+        class: mrml_kernel::TotalMicrovmClass,
+    ) -> Result<IsolationServiceSpec, ConfigError> {
+        IsolationServiceSpec::new(
+            domain,
+            interface,
+            interface_generation,
+            provider_generation,
+            self.policy_generation,
+            class,
+            self.placement,
+        )
+        .map_err(|_| ConfigError::InvalidValue)
+    }
 }
 
 impl<const UPDATES: usize> ConfigTransaction<UPDATES> {
@@ -7493,6 +7635,97 @@ mod tests {
         assert_eq!(
             component.read(&configuration, &capabilities, access),
             Err(ConfigError::NonCanonical)
+        );
+    }
+
+    #[test]
+    fn service_bounds_admit_exact_policy_without_fallback() {
+        let dual = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .unwrap();
+        let default = AppliedIsolationPolicy {
+            mode: IsolationMode::Balanced,
+            component_request: None,
+            policy_generation: 9,
+        }
+        .admit_service(dual)
+        .unwrap();
+        assert_eq!(default.placement(), IsolationPlacement::NativeService);
+        assert_eq!(default.source(), IsolationPolicySource::PackageDefault);
+        assert_eq!(default.policy_generation(), 9);
+
+        let total = AppliedIsolationPolicy {
+            mode: IsolationMode::TotalMicrovm,
+            component_request: Some(IsolationPlacement::NativeService),
+            policy_generation: 10,
+        }
+        .admit_service(dual)
+        .unwrap();
+        assert_eq!(total.placement(), IsolationPlacement::Microvm);
+        assert_eq!(total.source(), IsolationPolicySource::TotalMicrovm);
+        let spec = total
+            .service_spec(
+                ObjectId(501),
+                ObjectId(502),
+                3,
+                17,
+                TotalMicrovmClass::MicrovmEligible,
+            )
+            .unwrap();
+        assert_eq!(spec.placement(), IsolationPlacement::Microvm);
+        assert_eq!(spec.policy_generation(), 10);
+        assert_eq!(spec.interface_generation(), 3);
+        assert_eq!(spec.provider_generation(), 17);
+
+        let native_only = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            AppliedIsolationPolicy {
+                mode: IsolationMode::TotalMicrovm,
+                component_request: None,
+                policy_generation: 11,
+            }
+            .admit_service(native_only),
+            Err(ConfigError::SchemaViolation)
+        );
+
+        let microvm_required = IsolationServiceBounds::new(
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            AppliedIsolationPolicy {
+                mode: IsolationMode::Custom,
+                component_request: Some(IsolationPlacement::NativeService),
+                policy_generation: 12,
+            }
+            .admit_service(microvm_required),
+            Err(ConfigError::SchemaViolation)
+        );
+        assert!(
+            IsolationServiceBounds::new(
+                IsolationPlacement::NativeService,
+                IsolationPlacement::Microvm,
+                IsolationPlacement::Microvm,
+                true,
+                true,
+            )
+            .is_err()
         );
     }
 }
