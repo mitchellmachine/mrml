@@ -17,6 +17,11 @@ pub const MAX_PACKAGE_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_PAYLOADS: usize = 16;
 pub const MAX_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
+pub const PACKAGE_EXTENSION: &str = "mrp";
+pub const RELEASE_EXTENSION: &str = "mrs";
+pub const SYSTEM_IMAGE_EXTENSION: &str = "mrz";
+pub const INTERFACE_EXTENSION: &str = "mri";
+pub const DETACHED_SIGNATURE_EXTENSION: &str = "mrsig";
 const SIGNED: u16 = 1;
 const ZSTD: &str = "zstd";
 
@@ -63,6 +68,20 @@ pub struct BuildPayload<'a> {
     pub architecture: &'a str,
     pub compress: bool,
     pub bytes: &'a [u8],
+}
+
+pub fn default_package_filename(id: &str, version: u64) -> Result<String, Error> {
+    if !identifier(id) || version == 0 {
+        return Err(Error::Identifier);
+    }
+    Ok(format!("{id}-{version}.{PACKAGE_EXTENSION}"))
+}
+
+pub fn default_release_filename(version: u64) -> Result<String, Error> {
+    if version == 0 {
+        return Err(Error::Identifier);
+    }
+    Ok(format!("mrml-system-{version}.{RELEASE_EXTENSION}"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -772,11 +791,60 @@ fn put_u64(b: &mut [u8], o: usize, v: u64) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn private_key() -> Vec<u8> {
         (0..LAMPORT_PRIVATE_KEY_BYTES)
             .map(|i| (i as u64 * 131 + 17) as u8)
             .collect()
+    }
+
+    #[test]
+    fn canonical_names_and_filesystem_suffixes_are_non_authoritative() {
+        assert_eq!(
+            default_package_filename("org.mrml.zstd", 15).unwrap(),
+            "org.mrml.zstd-15.mrp"
+        );
+        assert_eq!(
+            default_release_filename(105).unwrap(),
+            "mrml-system-105.mrs"
+        );
+        assert_eq!(default_package_filename("bad", 1), Err(Error::Identifier));
+
+        let encoded = build(
+            "org.mrml.zstd",
+            "library",
+            15,
+            &[BuildPayload {
+                name: "zstd",
+                purpose: "provider",
+                architecture: "x86_64",
+                compress: false,
+                bytes: b"valid-package-content",
+            }],
+            None,
+        )
+        .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mrml-extension-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let canonical = directory.join("org.mrml.zstd-15.mrp");
+        let renamed = directory.join("foo.bin");
+        let deceptive = directory.join("trusted-kernel.mrp");
+        fs::write(&canonical, &encoded).unwrap();
+        fs::rename(&canonical, &renamed).unwrap();
+        let renamed_bytes = fs::read(&renamed).unwrap();
+        let parsed = parse(&renamed_bytes, false).unwrap();
+        assert_eq!((parsed.id, parsed.version), ("org.mrml.zstd", 15));
+        fs::write(&deceptive, b"not an mrml package").unwrap();
+        assert_eq!(
+            parse(&fs::read(&deceptive).unwrap(), false),
+            Err(Error::Format)
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 
     fn release_package(id: &str, class: &str, purpose: &str, version: u64) -> Vec<u8> {

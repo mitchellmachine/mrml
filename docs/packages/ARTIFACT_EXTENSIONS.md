@@ -1,10 +1,11 @@
 # MRML artifact extensions and content identity
 
-Status: **DEFINED CONVENTION**. The package and boot `SystemRelease` formats
-already have internal magic, explicit format versions, bounded authenticated
-metadata, and content digests. Default filename generation and the wider
-`SystemImage`/detached-signature tool family remain **PLANNED** unless an exact
-command and focused test below are recorded as implemented elsewhere.
+Status: **PARTIALLY IMPLEMENTED**. The package and boot `SystemRelease` formats
+have internal magic, explicit format versions, bounded authenticated metadata,
+and content digests. `mrml package create` now defaults to
+`<package-id>-<version>.mrp`, `release-create` defaults to
+`mrml-system-<version>.mrs`, and the standalone Zstd ABI-3 schema is `3.mri`.
+Complete `SystemImage` and detached-signature output tooling remains **PLANNED**.
 
 ## Canonical extension family
 
@@ -12,9 +13,9 @@ MRML uses these preferred user-facing extensions:
 
 | Extension | Artifact | Status |
 | --- | --- | --- |
-| `.mrp` | signed deployable MRML Package (MRP) | convention defined; package format implemented |
-| `.mri` | standalone MRML interface definition (MRI) | convention defined |
-| `.mrs` | distinct serialized `SystemRelease` (MRS) | convention defined; boot release format implemented |
+| `.mrp` | signed deployable MRML Package (MRP) | format/default naming/filename-independence tested |
+| `.mri` | standalone MRML interface definition (MRI) | Zstd ABI-3 schema migrated |
+| `.mrs` | distinct serialized `SystemRelease` (MRS) | boot format/default naming implemented |
 | `.mrz` | complete deployable MRML `SystemImage` (MRZ) | convention defined; complete image tooling planned |
 | `.mrsig` | detached MRML signature (MRSIG) | convention defined; optional tooling planned |
 
@@ -77,6 +78,12 @@ after rename to `foo.bin`, malformed bytes are rejected despite a trusted-lookin
 magic-based tests are required before `.mrs`, `.mrz`, `.mri`, or `.mrsig` tooling
 is reported **IMPLEMENTED**. Repository review must distinguish conventions from
 working commands and retain internal magic independently of filenames.
+
+The 2026-08-25 Windows host-tool suite passed 64 tests, including a filesystem
+rename of a valid `org.mrml.zstd-15.mrp` to `foo.bin` with unchanged parsed
+identity and rejection of malformed `trusted-kernel.mrp`. A live CLI probe also
+created and verified the default `org.mrml.zstd-15.mrp`. These tests establish
+package filename independence only; `.mrz` and `.mrsig` tooling remains planned.
 
 Patent review: **NOT_TRIGGERED** for the naming convention. It introduces no
 runtime, storage, compression, cryptographic, or authority mechanism. Related

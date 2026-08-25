@@ -13,7 +13,7 @@ profile = "interface"
 abi = "mrml-call-v1"
 fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"
 generation = 3
-schema = "interface.mrml"
+schema = "3.mri"
 
 [[target]]
 arch = "x86_64"

@@ -235,7 +235,7 @@ fn print_help() {
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
-        "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT OUTPUT [--compress] [--private-key KEY]"
+        "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT [OUTPUT] [--compress] [--private-key KEY]"
     );
     println!("       mrml package verify FILE [--require-signature] [--output structured]");
     println!(
@@ -303,7 +303,7 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
             );
             Ok(())
         }
-        Some("release-create") if args.len() == 7 => {
+        Some("release-create") if matches!(args.len(), 6 | 7) => {
             let version = args[1]
                 .parse::<u64>()
                 .map_err(|_| "ReleaseVersionInvalid".to_owned())?;
@@ -324,17 +324,21 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
             private.fill(0);
             fs::remove_file(&args[5])
                 .map_err(|error| format!("ReleaseKeyConsumeError {{ detail: {error} }}"))?;
+            let output_path = args.get(6).cloned().unwrap_or(
+                package::default_release_filename(version)
+                    .map_err(|error| format!("ReleaseOutputNameError {{ detail: {error:?} }}"))?,
+            );
             let mut output = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(&args[6])
+                .open(&output_path)
                 .map_err(|error| format!("ReleaseOutputCreateError {{ detail: {error} }}"))?;
             output
                 .write_all(&encoded)
                 .and_then(|_| output.sync_all())
                 .map_err(|error| format!("ReleaseOutputWriteError {{ detail: {error} }}"))?;
             println!(
-                "system-release|operation=create|status=PASS|version={version}|packages=3|bytes={}",
+                "system-release|operation=create|status=PASS|version={version}|packages=3|bytes={}|output={output_path}",
                 encoded.len()
             );
             Ok(())
@@ -364,7 +368,7 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
         }
         Some("boot-media-create") => qemu_boot::create_media(&args[1..]),
         Some("qemu-boot") => qemu_boot::run_qemu(&args[1..]),
-        Some("create") if args.len() >= 8 => {
+        Some("create") if args.len() >= 7 => {
             let id = &args[1];
             if !workspace
                 .components
@@ -380,15 +384,19 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
             let architecture = &args[4];
             let purpose = &args[5];
             let input_path = Path::new(&args[6]);
-            let output_path = Path::new(&args[7]);
-            let compress = args.iter().skip(8).any(|arg| arg == "--compress");
-            let private_path = args
+            let explicit_output = args.get(7).filter(|value| !value.starts_with("--"));
+            let option_start = if explicit_output.is_some() { 8 } else { 7 };
+            let default_output = package::default_package_filename(id, version)
+                .map_err(|error| format!("PackageOutputNameError {{ detail: {error:?} }}"))?;
+            let output_path = Path::new(explicit_output.unwrap_or(&default_output));
+            let options = &args[option_start..];
+            let compress = options.iter().any(|arg| arg == "--compress");
+            let private_path = options
                 .windows(2)
                 .find(|pair| pair[0] == "--private-key")
                 .map(|pair| pair[1].as_str());
-            if args
+            if options
                 .iter()
-                .skip(8)
                 .any(|arg| arg.starts_with("--") && arg != "--compress" && arg != "--private-key")
             {
                 return Err("PackageUsageError { unknown_option }".into());
@@ -433,10 +441,11 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
                 .and_then(|_| output.sync_all())
                 .map_err(|error| format!("PackageOutputWriteError {{ detail: {error} }}"))?;
             println!(
-                "package|operation=create|status=PASS|id={id}|class={class}|version={version}|architecture={architecture}|purpose={purpose}|compression={}|signed={}|bytes={}",
+                "package|operation=create|status=PASS|id={id}|class={class}|version={version}|architecture={architecture}|purpose={purpose}|compression={}|signed={}|bytes={}|output={}",
                 if compress { "zstd" } else { "none" },
                 private.is_some(),
-                encoded.len()
+                encoded.len(),
+                output_path.display()
             );
             Ok(())
         }
