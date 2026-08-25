@@ -651,6 +651,40 @@ pub enum GenericTraitImplementationSolution {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SymbolicTraitGoalSubstitution {
+    bindings: [Option<TraitUniverseAssignment>; MAX_CANONICAL_TRAIT_VARIABLES],
+    binding_count: usize,
+}
+
+impl SymbolicTraitGoalSubstitution {
+    pub fn bindings(&self) -> &[Option<TraitUniverseAssignment>] {
+        &self.bindings[..self.binding_count]
+    }
+
+    pub fn binding(&self, variable: TraitInferenceVariableId) -> Option<TraitGoalType> {
+        self.bindings()
+            .iter()
+            .flatten()
+            .find(|binding| binding.variable() == variable)
+            .map(|binding| binding.value())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenericExistentialTraitGoalAnswer {
+    pub implementation_id: GenericTraitImplementationId,
+    pub instantiated: InstantiatedTraitWhereClause,
+    pub substitution: SymbolicTraitGoalSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GenericExistentialTraitGoalSolution {
+    Unique(GenericExistentialTraitGoalAnswer),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenericTraitImplementationDatabase {
     implementations:
         [Option<IdentifiedGenericTraitImplementation>; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
@@ -784,6 +818,46 @@ impl GenericTraitImplementationDatabase {
         ))
     }
 
+    pub fn select_existential(
+        &self,
+        goal: ImplementedTraitGoal,
+    ) -> Result<GenericExistentialTraitGoalSolution, TraitGoalError> {
+        validate_existential_goal(goal)?;
+        let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal)?;
+        let mut selected = None;
+        for implementation in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            match match_generic_existential_head(implementation.implementation, canonicalized)? {
+                GenericExistentialHeadMatch::Unique {
+                    arguments,
+                    substitution,
+                } => {
+                    if selected.is_some() {
+                        return Ok(GenericExistentialTraitGoalSolution::Ambiguous);
+                    }
+                    selected = Some(GenericExistentialTraitGoalAnswer {
+                        implementation_id: implementation.id,
+                        instantiated: implementation.implementation.instantiate_goal_types(
+                            &arguments[..implementation.implementation.parameter_count],
+                        )?,
+                        substitution,
+                    });
+                }
+                GenericExistentialHeadMatch::Ambiguous => {
+                    return Ok(GenericExistentialTraitGoalSolution::Ambiguous);
+                }
+                GenericExistentialHeadMatch::NoSolution => {}
+            }
+        }
+        Ok(selected.map_or(
+            GenericExistentialTraitGoalSolution::NoSolution,
+            GenericExistentialTraitGoalSolution::Unique,
+        ))
+    }
+
     fn find(
         &self,
         id: GenericTraitImplementationId,
@@ -793,6 +867,185 @@ impl GenericTraitImplementationDatabase {
             .flatten()
             .copied()
             .find(|implementation| implementation.id == id)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenericExistentialHeadMatch {
+    Unique {
+        arguments: [TraitGoalType; MAX_TRAIT_GENERIC_PARAMETERS],
+        substitution: SymbolicTraitGoalSubstitution,
+    },
+    Ambiguous,
+    NoSolution,
+}
+
+fn match_generic_existential_head(
+    implementation: TraitWhereClause,
+    query: CanonicalizedImplementedTraitGoal,
+) -> Result<GenericExistentialHeadMatch, TraitGoalError> {
+    if implementation.consequence.trait_id != query.goal.trait_id
+        || implementation.consequence.argument_count != query.goal.argument_count
+    {
+        return Ok(GenericExistentialHeadMatch::NoSolution);
+    }
+    let mut unifier = FlatExistentialHeadUnifier::NEW;
+    if !unifier.unify(implementation.consequence.self_type, query.goal.self_type)? {
+        return Ok(GenericExistentialHeadMatch::NoSolution);
+    }
+    for (implementation, query) in implementation
+        .consequence
+        .arguments()
+        .iter()
+        .zip(query.goal.arguments())
+    {
+        let implementation = implementation
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let query = query.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+        if !unifier.unify(implementation, query)? {
+            return Ok(GenericExistentialHeadMatch::NoSolution);
+        }
+    }
+
+    let mut arguments =
+        [TraitGoalType::Concrete(TraitTypeId::new(0)); MAX_TRAIT_GENERIC_PARAMETERS];
+    for (index, argument) in arguments[..implementation.parameter_count]
+        .iter_mut()
+        .enumerate()
+    {
+        let root = unifier.root(index);
+        *argument = if let Some(concrete) = unifier.concrete[root] {
+            TraitGoalType::Concrete(concrete)
+        } else if let Some(variable) = existential_root_representative(unifier, root, query) {
+            TraitGoalType::InferenceVariable(variable)
+        } else {
+            return Ok(GenericExistentialHeadMatch::Ambiguous);
+        };
+    }
+
+    let mut bindings = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+    for (index, variable) in query.variables().iter().enumerate() {
+        let variable = variable
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let root = unifier.root(MAX_TRAIT_GENERIC_PARAMETERS + index);
+        let value = unifier.concrete[root]
+            .map(TraitGoalType::Concrete)
+            .or_else(|| {
+                existential_root_representative(unifier, root, query)
+                    .map(TraitGoalType::InferenceVariable)
+            })
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        bindings[index] = Some(TraitUniverseAssignment::new(variable, value)?);
+    }
+    Ok(GenericExistentialHeadMatch::Unique {
+        arguments,
+        substitution: SymbolicTraitGoalSubstitution {
+            bindings,
+            binding_count: query.variable_count,
+        },
+    })
+}
+
+fn existential_root_representative(
+    unifier: FlatExistentialHeadUnifier,
+    root: usize,
+    query: CanonicalizedImplementedTraitGoal,
+) -> Option<TraitInferenceVariableId> {
+    query
+        .variables()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, variable)| {
+            (unifier.root(MAX_TRAIT_GENERIC_PARAMETERS + index) == root)
+                .then(|| variable.as_ref().copied())
+                .flatten()
+        })
+        .min()
+}
+
+#[derive(Clone, Copy)]
+struct FlatExistentialHeadUnifier {
+    parents: [u8; MAX_TRAIT_GENERIC_PARAMETERS + MAX_CANONICAL_TRAIT_VARIABLES],
+    concrete: [Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS + MAX_CANONICAL_TRAIT_VARIABLES],
+}
+
+impl FlatExistentialHeadUnifier {
+    const NEW: Self = Self {
+        parents: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        concrete: [None; MAX_TRAIT_GENERIC_PARAMETERS + MAX_CANONICAL_TRAIT_VARIABLES],
+    };
+
+    fn unify(
+        &mut self,
+        implementation: BoundTraitGoalType,
+        query: CanonicalTraitGoalType,
+    ) -> Result<bool, TraitGoalError> {
+        match (implementation, query) {
+            (
+                BoundTraitGoalType::Concrete(implementation),
+                CanonicalTraitGoalType::Concrete(query),
+            ) => Ok(implementation == query),
+            (
+                BoundTraitGoalType::Concrete(implementation),
+                CanonicalTraitGoalType::BoundVariable(query),
+            ) => Ok(self.constrain(
+                MAX_TRAIT_GENERIC_PARAMETERS + query as usize,
+                implementation,
+            )),
+            (
+                BoundTraitGoalType::Parameter(implementation),
+                CanonicalTraitGoalType::Concrete(query),
+            ) => Ok(self.constrain(implementation.get() as usize, query)),
+            (
+                BoundTraitGoalType::Parameter(implementation),
+                CanonicalTraitGoalType::BoundVariable(query),
+            ) => Ok(self.union(
+                implementation.get() as usize,
+                MAX_TRAIT_GENERIC_PARAMETERS + query as usize,
+            )),
+            (_, CanonicalTraitGoalType::Placeholder(_)) => {
+                Err(TraitGoalError::NonExistentialClauseQuery)
+            }
+        }
+    }
+
+    fn root(self, mut variable: usize) -> usize {
+        while self.parents[variable] as usize != variable {
+            variable = self.parents[variable] as usize;
+        }
+        variable
+    }
+
+    fn constrain(&mut self, variable: usize, concrete: TraitTypeId) -> bool {
+        let root = self.root(variable);
+        match self.concrete[root] {
+            Some(existing) => existing == concrete,
+            None => {
+                self.concrete[root] = Some(concrete);
+                true
+            }
+        }
+    }
+
+    fn union(&mut self, left: usize, right: usize) -> bool {
+        let left = self.root(left);
+        let right = self.root(right);
+        if left == right {
+            return true;
+        }
+        match (self.concrete[left], self.concrete[right]) {
+            (Some(left), Some(right)) if left != right => return false,
+            _ => {}
+        }
+        self.parents[right] = left as u8;
+        if self.concrete[left].is_none() {
+            self.concrete[left] = self.concrete[right];
+        }
+        true
     }
 }
 
@@ -1490,6 +1743,7 @@ pub enum TraitGoalError {
     UniverseOverflow,
     UniverseLeak,
     NonRigidClauseQuery,
+    NonExistentialClauseQuery,
     TooManyGenericImplementations,
     DuplicateGenericImplementationId,
     OverlappingGenericImplementation,
@@ -1549,6 +1803,20 @@ fn validate_concrete_goal(goal: ImplementedTraitGoal) -> Result<(), TraitGoalErr
                 .copied()
                 .ok_or(TraitGoalError::InvalidGoal)?,
         )?;
+    }
+    Ok(())
+}
+
+fn validate_existential_goal(goal: ImplementedTraitGoal) -> Result<(), TraitGoalError> {
+    canonicalize_implemented_trait_goal(goal)?;
+    if matches!(goal.self_type, TraitGoalType::Placeholder(_))
+        || goal
+            .arguments()
+            .iter()
+            .flatten()
+            .any(|argument| matches!(argument, TraitGoalType::Placeholder(_)))
+    {
+        return Err(TraitGoalError::NonExistentialClauseQuery);
     }
     Ok(())
 }
@@ -2320,6 +2588,14 @@ pub fn solve_exists_trait_goal_exact(
         TraitGoalSolution::Ambiguous => Ok(ExistentialTraitGoalSolution::Ambiguous),
         TraitGoalSolution::NoSolution => Ok(ExistentialTraitGoalSolution::NoSolution),
     }
+}
+
+pub fn solve_exists_trait_goal_generic(
+    implementations: &GenericTraitImplementationDatabase,
+    universe: TraitUniverseIndex,
+    goal: ExistsImplementedTraitGoal,
+) -> Result<GenericExistentialTraitGoalSolution, TraitGoalError> {
+    implementations.select_existential(goal.instantiate_in_universe(universe)?)
 }
 
 fn implementation_matches_goal(
@@ -3907,6 +4183,183 @@ mod tests {
                 ),
             ),
             Err(TraitGoalError::UnboundGenericParameter)
+        );
+    }
+
+    #[test]
+    fn generic_existential_selection_retains_symbolic_identity() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(360),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(361),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(61), implementation)
+            .unwrap();
+        let goal = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(360),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(8), 0);
+        let GenericExistentialTraitGoalSolution::Unique(answer) =
+            solve_exists_trait_goal_generic(&generic, TraitUniverseIndex::new(8), goal).unwrap()
+        else {
+            panic!("expected one symbolic generic answer");
+        };
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::InferenceVariable(variable))
+        );
+        assert_eq!(
+            answer.instantiated.premises.predicates()[0]
+                .unwrap()
+                .self_type,
+            TraitGoalType::InferenceVariable(variable)
+        );
+    }
+
+    #[test]
+    fn generic_existential_selection_composes_equality_and_concrete_constraints() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut repeated_head = BoundImplementedTraitGoal::new(
+            TraitId::new(362),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        repeated_head
+            .push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(
+                GenericTraitImplementationId::new(1),
+                TraitWhereClause::new(1, repeated_head).unwrap(),
+            )
+            .unwrap();
+        let mut query = BoundImplementedTraitGoal::new(
+            TraitId::new(362),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+        );
+        query
+            .push_argument(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+                1,
+            )))
+            .unwrap();
+        let query = ExistsImplementedTraitGoal::new(2, query).unwrap();
+        let first = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(9), 0);
+        let second = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(9), 1);
+        let GenericExistentialTraitGoalSolution::Unique(answer) =
+            solve_exists_trait_goal_generic(&generic, TraitUniverseIndex::new(9), query).unwrap()
+        else {
+            panic!("expected one equality-constrained answer");
+        };
+        assert_eq!(
+            answer.substitution.binding(first),
+            Some(TraitGoalType::InferenceVariable(first))
+        );
+        assert_eq!(
+            answer.substitution.binding(second),
+            Some(TraitGoalType::InferenceVariable(first))
+        );
+
+        let concrete = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(363),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(55)),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(2), concrete)
+            .unwrap();
+        let query = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(363),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        let GenericExistentialTraitGoalSolution::Unique(answer) =
+            solve_exists_trait_goal_generic(&generic, TraitUniverseIndex::new(4), query).unwrap()
+        else {
+            panic!("expected one concrete-constrained answer");
+        };
+        assert_eq!(
+            answer
+                .substitution
+                .binding(TraitInferenceVariableId::in_universe(
+                    TraitUniverseIndex::new(4),
+                    0,
+                )),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(55)))
+        );
+    }
+
+    #[test]
+    fn generic_existential_selection_preserves_ambiguity_and_rejects_rigid_queries() {
+        let mut implementation = TraitWhereClause::new(
+            2,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(364),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(365),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), implementation)
+            .unwrap();
+        let query = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(364),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            solve_exists_trait_goal_generic(&generic, TraitUniverseIndex::ROOT, query),
+            Ok(GenericExistentialTraitGoalSolution::Ambiguous)
+        );
+        assert_eq!(
+            generic.select_existential(ImplementedTraitGoal::new(
+                TraitId::new(364),
+                TraitGoalType::Placeholder(TraitPlaceholder::new(
+                    TraitUniverseIndex::new(1),
+                    TraitPlaceholderId::new(0),
+                )),
+            )),
+            Err(TraitGoalError::NonExistentialClauseQuery)
+        );
+        assert_eq!(
+            generic.select_existential(ImplementedTraitGoal::new(
+                TraitId::new(999),
+                TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+            )),
+            Ok(GenericExistentialTraitGoalSolution::NoSolution)
         );
     }
 

@@ -830,6 +830,17 @@ conformance tests, and 335 replacement tests: 832 compiler tests per host.
 Generic inference candidates, inferred premise proof, projection composition,
 universal answer inversion, and source existential syntax remain unsupported.
 
+The symbolic generic-existential milestone matches canonical inference-bearing
+queries against coherent flat generic heads with a fixed 16-node constraint
+graph. Concrete constraints produce concrete bindings; unresolved equality
+classes map to their oldest universe-safe query representative, and selected
+premises retain those symbolic terms. Head-unconstrained implementation
+parameters remain ambiguous; rigid inputs fail explicitly. Windows gnullvm and
+native Arch Linux WSL each pass 489 library tests, one component-interface probe,
+10 conformance tests, and 335 replacement tests: 835 compiler tests per host.
+Recursive inferred-premise proof, nested/projection unification, cross-family
+answer composition, and source existential syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.

@@ -4083,6 +4083,18 @@ Generic inference candidates, inferred premise proof, projection composition,
 universal answer inversion, source existential syntax, and mixed inference
 selection remain unsupported.
 
+The symbolic generic-existential milestone matches canonical inference-bearing
+queries against coherent flat generic heads with a fixed 16-node constraint
+graph. Concrete constraints produce concrete bindings; unresolved equality
+classes map to their oldest universe-safe query representative, and selected
+premises retain those symbolic terms. Head-unconstrained implementation
+parameters remain ambiguous; rigid inputs fail explicitly. Windows gnullvm and
+native Arch Linux WSL each pass 489 library tests, one component-interface probe,
+10 conformance tests, and 335 replacement tests: 835 compiler tests per host.
+Recursive inferred-premise proof, nested/projection unification, cross-family
+answer composition, source existential syntax, and general mixed inference
+selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
