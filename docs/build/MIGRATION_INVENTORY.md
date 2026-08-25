@@ -553,6 +553,21 @@ checked on a Windows host without changing application source behavior:
 No Linux runtime, live machine session, remote model service, CUDA/GPU execution,
 or physical-hardware evidence was established by this path-only move.
 
+The server move from `crates/mrml-server` to `apps/server` was checked on a
+Windows host without changing application source behavior:
+
+- workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
+- pinned-nightly no-default-feature tests — PASS, 4 library tests plus an empty
+  binary test target, including a controlled native-TCP test;
+- no-default-feature strict all-target Clippy — FAIL on one existing dead-code
+  lint in unchanged binary test compilation;
+- `.\target\debug\mrml.exe build mrml-server` — FAIL at tensor's already-
+  recorded MSVC/no_std build-script unwind limitation;
+- stale exact `crates/mrml-server/` path scan — PASS.
+
+No Linux runtime, externally exposed server, remote traffic, CUDA/GPU execution,
+or physical-hardware evidence was established by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

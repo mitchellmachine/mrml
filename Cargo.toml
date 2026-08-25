@@ -25,7 +25,7 @@ members = [
     "packages/libraries/ssh",
     "apps/machine",
     "packages/libraries/error",
-    "crates/mrml-server",
+    "apps/server",
     "packages/libraries/terminal-style",
     "tools/host",
     "packages/libraries/percent-encoding",
