@@ -23,8 +23,10 @@ implemented; general Store release/image/publication work is not complete.
   discovered manifests, and resolves 131 compile edges plus the one declared
   runtime interface requirement.
 - `mrml.lock` V2 keeps compile, build-tool, runtime-interface, package, and
-  SystemRelease graphs distinct. The current declared counts are 131, 0, 1, 0,
-  and 3 respectively.
+  SystemRelease graphs distinct. The current declared counts are 131, 0, 1,
+  127, and 3 respectively. Package edges are explicitly classified as static
+  runtime, boot-bound, or SystemRelease-bound; test-only and interface-schema
+  compile edges are excluded from that package graph.
 - The only remaining `Cargo.toml` and `Cargo.lock` are the clean-source
   stage-zero bootstrap for `mrml`; package-local Cargo manifests are gone.
 - `.github/workflows/manifest-v2.yml` repeats the exact stage-zero bootstrap on

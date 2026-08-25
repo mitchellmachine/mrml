@@ -72,9 +72,10 @@ The canonical `mrml.lock` format is V2. It records compile dependencies and
 runtime interface bindings separately, including the exact interface generation,
 fingerprint, provider identity, and target set. It also reports distinct
 compile, build-tool, runtime-interface, package, and SystemRelease graph counts
-and records the three fixed boot-release roles. Zero build-tool or package edges
-means none are currently declared; it does not merge those domains into the
-compile graph.
+and records the three fixed boot-release roles. The package graph independently
+classifies non-test, non-interface-schema compile providers as `STATIC_RUNTIME`,
+`BOOT_BOUND`, or `SYSTEM_RELEASE_BOUND`; this does not make a compile edge and a
+runtime/package edge the same relationship.
 
 ## Compiler modes and readiness
 

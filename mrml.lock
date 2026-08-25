@@ -7,7 +7,7 @@ toolchain = "nightly-2026-08-24"
 compile_edges = 131
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 0
+package_edges = 127
 system_release_edges = 3
 
 [[package]]
@@ -15,230 +15,414 @@ id = "org.mrml.app.cli"
 path = "packages/apps/cli"
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
 
+static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.app.server"
 path = "packages/apps/server"
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.tls", "org.mrml.tool.host"]
+
+static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.tls", "org.mrml.tool.host"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.compiler.core"
 path = "packages/compiler/core"
 compile_dependencies = []
 
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.compiler.driver"
 path = "packages/compiler/driver"
 compile_dependencies = ["org.mrml.compiler.core", "org.mrml.library.error", "org.mrml.library.runtime"]
+
+static_runtime = ["org.mrml.compiler.core", "org.mrml.library.error", "org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.experiment.vbs-enclave"
 path = "packages/experiments/mrml-vbs-enclave"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
 
+static_runtime = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.experiment.vbs-host"
 path = "packages/experiments/mrml-vbs-host"
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+
+static_runtime = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.interface.compression.zstd"
 path = "packages/interfaces/org.mrml.interface.compression.zstd"
 compile_dependencies = []
 
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.agent"
 path = "packages/libraries/agent"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
+
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.av1"
 path = "packages/libraries/av1"
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
 
+static_runtime = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.crypto"
 path = "packages/libraries/crypto"
 compile_dependencies = ["org.mrml.library.runtime"]
+
+static_runtime = ["org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.error"
 path = "packages/libraries/error"
 compile_dependencies = ["org.mrml.library.json", "org.mrml.library.runtime"]
 
+static_runtime = ["org.mrml.library.json", "org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.http"
 path = "packages/libraries/http"
 compile_dependencies = ["org.mrml.library.runtime", "org.mrml.library.tls"]
+
+static_runtime = ["org.mrml.library.runtime", "org.mrml.library.tls"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.json"
 path = "packages/libraries/json"
 compile_dependencies = ["org.mrml.library.runtime"]
 
+static_runtime = ["org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.linux"
 path = "packages/libraries/linux"
 compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.machine"
 path = "packages/apps/machine"
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.tool.host"]
 
+static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.tool.host"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.math"
 path = "packages/libraries/math"
 compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.model"
 path = "packages/libraries/model"
 compile_dependencies = ["org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.library.tensor"]
 
+static_runtime = ["org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.library.tensor"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.opus"
 path = "packages/libraries/opus"
 compile_dependencies = ["org.mrml.library.math"]
+
+static_runtime = ["org.mrml.library.math"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.package-format"
 path = "packages/libraries/package-format"
 compile_dependencies = ["org.mrml.library.crypto"]
 
+static_runtime = ["org.mrml.library.crypto"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.percent-encoding"
 path = "packages/libraries/percent-encoding"
 compile_dependencies = ["org.mrml.library.runtime"]
+
+static_runtime = ["org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.runtime"
 path = "packages/libraries/runtime"
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.windows"]
 
+static_runtime = ["org.mrml.library.linux", "org.mrml.library.windows"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.ssh"
 path = "packages/libraries/ssh"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
+
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.tensor"
 path = "packages/gpu/tensor"
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel"]
 
+static_runtime = ["org.mrml.library.linux", "org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.terminal-style"
 path = "packages/libraries/terminal-style"
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
+
+static_runtime = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.tls"
 path = "packages/libraries/tls"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
 
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.tokenizer"
 path = "packages/libraries/tokenizer"
 compile_dependencies = ["org.mrml.library.runtime"]
+
+static_runtime = ["org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.uefi"
 path = "packages/libraries/uefi"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
+static_runtime = []
+boot_bound = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.library.wikipedia"
 path = "packages/libraries/wikipedia"
 compile_dependencies = ["org.mrml.library.runtime", "org.mrml.zim", "org.mrml.zstd"]
+
+static_runtime = ["org.mrml.library.runtime", "org.mrml.zim", "org.mrml.zstd"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.library.windows"
 path = "packages/libraries/windows"
 compile_dependencies = []
 
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.service.config"
 path = "packages/services/config"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.service.storage", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.library.crypto", "org.mrml.service.storage", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.service.storage"
 path = "packages/services/storage"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
 
+static_runtime = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.system.bootloader"
 path = "packages/system/bootloader"
 compile_dependencies = ["org.mrml.system.kernel"]
+
+static_runtime = []
+boot_bound = ["org.mrml.system.kernel"]
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.system.kernel"
 path = "packages/system/kernel"
 compile_dependencies = ["org.mrml.library.crypto"]
 
+static_runtime = ["org.mrml.library.crypto"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.system.kernel-bench"
 path = "packages/tests/kernel-bench"
 compile_dependencies = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.system.service-image"
 path = "packages/system/service-image"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.service.config", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
+static_runtime = []
+boot_bound = []
+system_release_bound = ["org.mrml.library.crypto", "org.mrml.service.config", "org.mrml.service.storage", "org.mrml.system.kernel"]
+
 [[package]]
 id = "org.mrml.system.vmm-kvm"
 path = "packages/system/vmm/kvm"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.system.vmm-whp"
 path = "packages/system/vmm/whp"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
+static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.tool.build"
 path = "packages/tools/mrml"
 compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.tool.git"
 path = "packages/tools/git"
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.ssh", "org.mrml.library.terminal-style"]
 
+static_runtime = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.ssh", "org.mrml.library.terminal-style"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.tool.host"
 path = "packages/tools/host"
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.linux", "org.mrml.library.percent-encoding", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.windows"]
+
+static_runtime = ["org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.linux", "org.mrml.library.percent-encoding", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.windows"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.tool.sign"
 path = "packages/tools/sign"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.tool.trainer"
 path = "packages/tools/trainer"
 compile_dependencies = ["org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tokenizer", "org.mrml.library.wikipedia"]
+
+static_runtime = ["org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tokenizer", "org.mrml.library.wikipedia"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.tool.vmm-kvm-run"
 path = "packages/tools/vmm/kvm-run"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
 
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.tool.vmm-whp-run"
 path = "packages/tools/vmm/whp-run"
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+boot_bound = []
+system_release_bound = []
 
 [[package]]
 id = "org.mrml.zim"
 path = "packages/libraries/zim"
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime"]
 
+static_runtime = ["org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
+
 [[package]]
 id = "org.mrml.zstd"
 path = "packages/libraries/zstd"
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime"]
+
+static_runtime = ["org.mrml.library.runtime"]
+boot_bound = []
+system_release_bound = []
 
 [[interface_binding]]
 consumer = "org.mrml.zim"

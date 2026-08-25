@@ -542,7 +542,16 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
         "runtime_interface_edges = {}\n",
         workspace.interface_bindings.len()
     ));
-    encoded.push_str("package_edges = 0\n");
+    let package_edges = workspace
+        .components
+        .iter()
+        .map(|component| {
+            classified_package_dependencies(workspace, component).map(|edges| edges.len())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum::<usize>();
+    encoded.push_str(&format!("package_edges = {package_edges}\n"));
     encoded.push_str(&format!(
         "system_release_edges = {}\n\n",
         SYSTEM_RELEASE.len()
@@ -579,6 +588,25 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
             encoded.push('"');
         }
         encoded.push_str("]\n\n");
+        let classified = classified_package_dependencies(workspace, component)?;
+        for class in ["STATIC_RUNTIME", "BOOT_BOUND", "SYSTEM_RELEASE_BOUND"] {
+            encoded.push_str(&format!("{} = [", class.to_ascii_lowercase()));
+            let matches = classified
+                .iter()
+                .filter(|(_, edge_class)| edge_class == &class)
+                .map(|(package, _)| package.as_str())
+                .collect::<Vec<_>>();
+            for (index, package) in matches.iter().enumerate() {
+                if index != 0 {
+                    encoded.push_str(", ");
+                }
+                encoded.push('"');
+                encoded.push_str(package);
+                encoded.push('"');
+            }
+            encoded.push_str("]\n");
+        }
+        encoded.push('\n');
     }
     for binding in &workspace.interface_bindings {
         encoded.push_str("[[interface_binding]]\n");
@@ -627,6 +655,45 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
         workspace.interface_bindings.len()
     );
     Ok(())
+}
+
+fn classified_package_dependencies(
+    workspace: &Workspace,
+    component: &Component,
+) -> Result<Vec<(String, &'static str)>, String> {
+    let action = component.rust_action.as_ref().ok_or_else(|| {
+        format!(
+            "DependencyClassificationActionMissing {{ package: {} }}",
+            component.id
+        )
+    })?;
+    let mut classified = Vec::new();
+    for external in &action.externs {
+        if external.test_only {
+            continue;
+        }
+        let provider = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or_else(|| {
+                format!(
+                    "DependencyClassificationProviderMissing {{ package: {}, dependency: {} }}",
+                    component.id, external.package
+                )
+            })?;
+        if provider.class == "SHARED" && provider.id.starts_with("org.mrml.interface.") {
+            continue;
+        }
+        let class = match component.id.as_str() {
+            "org.mrml.system.bootloader" | "org.mrml.library.uefi" => "BOOT_BOUND",
+            "org.mrml.system.service-image" => "SYSTEM_RELEASE_BOUND",
+            _ => "STATIC_RUNTIME",
+        };
+        classified.push((provider.id.clone(), class));
+    }
+    classified.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(classified)
 }
 
 fn interface_command(args: &[String]) -> Result<(), String> {
