@@ -394,6 +394,22 @@ source behavior:
 No Linux host/runtime, release-mode performance gate, affinity-pinned physical
 core, bare-metal, or physical-hardware execution was exercised by this move.
 
+The signing-tool move from `crates/mrml-sign` to `tools/sign` was checked on a
+Windows host without changing signing source behavior:
+
+- `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-sign`
+  — PASS, 8 tests;
+- `.\target\debug\mrml.exe build mrml-sign` — FAIL because the frontend's
+  selected MSVC target could not find `link.exe` on this host;
+- `git grep -n 'crates/mrml-sign/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact signing-tool path matches.
+
+No Linux host/runtime, live signing key, Secure Boot enrollment, firmware,
+bare-metal, or physical-hardware execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
