@@ -7846,6 +7846,68 @@ The deterministic one-microsecond probe slices are accounting tokens, not
 measured execution or proof of a host/APIC deadline; timer programming and
 elapsed-time reconciliation remain planned.
 
+### Hosted supervised native Zstd service lifecycle
+
+The exact-generation Zstd ABI-3 path now has a concrete native-service control
+plane in addition to the separately hosted WHP/KVM microVM probe. A
+`ZstdNativeServiceBackend` requires a nonzero reply object and creates the
+provider as a distinct-address-space `TaskRuntime` task through the existing
+`ServiceSupervisor`, then returns an immutable endpoint
+carrying its service, task, domain, interface, provider generation, and policy
+generation. Only after isolation admission commits that endpoint does a
+separate operation issue the provider's exact reply capability and project the
+route into the unchanged request/reply data plane. The projection preserves all
+admitted route fields and cannot select a provider or placement.
+
+The focused test sends the generated 104-byte request and one attenuated shared-
+buffer capability from the caller to the launched provider task, executes the
+existing private-scratch service loop, verifies the exact reply and output, and
+then retires the task. Address-space erasure must consume the supervisor's exact
+cleanup ticket before the endpoint is forgotten. Erasure uncertainty retains
+the endpoint and ticket for an exact retry. A strict Total-mode test proves the
+native placement request is rejected by admission before any supervisor launch,
+with zero native fallback.
+
+Evidence is hosted unit/simulation evidence only. The standalone EFI service
+image did not execute in this path, and this does not prove resolver-to-launch
+integration, WHP/KVM host resistance, bare metal, or physical isolation. The
+existing WHP and nested-KVM signed component probes remain the separate microVM
+placement evidence.
+
+Exact commands and outcomes:
+
+```text
+target/debug/mrml.exe test org.mrml.zstd --target windows --release
+26 passed; 0 failed
+
+target/debug/mrml.exe test org.mrml.system.kernel --target windows --release
+506 passed; 0 failed
+
+./target/debug/mrml test org.mrml.zstd --target linux --release
+26 passed; 0 failed (Arch Linux under WSL)
+
+./target/debug/mrml test org.mrml.system.kernel --target linux --release
+506 passed; 0 failed (Arch Linux under WSL)
+
+target/debug/mrml.exe test org.mrml.tool.vmm-whp-run --target windows --release
+7 passed; 0 failed
+
+./target/debug/mrml test org.mrml.tool.vmm-kvm-run --target linux --release
+8 passed; 0 failed (Arch Linux under WSL; pre-existing CUDA PTX warnings)
+```
+
+A retained-artifact WHP `component-service-probe` rerun produced no terminal
+event for more than 150 seconds and was interrupted; it is not counted as fresh
+live evidence. The KVM live probe was not rerun after that inconclusive result.
+The prior documented successful signed probes remain historical evidence only.
+
+Patent review: `NOT_TRIGGERED` — this integration reuses MRML's existing
+fixed-capacity task/service lifecycle, exact scalar generation checks,
+capability transfer, bounded IPC/shared-buffer transport, and retryable cleanup.
+It adds no scheduling, transport, codec, compression, virtualization,
+cryptographic, or hardware mechanism. The broader component/interface and Zstd
+reviews remain `TRIGGERED`; see [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

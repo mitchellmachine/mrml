@@ -61,8 +61,18 @@ if revocation fails. Construction now consumes one committed service route and
 requires exact agreement with the expected interface object, ABI generation,
 immutable provider generation, and policy generation. The retained domain,
 Total-mode class, and placement cannot be replaced by data-plane messages. It is
-not a launched native service or microVM: actual resolver-to-launch dispatch,
-supervision, and WHP/KVM invocation remain **PLANNED**. The standalone
+now composed with a hosted supervised native-service backend: the backend
+creates a distinct-address-space `TaskRuntime` task through
+`ServiceSupervisor`, retains the exact service/task and
+interface/provider/policy identities, and issues reply
+authority only when the committed route is consumed into the stable ABI data
+plane. Windows and Arch Linux tests execute the exact ABI-3 request through
+that launched task's inbox and shared-buffer projection, then require task
+retirement and address-space erasure. Erasure uncertainty retains the endpoint
+and cleanup ticket for exact retry. Total mode rejects this native route before
+the supervisor creates a task. This is controlled hosted kernel-lifecycle
+evidence, not execution of the standalone native image or a complete resolver-
+to-launch runtime; those remain **PLANNED**. The standalone
 `org.mrml.zstd` target binary now supplies the x86-64 `int 0x80` trap for exact
 operations 5, 7/8, 12, and 4 and accepts endpoint, caller, and provider
 generation only from immutable launch registers. Cross-host target builds pass,
@@ -530,7 +540,8 @@ Documentation is not implementation evidence. Implement bounded milestones:
 1. policy/object schema, validation, workspace retention, lock output, and
    bounded kernel launch admission/reporting (**PARTIALLY IMPLEMENTED**);
 2. one representative dual-placement service (**PARTIALLY IMPLEMENTED** for
-   manifest policy and hosted kernel IPC/shared-buffer dispatch only);
+   manifest policy, a hosted supervised native-service ABI-3 call, and the
+   separately hosted WHP/KVM microVM call; general resolver dispatch remains);
 3. one representative dual-placement GUI application;
 4. monitor placement visibility;
 5. resource and device projections;

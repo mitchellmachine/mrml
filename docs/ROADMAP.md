@@ -181,13 +181,22 @@ also **PARTIALLY IMPLEMENTED**: version-1 schemas have deterministic SHA3-256
 fingerprints and pointer-free Rust bindings, with the canonical Zstd ABI-3
 fixture reproducing byte-for-byte on Windows and Arch Linux. Native call
 lowering, compiler-emitted conformance metadata, ABI diffs, runtime loading, and
-native provider execution remain **PLANNED**. The hosted Zstd ABI-3 byte-call
-adapter now exercises exact generated descriptors on Windows and Arch Linux.
+standalone native provider execution remain **PLANNED**. The hosted Zstd ABI-3
+byte-call adapter now exercises exact generated descriptors on Windows and Arch
+Linux, including one supervised native task/service lifecycle.
 Separate package-owned `org.mrml.zstd` provider and `org.mrml.zim` consumer
 artifacts also build for the MRML-native target. Separately signed artifacts
 now complete one exact-generation hosted microVM call and supervised cleanup on
 WHP and nested KVM; this remains controlled hosted evidence rather than native-
 service, host-resistant, physical, or general resolver evidence.
+A complementary hosted native-service path creates the Zstd provider as a
+distinct-address-space supervised `TaskRuntime` task, opens the unchanged ABI
+data plane only after exact route commit, completes the same bounded request,
+and retires the
+task only after address-space erasure. Cleanup uncertainty retains the exact
+endpoint for retry, and strict Total admission rejects native placement before
+supervisor launch. This is native-service lifecycle/model evidence on Windows
+and Arch Linux, not standalone MRML-image execution or physical isolation.
 A backend-neutral control-plane admission now binds those two immutable load
 plans to the exact generation/interface placement and rejects either package
 generation mismatch before backend launch. WHP/KVM attachment and execution
@@ -289,8 +298,10 @@ syscall-frame bindings. Its allocation-free one-page target floor handles
 raw/RLE frames and rejects entropy-coded blocks. This proves target build and
 format plus one separately signed hosted execution with the ZIM consumer on WHP
 and nested KVM. It does not prove general resolver-to-launch dispatch,
-update-without-consumer-rebuild, native-service placement, or physical
-isolation.
+update-without-consumer-rebuild, standalone native-image execution, or physical
+isolation. The separate hosted supervised path does prove native-service
+placement through the kernel task/service model, but does not execute this EFI
+artifact or connect the generation resolver to launch.
 
 Servicing retention and inspection are **PARTIALLY IMPLEMENTED** as a bounded
 build-tool model. Exact live bindings and retained system generations, rollback
@@ -316,8 +327,11 @@ resolver/policy binding. A canonical MRML-target provider binary and concrete
 x86-64 trap now run with the separately signed ZIM consumer in the focused WHP
 and nested-KVM microVM probe. Its fixed task runtime and supervisor are RAM-pool
 accounted and reclaimed after cleanup. General resolver dispatch,
-native-service parity, guest RAM/vCPU/device accounting, and physical isolation
-remain unproved. The host-tested register adapter maps the loop to exact
+standalone native-image execution, guest RAM/vCPU/device accounting, and
+physical isolation remain unproved. Hosted native-service parity now covers one
+supervised exact-generation task, request/reply, revocation, and retryable
+cleanup path on Windows and Arch Linux. The host-tested register adapter maps
+the loop to exact
 operations 5, 7/8, 12, and 4 and proves capability release precedes response
 visibility.
 

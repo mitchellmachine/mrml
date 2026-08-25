@@ -4819,3 +4819,17 @@ generic selection and bound-parameter substitution to existing associated values
 and reuses the existing fixed projection cycle stack. It adds no solver search,
 coherence rule, specialization, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Hosted supervised native Zstd service lifecycle
+
+**Result: NOT_TRIGGERED after the existing component-interface review.** This
+integration creates one provider through MRML's existing fixed-capacity
+`TaskRuntime` and `ServiceSupervisor`, projects an already committed exact-
+generation isolation route into the previously reviewed ABI-3 IPC/shared-buffer
+adapter, and consumes the existing cleanup ticket only after address-space
+erasure. It adds no scheduler selection, process-isolation technique, interface
+resolution algorithm, queue/ring transport, codec/compression operation,
+cryptographic construction, virtualization mechanism, or hardware protocol.
+The broader independently serviced component, Zstd, adaptive-placement, and
+microVM mechanisms retain their existing `TRIGGERED` reviews; this agent review
+does not replace targeted independent human review.

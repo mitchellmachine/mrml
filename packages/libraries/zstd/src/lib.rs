@@ -26,7 +26,8 @@ pub use service_loop::{
     ReceivedZstdEnvelope, ZstdServiceLoop, ZstdServiceLoopError, ZstdServiceSyscalls,
 };
 pub use task_runtime_adapter::{
-    ZstdAdmittedTaskRuntimeEndpoint, ZstdResolvedServiceBinding, ZstdServiceBindingError,
+    ZstdAdmittedTaskRuntimeEndpoint, ZstdNativeServiceBackend, ZstdNativeServiceEndpoint,
+    ZstdNativeServiceError, ZstdResolvedServiceBinding, ZstdServiceBindingError,
     ZstdTaskRuntimeAdapter, ZstdTaskRuntimeAdapterError, ZstdTaskRuntimeEndpoint,
 };
 pub use userspace_syscall_adapter::{

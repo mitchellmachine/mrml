@@ -485,6 +485,23 @@ impl<E> RoutedIsolationService<E> {
     pub fn into_endpoint(self) -> E {
         self.endpoint
     }
+
+    /// Replaces only the concrete transport endpoint while preserving the
+    /// exact admitted domain, interface, provider, policy, class, and
+    /// placement identity. This is used when a placement-specific supervisor
+    /// endpoint must be projected into the stable interface data plane.
+    pub fn map_endpoint<M>(self, map: impl FnOnce(E) -> M) -> RoutedIsolationService<M> {
+        RoutedIsolationService {
+            endpoint: map(self.endpoint),
+            domain: self.domain,
+            interface: self.interface,
+            interface_generation: self.interface_generation,
+            provider_generation: self.provider_generation,
+            policy_generation: self.policy_generation,
+            class: self.class,
+            placement: self.placement,
+        }
+    }
     pub const fn domain(&self) -> ObjectId {
         self.domain
     }

@@ -100,6 +100,14 @@ committed isolation route whose exact interface object, ABI generation,
 provider generation, and policy generation match the expected resolver/policy
 binding; the route also retains immutable domain, Total-mode class, and
 placement evidence. This does not connect the actual resolver to the launcher.
+The same committed-route type now also feeds a hosted supervised native Zstd
+backend. It creates a distinct-address-space kernel task/service endpoint,
+opens the ABI data plane by issuing only the exact reply capability, completes the unchanged
+request through the existing `TaskRuntime` adapter, and retires the endpoint
+only after address-space erasure. Cleanup uncertainty retains the exact service
+and ticket for retry; Total mode denies native placement before task creation.
+Windows and Arch Linux tests cover this native-service lifecycle, but do not
+execute the standalone EFI image or establish physical isolation.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/
@@ -457,8 +465,9 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    provider load plans selected by the generation-bound service placement);
 4. `org.mrml.zstd` providing `compression.zstd@3`
    (**PARTIALLY IMPLEMENTED** for the canonical byte-call provider and bounded
-   hosted kernel-IPC/shared-buffer adapter, plus a standalone signed MRML-target
-   provider launched with exact-generation identity on WHP and nested KVM);
+   hosted kernel-IPC/shared-buffer adapter, a supervised hosted native-service
+   lifecycle, plus a standalone signed MRML-target provider launched with exact-
+   generation identity on WHP and nested KVM);
 5. `org.mrml.zim` consuming that interface without provider path knowledge
    (**PARTIALLY IMPLEMENTED** for an isolated-service manifest requirement,
    bounded borrowed views, typed responses, and a separately signed MRML-target
@@ -472,7 +481,8 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    of new prohibited-provider bindings only);
 9. cross-compiler, performance, fuzzing, and optional service-provider evidence
    (**PARTIALLY IMPLEMENTED** for bounded hosted kernel IPC/shared-buffer
-   dispatch, an isolated-endpoint adapter, and one explicit descriptor scalar
+   dispatch, a supervised native-service endpoint, an isolated-endpoint adapter,
+   and one explicit descriptor scalar
    projection compiled by `mrml-rustc` to COFF/ELF while pinned upstream rustc
    executes the reference; full binding, performance, fuzzing, launched-service,
    and real isolation evidence remain);
