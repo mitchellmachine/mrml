@@ -7120,6 +7120,51 @@ runtime, AI mechanism, or media mechanism. Planned scopes recorded as
 `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged;
 agent review does not replace independent human dual review.
 
+### Accounted volatile configuration state
+
+The first userspace-policy memory integration is **PARTIALLY IMPLEMENTED**.
+`AccountedConfigurationService` rounds its complete concrete wrapper—including
+all fixed-capacity schema/value records and bounded audit history—to pages and
+commits that exact quantity as one anonymous `MemoryObject`. Empty construction,
+construction with validated schemas, and authenticated checkpoint recovery all
+finish semantic validation before charging and finish charging before returning
+publishable state. Configuration identifiers and contents never become memory
+authority.
+
+Invalid roots, schemas, checkpoint state, arithmetic, and insufficient pools
+fail without changing usage. Consuming release returns the exact commitment;
+failure returns the complete still-accounted service. This wrapper does not
+charge caller-owned checkpoint/IPC scratch, provide physical backing, select
+pool policy, reconstruct boot capabilities, or change configuration/restart
+authority. The signed service image and reboot path still construct unaccounted
+volatile state, so no live, reboot, hosted, or physical evidence is claimed.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through the configuration service, `MemoryPoolTable`, and
+`CapabilitySpace`.
+
+DIGITAL-RIGHTS REVIEW: the local owner-selected pool pays only for fixed service
+state. Accounting reveals no setting, value, audit event, user identity, or
+content and creates no vendor, publisher, provider, verifier, DRM, attestation,
+AI-only, first-party, or accessibility authority. Exhaustion cannot draw from an
+unrelated pool.
+
+HOSTILE SECURITY REVIEW: generic capacities, concrete layout size, conversion
+and rounding, roots, schemas, checkpoints, pool/object generations, capability
+slots, exhaustion, release, and replay are hostile. Configuration validation or
+recovery completes before charging; exact charging completes before publication;
+failure leaves usage unchanged or returns the complete live owner. Accounting
+does not replace existing per-operation capability checks.
+
+Patent review: `NOT_TRIGGERED` — page-rounded accounting of conventional fixed-
+capacity configuration state adds no compatibility transport, host-share
+protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, or media mechanism. Planned scopes
+recorded as `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain
+unchanged; agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

@@ -77,7 +77,10 @@ and objects, attenuated child page/mapping/count reservations, content-free
 usage inspection, exact capability checks, and recursive pool revocation. This
 accounts commitments only; frame allocation, mapping, sharing, pinning, DMA,
 cache charging, VMM projection, and userspace policy integration remain
-unimplemented. An opt-in accounted preallocated page-table store commits its
+incomplete. An opt-in accounted configuration-service wrapper now commits its
+complete fixed settings and audit state for fresh, empty, and checkpoint-
+recovered construction; live service-image composition has not adopted it. An
+opt-in accounted preallocated page-table store commits its
 complete arena capacity before publication, but live boot construction has not
 adopted it. An opt-in accounted task-runtime wrapper now commits its
 complete fixed scheduler, task/capability metadata, delegation-table, and

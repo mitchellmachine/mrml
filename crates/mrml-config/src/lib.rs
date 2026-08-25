@@ -8,11 +8,14 @@
 //! capacity, and sequence conditions before the first mutation.
 
 use core::array;
+use core::mem::size_of;
+use core::ops::{Deref, DerefMut};
 
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, Message, ObjectId, Priority, RestartPolicy,
+    Capability, CapabilityError, CapabilitySpace, MemoryBackingKind, MemoryObjectId, MemoryPoolId,
+    MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority, RestartPolicy,
     Rights, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor,
     TaskId, TaskRuntime,
 };
@@ -1315,6 +1318,172 @@ pub struct ConfigurationService<const SETTINGS: usize, const AUDIT: usize> {
     audit_head: usize,
     audit_count: usize,
     next_audit_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountedConfigurationError {
+    Configuration(ConfigError),
+    Memory(MemoryResourceError),
+    Arithmetic,
+}
+
+impl From<ConfigError> for AccountedConfigurationError {
+    fn from(value: ConfigError) -> Self {
+        Self::Configuration(value)
+    }
+}
+
+impl From<MemoryResourceError> for AccountedConfigurationError {
+    fn from(value: MemoryResourceError) -> Self {
+        Self::Memory(value)
+    }
+}
+
+/// Fixed-capacity configuration state whose complete concrete footprint is
+/// committed to one exact memory pool before publication.
+pub struct AccountedConfigurationService<const SETTINGS: usize, const AUDIT: usize> {
+    service: ConfigurationService<SETTINGS, AUDIT>,
+    charge: MemoryObjectId,
+    charge_capability: Capability,
+    committed_pages: u64,
+}
+
+impl<const SETTINGS: usize, const AUDIT: usize> AccountedConfigurationService<SETTINGS, AUDIT> {
+    pub fn empty<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        root: ObjectId,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedConfigurationError> {
+        Self::account(
+            ConfigurationService::empty(root)?,
+            pool,
+            pool_capability,
+            memory,
+            authorities,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        root: ObjectId,
+        schemas: &[SettingSchema],
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedConfigurationError> {
+        Self::account(
+            ConfigurationService::new(root, schemas)?,
+            pool,
+            pool_capability,
+            memory,
+            authorities,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn recover_checkpoint<
+        A: CapabilityAuthorizer + ?Sized,
+        const POOLS: usize,
+        const OBJECTS: usize,
+        const AUTHORITIES: usize,
+    >(
+        capabilities: &A,
+        root_capability: Capability,
+        input: &[u8],
+        expected_digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES],
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedConfigurationError> {
+        Self::account(
+            ConfigurationService::recover_checkpoint(
+                capabilities,
+                root_capability,
+                input,
+                expected_digest,
+            )?,
+            pool,
+            pool_capability,
+            memory,
+            authorities,
+        )
+    }
+
+    pub fn required_pages() -> Result<u64, AccountedConfigurationError> {
+        let bytes = u64::try_from(size_of::<Self>())
+            .map_err(|_| AccountedConfigurationError::Arithmetic)?;
+        bytes
+            .checked_add(PAGE_SIZE - 1)
+            .map(|rounded| rounded / PAGE_SIZE)
+            .filter(|pages| *pages != 0)
+            .ok_or(AccountedConfigurationError::Arithmetic)
+    }
+
+    pub const fn charge(&self) -> MemoryObjectId {
+        self.charge
+    }
+
+    pub const fn committed_pages(&self) -> u64 {
+        self.committed_pages
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn release<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        self,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<u64, (Self, MemoryResourceError)> {
+        match memory.release_object(self.charge, self.charge_capability, authorities) {
+            Ok(pages) => Ok(pages),
+            Err(error) => Err((self, error)),
+        }
+    }
+
+    fn account<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        service: ConfigurationService<SETTINGS, AUDIT>,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedConfigurationError> {
+        let committed_pages = Self::required_pages()?;
+        let (charge, charge_capability) = memory.allocate_object(
+            pool,
+            pool_capability,
+            committed_pages,
+            MemoryBackingKind::Anonymous,
+            Rights::CONTROL,
+            authorities,
+        )?;
+        Ok(Self {
+            service,
+            charge,
+            charge_capability,
+            committed_pages,
+        })
+    }
+}
+
+impl<const SETTINGS: usize, const AUDIT: usize> Deref
+    for AccountedConfigurationService<SETTINGS, AUDIT>
+{
+    type Target = ConfigurationService<SETTINGS, AUDIT>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.service
+    }
+}
+
+impl<const SETTINGS: usize, const AUDIT: usize> DerefMut
+    for AccountedConfigurationService<SETTINGS, AUDIT>
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.service
+    }
 }
 
 impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, AUDIT> {
@@ -2746,6 +2915,94 @@ mod tests {
         recover_validate_and_commit_stable_authorities,
     };
 
+    const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    #[test]
+    fn accounted_configuration_charges_complete_state_until_consuming_release() {
+        let pages = AccountedConfigurationService::<3, 2>::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(26).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let schema = SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap();
+        let service = AccountedConfigurationService::<3, 2>::new(
+            ObjectId(10),
+            &[schema],
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        assert_eq!(service.setting_count(), 1);
+        assert_eq!(service.committed_pages(), pages);
+        assert_eq!(memory.object_pool(service.charge()), Ok(pool));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            pages
+        );
+        assert!(matches!(
+            service.release(&mut memory, &mut authorities),
+            Ok(released) if released == pages
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+    }
+
+    #[test]
+    fn configuration_validation_and_pool_exhaustion_never_publish_unaccounted_state() {
+        let pages = AccountedConfigurationService::<64, 64>::required_pages().unwrap();
+        assert!(pages > 1);
+        let mut memory = MemoryPoolTable::<1, 1>::new(27).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages - 1, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let schema = SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap();
+        assert!(matches!(
+            AccountedConfigurationService::<64, 64>::new(
+                ObjectId(10),
+                &[schema],
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            ),
+            Err(AccountedConfigurationError::Memory(
+                MemoryResourceError::PoolExhausted
+            ))
+        ));
+        assert!(matches!(
+            AccountedConfigurationService::<64, 64>::new(
+                ObjectId(10),
+                &[],
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            ),
+            Err(AccountedConfigurationError::Configuration(
+                ConfigError::Capacity
+            ))
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+    }
+
     fn fixture() -> (
         ConfigurationService<3, 2>,
         CapabilitySpace<4>,
@@ -3672,6 +3929,30 @@ mod tests {
                 setting: SettingId::new(1).unwrap(),
             })
         );
+
+        let pages = AccountedConfigurationService::<3, 2>::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(28).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let recovered = AccountedConfigurationService::<3, 2>::recover_checkpoint(
+            &capabilities,
+            root,
+            &bytes[..checkpoint.length],
+            checkpoint.digest,
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        assert_eq!((recovered.revision(), recovered.setting_count()), (2, 2));
+        assert_eq!(recovered.committed_pages(), pages);
+        assert!(matches!(
+            recovered.release(&mut memory, &mut authorities),
+            Ok(released) if released == pages
+        ));
     }
 
     #[test]

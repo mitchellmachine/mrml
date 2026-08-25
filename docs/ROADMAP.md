@@ -192,13 +192,21 @@ delegation-table, and two-slot-per-task inline-inbox footprint from one exact
 pool before publication. Exhaustion leaves the pool unchanged, and consuming
 release returns the commitment; failed release returns the still-accounted
 runtime. Existing boot/runtime construction is not yet migrated to this path.
+The first userspace-policy charge foundation is **PARTIALLY IMPLEMENTED**:
+fresh, empty, and checkpoint-recovered `ConfigurationService` construction may
+commit the complete concrete settings/audit footprint to one exact pool before
+publication. Validation or exhaustion leaves usage unchanged; consuming release
+returns the commitment. The signed service image and reboot path do not use it.
 
 1. Implement the policy/configuration service and service supervision protocol.
    **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed
    schema, exact-object capability checks for reads and every transaction
    update, optimistic revision binding, atomic bounded commits, monotonic audit
    sequencing with explicit overwrite gaps, and strict version-1
-   configuration/supervision request and response codecs. Kernel service-state
+   configuration/supervision request and response codecs. The opt-in
+   `AccountedConfigurationService` charges its complete fixed settings and audit
+   capacity before fresh or checkpoint-recovered publication; live image and
+   reboot integration remain pending. Kernel service-state
    introspection now requires exact READ authority rather than a service token.
    Syscall operation 9 now exposes only that authorized state query to CPL3: it
    accepts an opaque generational service token plus an exact task-local READ
