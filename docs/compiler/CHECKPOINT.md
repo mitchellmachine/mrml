@@ -988,8 +988,11 @@ the shared projection environment and unified with the existential query;
 parameters found only below projections fail closed as ambiguous. Windows
 gnullvm and native Arch Linux WSL each pass 522 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 868 compiler
-tests per host. Clause premises, recursive solver integration, generic
-implementation heads and coherence, higher-ranked term binders, projection
+tests per host. Each clause may retain up to eight flat implemented-trait
+premises, instantiated from the selected head substitution and discharged by
+the existing depth- and cycle-bounded projection-aware proof. Recursive
+projection-bearing-clause integration, generic implementation heads and
+coherence, higher-ranked term binders, projection
 terms in premise type positions, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 

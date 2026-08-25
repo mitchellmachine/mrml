@@ -4653,3 +4653,12 @@ existing universe-aware inference identities before using the existing goal
 solver. It adds no new term or source grammar, branching search,
 specialization order, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Projection-bearing clause premise proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment instantiates existing
+bounded flat trait predicates from an already selected projection-bearing head
+and sends them through the existing depth- and cycle-bounded proof operation.
+It adds no recursive projection-clause lookup, coherence rule, branching search,
+specialization order, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.

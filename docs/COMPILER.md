@@ -1043,9 +1043,13 @@ duplicate identities and clauses fail explicitly, multiple matching clauses
 remain ambiguous, and a parameter that occurs only beneath a projection fails
 closed as ambiguous instead of being guessed. Focused tests cover projection
 normalization that determines an existential substitution, a normalized
-mismatch, and the unconstrained-parameter boundary. This is bounded logical
-head/fact elaboration only: clause premises, recursive solver integration,
-projection terms in premise type positions, generic implementation heads and
+mismatch, and the unconstrained-parameter boundary. Each head may also retain
+up to eight flat implemented-trait premises; the selected substitution
+instantiates them and the existing projection-aware recursive proof must
+discharge them before the candidate succeeds. Missing premises and premise
+capacity have focused tests. This is bounded logical head elaboration with flat
+premises only: recursive projection-bearing-clause integration, projection
+terms in premise type positions, generic implementation heads and
 their coherence rules, higher-ranked term binders, backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.
 

@@ -4213,8 +4213,11 @@ the projection-aware environment and unified with the existential query. A
 parameter occurring only beneath a projection fails closed as ambiguous.
 Windows gnullvm and native Arch Linux WSL each pass 522 library tests, one
 component-interface probe, 10 conformance tests, and 335 replacement tests: 868
-compiler tests per host. Clause premises, recursive solver integration, generic
-implementation heads and coherence, higher-ranked term binders, projection
+compiler tests per host. A head may carry up to eight flat implemented-trait
+premises; the selected substitution instantiates them and the existing depth-
+and cycle-bounded projection-aware proof must discharge them. Recursive
+projection-bearing-clause integration, generic implementation heads and
+coherence, higher-ranked term binders, projection
 terms in premise type positions, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 
