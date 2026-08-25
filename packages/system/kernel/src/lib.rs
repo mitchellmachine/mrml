@@ -94,7 +94,8 @@ pub use ipc::{
     MAX_WIRE_MESSAGE, Message, Receiver, WIRE_HEADER_LENGTH,
 };
 pub use isolation::{
-    ComponentServiceArtifactError, ComponentServiceLaunchError, HostSubstrateReason,
+    ComponentServiceArtifactError, ComponentServiceHandoffError, ComponentServiceLaunchError,
+    HostSubstrateReason,
     IsolationAdmissionTable, IsolationBackendFailure, IsolationLaunchError,
     IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode, IsolationPlacement,
     IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
@@ -102,7 +103,8 @@ pub use isolation::{
     PreparedComponentServiceLaunch, PreparedComponentServiceRouteError, PreparedIsolationLaunch,
     PreparedIsolationServiceRoute, ReservedIsolationVcpus, RoutedIsolationService,
     RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport, UnavailableIsolationDomain,
-    launch_prepared_component_service, launch_prepared_isolation_service_route,
+    bind_component_service_handoff, launch_prepared_component_service,
+    launch_prepared_isolation_service_route, prepare_component_service_handoff,
     prepare_isolation_service_route, reserve_isolation_vcpus, route_isolation_service,
 };
 pub use memory::{

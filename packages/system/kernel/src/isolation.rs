@@ -1,4 +1,7 @@
 use core::array;
+use mrml_package_format::{
+    ComponentServiceLaunchHandoff, ComponentServiceLaunchHandoffError, ComponentServicePlacement,
+};
 
 use crate::{
     ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetTable, CpuResourceError,
@@ -494,6 +497,90 @@ pub enum PreparedComponentServiceRouteError<E, Endpoint> {
         error: ComponentServiceArtifactError,
     },
     Route(IsolationServiceRouteError<E, Endpoint>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ComponentServiceHandoffError {
+    Decode(ComponentServiceLaunchHandoffError),
+    Spec(IsolationServiceSpecError),
+    Admission(IsolationLaunchError),
+    Binding {
+        route: PreparedIsolationServiceRoute,
+        error: ComponentServiceLaunchError,
+    },
+}
+
+/// Decodes and consumes one canonical generation-bound control-plane handoff.
+/// The active system/policy generations are checked by isolation admission
+/// before a backend can run; the exact interface fingerprint and authenticated
+/// artifact digests then remain owned by the prepared component launch.
+pub fn prepare_component_service_handoff<const DOMAINS: usize>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    bytes: &[u8],
+) -> Result<PreparedComponentServiceLaunch, ComponentServiceHandoffError> {
+    let handoff = ComponentServiceLaunchHandoff::decode(bytes)
+        .map_err(ComponentServiceHandoffError::Decode)?;
+    let placement = match handoff.placement() {
+        ComponentServicePlacement::NativeService => IsolationPlacement::NativeService,
+        ComponentServicePlacement::Microvm => IsolationPlacement::Microvm,
+    };
+    let spec = IsolationServiceSpec::new(
+        ObjectId(handoff.domain_object()),
+        ObjectId(handoff.interface_object()),
+        handoff.interface_generation(),
+        handoff.provider_generation(),
+        handoff.system_generation(),
+        handoff.policy_generation(),
+        TotalMicrovmClass::MicrovmEligible,
+        placement,
+    )
+    .map_err(ComponentServiceHandoffError::Spec)?;
+    let route = prepare_isolation_service_route(admission, spec)
+        .map_err(ComponentServiceHandoffError::Admission)?;
+    bind_component_service_handoff(route, handoff)
+        .map_err(|(route, error)| ComponentServiceHandoffError::Binding { route, error })
+}
+
+/// Binds an already resource-reserved isolation route to the same canonical
+/// handoff. This keeps CPU/RAM reservation stages linear without reconstructing
+/// or weakening the generation/interface transaction.
+pub fn bind_component_service_handoff(
+    route: PreparedIsolationServiceRoute,
+    handoff: ComponentServiceLaunchHandoff,
+) -> Result<
+    PreparedComponentServiceLaunch,
+    (PreparedIsolationServiceRoute, ComponentServiceLaunchError),
+> {
+    let placement = match handoff.placement() {
+        ComponentServicePlacement::NativeService => IsolationPlacement::NativeService,
+        ComponentServicePlacement::Microvm => IsolationPlacement::Microvm,
+    };
+    let expected = match IsolationServiceSpec::new(
+        ObjectId(handoff.domain_object()),
+        ObjectId(handoff.interface_object()),
+        handoff.interface_generation(),
+        handoff.provider_generation(),
+        handoff.system_generation(),
+        handoff.policy_generation(),
+        TotalMicrovmClass::MicrovmEligible,
+        placement,
+    ) {
+        Ok(spec) => spec,
+        Err(_) => return Err((route, ComponentServiceLaunchError::RouteIdentityMismatch)),
+    };
+    if route.spec() != expected {
+        return Err((route, ComponentServiceLaunchError::RouteIdentityMismatch));
+    }
+    PreparedComponentServiceLaunch::bind(
+        route,
+        expected.interface(),
+        expected.interface_generation(),
+        expected.provider_generation(),
+        expected.system_generation(),
+        *handoff.interface_fingerprint(),
+        *handoff.consumer_artifact(),
+        *handoff.provider_artifact(),
+    )
 }
 
 pub fn prepare_isolation_service_route<const DOMAINS: usize>(
@@ -1542,6 +1629,62 @@ mod tests {
         .unwrap();
         assert_eq!(routed.placement(), IsolationPlacement::NativeService);
         assert_eq!((backend.native_launches, backend.microvm_launches), (1, 0));
+    }
+
+    #[test]
+    fn canonical_handoff_revalidates_active_generation_before_backend_launch() {
+        let handoff = ComponentServiceLaunchHandoff::new(
+            SYSTEM_GENERATION,
+            7,
+            0x43,
+            0x434f_4e46_4947,
+            1,
+            9,
+            ComponentServicePlacement::Microvm,
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let launch = prepare_component_service_handoff(&mut table, &handoff.encode()).unwrap();
+        let mut backend = backend();
+        let routed = launch_prepared_component_service(
+            &mut table,
+            &mut backend,
+            launch,
+            ArtifactKind::ServiceImage,
+            &[0x18; 64],
+            ArtifactKind::ServiceImage,
+            &[0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(routed.system_generation(), SYSTEM_GENERATION);
+        assert_eq!(routed.placement(), IsolationPlacement::Microvm);
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
+
+        let stale = ComponentServiceLaunchHandoff::new(
+            SYSTEM_GENERATION - 1,
+            7,
+            0x44,
+            0x434f_4e46_4947,
+            1,
+            9,
+            ComponentServicePlacement::Microvm,
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_component_service_handoff(&mut table, &stale.encode()),
+            Err(ComponentServiceHandoffError::Admission(
+                IsolationLaunchError::InvalidSystemGeneration
+            ))
+        );
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
     }
 
     #[test]

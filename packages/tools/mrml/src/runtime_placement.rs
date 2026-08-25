@@ -1,5 +1,8 @@
 use crate::abi::{AbiOpaqueHandle, InterfaceIdentity};
 use crate::binding::{BindingError, InterfaceBindingId, InterfaceBindingTable, ProviderTarget};
+use crate::component_launch::{
+    ComponentServiceLaunchHandoff, ComponentServiceLaunchHandoffError, ComponentServicePlacement,
+};
 use crate::generation::{SystemGeneration, SystemPackage};
 use crate::isolation::{EffectivePlacement, IsolationPlacement, PlacementSource};
 use crate::loader::ImmutableLoadPlan;
@@ -174,6 +177,37 @@ pub struct PreparedGenerationBoundServiceLaunch {
     provider: ImmutableLoadPlan,
 }
 
+/// Capability-selected kernel object identities and the applied policy
+/// generation supplied after package/interface resolution. These values
+/// identify the kernel objects for the handoff; constructing this record does
+/// not grant either capability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelServiceLaunchAuthority {
+    policy_generation: u64,
+    domain_object: u64,
+    interface_object: u64,
+}
+
+impl KernelServiceLaunchAuthority {
+    pub const fn new(
+        policy_generation: u64,
+        domain_object: u64,
+        interface_object: u64,
+    ) -> Result<Self, ComponentServiceLaunchHandoffError> {
+        if policy_generation == 0 {
+            return Err(ComponentServiceLaunchHandoffError::Generation);
+        }
+        if domain_object == 0 || interface_object == 0 {
+            return Err(ComponentServiceLaunchHandoffError::Object);
+        }
+        Ok(Self {
+            policy_generation,
+            domain_object,
+            interface_object,
+        })
+    }
+}
+
 impl PreparedGenerationBoundServiceLaunch {
     pub fn prepare(
         system: &SystemGeneration,
@@ -234,6 +268,34 @@ impl PreparedGenerationBoundServiceLaunch {
 
     pub fn provider(&self) -> &ImmutableLoadPlan {
         &self.provider
+    }
+
+    /// Emits the one canonical pointer-free handoff consumed by kernel
+    /// isolation admission. Package generations, digests, interface identity,
+    /// fingerprint, and selected placement come only from this already
+    /// prepared immutable launch; the caller supplies only capability-selected
+    /// kernel object identities and the applied policy generation.
+    pub fn kernel_handoff(
+        &self,
+        authority: KernelServiceLaunchAuthority,
+    ) -> Result<ComponentServiceLaunchHandoff, ComponentServiceLaunchHandoffError> {
+        let placement = match self.placement {
+            IsolationPlacement::NativeService => ComponentServicePlacement::NativeService,
+            IsolationPlacement::Microvm => ComponentServicePlacement::Microvm,
+            _ => return Err(ComponentServiceLaunchHandoffError::Placement),
+        };
+        ComponentServiceLaunchHandoff::new(
+            self.system_generation,
+            authority.policy_generation,
+            authority.domain_object,
+            authority.interface_object,
+            self.resolved.interface().generation(),
+            self.resolved.provider().version(),
+            placement,
+            self.resolved.fingerprint(),
+            *self.consumer.package().artifact_digest(),
+            *self.provider.package().artifact_digest(),
+        )
     }
 
     /// Publishes the first live endpoint reference only after the selected
@@ -575,6 +637,18 @@ mod tests {
         assert_eq!(prepared.system_generation(), 108);
         assert_eq!(prepared.placement(), IsolationPlacement::NativeService);
         assert_eq!(prepared.resolved().provider().version(), 15);
+        let handoff = prepared
+            .kernel_handoff(KernelServiceLaunchAuthority::new(7, 0x500, 0x406).unwrap())
+            .unwrap();
+        assert_eq!(handoff.system_generation(), 108);
+        assert_eq!(handoff.policy_generation(), 7);
+        assert_eq!(handoff.interface_generation(), 3);
+        assert_eq!(handoff.provider_generation(), 15);
+        assert_eq!(handoff.interface_fingerprint(), &ZSTD3);
+        assert_eq!(
+            ComponentServiceLaunchHandoff::decode(&handoff.encode()),
+            Ok(handoff)
+        );
 
         let mut bindings = InterfaceBindingTable::<1>::new().unwrap();
         assert_eq!(bindings.bindings().count(), 0);

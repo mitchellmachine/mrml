@@ -212,16 +212,24 @@ record. Configuration-derived service specifications use that active value;
 the native Zstd binding and WHP/KVM commit paths reject or detect any stale
 value before opening the data plane. Windows and Arch Linux kernel, Zstd, and
 configuration suites plus WHP/KVM runner suites pass. The runners use a
-transient local generation, so persisted `DeploymentService` activation and a
-canonical build-tool-to-kernel handoff remain **PLANNED**.
+transient local generation, so persisted `DeploymentService` activation and
+general resolver-driven launch remain **PLANNED**. The canonical build-tool-to-
+kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 216-byte
+record carries the resolved system/provider/interface generations,
+fingerprint, placement, applied policy generation, capability-selected object
+IDs, and exact consumer/provider digests. Kernel decoding and both focused VMM
+runners reject substitutions before backend invocation. Windows/Arch Linux
+package-format 3, build-tool 78, and kernel 509 test suites pass; WHP passes 7
+and KVM passes 8.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the
 generational binding table. Package/form/artifact mismatch, Total exceptions,
 or table exhaustion publish no new endpoint reference and preserve existing
 bindings; publication failure returns the complete launch and endpoint for
-teardown. Windows and Arch Linux build-tool suites pass 76 tests. Kernel runtime
-handoff and general WHP/KVM invocation from this plan remain **PLANNED**.
+teardown. Windows and Arch Linux build-tool suites pass 78 tests. Canonical
+kernel handoff is now exercised by the focused WHP/KVM component path; general
+resolver-driven runtime invocation remains **PLANNED**.
 The kernel-side prepared launch handoff now carries the same two digests plus
 the exact interface fingerprint/generation and provider generation while
 retaining the uncommitted fail-closed isolation route. Backend verification of

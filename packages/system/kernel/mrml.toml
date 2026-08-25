@@ -29,6 +29,12 @@ package = "org.mrml.library.crypto"
 provider_profile = "core"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_package_format"
+compile_name = "mrml-package-format"
+package = "org.mrml.library.package-format"
+scope = "compile"
+
 [[host_build]]
 targets = ["WINDOWS", "LINUX"]
 

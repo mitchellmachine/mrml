@@ -25,7 +25,7 @@ use mrml_kernel::{
     GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
     GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
     IsolationMode, IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable,
-    MicrovmPageProjectionKind, ObjectId, PreparedComponentServiceLaunch,
+    bind_component_service_handoff, MicrovmPageProjectionKind, ObjectId,
     PreparedIsolationServiceRoute, ResourceCommand, Rights, SignedArtifact, TotalMicrovmClass,
     TrustRoot, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
@@ -50,7 +50,10 @@ use mrml_kernel::{
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
-use mrml_package_format::{admit_kernel_payload, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES};
+use mrml_package_format::{
+    admit_kernel_payload, ComponentServiceLaunchHandoff, ComponentServicePlacement,
+    MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES,
+};
 #[cfg(target_os = "linux")]
 use mrml_runtime::mrml_println as println;
 #[cfg(target_os = "linux")]
@@ -2133,17 +2136,21 @@ fn application_main() -> Result<()> {
         let provider = provider_executable
             .as_ref()
             .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
+        let handoff = ComponentServiceLaunchHandoff::new(
+            1,
+            1,
+            0x5a49_4d5f_5a53_5444,
+            0x5a53_5444_0000_0003,
+            3,
+            provider.artifact().version(),
+            ComponentServicePlacement::Microvm,
+            ZSTD_INTERFACE_FINGERPRINT,
+            *consumer.artifact().digest(),
+            *provider.artifact().digest(),
+        )
+        .map_err(|error| anyhow!("component launch handoff failed: {:?}", error))?;
         Some(
-            match PreparedComponentServiceLaunch::bind(
-                prepared,
-                ObjectId(0x5a53_5444_0000_0003),
-                3,
-                provider.artifact().version(),
-                1,
-                ZSTD_INTERFACE_FINGERPRINT,
-                *consumer.artifact().digest(),
-                *provider.artifact().digest(),
-            ) {
+            match bind_component_service_handoff(prepared, handoff) {
                 Ok(launch) => launch,
                 Err((route, error)) => {
                     route
