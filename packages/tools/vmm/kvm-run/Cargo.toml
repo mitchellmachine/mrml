@@ -1,0 +1,21 @@
+[package]
+name = "mrml-kvm-run"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Verified standalone MRML kernel launcher for KVM"
+
+[[bin]]
+name = "mrml-kvm-run"
+path = "src/main.rs"
+
+[dependencies]
+mrml-crypto = { path = "../../../libraries/crypto", default-features = false }
+mrml-error = { path = "../../../libraries/error" }
+mrml-kernel = { path = "../../../system/kernel" }
+mrml-kvm = { path = "../../../system/vmm/kvm" }
+mrml-runtime = { path = "../../../libraries/runtime" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+mrml-tensor = { path = "../../../gpu/tensor", features = ["cuda"] }

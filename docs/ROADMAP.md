@@ -122,7 +122,7 @@ manifest, pinned upstream orchestration, profiles, EFI export, packaging/signing
 release/image/publication, provenance, experimental `mrml-rustc`, then per-profile
 promotion. It cannot redirect this compiler lane or the foundational OS gate.
 
-**PARTIALLY IMPLEMENTED:** stage-zero `tools/mrml`, `MRML.workspace`, structured
+**PARTIALLY IMPLEMENTED:** stage-zero `packages/tools/mrml`, `MRML.workspace`, structured
 Cargo-bridge build/test dispatch, native dependency resolution, current-host VMM
 selection, UEFI routing, and CUDA target validation now exist. All tracked
 components have semantic homes outside generic `crates/`. Follow
@@ -411,16 +411,16 @@ edges are sibling semantic-package references without changing codec,
 conformance, or feature behavior.
 
 The compiler lane has moved dependency-free `mrml-rustc` to
-`compiler/core`; its driver edge and durable recovery/oracle/review references
+`packages/compiler/core`; its driver edge and durable recovery/oracle/review references
 now resolve there without changing compiler semantics.
 
-The compiler driver now resides at `compiler/driver`; its core/error/runtime
+The compiler driver now resides at `packages/compiler/driver`; its core/error/runtime
 edges resolve to semantic homes without changing command behavior.
 
-`mrml-git` now resides at `tools/git`; all four dependency edges already
+`mrml-git` now resides at `packages/tools/git`; all four dependency edges already
 resolve to semantic packages without changing Git or SSH behavior.
 
-`mrml-tools` now resides at `tools/host`; all eight dependency edges resolve
+`mrml-tools` now resides at `packages/tools/host`; all eight dependency edges resolve
 to semantic packages and all four consumers resolve to the host-tool home
 without changing input policy or tool behavior.
 

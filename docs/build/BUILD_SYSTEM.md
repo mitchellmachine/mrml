@@ -1,6 +1,6 @@
 # MRML bootstrap build and packaging toolchain
 
-**Status: PARTIALLY IMPLEMENTED.** `tools/mrml` now parses the versioned root
+**Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` now parses the versioned root
 `MRML.workspace`, emits typed list/doctor/audit/build/test results, resolves and
 validates the complete declared dependency graph natively, inventories unusual
 build inputs, directly invokes pinned upstream rustc for all 42 actions, selects current-
@@ -54,6 +54,11 @@ or LLVM remains an evidence-driven migration, never an OS-progress prerequisite.
 object, package, release, and image responsibilities may later be libraries or
 tools; avoid premature process/tool proliferation.
 
+Native artifacts are isolated under `target/mrml-native/`. This deliberately
+does not use `target/mrml/`, because Cargo's Unix stage-zero executable occupies
+the path `target/mrml`; sharing that name makes a clean Linux bootstrap unable
+to create its native artifact directory.
+
 ## Compiler modes and readiness
 
 Compiler selection is explicit: `UpstreamRustc`, `MrmlRustcExperimental`, or
@@ -106,14 +111,14 @@ was verified. The first eighteen library components, `mrml-math`,
 `mrml-error`, `mrml-terminal-style`, and `mrml-av1`, now live under
 `packages/libraries/`; further semantic component homes belong under
 `packages/`, with the
-bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
+bootstrap tool under `packages/tools/mrml` and compiler tooling under a clear compiler
 location. Do not create empty speculative directories.
 
-The dependency-free `mrml-rustc` core lives at `compiler/core`, and its
-separate driver lives at `compiler/driver`.
-`mrml-git` now lives at `tools/git`; its host-tool classification and Cargo
+The dependency-free `mrml-rustc` core lives at `packages/compiler/core`, and its
+separate driver lives at `packages/compiler/driver`.
+`mrml-git` now lives at `packages/tools/git`; its host-tool classification and Cargo
 bridge remain unchanged.
-`mrml-tools` now lives at `tools/host`; its input-policy counts, feature
+`mrml-tools` now lives at `packages/tools/host`; its input-policy counts, feature
 behavior, and Cargo bridge remain unchanged.
 
 The first explicit `rust-action` nodes are the dependency-free `mrml-math`,

@@ -34,7 +34,7 @@ cover the documented bounded arithmetic, control-flow, integer, pointer,
 reference, array, tuple, and native ABI/object slices.
 
 Detailed per-slice mappings and Windows/Arch native evidence remain in
-`compiler/core/README.md` and the test sources. This record intentionally
+`packages/compiler/core/README.md` and the test sources. This record intentionally
 does not duplicate the upstream changelog or the complete evidence ledger.
 
 ## Conformance result

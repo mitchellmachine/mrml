@@ -156,7 +156,7 @@ preserves the VBS initialization structure as mutable because Windows returns
 the actual created thread count through it. These transitions are implemented,
 malformed-state tested, and exercised by the signed-image probe below.
 
-`experiments/mrml-vbs-enclave` is the first standalone enclave image source. It
+`packages/experiments/mrml-vbs-enclave` is the first standalone enclave image source. It
 is original `no_std` Rust using only MRML crates and `core`, builds as a PE DLL
 with the Windows GNU/LLVM toolchain, and embeds an 80-byte x86_64 enclave
 configuration. The configuration is non-debug, uses strict containing-process
@@ -195,7 +195,7 @@ it set `IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY` and
 image passes the independent MRML Authenticode digest parser. A Windows-accepted
 certificate signature is still required before the real load test.
 
-`experiments/mrml-vbs-host` is an original `no_std` lifecycle probe using only
+`packages/experiments/mrml-vbs-host` is an original `no_std` lifecycle probe using only
 MRML crates and `core`. It reports capability/ABI discovery, creates the
 non-debug enclave, passes a bounded canonical UTF-16 image path, loads the
 image, initializes one enclave thread, and then invokes the authority with

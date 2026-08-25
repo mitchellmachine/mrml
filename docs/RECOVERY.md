@@ -143,28 +143,28 @@ explicitly and downgrade the status rather than guessing.
   and ABI generations differ, boot/recovery codecs may remain pinned/static, and
   `mrml-rustc` will eventually validate the same explicit ABI as upstream rustc.
 
-- Kernel mechanisms: `system/kernel/src/`
-- x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `system/kernel/src/arch/x86_64/`
+- Kernel mechanisms: `packages/system/kernel/src/`
+- x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `packages/system/kernel/src/arch/x86_64/`
 - CPU support floor, Intel/AMD microcode, post-update vulnerability state,
   heterogeneous scheduling, CPU budgets, power, telemetry, thermal safety,
   monitor, and hardware milestones: `docs/platform/CPU_PLATFORM.md`. These are
   planned unless exact code and focused evidence establish otherwise; CPU age
   never substitutes for affectedness evaluation.
-- Boot image and loader: `system/bootloader/`, `packages/libraries/uefi/`
-- CPL3 service image: `system/service-image/`
+- Boot image and loader: `packages/system/bootloader/`, `packages/libraries/uefi/`
+- CPL3 service image: `packages/system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`
-- Linux KVM: `system/vmm/kvm/`, `tools/vmm/kvm-run/`
-- Windows WHP: `system/vmm/whp/`, `tools/vmm/whp-run/`
+- Linux KVM: `packages/system/vmm/kvm/`, `packages/tools/vmm/kvm-run/`
+- Windows WHP: `packages/system/vmm/whp/`, `packages/tools/vmm/whp-run/`
 - VBS and protected execution: search for `Vbs`, `Vtl1`, `ProtectionMode`,
   `AuthenticatedAdmission`, `receipt`, and `sealed` across the workspace.
 - Capabilities/IPC/lifecycle: `capability.rs`, `ipc.rs`, `shared_memory.rs`,
   `scheduler.rs`, `task_runtime.rs`, `service_lifecycle.rs`.
-- Compiler: `compiler/core/`, `compiler/driver/`; never infer a
+- Compiler: `packages/compiler/core/`, `packages/compiler/driver/`; never infer a
   complete compiler or application ABI from supported subset code generation.
   Read `docs/COMPILER.md` and every record under `docs/compiler/oracles/` before
   selecting compiler work. Recover the future-Rust direction, not an assumed
   obligation to reproduce old editions or arbitrary historical rustc behavior.
-- Host browser automation: `tools/host/src/browser.rs` and `web.rs`; this
+- Host browser automation: `packages/tools/host/src/browser.rs` and `web.rs`; this
   is not an MRML browser engine, compositor, or OS application implementation.
 - Future browser work must read `docs/BROWSER_SEMANTICS.md`: blind humans,
   Braille, speech, keyboard, and text-only AI share one sanitized generational
@@ -173,7 +173,7 @@ explicitly and downgrade the status rather than guessing.
   ABI stabilization.
 - Application/GUI/browser OS work: search the whole tree; absence is meaningful
   and planned documentation must not be promoted to implementation status.
-- Native filesystem: `services/storage` contains the first userspace-service
+- Native filesystem: `packages/services/storage` contains the first userspace-service
   foundation: stable volume/object identities, attenuated generational
   authority with descendant revocation, and canonical checksummed v1 volume,
   superblock, directory-entry, directory, file, and extent metadata. Its bounded

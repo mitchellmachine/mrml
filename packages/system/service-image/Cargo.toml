@@ -1,0 +1,22 @@
+[package]
+name = "mrml-service-image"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+preemption-probe = []
+block-service-loop = []
+
+[dependencies]
+mrml-config = { path = "../../services/config" }
+mrml-crypto = { path = "../../libraries/crypto", default-features = false }
+mrml-kernel = { path = "../../system/kernel" }
+mrml-storage = { path = "../../services/storage" }
+
+[[bin]]
+name = "mrml-service-pe"
+path = "src/main.rs"
+test = false
+bench = false

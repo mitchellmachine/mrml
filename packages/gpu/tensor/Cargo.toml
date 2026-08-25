@@ -14,7 +14,7 @@ cuda = ["runtime"]
 [dependencies]
 mrml-math = { path = "../../libraries/math" }
 mrml-runtime = { path = "../../libraries/runtime" }
-mrml-kernel = { path = "../../../system/kernel" }
+mrml-kernel = { path = "../../system/kernel" }
 
 [build-dependencies]
 mrml-runtime = { path = "../../libraries/runtime" }

@@ -1,0 +1,11 @@
+[package]
+name = "mrml-config"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+mrml-crypto = { path = "../../libraries/crypto", default-features = false }
+mrml-kernel = { path = "../../system/kernel" }
+mrml-storage = { path = "../storage" }

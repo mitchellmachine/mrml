@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-25 — collision-free native artifact directory
+
+The build frontend now writes direct-rustc artifacts under
+`target/mrml-native/` so the directory cannot collide with Cargo's Unix
+stage-zero executable at `target/mrml`. This changes repository build-path
+selection only and introduces no new runtime, compiler, package, or security
+mechanism. **Result: NOT_TRIGGERED.** Existing package/resolver reviews remain
+in force.
+
 ## 2026-08-25 — UEFI trust and network administration architecture
 
 **Result: TRIGGERED.** Planned typed firmware/Secure Boot transactions, trust-set
@@ -136,12 +145,12 @@ NOT_TRIGGERED.** The existing worldwide AV1 mechanism and license review remains
 in force.
 
 The compiler-core semantic move relocates dependency-free `mrml-rustc` to
-`compiler/core` and updates its driver and durable documentation paths without
+`packages/compiler/core` and updates its driver and durable documentation paths without
 changing compiler semantics. **Result: NOT_TRIGGERED.** Existing compiler-
 mechanism reviews remain in force.
 
 The compiler-driver semantic move relocates `mrml-rustc-driver` to
-`compiler/driver` after its core/error/runtime dependencies without changing
+`packages/compiler/driver` after its core/error/runtime dependencies without changing
 driver behavior. **Result: NOT_TRIGGERED.** This is repository organization,
 not a new compiler mechanism.
 
@@ -161,7 +170,7 @@ explicitly separate host-test policy without changing kernel mechanisms.
 resolver review and **NOT_TRIGGERED** for kernel behavior; existing kernel
 mechanism reviews remain in force.
 
-The Git-tool semantic move relocates `mrml-git` to `tools/git` after its
+The Git-tool semantic move relocates `mrml-git` to `packages/tools/git` after its
 error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
 diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository
 organization, not a new Git mechanism.
@@ -171,7 +180,7 @@ harness execution, and explicit compile-time environment selection, then applies
 them to `mrml-git` without changing Git behavior. **Result: TRIGGERED** under the
 existing package/resolver review; existing Git/SSH reviews remain in force.
 
-The host-tool semantic move relocates `mrml-tools` to `tools/host` after all
+The host-tool semantic move relocates `mrml-tools` to `packages/tools/host` after all
 eight dependencies and updates all four inbound Cargo paths without changing
 browser, desktop, executor, media, MCP, or web behavior. **Result:
 NOT_TRIGGERED.** This is repository organization, not a new tool mechanism.
@@ -219,12 +228,12 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 | --- | --- | --- | --- |
 | Highest | AV1 coding tools, restoration, prediction, transforms, entropy, film grain | `packages/libraries/av1/src/` | AOMedia patent terms require exact license review; third-party assertions remain possible. |
 | Highest | Opus SILK/CELT, PVQ, range coding, stereo/pitch tools | `packages/libraries/opus/src/` | RFC 6716 records multiple IETF IPR disclosures; terms and worldwide family members need claims review. |
-| High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `system/kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `system/vmm/{kvm,whp}/`, `packages/gpu/tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
+| High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `packages/system/kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `packages/system/vmm/{kvm,whp}/`, `packages/gpu/tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
 | High | Quantized inference, planning, KV cache, speculative decoding | `packages/gpu/tensor/src/{quant,ops,execution_plan,kv_cache,speculative}.rs` | Must distinguish standard formats from MRML scheduling/layout. |
 | High | Zstandard FSE/Huffman/sequences | `packages/libraries/zstd/src/` | Compression and upstream grant review required. |
 | High | Hybrid X25519/ML-KEM TLS and AEAD | `packages/libraries/tls/`, `packages/libraries/crypto/` | Standards/IPR and exact protocol-version review required. |
-| Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `system/kernel/src/protected_*.rs`, `system/vmm/whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
-| Medium | Rust-subset lowering/object generation | `compiler/core/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
+| Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `packages/system/kernel/src/protected_*.rs`, `packages/system/vmm/whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
+| Medium | Rust-subset lowering/object generation | `packages/compiler/core/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
 
 ### Discovery performed
 
@@ -255,7 +264,7 @@ Patent review: `TRIGGERED` — persistent worldwide policy and initial landscape
 
 ## 2026-08-23 — fixed-array reference helper signatures
 
-MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
+MRML source: `packages/compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 The compiler now carries existing fixed-array element, count, and mutability
 information through its bounded descriptor for inlined safe Rust-ABI helper
@@ -268,7 +277,7 @@ lowering within the review log's existing Rust-subset compiler category.
 
 ## 2026-08-23 — slice and string reference helper signatures
 
-MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
+MRML source: `packages/compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 The compiler now carries existing slice element, string, and mutability
 information through bounded descriptors for inlined safe Rust-ABI helper calls.
@@ -284,7 +293,7 @@ category.
 
 ## 2026-08-23 — value-producing loop helper tails
 
-MRML source: `compiler/core/src/{parser,codegen,pipeline}.rs`.
+MRML source: `packages/compiler/core/src/{parser,codegen,pipeline}.rs`.
 
 The helper-body parser now preserves a tail value-producing loop when the
 existing bounded expression parser accepts the complete remainder. Existing
@@ -299,7 +308,7 @@ category.
 
 ## 2026-08-23 — by-value fixed-array helper signatures
 
-MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
+MRML source: `packages/compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 The compiler now carries existing fixed-array element and count information
 through bounded descriptors for inlined safe Rust-ABI helper calls. Arguments
@@ -314,9 +323,9 @@ compiler category.
 
 ## 2026-08-23 — native guest-mapping revocation ordering
 
-MRML source: `system/kernel/src/vm.rs`,
-`system/vmm/kvm/src/{abi,native.rs,native/launch.rs}`, and
-`system/vmm/whp/src/{abi,native.rs,native/launch.rs}`.
+MRML source: `packages/system/kernel/src/vm.rs`,
+`packages/system/vmm/kvm/src/{abi,native.rs,native/launch.rs}`, and
+`packages/system/vmm/whp/src/{abi,native.rs,native/launch.rs}`.
 
 The VMM adapters now remove exact second-level guest mappings before the common
 mapping identity is retired and prevent vCPU execution after uncertain native
@@ -329,7 +338,7 @@ enforcement over existing hypervisor APIs.
 
 ## 2026-08-23 — cleanup-gated service restart
 
-MRML source: `system/kernel/src/{task_runtime,service_lifecycle}.rs` and
+MRML source: `packages/system/kernel/src/{task_runtime,service_lifecycle}.rs` and
 `crates/mrml-{kvm,whp}/src/native/launch.rs`.
 
 Service retirement now preflights restart timing, retains an exact one-use
@@ -344,7 +353,7 @@ zeroization gating over existing service reset mechanisms.
 
 ## 2026-08-23 — task-owned shared-resource cleanup
 
-MRML source: `system/kernel/src/shared_memory.rs`.
+MRML source: `packages/system/kernel/src/shared_memory.rs`.
 
 Shared mappings may now bind an exact task generation. Service cleanup removes
 each native mapping before its policy identity and binding, retains peer
@@ -359,7 +368,7 @@ lifecycle and cleanup composition.
 
 ## 2026-08-23 — Phase 1 service-policy microbenchmarks
 
-MRML source: `tests/kernel-bench/src/lib.rs`.
+MRML source: `packages/tests/kernel-bench/src/lib.rs`.
 
 The host-only release harness now times existing IPC, scheduler wakeup,
 capability transfer/revocation, shared-binding, and cross-runtime domain-handoff
@@ -371,8 +380,8 @@ operations.
 
 ## 2026-08-23 — pinned cross-core and live WHP mapping benchmarks
 
-MRML source: `tests/kernel-bench/src/lib.rs`,
-`system/vmm/whp/src/native.rs`, and `system/vmm/kvm/src/native.rs`.
+MRML source: `packages/tests/kernel-bench/src/lib.rs`,
+`packages/system/vmm/whp/src/native.rs`, and `packages/system/vmm/kvm/src/native.rs`.
 
 The host-only harness parses documented Windows processor topology, pins two
 threads to distinct reported cores, and measures the existing ownership
@@ -386,7 +395,7 @@ hypervisor operations.
 
 ## 2026-08-23 — transitive IPC capability revocation
 
-MRML source: `system/kernel/src/task_runtime.rs`.
+MRML source: `packages/system/kernel/src/task_runtime.rs`.
 
 IPC transfers now record bounded parent/child relations between exact
 generational capability handles. Explicit revocation and task retirement walk
@@ -400,7 +409,7 @@ lifecycle revocation.
 
 ## 2026-08-23 — supervised fault cleanup and restart composition
 
-MRML source: `system/kernel/src/{service_lifecycle,shared_memory}.rs`.
+MRML source: `packages/system/kernel/src/{service_lifecycle,shared_memory}.rs`.
 
 Service recovery now sequences existing task retirement, peer notification,
 native shared-mapping revocation, resource/address-space erasure, and bounded
@@ -414,7 +423,7 @@ composition.
 
 ## 2026-08-23 — hosted cleanup-ticket service reset handshake
 
-MRML source: `system/bootloader/src/main.rs` and
+MRML source: `packages/system/bootloader/src/main.rs` and
 `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 The signed hosted probe now pauses on an exact service-slot cleanup request,
@@ -429,7 +438,7 @@ verification.
 
 ## 2026-08-23 — signed typed service peer-death proof
 
-MRML source: `system/bootloader/src/main.rs` and
+MRML source: `packages/system/bootloader/src/main.rs` and
 `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 The signed hosted service path now checks an existing typed clean peer-death
@@ -444,7 +453,7 @@ test-harness verification.
 
 ## 2026-08-23 — diverging Rust helper signatures
 
-MRML source: `compiler/core/src/{expression,codegen,pipeline}.rs`.
+MRML source: `packages/compiler/core/src/{expression,codegen,pipeline}.rs`.
 
 Safe inlined Rust helpers may declare the never return type when their existing
 bounded body representation proves an unconditional diverging loop. Call-site
@@ -458,7 +467,7 @@ existing bounded compiler control flow.
 ## 2026-08-23 — bounded heterogeneous scalar tuples
 
 MRML source:
-`compiler/core/src/{expression,ir,semantics,codegen,pipeline}.rs`.
+`packages/compiler/core/src/{expression,ir,semantics,codegen,pipeline}.rs`.
 
 The compiler now represents up to four heterogeneous built-in scalar tuple
 elements in fixed arrays, materializes them in existing checked stack slots,
@@ -487,8 +496,8 @@ lifecycle revocation.
 
 ## 2026-08-23 — signed surviving-peer fault notification
 
-MRML source: `system/kernel/src/task_runtime.rs`,
-`system/bootloader/src/main.rs`, `system/service-image/src/main.rs`,
+MRML source: `packages/system/kernel/src/task_runtime.rs`,
+`packages/system/bootloader/src/main.rs`, `packages/system/service-image/src/main.rs`,
 and `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 Retirement now publishes an existing typed death event and wakes blocked peers
@@ -503,8 +512,8 @@ lifecycle verification.
 
 ## 2026-08-23 — typed configuration and supervision protocol foundation
 
-MRML source: `services/config/src/lib.rs` and
-`system/kernel/src/{capability,service_lifecycle}.rs`.
+MRML source: `packages/services/config/src/lib.rs` and
+`packages/system/kernel/src/{capability,service_lifecycle}.rs`.
 
 The service foundation applies fixed schemas, ordinary optimistic transaction
 revision checks, exact capability authorization, a bounded overwrite-detecting
@@ -519,8 +528,8 @@ service-control message handling.
 
 ## 2026-08-23 — IPC-derived configuration and supervision dispatch
 
-MRML source: `services/config/src/lib.rs` and
-`system/kernel/src/ipc.rs`.
+MRML source: `packages/services/config/src/lib.rs` and
+`packages/system/kernel/src/ipc.rs`.
 
 Configuration and supervision dispatch now separates payload data from
 authority by resolving operations from the receiver-space capabilities that
@@ -535,8 +544,8 @@ and service dispatch.
 
 ## 2026-08-23 — bounded CPL3 buffer validation foundation
 
-MRML source: `system/kernel/src/{syscall,capability}.rs` and
-`system/kernel/src/arch/x86_64/{address_space,page_table,service_space}.rs`.
+MRML source: `packages/system/kernel/src/{syscall,capability}.rs` and
+`packages/system/kernel/src/arch/x86_64/{address_space,page_table,service_space}.rs`.
 
 The kernel now decodes bounded buffer descriptors, validates canonical
 capability-transfer records, resolves complete ranges against user mappings,
@@ -550,7 +559,7 @@ syscall descriptor parsing.
 
 ## 2026-08-23 — lazy tuple-valued compiler control flow
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Tuple-valued conditionals and bounded value-producing loops now select one
 existing branch and materialize its fixed stack slots once. This reuses
@@ -562,7 +571,7 @@ Patent review: `NOT_TRIGGERED` — ordinary aggregate control-flow lowering.
 
 ## 2026-08-23 — ordered tuple expression sequencing
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Tuple materialization and field projection now evaluate an existing scalar
 statement prefix once before consuming the tuple tail. This reuses conventional
@@ -573,8 +582,8 @@ Patent review: `NOT_TRIGGERED` — ordinary expression sequencing.
 
 ## 2026-08-23 — bounded mutable tuple places
 
-MRML source: `compiler/core/src/parser.rs` and
-`compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/parser.rs` and
+`packages/compiler/core/src/codegen.rs`.
 
 Numeric fields of mutable bounded scalar-tuple locals can now be assigned in
 their existing fixed stack slots. This reuses conventional place parsing,
@@ -588,8 +597,8 @@ Patent review: `NOT_TRIGGERED` — ordinary aggregate-place assignment.
 
 ## 2026-08-23 — structured bounded assignment places
 
-MRML source: `compiler/core/src/parser.rs` and
-`compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/parser.rs` and
+`packages/compiler/core/src/codegen.rs`.
 
 Assignment targets now retain a base binding and an explicit bounded direct,
 dereference, index, or numeric tuple-field projection instead of repeatedly
@@ -601,7 +610,7 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler place representation.
 
 ## 2026-08-23 — monotonic runtime local identities
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Runtime locals receive checked monotonic identities that remain distinct when
 scope cleanup permits a fixed storage index to be reused. Assignment lowering
@@ -614,7 +623,7 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler local/place identity.
 
 ## 2026-08-23 — explicit runtime place access intent
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Resolved assignment places now distinguish a plain write from a
 read-modify-write, and existing assignment emitters consume that classification
@@ -626,9 +635,9 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler access classification.
 
 ## 2026-08-23 — signed buffered CPL3 service IPC
 
-MRML source: `system/bootloader/src/main.rs`,
-`system/service-image/src/main.rs`,
-`system/kernel/src/arch/x86_64/context.rs`, and hosted launchers.
+MRML source: `packages/system/bootloader/src/main.rs`,
+`packages/system/service-image/src/main.rs`,
+`packages/system/kernel/src/arch/x86_64/context.rs`, and hosted launchers.
 
 The signed service probe now performs bounded user-buffer validation, ordinary
 capability-message delivery, blocked-receiver wakeup, address-space switching,
@@ -642,7 +651,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded IPC and context switchin
 
 ## 2026-08-23 — bounded runtime body fact tables
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Runtime emission now retains fixed-capacity monotonic local facts across stack-
 slot reuse and source-ordered assignment-place access facts through final
@@ -655,7 +664,7 @@ validation within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — stable runtime identifier-read facts
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Runtime identifier loads now append conventional read facts to the existing
 bounded local/place table, reusing stable local or parameter identity across
@@ -667,7 +676,7 @@ within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — bounded source-independent place projections
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Runtime place facts now retain a four-step fixed-capacity list of conventional
 dereference, index, tuple-field, or subslice projections and validate each step
@@ -680,7 +689,7 @@ and type validation within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — bounded runtime read-place discovery
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Runtime read syntax now peels conventional identifier, dereference, index,
 tuple-field, subslice, and transparent expression forms into the existing
@@ -693,7 +702,7 @@ within the existing Rust-subset compiler category.
 
 ## 2026-08-23 — standalone typed runtime body facts
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 Local and place-access facts now occupy a conventional fixed-capacity object
 separate from machine-code buffers. A bounded pre-emission pass assigns types,
@@ -707,7 +716,7 @@ category.
 
 ## 2026-08-23 — signed CPL3 configuration read dispatch
 
-MRML source: `services/config`, `system/kernel`, the signed kernel and
+MRML source: `packages/services/config`, `packages/system/kernel`, the signed kernel and
 service images, and the WHP/KVM hosted launch paths.
 
 The signed service now decodes a conventional fixed-record configuration read,
@@ -723,7 +732,7 @@ integration.
 
 ## 2026-08-23 — signed CPL3 configuration commit dispatch
 
-MRML source: `services/config`, the signed kernel and service images, and the
+MRML source: `packages/services/config`, the signed kernel and service images, and the
 WHP/KVM hosted launch paths.
 
 The signed client encodes a conventional fixed-record one-update transaction,
@@ -739,7 +748,7 @@ transaction integration.
 
 ## 2026-08-23 — signed CPL3 configuration schema admission
 
-MRML source: `services/config`, the signed service image, and the WHP/KVM
+MRML source: `packages/services/config`, the signed service image, and the WHP/KVM
 hosted probe sequencing.
 
 The service decodes a conventional fixed schema record for Boolean, bounded
@@ -755,7 +764,7 @@ RPC integration.
 
 ## 2026-08-23 — bounded configuration checkpoint codec
 
-MRML source: `services/config`.
+MRML source: `packages/services/config`.
 
 Configuration state is serialized into conventional fixed headers and records,
 hashed with SHA3-256, and decoded into fresh fixed-capacity state only after
@@ -769,7 +778,7 @@ and defensive recovery validation.
 
 ## 2026-08-23 — scoped conditional compiler fact identities
 
-MRML source: `compiler/core`.
+MRML source: `packages/compiler/core`.
 
 The bounded compiler prepass uses conventional lexical-scope copies and a
 monotonic local-identity counter while visiting mutually exclusive conditional
@@ -782,7 +791,7 @@ bookkeeping.
 
 ## 2026-08-23 — bounded assignment access expectations
 
-MRML source: `compiler/core`.
+MRML source: `packages/compiler/core`.
 
 The compiler records conventional pre-resolved assignment use/definition facts
 in a fixed-capacity table and compares them with assignment sites during its
@@ -795,7 +804,7 @@ and defensive invariant checking.
 
 ## 2026-08-23 — assignment root-place read expectations
 
-MRML source: `compiler/core`.
+MRML source: `packages/compiler/core`.
 
 The compiler applies its existing bounded place-syntax discovery to assignment
 RHS roots, resolves conventional symbol-table identities, and compares fixed-
@@ -808,7 +817,7 @@ invariant checking.
 
 ## 2026-08-23 — bounded loop-scope compiler declaration facts
 
-MRML source: `compiler/core`.
+MRML source: `packages/compiler/core`.
 
 The compiler mirrors its existing bounded emission traversal to perform
 conventional symbol-table preanalysis across loop, nested-loop, conditional-arm,
@@ -822,7 +831,7 @@ bookkeeping.
 
 ## 2026-08-23 — sequential top-level compiler declaration facts
 
-MRML source: `compiler/core`.
+MRML source: `packages/compiler/core`.
 
 The compiler continues conventional bounded symbol-table preanalysis across
 ordinary top-level statements and repeated lexical conditional scopes until its
@@ -835,7 +844,7 @@ bookkeeping.
 
 ## 2026-08-23 — capability-native storage identity and metadata foundation
 
-MRML source: `services/storage`.
+MRML source: `packages/services/storage`.
 
 The userspace storage foundation uses conventional nonzero stable identifiers,
 fixed-capacity generational capability tables, attenuated delegation with
@@ -850,7 +859,7 @@ defensive fixed-record filesystem metadata.
 
 ## 2026-08-23 — bounded native extent mapping
 
-MRML source: `services/storage/src/extent.rs`.
+MRML source: `packages/services/storage/src/extent.rs`.
 
 The storage service uses conventional fixed extent records, explicit sparse
 holes, ordered logical coverage, linear bounded lookup, physical range checks,
@@ -864,7 +873,7 @@ mapping.
 
 ## 2026-08-23 — checksummed COW metadata publication planning
 
-MRML source: `services/storage/src/cow.rs`.
+MRML source: `packages/services/storage/src/cow.rs`.
 
 The storage service uses conventional copy-on-write ordering: validate and
 checksum new unreachable metadata, flush it, atomically replace an inactive
@@ -878,7 +887,7 @@ publication ordering.
 
 ## 2026-08-23 — capability-authorized bounded directory operations
 
-MRML source: `services/storage/src/directory.rs` and the storage authority
+MRML source: `packages/services/storage/src/directory.rs` and the storage authority
 and metadata modules.
 
 The service uses conventional fixed-capacity directory tables, monotonic object
@@ -893,7 +902,7 @@ bookkeeping.
 
 ## 2026-08-23 — bounded verified native file reads
 
-MRML source: `services/storage/src/file.rs` and the extent/authority modules.
+MRML source: `packages/services/storage/src/file.rs` and the extent/authority modules.
 
 The service uses conventional capability-checked range reads, linear extent
 resolution, sparse-hole zero filling, SHA3-256 data verification, bounded
@@ -905,7 +914,7 @@ Patent review: `NOT_TRIGGERED` — conventional checksummed extent reads.
 
 ## 2026-08-23 — bounded COW native file writes
 
-MRML source: `services/storage/src/file.rs` and the extent/COW/metadata
+MRML source: `packages/services/storage/src/file.rs` and the extent/COW/metadata
 modules.
 
 The service uses conventional capability-checked range writes, complete
@@ -920,7 +929,7 @@ updates.
 
 ## 2026-08-23 — bounded multi-file COW transactions
 
-MRML source: `services/storage/src/transaction.rs` and the file/COW modules.
+MRML source: `packages/services/storage/src/transaction.rs` and the file/COW modules.
 
 The service uses conventional fixed-capacity transaction admission, duplicate
 participant/range rejection, one copy-on-write root publication, and one-use
@@ -933,7 +942,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded transaction batching.
 
 ## 2026-08-23 — redundant COW root recovery selection
 
-MRML source: `services/storage/src/recovery.rs` and the canonical superblock
+MRML source: `packages/services/storage/src/recovery.rs` and the canonical superblock
 format.
 
 The service uses conventional redundant checksummed superblocks, complete-tree
@@ -946,7 +955,7 @@ Patent review: `NOT_TRIGGERED` — conventional redundant-root selection.
 
 ## 2026-08-23 — canonical allocation ownership index
 
-MRML source: `services/storage/src/allocation.rs`.
+MRML source: `packages/services/storage/src/allocation.rs`.
 
 The service uses conventional checksummed allocation records, physical ordering,
 reserved-range exclusion, global overlap rejection, and exact owner/generation/
@@ -957,7 +966,7 @@ Patent review: `NOT_TRIGGERED` — conventional allocation ownership bookkeeping
 
 ## 2026-08-23 — canonical allocation metadata image
 
-MRML source: `services/storage/src/allocation.rs`.
+MRML source: `packages/services/storage/src/allocation.rs`.
 
 The service uses a conventional versioned image header, fixed-width allocation
 records, whole-image SHA3-256 corruption detection, zero padding, and bounded
@@ -969,7 +978,7 @@ Patent review: `NOT_TRIGGERED` — conventional checksummed allocation metadata.
 
 ## 2026-08-23 — canonical extent metadata images
 
-MRML source: `services/storage/src/extent.rs` and allocation ownership types.
+MRML source: `packages/services/storage/src/extent.rs` and allocation ownership types.
 
 The service uses a conventional versioned extent-list header, fixed-width
 checksummed records, whole-image SHA3-256 corruption detection, zero padding,
@@ -981,7 +990,7 @@ Patent review: `NOT_TRIGGERED` — conventional checksummed extent-list metadata
 
 ## 2026-08-23 — bounded reachable storage validation
 
-MRML source: `services/storage/src/recovery.rs`, `directory.rs`, and the
+MRML source: `packages/services/storage/src/recovery.rs`, `directory.rs`, and the
 allocation/extent metadata modules.
 
 The service uses conventional fixed-capacity graph traversal, versioned
@@ -994,7 +1003,7 @@ Patent review: `NOT_TRIGGERED` — conventional filesystem consistency traversal
 
 ## 2026-08-23 — integrated redundant-root recovery simulation
 
-MRML source: `services/storage/src/recovery.rs`.
+MRML source: `packages/services/storage/src/recovery.rs`.
 
 The service composes conventional redundant-root selection with bounded
 filesystem consistency validation, deterministic fault injection, and a
@@ -1009,7 +1018,7 @@ Patent review: `NOT_TRIGGERED` — conventional recovery fault simulation.
 
 ## 2026-08-23 — bounded allocation successor planning
 
-MRML source: `services/storage/src/allocation.rs`.
+MRML source: `packages/services/storage/src/allocation.rs`.
 
 The service uses conventional copy-on-write allocation-table reconstruction,
 exact free/allocate changes, sorted records, active-range exclusion, generation
@@ -1021,7 +1030,7 @@ Patent review: `NOT_TRIGGERED` — conventional COW allocation bookkeeping.
 
 ## 2026-08-23 — staged transactional allocation images
 
-MRML source: `services/storage/src/allocation.rs` and `transaction.rs`.
+MRML source: `packages/services/storage/src/allocation.rs` and `transaction.rs`.
 
 The service uses conventional complete-image staging, SHA3-256 corruption
 detection, durable flush ordering, typed transaction participants, exact COW
@@ -1033,7 +1042,7 @@ Patent review: `NOT_TRIGGERED` — conventional transactional metadata staging.
 
 ## 2026-08-23 — bounded assignment-expression read traversal
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 The compiler performs a conventional bounded recursive syntax traversal in the
 same operand order as code emission and stores resolved reads in fixed-capacity
@@ -1044,7 +1053,7 @@ Patent review: `NOT_TRIGGERED` — conventional compiler fact collection.
 
 ## 2026-08-23 — typed assignment-index read planning
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 The compiler uses conventional expression typing and constant evaluation to
 select the same fixed-capacity read-fact order as its existing reference and
@@ -1055,7 +1064,7 @@ Patent review: `NOT_TRIGGERED` — conventional type-directed compiler traversal
 
 ## 2026-08-23 — staged transactional directory images
 
-MRML source: `services/storage/src/directory.rs` and `transaction.rs`.
+MRML source: `packages/services/storage/src/directory.rs` and `transaction.rs`.
 
 The service uses conventional canonical directory metadata and entry-list
 encoding, SHA3-256 corruption detection, copy-on-write staging, durable flush
@@ -1068,7 +1077,7 @@ staging.
 
 ## 2026-08-23 — bounded directory ancestry proof
 
-MRML source: `services/storage/src/directory.rs`.
+MRML source: `packages/services/storage/src/directory.rs`.
 
 The service performs a conventional fixed-capacity parent-chain walk over one
 immutable filesystem generation, binds the moved directory's exact generation
@@ -1094,7 +1103,7 @@ validation.
 
 ## 2026-08-23 — transactional stable object-ID allocator image
 
-MRML source: `services/storage/src/object_id_allocator.rs` and
+MRML source: `packages/services/storage/src/object_id_allocator.rs` and
 `transaction.rs`.
 
 The service uses a conventional monotonic integer allocator, canonical
@@ -1108,7 +1117,7 @@ metadata.
 
 ## 2026-08-23 — exact allocator-metadata allocation ownership
 
-MRML source: `services/storage/src/allocation.rs` and
+MRML source: `packages/services/storage/src/allocation.rs` and
 `object_id_allocator.rs`.
 
 The service uses a conventional purpose tag and exact owner, generation, and
@@ -1121,7 +1130,7 @@ Patent review: `NOT_TRIGGERED` — conventional exact allocation bookkeeping.
 
 ## 2026-08-23 — grouped create receipt consumption
 
-MRML source: `services/storage/src/transaction.rs`.
+MRML source: `packages/services/storage/src/transaction.rs`.
 
 The transaction receipt conventionally preflights two bounded participant
 groups for presence and duplicates before clearing the complete set. This adds
@@ -1131,7 +1140,7 @@ Patent review: `NOT_TRIGGERED` — conventional atomic receipt bookkeeping.
 
 ## 2026-08-23 — complete prepared storage create assembly
 
-MRML source: `services/storage/src/create.rs` and its existing directory,
+MRML source: `packages/services/storage/src/create.rs` and its existing directory,
 file, allocation, allocator, authority, COW, and transaction primitives.
 
 The service conventionally groups a staged parent-directory closure, empty
@@ -1145,7 +1154,7 @@ Patent review: `NOT_TRIGGERED` — conventional transactional create assembly.
 
 ## 2026-08-23 — reachable object-ID allocator recovery validation
 
-MRML source: `services/storage/src/recovery.rs` and the canonical allocator
+MRML source: `packages/services/storage/src/recovery.rs` and the canonical allocator
 and allocation formats.
 
 The recovery validator conventionally requires one purpose-tagged allocator
@@ -1159,7 +1168,7 @@ Patent review: `NOT_TRIGGERED` — conventional allocator recovery validation.
 
 ## 2026-08-23 — exact directory-create parent binding
 
-MRML source: `services/storage/src/directory.rs` and `create.rs`.
+MRML source: `packages/services/storage/src/directory.rs` and `create.rs`.
 
 The service conventionally retains the parent encoded in new directory
 metadata, compares it with the unique parent successor containing the new
@@ -1171,7 +1180,7 @@ Patent review: `NOT_TRIGGERED` — conventional directory parent validation.
 
 ## 2026-08-23 — full-range primary-metadata COW digests
 
-MRML source: `services/storage/src/cow.rs`, `file.rs`, and `directory.rs`.
+MRML source: `packages/services/storage/src/cow.rs`, `file.rs`, and `directory.rs`.
 
 The service conventionally hashes a fixed metadata record followed by zero
 padding through its exact block-aligned storage range. This makes the staged
@@ -1182,7 +1191,7 @@ Patent review: `NOT_TRIGGERED` — conventional zero-padded image hashing.
 
 ## 2026-08-23 — interrupted create publication recovery simulation
 
-MRML source: `services/storage/src/create.rs` using the existing COW and
+MRML source: `packages/services/storage/src/create.rs` using the existing COW and
 reachable-recovery primitives.
 
 The test model conventionally separates staged metadata and redundant
@@ -1196,7 +1205,7 @@ Patent review: `NOT_TRIGGERED` — conventional cut-point recovery simulation.
 
 ## 2026-08-23 — recovered child capability derivation
 
-MRML source: `services/storage/src/authority.rs`, `directory.rs`, and
+MRML source: `packages/services/storage/src/authority.rs`, `directory.rs`, and
 `create.rs`.
 
 The service conventionally requires an explicit parent-directory right before
@@ -1211,7 +1220,7 @@ revocation lineage.
 
 ## 2026-08-23 — exact-block metadata adapter
 
-MRML source: `services/storage/src/block.rs`.
+MRML source: `packages/services/storage/src/block.rs`.
 
 The service conventionally adapts canonical metadata images to exact block
 writes, verifies SHA3-256 by complete readback, orders flushes before and after
@@ -1224,8 +1233,8 @@ Patent review: `NOT_TRIGGERED` — conventional checked block-I/O adaptation.
 
 ## 2026-08-23 — exact-block file-data adapter
 
-MRML source: `services/storage/src/block.rs` and the crate-private
-`FileState` extent-map accessor in `services/storage/src/file.rs`.
+MRML source: `packages/services/storage/src/block.rs` and the crate-private
+`FileState` extent-map accessor in `packages/services/storage/src/file.rs`.
 
 The service conventionally verifies a complete extent before a subrange read,
 reconstructs copy-on-write successor blocks from verified predecessor data,
@@ -1237,7 +1246,7 @@ Patent review: `NOT_TRIGGERED` — conventional verified file-data adaptation.
 
 ## 2026-08-23 — capability-bound block-service core
 
-MRML source: `services/storage/src/block_service.rs`.
+MRML source: `packages/services/storage/src/block_service.rs`.
 
 The service conventionally registers device descriptors, authorizes exact block
 operations with principal-bound generational handles and attenuable rights,
@@ -1250,7 +1259,7 @@ service dispatch.
 
 ## 2026-08-23 — versioned block-service control codec
 
-MRML source: `services/storage/src/block_protocol.rs`.
+MRML source: `packages/services/storage/src/block_protocol.rs`.
 
 The service conventionally encodes fixed-size versioned request/response
 records, uses separately authorized buffers for bulk I/O, correlates requests
@@ -1262,8 +1271,8 @@ Patent review: `NOT_TRIGGERED` — conventional bounded control protocol.
 
 ## 2026-08-23 — exact received-buffer capability shape
 
-MRML source: `system/kernel/src/{capability,ipc}.rs` and
-`services/storage/src/block_protocol.rs`.
+MRML source: `packages/system/kernel/src/{capability,ipc}.rs` and
+`packages/services/storage/src/block_protocol.rs`.
 
 The kernel conventionally requires zero capabilities or one live transferred
 capability with an exact rights set before returning its object identity, while
@@ -1275,7 +1284,7 @@ Patent review: `NOT_TRIGGERED` — conventional exact capability authorization.
 
 ## 2026-08-23 — received capability to shared-binding resolution
 
-MRML source: `system/kernel/src/{ipc,shared_memory}.rs`.
+MRML source: `packages/system/kernel/src/{ipc,shared_memory}.rs`.
 
 The kernel conventionally composes exact receiver-capability authorization with
 an exact live shared-memory binding check and returns an opaque resource handle
@@ -1287,7 +1296,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized mapping resolution.
 
 ## 2026-08-23 — canonical empty child creation images
 
-MRML source: `services/storage/src/file.rs`, `directory.rs`, and
+MRML source: `packages/services/storage/src/file.rs`, `directory.rs`, and
 `transaction.rs`.
 
 The service conventionally encodes and stages empty generation-1 file/extent
@@ -1303,7 +1312,7 @@ metadata.
 
 ## 2026-08-23 — scalar initializer and expression-statement read planning
 
-MRML source: `compiler/core/src/codegen.rs`.
+MRML source: `packages/compiler/core/src/codegen.rs`.
 
 The compiler applies its existing bounded recursive expression visitor before
 binding activation and across supported scoped expression statements, retaining
@@ -1316,7 +1325,7 @@ and source-order traversal.
 
 ## 2026-08-23 — authorized opaque shared-buffer I/O
 
-MRML source: `system/kernel/src/{ipc,shared_memory}.rs`.
+MRML source: `packages/system/kernel/src/{ipc,shared_memory}.rs`.
 
 The kernel conventionally repeats exact receiver-capability and live
 shared-binding validation before a bounded read or write through an opaque
@@ -1327,7 +1336,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized bounded I/O.
 
 ## 2026-08-23 — authenticated shared-binding selection
 
-MRML source: `system/kernel/src/{ipc,shared_memory}.rs`.
+MRML source: `packages/system/kernel/src/{ipc,shared_memory}.rs`.
 
 The kernel conventionally selects exactly one bounded table entry by an
 already-authorized object plus kernel-known VM/task identity and access mode,
@@ -1339,8 +1348,8 @@ Patent review: `NOT_TRIGGERED` — conventional bounded authorized lookup.
 
 ## 2026-08-23 — capability-bound block transport composition
 
-MRML source: `services/storage/src/{block_protocol,kernel_transport}.rs`
-and `system/kernel/src/ipc.rs`.
+MRML source: `packages/services/storage/src/{block_protocol,kernel_transport}.rs`
+and `packages/system/kernel/src/ipc.rs`.
 
 The storage service conventionally separates replay/poison admission from
 execution, copies exact capability-authorized buffer ranges through bounded
@@ -1352,8 +1361,8 @@ Patent review: `NOT_TRIGGERED` — conventional authorized service dispatch.
 
 ## 2026-08-23 — capability-selected shared-buffer syscall ABI
 
-MRML source: `system/kernel/src/syscall.rs` and
-`system/bootloader/src/main.rs`.
+MRML source: `packages/system/kernel/src/syscall.rs` and
+`packages/system/bootloader/src/main.rs`.
 
 The kernel conventionally decodes opaque capability, offset, userspace address,
 and bounded length fields for read/write copy operations, rejects noncanonical
@@ -1364,7 +1373,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded syscall validation.
 
 ## 2026-08-23 — shared-buffer syscall execution composition
 
-MRML source: `system/kernel/src/shared_buffer_syscall.rs` and
+MRML source: `packages/system/kernel/src/shared_buffer_syscall.rs` and
 `task_runtime.rs`.
 
 The kernel conventionally combines task-local capability lookup, live binding
@@ -1376,7 +1385,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized copy composition.
 
 ## 2026-08-23 — active-page shared-buffer user copy
 
-MRML source: `system/kernel/src/arch/x86_64/active_user_copy.rs` and
+MRML source: `packages/system/kernel/src/arch/x86_64/active_user_copy.rs` and
 `shared_buffer_syscall.rs`.
 
 The x86-64 adapter conventionally binds an active page-table range validation
@@ -1388,7 +1397,7 @@ Patent review: `NOT_TRIGGERED` — conventional validated active-memory copy.
 
 ## 2026-08-23 — bounded opaque host-resource table
 
-MRML source: `system/kernel/src/host_resource.rs`.
+MRML source: `packages/system/kernel/src/host_resource.rs`.
 
 The kernel conventionally assigns monotonic opaque handles to fixed-capacity
 resource entries, rejects live aliases and stale handles, checks transfer bounds
@@ -1401,8 +1410,8 @@ Patent review: `NOT_TRIGGERED` — conventional bounded resource indirection.
 
 ## 2026-08-23 — active service mapping revocation adapter
 
-MRML source: `system/kernel/src/{vm,shared_memory}.rs` and
-`system/kernel/src/arch/x86_64/page_table.rs`.
+MRML source: `packages/system/kernel/src/{vm,shared_memory}.rs` and
+`packages/system/kernel/src/arch/x86_64/page_table.rs`.
 
 Shared cleanup conventionally consumes a narrow native mapping-removal
 interface. The x86-64 service adapter binds one active root and exact mapping,
@@ -1414,7 +1423,7 @@ Patent review: `NOT_TRIGGERED` — conventional exact mapping teardown.
 
 ## 2026-08-23 — hosted observation of kernel-side leaf retirement
 
-MRML source: `system/kernel/src/arch/x86_64/page_table.rs` and
+MRML source: `packages/system/kernel/src/arch/x86_64/page_table.rs` and
 `crates/mrml-{kvm,whp}/src/native/launch.rs`.
 
 KVM and WHP conventionally verify that every leaf in one recorded service
@@ -1439,8 +1448,8 @@ Patent review: `NOT_TRIGGERED` — conventional isolated page lifecycle.
 
 ## 2026-08-24 — kernel-image service-resource composition
 
-MRML source: `system/bootloader/src/main.rs`,
-`system/service-image/src/main.rs`, and
+MRML source: `packages/system/bootloader/src/main.rs`,
+`packages/system/service-image/src/main.rs`, and
 `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
 The kernel conventionally provisions a task-local attenuated capability, binds
@@ -1454,9 +1463,9 @@ Patent review: `NOT_TRIGGERED` — conventional authorized resource lifecycle.
 
 ## 2026-08-24 — exact service-resource operation capabilities
 
-MRML source: `system/kernel/src/shared_memory.rs`,
-`system/bootloader/src/main.rs`, and
-`system/service-image/src/main.rs`.
+MRML source: `packages/system/kernel/src/shared_memory.rs`,
+`packages/system/bootloader/src/main.rs`, and
+`packages/system/service-image/src/main.rs`.
 
 The hosted service conventionally uses separate exact read and read/write
 capabilities for one non-executable bound page. Binding selection allows only a
@@ -1468,9 +1477,9 @@ Patent review: `NOT_TRIGGERED` — conventional least-authority separation.
 
 ## 2026-08-24 — authorized service-state query syscall
 
-MRML source: `system/kernel/src/syscall.rs`,
-`system/bootloader/src/main.rs`, and
-`system/service-image/src/main.rs`.
+MRML source: `packages/system/kernel/src/syscall.rs`,
+`packages/system/bootloader/src/main.rs`, and
+`packages/system/service-image/src/main.rs`.
 
 The kernel conventionally combines an exact task-local READ capability with an
 opaque generational service token and returns only a bounded detail-free
@@ -1482,9 +1491,9 @@ lookup and bounded status enumeration.
 
 ## 2026-08-24 — canonical userspace supervision query envelope
 
-MRML source: `services/config/src/lib.rs`,
-`system/service-image/src/main.rs`,
-`system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
+MRML source: `packages/services/config/src/lib.rs`,
+`packages/system/service-image/src/main.rs`,
+`packages/system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
 
 The client conventionally sends a fixed query record with one separately
 attenuated capability. The service validates the envelope, invokes the existing
@@ -1496,9 +1505,9 @@ with least-authority capability transfer.
 
 ## 2026-08-24 — split-phase trusted service restart planning
 
-MRML source: `system/kernel/src/service_lifecycle.rs`,
-`system/kernel/src/syscall.rs`, and
-`services/config/src/lib.rs`.
+MRML source: `packages/system/kernel/src/service_lifecycle.rs`,
+`packages/system/kernel/src/syscall.rs`, and
+`packages/services/config/src/lib.rs`.
 
 The kernel conventionally separates authorization and validation from commit so
 a trusted host may reprovision resources between them, then repeats lifecycle,
@@ -1524,9 +1533,9 @@ mapping.
 
 ## 2026-08-24 — capability-authorized hosted restart request
 
-MRML source: `services/config/src/lib.rs`,
-`system/service-image/src/main.rs`,
-`system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
+MRML source: `packages/services/config/src/lib.rs`,
+`packages/system/service-image/src/main.rs`,
+`packages/system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
 
 An isolated manager conventionally transfers an attenuated control capability
 with a fixed restart record. Trusted kernel code supplies launch state, performs

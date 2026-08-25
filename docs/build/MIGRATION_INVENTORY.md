@@ -11,7 +11,7 @@ of `mrml`; package/release/image work is not complete.
 
 ## Implemented first gate
 
-- dependency-free Rust `tools/mrml`, bootstrapped with pinned Cargo/rustc;
+- dependency-free Rust `packages/tools/mrml`, bootstrapped with pinned Cargo/rustc;
 - versioned native component inventory with distinct identity, path, Cargo bridge,
   class, target families, default selection, dependencies, features, outputs,
   and per-component input policies;
@@ -109,16 +109,16 @@ exercised by this increment.
 - `mrml-av1` moved after its platform/runtime dependencies, with all three
   dependency paths updated; its codec implementation, conformance evidence,
   feature behavior, review status, and Cargo bridge remain unchanged.
-- dependency-free `mrml-rustc` moved to `compiler/core`, with its driver,
+- dependency-free `mrml-rustc` moved to `packages/compiler/core`, with its driver,
   recovery, oracle, checkpoint, hygiene-command, and patent-review paths
   updated; compiler semantics and its Cargo bridge remain unchanged.
-- `mrml-rustc-driver` moved to `compiler/driver` after its core, error, and
+- `mrml-rustc-driver` moved to `packages/compiler/driver` after its core, error, and
   runtime dependencies; its three dependency paths, recovery/checkpoint paths,
   command behavior, and Cargo bridge remain unchanged.
-- `mrml-git` moved to `tools/git` after error/runtime/SSH/terminal-style;
+- `mrml-git` moved to `packages/tools/git` after error/runtime/SSH/terminal-style;
   its dependency paths already resolve to semantic packages, while library/bin
   behavior, compile-environment policy, and Cargo bridge remain unchanged.
-- `mrml-tools` moved to `tools/host` after all eight dependencies, with all
+- `mrml-tools` moved to `packages/tools/host` after all eight dependencies, with all
   four inbound Cargo paths updated; its feature behavior, 26 external-command
   sites, compile-environment policy, and Cargo bridge remain unchanged.
 
@@ -275,7 +275,7 @@ The compiler-core move was checked on a Windows host with
   — PASS, 765 tests (420 library, 10 conformance, 335 replacement);
 - `.\target\debug\mrml.exe doctor`, `.\target\debug\mrml.exe audit`, and
   `.\target\debug\mrml.exe build mrml-rustc` — PASS;
-- `rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\\s*\\{" compiler/core/src`
+- `rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\\s*\\{" packages/compiler/core/src`
   — PASS with no matches.
 
 No Linux compiler-core execution was exercised by this move; the existing
@@ -290,7 +290,7 @@ The compiler-driver move was checked on a Windows host with
   — PASS;
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-rustc-driver`
   — PASS, 2 tests;
-- `rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\\s*\\{" compiler/core/src compiler/driver/src`
+- `rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\\s*\\{" packages/compiler/core/src packages/compiler/driver/src`
   — PASS with no matches;
 - `.\target\debug\mrml.exe build mrml-rustc-driver` — FAIL because the
   selected MSVC target could not find `link.exe`.
@@ -352,14 +352,14 @@ route, or accessibility hardware was exercised by this move.
 
 The later native host-tool action was checked with the exact dated 2026-08-24
 toolchains. It records the resolved `runtime` set, repository-relative
-`CARGO_MANIFEST_DIR=tools/host`, six universal externs, and one host platform
+`CARGO_MANIFEST_DIR=packages/tools/host`, six universal externs, and one host platform
 extern. Arch Linux WSL2 passed all 32 tests. Windows reproduced the Cargo
 baseline at 31 passed and one installed-Edge DevTools-port failure. `mrml doctor`,
 `mrml audit`, and native build passed on both hosts. No live remote web service,
 physical browser, desktop/audio route, accessibility hardware, KVM, or bare
 metal was established by this evidence.
 
-The kernel move from `crates/mrml-kernel` to `system/kernel` was checked on a
+The kernel move from `crates/mrml-kernel` to `packages/system/kernel` was checked on a
 Windows host without changing kernel source behavior:
 
 - `cargo metadata --no-deps --format-version 1`,
@@ -391,7 +391,7 @@ All 474 host tests passed on each host. `mrml doctor` and `mrml audit` passed.
 The target rlib was not executed; no KVM, WHP, nested virtualization, UEFI,
 Secure Boot, TPM, IOMMU, bare metal, or physical hardware was verified.
 
-The bootloader move from `crates/mrml-kernel-image` to `system/bootloader` was
+The bootloader move from `crates/mrml-kernel-image` to `packages/system/bootloader` was
 checked on a Windows host without changing bootloader source behavior:
 
 - `cargo metadata --no-deps --format-version 1`,
@@ -411,7 +411,7 @@ No UEFI runtime, Secure Boot, TPM, bare-metal, or physical-hardware execution
 was exercised by this path-only move.
 
 The signed service-image move from `crates/mrml-service-image` to
-`system/service-image` was checked on a Windows host without changing service
+`packages/system/service-image` was checked on a Windows host without changing service
 source behavior:
 
 - `cargo metadata --no-deps --format-version 1`,
@@ -431,7 +431,7 @@ The UEFI target compilation above is compile-time evidence only. No signed
 service runtime, WHP/KVM, UEFI firmware, bare-metal, or physical-hardware
 execution was exercised by this path-only move.
 
-The configuration-service move from `crates/mrml-config` to `services/config`
+The configuration-service move from `crates/mrml-config` to `packages/services/config`
 was checked on a Windows host without changing service source behavior:
 
 - `cargo metadata --no-deps --format-version 1`,
@@ -450,7 +450,7 @@ was checked on a Windows host without changing service source behavior:
 No Linux host/runtime, signed service, WHP/KVM, bare-metal, or physical-hardware
 execution was exercised by this path-only move.
 
-The storage-service move from `crates/mrml-storage` to `services/storage` was
+The storage-service move from `crates/mrml-storage` to `packages/services/storage` was
 checked on a Windows host without changing storage source behavior:
 
 - `cargo metadata --no-deps --format-version 1`,
@@ -490,7 +490,7 @@ No Linux host/runtime, UEFI firmware, Secure Boot, TPM, bare-metal, or physical-
 hardware execution was exercised by this path-only move.
 
 The kernel benchmark/test-harness move from `crates/mrml-kernel-bench` to
-`tests/kernel-bench` was checked on a Windows host without changing harness
+`packages/tests/kernel-bench` was checked on a Windows host without changing harness
 source behavior:
 
 - `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
@@ -505,7 +505,7 @@ source behavior:
 No Linux host/runtime, release-mode performance gate, affinity-pinned physical
 core, bare-metal, or physical-hardware execution was exercised by this move.
 
-The signing-tool move from `crates/mrml-sign` to `tools/sign` was checked on a
+The signing-tool move from `crates/mrml-sign` to `packages/tools/sign` was checked on a
 Windows host without changing signing source behavior:
 
 - `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
@@ -521,7 +521,7 @@ Windows host without changing signing source behavior:
 No Linux host/runtime, live signing key, Secure Boot enrollment, firmware,
 bare-metal, or physical-hardware execution was exercised by this path-only move.
 
-The KVM-library move from `crates/mrml-kvm` to `system/vmm/kvm` was checked on a
+The KVM-library move from `crates/mrml-kvm` to `packages/system/vmm/kvm` was checked on a
 Windows host without changing VMM source behavior:
 
 - `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
@@ -539,7 +539,7 @@ Windows host without changing VMM source behavior:
 No Linux host/runtime, `/dev/kvm`, nested virtualization, VM launch, or physical-
 hardware execution was exercised by this path-only move.
 
-The WHP-library move from `crates/mrml-whp` to `system/vmm/whp` was checked on a
+The WHP-library move from `crates/mrml-whp` to `packages/system/vmm/whp` was checked on a
 Windows host without changing VMM source behavior:
 
 - `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
@@ -556,7 +556,7 @@ test process does not by itself prove those conditional operations ran. No
 nested-virtualization, physical-hardware, VTL1, TPM, IOMMU, or remote-attestation
 evidence was established by this path-only move.
 
-The KVM-runner move from `crates/mrml-kvm-run` to `tools/vmm/kvm-run` was checked
+The KVM-runner move from `crates/mrml-kvm-run` to `packages/tools/vmm/kvm-run` was checked
 on a Windows host without changing launcher source behavior:
 
 - workspace metadata, formatting, strict Clippy, `mrml doctor`, and `mrml audit`
@@ -570,7 +570,7 @@ on a Windows host without changing launcher source behavior:
 No Linux host/runtime, CUDA, `/dev/kvm`, VM launch, nested virtualization, or
 physical-hardware execution was exercised by this path-only move.
 
-The WHP-runner move from `crates/mrml-whp-run` to `tools/vmm/whp-run` was checked
+The WHP-runner move from `crates/mrml-whp-run` to `packages/tools/vmm/whp-run` was checked
 on a Windows host without changing launcher source behavior:
 
 - workspace metadata, formatting, no-default-feature strict Clippy,
@@ -636,7 +636,7 @@ was checked on a Windows host without changing agent source behavior:
 No Linux runtime, live remote model service, CUDA/GPU execution, desktop tools,
 or physical-hardware evidence was established by this path-only move.
 
-The CLI move from `crates/mrml-cli` to `apps/cli` was checked on a Windows host
+The CLI move from `crates/mrml-cli` to `packages/apps/cli` was checked on a Windows host
 without changing application source behavior:
 
 - workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
@@ -650,7 +650,7 @@ without changing application source behavior:
 No Linux runtime, interactive CLI, remote model download, CUDA/GPU execution,
 or physical-hardware evidence was established by this path-only move.
 
-The machine-application move from `crates/mrml-machine` to `apps/machine` was
+The machine-application move from `crates/mrml-machine` to `packages/apps/machine` was
 checked on a Windows host without changing application source behavior:
 
 - workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
@@ -664,7 +664,7 @@ checked on a Windows host without changing application source behavior:
 No Linux runtime, live machine session, remote model service, CUDA/GPU execution,
 or physical-hardware evidence was established by this path-only move.
 
-The server move from `crates/mrml-server` to `apps/server` was checked on a
+The server move from `crates/mrml-server` to `packages/apps/server` was checked on a
 Windows host without changing application source behavior:
 
 - workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
@@ -679,7 +679,7 @@ Windows host without changing application source behavior:
 No Linux runtime, externally exposed server, remote traffic, CUDA/GPU execution,
 or physical-hardware evidence was established by this path-only move.
 
-The trainer-tool move from `crates/mrml-trainer` to `tools/trainer` was checked
+The trainer-tool move from `crates/mrml-trainer` to `packages/tools/trainer` was checked
 on a Windows host without changing trainer source behavior:
 
 - workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
@@ -701,11 +701,11 @@ were not exercised by the Windows implementation environment.
 
 | Class | Current components/direction |
 | --- | --- |
-| `BOOTSTRAP_ONLY` | `tools/mrml`; Cargo stage zero, then self-build graph |
-| `COMPILER` | `mrml-rustc` at `compiler/core`; driver at `compiler/driver` |
+| `BOOTSTRAP_ONLY` | `packages/tools/mrml`; Cargo stage zero, then self-build graph |
+| `COMPILER` | `mrml-rustc` at `packages/compiler/core`; driver at `packages/compiler/driver` |
 | `MRML_NATIVE` | kernel, service image, configuration, storage |
 | `UEFI` | kernel-image bootloader artifact; `mrml-uefi` is shared support |
-| `HOST_WINDOWS_LINUX` | Git at `tools/git`, host tools at `tools/host`; CLI/server/sign/trainer and VMM launchers remain transitional |
+| `HOST_WINDOWS_LINUX` | Git at `packages/tools/git`, host tools at `packages/tools/host`; CLI/server/sign/trainer and VMM launchers remain transitional |
 | `GPU` | tensor/CUDA compatibility path; native GPU remains separate |
 | `TEST` | kernel benchmark |
 | `SHARED` | reusable crypto/runtime/protocol/media/model/platform libraries |

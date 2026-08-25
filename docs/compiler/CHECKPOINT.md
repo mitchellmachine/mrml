@@ -2,7 +2,7 @@
 
 This file is the short recovery record for the independent compiler lane. It
 does not replace `docs/COMPILER.md`, the oracle records, or the detailed
-evidence ledger in `compiler/core/README.md`. If chat history or a local
+evidence ledger in `packages/compiler/core/README.md`. If chat history or a local
 worktree is lost, recover this checkpoint first and verify every claim against
 the named commit and current source.
 
@@ -12,7 +12,7 @@ the named commit and current source.
 - Compiler checkpoint commit: `0350249c`
   (`build: move compiler driver`)
 - Remote state when recorded: `origin/main` includes the behavior-preserving
-  compiler core/driver relocation to `compiler/core` and `compiler/driver`,
+  compiler core/driver relocation to `packages/compiler/core` and `packages/compiler/driver`,
   exact recovery/review path updates, and Windows verification. The driver push
   from `3ed363de` to `0350249c` was a verified fast-forward; no compiler or
   driver semantics changed.
@@ -570,7 +570,7 @@ generation retains the last complete Windows/Linux evidence.
 The hygiene scan must remain empty:
 
 ```sh
-rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" compiler/core/src compiler/driver/src
+rg -n "(^|[^A-Za-z])(std|alloc)::|unsafe\s*\{" packages/compiler/core/src packages/compiler/driver/src
 ```
 
 Format only the compiler packages, preserve unrelated worktree changes, stage

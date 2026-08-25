@@ -1,0 +1,33 @@
+[package]
+name = "mrml-tools"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+default = ["runtime"]
+runtime = [
+    "dep:mrml-error",
+    "dep:mrml-terminal-style",
+    "dep:mrml-runtime",
+    "dep:serde_json",
+    "dep:mrml-percent-encoding",
+    "dep:mrml-linux",
+    "dep:mrml-windows",
+    "dep:mrml-http",
+]
+
+[dependencies]
+mrml-terminal-style = { path = "../../libraries/terminal-style", default-features = false, optional = true }
+mrml-error = { path = "../../libraries/error", optional = true }
+serde_json = { package = "mrml-json", path = "../../libraries/json", optional = true }
+mrml-percent-encoding = { path = "../../libraries/percent-encoding", optional = true }
+mrml-runtime = { path = "../../libraries/runtime", optional = true }
+mrml-http = { path = "../../libraries/http", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+mrml-windows = { path = "../../libraries/windows", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+mrml-linux = { path = "../../libraries/linux", optional = true }

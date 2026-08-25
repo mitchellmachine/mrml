@@ -1,0 +1,27 @@
+[package]
+name = "mrml-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+autobins = false
+
+[[bin]]
+name = "mrml-server"
+path = "src/main.rs"
+
+[features]
+default = ["auto"]
+auto = ["mrml-agent/auto"]
+cuda = ["mrml-agent/cuda"]
+vulkan = ["mrml-agent/vulkan"]
+
+[dependencies]
+mrml-agent = { path = "../../libraries/agent", default-features = false, features = ["runtime"] }
+mrml-terminal-style = { path = "../../libraries/terminal-style" }
+mrml-error = { path = "../../libraries/error" }
+mrml-model = { path = "../../libraries/model" }
+mrml-json = { path = "../../libraries/json" }
+mrml-tools = { path = "../../tools/host" }
+mrml-runtime = { path = "../../libraries/runtime" }
+mrml-tls = { path = "../../libraries/tls" }
