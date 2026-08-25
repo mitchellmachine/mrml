@@ -4080,3 +4080,14 @@ depth-first evaluation of fixed concrete premises with a 16-entry visited stack,
 explicit repeated-goal detection, and a hard overflow result. It adds no novel
 search ordering, coinduction, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Typed persistent isolation-policy records
+
+**Result: NOT_TRIGGERED.** This increment uses the existing capability-checked,
+fixed-size configuration records and authenticated checkpoint path to retain a
+component placement preference or system isolation-mode selection. Canonical
+tagged encoding, scope validation, and exact object capability checks are
+conventional bounded policy-record handling. It adds no placement-selection
+algorithm, VM transport, queue mechanism, hardware protocol, cryptography, or
+runtime authority path. The broader adaptive-placement selection and
+cross-placement transport review remains `TRIGGERED`.

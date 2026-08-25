@@ -6,6 +6,9 @@
 //! read and transaction update repeats exact capability checks against the
 //! schema-bound object. Transactions preflight all schema, authority, revision,
 //! capacity, and sequence conditions before the first mutation.
+//! Control planes establish authority; data planes should take the shortest
+//! safe path. Persisted policy is therefore typed control-plane input only: it
+//! neither grants capabilities nor becomes an invocation-path data transport.
 
 use core::array;
 use core::mem::size_of;
@@ -1793,6 +1796,187 @@ pub struct ConfigTransaction<const UPDATES: usize> {
     expected_revision: u64,
     updates: [Option<ConfigUpdate>; UPDATES],
     count: usize,
+}
+
+pub const ISOLATION_POLICY_VALUE_BYTES: usize = 16;
+const ISOLATION_POLICY_VALUE_MAGIC: [u8; 8] = *b"MRMLISO1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationPolicyScope {
+    Component,
+    System,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerIsolationSelection {
+    Default,
+    Native,
+    Microvm,
+    Balanced,
+    TotalMicrovm,
+}
+
+impl OwnerIsolationSelection {
+    const fn token(self) -> u8 {
+        match self {
+            Self::Default => 1,
+            Self::Native => 2,
+            Self::Microvm => 3,
+            Self::Balanced => 4,
+            Self::TotalMicrovm => 5,
+        }
+    }
+
+    const fn scope(self) -> IsolationPolicyScope {
+        match self {
+            Self::Default | Self::Native | Self::Microvm => IsolationPolicyScope::Component,
+            Self::Balanced | Self::TotalMicrovm => IsolationPolicyScope::System,
+        }
+    }
+
+    const fn decode(value: u8) -> Result<Self, ConfigError> {
+        match value {
+            1 => Ok(Self::Default),
+            2 => Ok(Self::Native),
+            3 => Ok(Self::Microvm),
+            4 => Ok(Self::Balanced),
+            5 => Ok(Self::TotalMicrovm),
+            _ => Err(ConfigError::InvalidValue),
+        }
+    }
+}
+
+/// Typed control-plane descriptor for one capability-authorized persistent
+/// placement setting. The object identifies the policy target; possession of
+/// this descriptor or its serialized value grants no read or write authority.
+/// Runtime code consumes a separately admitted generation-bound endpoint, not
+/// this record, so steady-state data does not round-trip through policy storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationPolicySetting {
+    setting: SettingId,
+    object: ObjectId,
+    scope: IsolationPolicyScope,
+}
+
+impl IsolationPolicySetting {
+    pub const fn component(setting: SettingId, object: ObjectId) -> Result<Self, ConfigError> {
+        Self::new(setting, object, IsolationPolicyScope::Component)
+    }
+
+    pub const fn system(setting: SettingId, object: ObjectId) -> Result<Self, ConfigError> {
+        Self::new(setting, object, IsolationPolicyScope::System)
+    }
+
+    const fn new(
+        setting: SettingId,
+        object: ObjectId,
+        scope: IsolationPolicyScope,
+    ) -> Result<Self, ConfigError> {
+        if object.0 == 0 {
+            return Err(ConfigError::InvalidSchema);
+        }
+        Ok(Self {
+            setting,
+            object,
+            scope,
+        })
+    }
+
+    pub const fn setting(self) -> SettingId {
+        self.setting
+    }
+
+    pub const fn object(self) -> ObjectId {
+        self.object
+    }
+
+    pub const fn scope(self) -> IsolationPolicyScope {
+        self.scope
+    }
+
+    pub const fn schema(self) -> Result<SettingSchema, ConfigError> {
+        SettingSchema::bytes(
+            self.setting,
+            self.object,
+            ISOLATION_POLICY_VALUE_BYTES as u8,
+        )
+    }
+
+    pub fn stage<const UPDATES: usize>(
+        self,
+        transaction: &mut ConfigTransaction<UPDATES>,
+        write_capability: Capability,
+        selection: OwnerIsolationSelection,
+    ) -> Result<(), ConfigError> {
+        if selection.scope() != self.scope {
+            return Err(ConfigError::SchemaViolation);
+        }
+        let mut encoded = [0u8; ISOLATION_POLICY_VALUE_BYTES];
+        encoded[..8].copy_from_slice(&ISOLATION_POLICY_VALUE_MAGIC);
+        encoded[8] = match self.scope {
+            IsolationPolicyScope::Component => 1,
+            IsolationPolicyScope::System => 2,
+        };
+        encoded[9] = selection.token();
+        transaction.push(ConfigUpdate::new(
+            self.setting,
+            write_capability,
+            ConfigValue::bytes(&encoded)?,
+        ))
+    }
+
+    pub fn read<const SETTINGS: usize, const AUDIT: usize, A: CapabilityAuthorizer + ?Sized>(
+        self,
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        read_capability: Capability,
+    ) -> Result<PersistedIsolationPolicy, ConfigError> {
+        let record = configuration.read(capabilities, read_capability, self.setting)?;
+        let value = record.value.ok_or(ConfigError::MissingSetting)?;
+        let encoded = value.as_bytes();
+        if value.kind() != ValueKind::Bytes
+            || encoded.len() != ISOLATION_POLICY_VALUE_BYTES
+            || encoded[..8] != ISOLATION_POLICY_VALUE_MAGIC
+            || encoded[10..].iter().any(|byte| *byte != 0)
+        {
+            return Err(ConfigError::NonCanonical);
+        }
+        let scope = match encoded[8] {
+            1 => IsolationPolicyScope::Component,
+            2 => IsolationPolicyScope::System,
+            _ => return Err(ConfigError::InvalidValue),
+        };
+        let selection = OwnerIsolationSelection::decode(encoded[9])?;
+        if scope != self.scope || selection.scope() != scope || record.revision == 0 {
+            return Err(ConfigError::SchemaViolation);
+        }
+        Ok(PersistedIsolationPolicy {
+            setting: self,
+            selection,
+            revision: record.revision,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistedIsolationPolicy {
+    setting: IsolationPolicySetting,
+    selection: OwnerIsolationSelection,
+    revision: u64,
+}
+
+impl PersistedIsolationPolicy {
+    pub const fn setting(self) -> IsolationPolicySetting {
+        self.setting
+    }
+
+    pub const fn selection(self) -> OwnerIsolationSelection {
+        self.selection
+    }
+
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
 }
 
 impl<const UPDATES: usize> ConfigTransaction<UPDATES> {
@@ -6934,6 +7118,140 @@ mod tests {
         assert_eq!(
             SupervisionResponse::decode(&response).unwrap().status,
             ResponseStatus::Rejected
+        );
+    }
+
+    #[test]
+    fn isolation_policy_is_typed_capability_authorized_and_recoverable() {
+        let root_object = ObjectId(0x4953_4f4c_4154_494f);
+        let component_object = ObjectId(0x434f_4d50_4f4e_454e);
+        let system_object = ObjectId(0x5359_5354_454d_504f);
+        let component =
+            IsolationPolicySetting::component(SettingId::new(40).unwrap(), component_object)
+                .unwrap();
+        let system =
+            IsolationPolicySetting::system(SettingId::new(41).unwrap(), system_object).unwrap();
+        let schemas = [component.schema().unwrap(), system.schema().unwrap()];
+        let mut configuration = ConfigurationService::<2, 4>::new(root_object, &schemas).unwrap();
+        let mut capabilities = CapabilitySpace::<4>::new();
+        let root = capabilities
+            .insert(root_object, Rights::CONTROL.union(Rights::READ))
+            .unwrap();
+        let component_access = capabilities
+            .insert(component_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let system_access = capabilities
+            .insert(system_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+
+        let mut transaction = ConfigTransaction::<2>::new(0);
+        component
+            .stage(
+                &mut transaction,
+                component_access,
+                OwnerIsolationSelection::Microvm,
+            )
+            .unwrap();
+        system
+            .stage(
+                &mut transaction,
+                system_access,
+                OwnerIsolationSelection::TotalMicrovm,
+            )
+            .unwrap();
+        assert_eq!(
+            configuration.commit(&capabilities, root, &transaction),
+            Ok(1)
+        );
+
+        let component_policy = component
+            .read(&configuration, &capabilities, component_access)
+            .unwrap();
+        assert_eq!(
+            component_policy.selection(),
+            OwnerIsolationSelection::Microvm
+        );
+        assert_eq!(component_policy.setting(), component);
+        assert_eq!(component_policy.revision(), 1);
+        assert_eq!(
+            system
+                .read(&configuration, &capabilities, system_access)
+                .unwrap()
+                .selection(),
+            OwnerIsolationSelection::TotalMicrovm
+        );
+        assert!(matches!(
+            component.read(&configuration, &capabilities, system_access),
+            Err(ConfigError::WrongObject)
+        ));
+
+        let mut checkpoint_bytes = [0; 512];
+        let checkpoint = configuration
+            .export_checkpoint(&capabilities, root, &mut checkpoint_bytes)
+            .unwrap();
+        let recovered = ConfigurationService::<2, 4>::recover_checkpoint(
+            &capabilities,
+            root,
+            &checkpoint_bytes[..checkpoint.length],
+            checkpoint.digest,
+        )
+        .unwrap();
+        assert_eq!(
+            component
+                .read(&recovered, &capabilities, component_access)
+                .unwrap()
+                .selection(),
+            OwnerIsolationSelection::Microvm
+        );
+        assert_eq!(
+            system
+                .read(&recovered, &capabilities, system_access)
+                .unwrap()
+                .selection(),
+            OwnerIsolationSelection::TotalMicrovm
+        );
+    }
+
+    #[test]
+    fn isolation_policy_rejects_scope_confusion_and_noncanonical_data() {
+        let component =
+            IsolationPolicySetting::component(SettingId::new(42).unwrap(), ObjectId(420)).unwrap();
+        let mut transaction = ConfigTransaction::<1>::new(0);
+        assert_eq!(
+            component.stage(
+                &mut transaction,
+                Capability::from_token(1),
+                OwnerIsolationSelection::TotalMicrovm,
+            ),
+            Err(ConfigError::SchemaViolation)
+        );
+        assert!(transaction.is_empty());
+
+        let mut configuration =
+            ConfigurationService::<1, 2>::new(ObjectId(419), &[component.schema().unwrap()])
+                .unwrap();
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let root = capabilities.insert(ObjectId(419), Rights::CONTROL).unwrap();
+        let access = capabilities
+            .insert(ObjectId(420), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let mut malformed = [0; ISOLATION_POLICY_VALUE_BYTES];
+        malformed[..8].copy_from_slice(&ISOLATION_POLICY_VALUE_MAGIC);
+        malformed[8] = 1;
+        malformed[9] = OwnerIsolationSelection::Microvm.token();
+        malformed[15] = 1;
+        let mut generic = ConfigTransaction::<1>::new(0);
+        generic
+            .push(ConfigUpdate::new(
+                component.setting(),
+                access,
+                ConfigValue::bytes(&malformed).unwrap(),
+            ))
+            .unwrap();
+        configuration.commit(&capabilities, root, &generic).unwrap();
+        assert_eq!(
+            component.read(&configuration, &capabilities, access),
+            Err(ConfigError::NonCanonical)
         );
     }
 }

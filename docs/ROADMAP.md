@@ -50,8 +50,12 @@ Three new persistent deltas are documented before implementation:
   both backends with one eligible domain, one microVM domain, and zero native
   fallback. This is hosted controlled-probe evidence, not required-system Total
   readiness. A complete representative dual-placement
-  service, owner-setting persistence, VM construction, resource
+  service, Settings/shell projection of owner policy, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
+  The configuration service now provides a bounded typed persistence
+  prerequisite for component placement preference and system Balanced/Total
+  selection, using exact setting/root capabilities and its authenticated
+  checkpoint recovery path. It does not itself resolve or grant placement.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.
   A one-use typed service transaction now preserves exact binding identity from

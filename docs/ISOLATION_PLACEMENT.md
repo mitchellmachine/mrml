@@ -118,6 +118,27 @@ and Total-mode exceptions fail closed. This does not select the provider or
 placement, grant capabilities, create either runtime, or carry interface
 traffic, so the representative dual-placement service remains **PLANNED**.
 
+> Control planes establish authority; data planes should take the shortest safe
+> path.
+
+For adaptive placement, the configuration service, resolver, capability policy,
+and VMM admission form the control plane. They select and authorize an exact
+provider generation, placement, projected capabilities, queues, resource
+budgets, and revocation path. Once admitted, ordinary interface traffic uses
+the shortest safe transport supported by that binding—an in-process call,
+native IPC, or a bounded shared microVM queue—without repeating policy lookup
+for every message. Data-plane bytes cannot grant capabilities, change placement,
+substitute providers, or widen the admitted binding.
+
+```text
+CONTROL PLANE
+App -> request interface capability -> policy/resolver -> service or VMM broker
+    -> bind exact provider generation + placement + queues -> done
+
+DATA PLANE
+App domain == admitted IPC/shared queue ==> bound provider -> backend/hardware
+```
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and
@@ -283,7 +304,15 @@ admission, security policy, and generation binding.
 
 ## Settings, boot, recovery, and accessibility
 
-The planned Settings application and object shell project one typed policy
+The configuration service now implements the first bounded typed persistent
+records for component preference and system Balanced/Total selection. Exact
+setting READ/WRITE plus configuration-root CONTROL capabilities remain required;
+records survive the authenticated checkpoint path, reject scope confusion and
+noncanonical bytes, and grant no runtime authority. This is **PARTIALLY
+IMPLEMENTED** control-plane persistence, not Settings, shell, policy resolution,
+effective placement, or Total-mode completion.
+
+The planned Settings application and object shell project that one typed policy
 service. They distinguish configured default, requested boot mode, effective
 state, and policy generation; show floors, supported forms, blockers, overhead,
 and restart/reboot requirements; and allow Default, stronger microVM placement,
@@ -291,6 +320,11 @@ or an explicit native selection only where the floor permits. Changes are
 transactional, auditable, recoverable, capability-controlled, and semantically
 available through keyboard, Braille, speech, automation, and authorized AI.
 Configuration expresses desired policy; it does not prove current placement.
+
+Focused Windows and Arch Linux runs each pass all 38 configuration-service
+tests, including typed persistence, exact capability enforcement, canonical
+decoding, scope separation, and authenticated checkpoint recovery. These are
+unit tests on hosted build targets, not boot, VMM, or physical-hardware evidence.
 
 The planned boot menu is `MRML`, `MRML — Total MicroVM Isolation`, `MRML
 Recovery`, and an independently discovered `Windows Boot Manager` where
