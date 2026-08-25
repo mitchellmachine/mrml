@@ -224,6 +224,11 @@ hosts match Cargo at four library tests and a zero-test binary harness. Forty
 components are native; two remain transitional. No live listener, TLS endpoint,
 remote model, CUDA device, or production traffic ran.
 
+`mrml-kvm-run` now binds core crypto, kernel/KVM, runtime, and tensor's host
+`cuda` profile through native rustc on Linux. Arch Linux WSL2 matches Cargo at
+eight passing tests. Forty-one components are native; only the `mrml`
+clean-source bootstrap remains transitional. No VM or physical hardware ran.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

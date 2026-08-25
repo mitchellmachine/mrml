@@ -341,6 +341,12 @@ Windows and Linux match Cargo at four library tests and a zero-test binary
 harness. Forty of 42 components are native; two remain transitional. No live
 listener, TLS endpoint, remote model, CUDA device, or production traffic ran.
 
+The KVM runner now compiles natively on Linux with its exact core-crypto,
+kernel/KVM, runtime, and tensor `cuda` providers. Arch Linux WSL2 matches Cargo
+at eight tests. Forty-one of 42 components are native; only the `mrml`
+clean-source bootstrap remains transitional. No VM, bare-metal, IOMMU, GPU, or
+physical-hardware execution occurred.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

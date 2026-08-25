@@ -484,6 +484,12 @@ Cargo at four library tests and the zero-test self-linked binary harness. Forty
 components are native and two remain transitional. No listening service, TLS
 endpoint, remote model, CUDA device, or production traffic ran.
 
+The Linux KVM runner now binds core crypto, kernel/KVM, runtime, and tensor's
+host `cuda` profile directly. Arch Linux WSL2 matches Cargo at eight passing
+tests. Forty-one components are native and only the `mrml` clean-source
+bootstrap remains transitional. No VM, bare metal, IOMMU, physical GPU, or
+physical hardware ran.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

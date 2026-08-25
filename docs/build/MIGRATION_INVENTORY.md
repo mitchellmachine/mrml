@@ -730,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Forty
+  explicit. Forty-one
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -910,6 +910,13 @@ Both exact hosts pass doctor/audit, native build, and matching native/Cargo
 baselines of four library tests plus the zero-test binary harness. Forty
 components are native and two remain transitional. No live listener, TLS
 endpoint, remote model, CUDA device, or production traffic ran.
+
+The KVM runner is now an exact Linux bin-only action over core crypto,
+error, kernel, KVM, runtime, and tensor's host `cuda` profile. The pinned Arch
+Linux WSL2 toolchain passes doctor/audit, native build, and matching native/Cargo
+eight-test suites. Forty-one components are native and only `mrml` itself
+remains transitional as the clean-source bootstrap boundary. No VM, bare metal,
+IOMMU, physical GPU, or physical hardware ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

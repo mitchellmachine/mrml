@@ -179,3 +179,5 @@ rust-binary|org.mrml.library.machine|mrml-machine|mrml_machine|apps/machine/src/
 rust-action|org.mrml.app.server|mrml_server|lib|apps/server/src/lib.rs|mrml-agent=mrml_agent@*#auto;mrml-error=mrml_error@*;mrml-json=mrml_json@*;mrml-model=mrml_model@*#auto;mrml-runtime=mrml_runtime@*;mrml-terminal-style=mrml_terminal_style@*;mrml-tls=mrml_tls@*;mrml-tools=mrml_tools@*
 rust-feature-set|org.mrml.app.server|WINDOWS,LINUX|auto
 rust-binary|org.mrml.app.server|mrml-server|mrml_server_bin|apps/server/src/main.rs|true
+rust-action|org.mrml.tool.vmm-kvm-run|mrml_kvm_run_action|none|-|mrml-crypto=mrml_crypto@LINUX#core;mrml-error=mrml_error@LINUX;mrml-kernel=mrml_kernel@LINUX;mrml-kvm=mrml_kvm@LINUX;mrml-runtime=mrml_runtime@LINUX;mrml-tensor=mrml_tensor@LINUX#cuda
+rust-binary|org.mrml.tool.vmm-kvm-run|mrml-kvm-run|mrml_kvm_run|tools/vmm/kvm-run/src/main.rs|false

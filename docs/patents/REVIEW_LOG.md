@@ -3310,3 +3310,11 @@ provider profiles, generated inputs, and self-linked binary model to unchanged
 server sources and their exact effective dependency graph. It adds no server,
 TLS, protocol, model, CUDA, resolver, cache, or runtime mechanism. Agent review
 does not replace independent human dual review.
+
+# 2026-08-25 — Native KVM runner action
+
+**Result: NOT_TRIGGERED.** This increment applies the existing native resolver,
+core provider profile, and recursive generated-input path to the unchanged KVM
+launcher and its exact dependency graph. It adds no hypervisor, VM, guest,
+mapping, CUDA, resolver, cache, or runtime mechanism. Agent review does not
+replace independent human dual review.
