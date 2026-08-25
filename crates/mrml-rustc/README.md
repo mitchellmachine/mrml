@@ -3654,3 +3654,18 @@ use. The pinned future-edition oracle rejected the live shared call reborrow
 with E0502 and accepted the post-last-use control. This does not claim arbitrary
 interprocedural effects or unrestricted regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The projected-reference path-ancestor milestone passed all 752 compiler and
+driver tests on Windows gnullvm and all 752 in release mode on native Arch Linux
+WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned rustc
+commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. A move of a tuple root
+now overlaps a live shared or mutable child borrowed through one of its
+reference fields. The fixed-capacity parent walk rejects malformed IDs and
+cycles, while sibling-field moves, post-last-use moves, and reference-binding
+replacement remain accepted. The pinned future-edition oracle rejected both
+live whole-root moves with E0505 and accepted the precision controls. Whole-
+tuple post-use emission remains outside the native-object subset and fails
+closed independently; its borrow-analysis control is not promoted to native
+execution evidence. This does not claim general place overlap, unrestricted
+regions, or arbitrary alias analysis. The `no_std`/allocation/unsafe hygiene
+scan remained empty.
