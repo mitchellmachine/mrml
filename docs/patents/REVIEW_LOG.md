@@ -108,6 +108,11 @@ platform/runtime dependencies and updates all five inbound Cargo paths without
 changing terminal behavior. **Result: NOT_TRIGGERED.** This is repository
 organization, not a new terminal mechanism.
 
+The eighteenth semantic move relocates `mrml-av1` after its platform/runtime
+dependencies without changing codec or feature behavior. **Result:
+NOT_TRIGGERED.** The existing worldwide AV1 mechanism and license review remains
+in force.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
@@ -145,7 +150,7 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 
 | Priority | Mechanism | MRML source | Initial result |
 | --- | --- | --- | --- |
-| Highest | AV1 coding tools, restoration, prediction, transforms, entropy, film grain | `crates/mrml-av1/src/` | AOMedia patent terms require exact license review; third-party assertions remain possible. |
+| Highest | AV1 coding tools, restoration, prediction, transforms, entropy, film grain | `packages/libraries/av1/src/` | AOMedia patent terms require exact license review; third-party assertions remain possible. |
 | Highest | Opus SILK/CELT, PVQ, range coding, stereo/pitch tools | `packages/libraries/opus/src/` | RFC 6716 records multiple IETF IPR disclosures; terms and worldwide family members need claims review. |
 | High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `crates/mrml-kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `crates/mrml-{kvm,whp}/`, `crates/mrml-tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
 | High | Quantized inference, planning, KV cache, speculative decoding | `crates/mrml-tensor/src/{quant,ops,execution_plan,kv_cache,speculative}.rs` | Must distinguish standard formats from MRML scheduling/layout. |

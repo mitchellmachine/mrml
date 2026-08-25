@@ -9,14 +9,14 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-mrml-runtime = { path = "../../packages/libraries/runtime" }
+mrml-runtime = { path = "../runtime" }
 
 [features]
 default = []
 nvidia = ["dep:mrml-linux", "dep:mrml-windows"]
 
 [target.'cfg(unix)'.dependencies]
-mrml-linux = { path = "../../packages/libraries/linux", optional = true }
+mrml-linux = { path = "../linux", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-mrml-windows = { path = "../../packages/libraries/windows", optional = true }
+mrml-windows = { path = "../windows", optional = true }

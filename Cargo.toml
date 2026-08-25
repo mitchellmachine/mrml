@@ -41,7 +41,7 @@ members = [
     "packages/libraries/wikipedia",
     "packages/libraries/tokenizer",
     "crates/mrml-trainer",
-    "crates/mrml-av1",
+    "packages/libraries/av1",
     "packages/libraries/opus",
 ]
 

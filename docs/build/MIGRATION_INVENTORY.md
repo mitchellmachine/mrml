@@ -2,12 +2,12 @@
 
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
-classified and reachable through the Cargo bridge. Seventeen libraries—`mrml-math`,
+classified and reachable through the Cargo bridge. Eighteen libraries—`mrml-math`,
 `mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`,
 `mrml-json`, `mrml-wikipedia`, `mrml-opus`, `mrml-windows`,
 `mrml-linux`, `mrml-runtime`, `mrml-crypto`, `mrml-tls`, and
-`mrml-http`, `mrml-ssh`, `mrml-error`, and `mrml-terminal-style`—have
-moved under `packages/libraries/`,
+`mrml-http`, `mrml-ssh`, `mrml-error`, `mrml-terminal-style`, and
+`mrml-av1`—have moved under `packages/libraries/`,
 and stage-zero lives at `tools/mrml`; other source remains under `crates/`.
 No claim is made that semantic moves or Cargo bridge removal are complete.
 
@@ -72,6 +72,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
 - `mrml-terminal-style` moved after its platform/runtime dependencies, with all
   three dependency paths and five inbound Cargo paths updated; its terminal
   behavior and Cargo bridge remain unchanged.
+- `mrml-av1` moved after its platform/runtime dependencies, with all three
+  dependency paths updated; its codec implementation, conformance evidence,
+  feature behavior, review status, and Cargo bridge remain unchanged.
 
 The runtime move was checked on a Windows host:
 
@@ -163,6 +166,23 @@ The terminal-style move was checked on a Windows host:
 
 No Linux host or runtime execution was exercised by this move.
 
+The AV1 move was checked on a Windows host:
+
+- `.\target\debug\mrml.exe doctor`, `.\target\debug\mrml.exe audit`, and
+  `.\target\debug\mrml.exe build mrml-av1` — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-av1 --lib`
+  — FAIL, 257 passed and 18 failed; sixteen failures reported stack overflow and
+  two reported existing assertion/arithmetic failures;
+- the same test with `RUST_MIN_STACK=33554432` — FAIL with the same 257/18
+  result;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-av1 -- --check`
+  — FAIL on existing formatting differences;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-av1 --all-targets --no-deps -- -D warnings`
+  — FAIL, four existing lints in unchanged AV1 source.
+
+No Linux host, NVIDIA feature path, conformance corpus, or physical decoder was
+exercised by this move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -185,7 +205,7 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the seventeen moved
+- Every component still has Cargo dependency metadata; all except the eighteen moved
   libraries and stage-zero remain beneath `crates/`. The root Cargo workspace
   still contains every component so the bridge resolves today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current
