@@ -76,8 +76,10 @@ Quantitative memory-resource policy now has fixed-capacity generational pools
 and objects, attenuated child page/mapping/count reservations, content-free
 usage inspection, exact capability checks, and recursive pool revocation. This
 accounts commitments only; frame allocation, mapping, sharing, pinning, DMA,
-cache/page-table charging, VMM projection, and userspace policy integration
-remain unimplemented. An opt-in accounted task-runtime wrapper now commits its
+cache charging, VMM projection, and userspace policy integration remain
+unimplemented. An opt-in accounted preallocated page-table store commits its
+complete arena capacity before publication, but live boot construction has not
+adopted it. An opt-in accounted task-runtime wrapper now commits its
 complete fixed scheduler, task/capability metadata, delegation-table, and
 inline IPC-inbox footprint to one exact pool object before publication. The
 legacy unaccounted constructor remains for simulation and existing boot paths.

@@ -7076,6 +7076,50 @@ mechanism. Planned scopes recorded as `TRIGGERED` in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
 
+### Preallocated page-table arena commitment
+
+Quantitative page-table accounting is **PARTIALLY IMPLEMENTED** for the
+existing bounded x86_64 arena. `AccountedPreallocatedPageTableStore` first
+checks the original scalar arena geometry: nonzero capacity of at most 256
+pages, aligned physical base, and a bounded 52-bit end. Its unsafe contract
+retains the caller's exclusive identity-mapped supervisor-writable ownership
+and no-concurrent-observation obligations. It then commits the exact full
+capacity as one anonymous `MemoryObject` before publishing a usable
+`PageTableStore`. Intermediate-table allocation consumes only this already
+committed arena, so sparse mappings cannot exceed its recorded bound.
+
+Construction failure publishes no store and leaves pool usage unchanged.
+Returning the commitment consumes the wrapper and is unsafe: every CPU, task,
+VM, recovery image, and cached root must have lost reachability, and required
+TLB invalidation must already be complete. Release failure returns the complete
+store and charge. Accounting release is not proof of content erasure. Current
+kernel-image boot/service construction still opens the legacy unaccounted store,
+so no live boot, hardware, or physical reclamation evidence is claimed.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through the page-table store, `MemoryPoolTable`, and `CapabilitySpace`.
+
+DIGITAL-RIGHTS REVIEW: the pool charge authenticates only owner-selected local
+resource policy. It introduces no content inspection, publisher/vendor/provider
+priority, DRM, remote attestation, telemetry, AI-only interface, or accessibility
+restriction. Exhaustion cannot consume another pool's authority.
+
+HOSTILE SECURITY REVIEW: the physical base, capacity, multiplication/addition,
+52-bit bound, pool/object generations, capability slots, allocation exhaustion,
+active-root reachability, TLB state, cleanup, and replay are hostile. Complete
+arena validation and exact commitment precede publication. Release is explicitly
+unsafe and consuming; failure preserves both store and charge. The wrapper does
+not conflate quantitative accounting with physical ownership or erasure.
+
+Patent review: `NOT_TRIGGERED` — exact accounting of a conventional bounded
+page-table arena adds no compatibility transport, host-share protocol,
+accessibility device, browser semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, or media mechanism. Planned scopes recorded as
+`TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged;
+agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

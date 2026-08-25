@@ -180,8 +180,12 @@ reservations, child counts, and rights; exact allocation limits fail locally;
 content-free usage inspection is independent from control; release and
 recursive pool revocation stale object and descendant-pool identities. This is
 accounting rather than frame allocation. Mapping, sharing, pinning, DMA,
-resize/COW, cache/page-table charging, VMM guest projection, userspace policy,
-and hardware evidence remain pending before this prerequisite is complete.
+resize/COW, cache charging, VMM guest projection, userspace policy, and hardware
+evidence remain pending before this prerequisite is complete. The first page-
+table charge foundation is **PARTIALLY IMPLEMENTED**: an opt-in wrapper commits
+the complete validated preallocated arena capacity before exposing a usable
+store, and unsafe release requires the caller to prove every table unreachable
+and required invalidation complete. Existing boot construction is not migrated.
 The first IPC/task-metadata charge foundation is now **PARTIALLY IMPLEMENTED**:
 an accounted runtime reserves its complete fixed scheduler, task/capability,
 delegation-table, and two-slot-per-task inline-inbox footprint from one exact

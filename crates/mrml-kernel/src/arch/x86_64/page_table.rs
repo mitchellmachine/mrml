@@ -4,7 +4,10 @@ use super::{
     ADDRESS_MASK, Mapping, PageError, PagePermissions, PageTableEntry, UserBufferAccess,
     UserBufferError, VirtAddr,
 };
-use crate::{GuestMappingRevoker, PAGE_SIZE, PhysAddr};
+use crate::{
+    Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind, MemoryObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, PAGE_SIZE, PhysAddr, Rights,
+};
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
 
@@ -17,6 +20,24 @@ pub enum PageTableBuildError {
     MappingMismatch,
     AddressOverflow,
     Page(PageError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountedPageTableStoreError {
+    PageTable(PageTableBuildError),
+    Memory(MemoryResourceError),
+}
+
+impl From<PageTableBuildError> for AccountedPageTableStoreError {
+    fn from(value: PageTableBuildError) -> Self {
+        Self::PageTable(value)
+    }
+}
+
+impl From<MemoryResourceError> for AccountedPageTableStoreError {
+    fn from(value: MemoryResourceError) -> Self {
+        Self::Memory(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -149,6 +170,109 @@ impl PageTableStore for PreallocatedPageTableStore {
         self.issued_table(table)?;
         unsafe { (table.get() as *mut u64).add(index).write_volatile(value) };
         Ok(())
+    }
+}
+
+/// A preallocated page-table arena whose complete physical capacity is charged
+/// to one exact memory pool before the store becomes available.
+///
+/// The commitment accounts capacity, not content authority or physical-frame
+/// identity. The caller retains the unsafe ownership obligations of
+/// `PreallocatedPageTableStore`.
+pub struct AccountedPreallocatedPageTableStore {
+    store: PreallocatedPageTableStore,
+    charge: MemoryObjectId,
+    charge_capability: Capability,
+    committed_pages: u64,
+}
+
+impl AccountedPreallocatedPageTableStore {
+    /// Validates the complete physical arena, then commits its exact page count
+    /// before publishing a usable store.
+    ///
+    /// # Safety
+    ///
+    /// The physical arena must satisfy `PreallocatedPageTableStore::new` for
+    /// the complete lifetime of this wrapper. The selected pool must be the
+    /// policy-designated owner of that arena commitment.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        base: PhysAddr,
+        pages: u64,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedPageTableStoreError> {
+        let store = unsafe { PreallocatedPageTableStore::new(base, pages) }?;
+        let (charge, charge_capability) = memory.allocate_object(
+            pool,
+            pool_capability,
+            pages,
+            MemoryBackingKind::Anonymous,
+            Rights::CONTROL,
+            authorities,
+        )?;
+        Ok(Self {
+            store,
+            charge,
+            charge_capability,
+            committed_pages: pages,
+        })
+    }
+
+    pub const fn charge(&self) -> MemoryObjectId {
+        self.charge
+    }
+
+    pub const fn committed_pages(&self) -> u64 {
+        self.committed_pages
+    }
+
+    pub const fn allocated_pages(&self) -> usize {
+        self.store.allocated_pages()
+    }
+
+    /// Returns the quantitative commitment after the physical arena is no
+    /// longer reachable from any active or resumable address space.
+    ///
+    /// On failure the complete store and charge are returned unchanged.
+    /// Releasing accounting is not evidence that page-table contents were
+    /// erased.
+    ///
+    /// # Safety
+    ///
+    /// No CPU, task, VM, recovery image, or cached root may reference a table
+    /// in this arena, and required TLB invalidation must already be complete.
+    #[allow(clippy::result_large_err)]
+    pub unsafe fn release<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        self,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<u64, (Self, MemoryResourceError)> {
+        match memory.release_object(self.charge, self.charge_capability, authorities) {
+            Ok(pages) => Ok(pages),
+            Err(error) => Err((self, error)),
+        }
+    }
+}
+
+impl PageTableStore for AccountedPreallocatedPageTableStore {
+    fn allocate_zeroed(&mut self) -> Result<PhysAddr, PageTableBuildError> {
+        self.store.allocate_zeroed()
+    }
+
+    fn read(&self, table: PhysAddr, index: usize) -> Result<u64, PageTableBuildError> {
+        self.store.read(table, index)
+    }
+
+    fn write(
+        &mut self,
+        table: PhysAddr,
+        index: usize,
+        value: u64,
+    ) -> Result<(), PageTableBuildError> {
+        self.store.write(table, index, value)
     }
 }
 
@@ -868,6 +992,94 @@ mod tests {
             store.write(PhysAddr::new(base.get() + 4 * PAGE_SIZE).unwrap(), 0, 0),
             Err(PageTableBuildError::Storage)
         );
+    }
+
+    #[test]
+    fn accounted_page_table_arena_charges_full_capacity_until_safe_release() {
+        let mut arena = IdentityArena([[u64::MAX; 512]; 5]);
+        let base = PhysAddr::new(arena.0.as_mut_ptr() as u64).unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(24).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let pool_rights = Rights::ALLOCATE.union(Rights::INSPECT);
+        let (pool, pool_capability) = memory
+            .create_root(4, 1, 0, pool_rights, &mut authorities)
+            .unwrap();
+        let store = unsafe {
+            AccountedPreallocatedPageTableStore::new(
+                base,
+                4,
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            )
+        }
+        .unwrap();
+        assert_eq!(store.committed_pages(), 4);
+        assert_eq!(memory.object_pool(store.charge()), Ok(pool));
+        let mut builder = PageTableBuilder::new(store).unwrap();
+        builder
+            .map_page(
+                VirtAddr::new(0x4000).unwrap(),
+                PhysAddr::new(0x20_0000).unwrap(),
+                PagePermissions::USER_READ_EXECUTE,
+            )
+            .unwrap();
+        assert_eq!(builder.store().allocated_pages(), 4);
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            4
+        );
+        let store = builder.into_store();
+        assert!(matches!(
+            unsafe { store.release(&mut memory, &mut authorities) },
+            Ok(4)
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+    }
+
+    #[test]
+    fn page_table_arena_exhaustion_never_publishes_an_uncharged_store() {
+        let mut arena = IdentityArena([[u64::MAX; 512]; 5]);
+        let base = PhysAddr::new(arena.0.as_mut_ptr() as u64).unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(25).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let pool_rights = Rights::ALLOCATE.union(Rights::INSPECT);
+        let (pool, pool_capability) = memory
+            .create_root(3, 1, 0, pool_rights, &mut authorities)
+            .unwrap();
+        assert!(matches!(
+            unsafe {
+                AccountedPreallocatedPageTableStore::new(
+                    base,
+                    4,
+                    pool,
+                    pool_capability,
+                    &mut memory,
+                    &mut authorities,
+                )
+            },
+            Err(AccountedPageTableStoreError::Memory(
+                MemoryResourceError::PoolExhausted
+            ))
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+        assert!(arena.0.iter().flatten().all(|entry| *entry == u64::MAX));
     }
 
     #[test]

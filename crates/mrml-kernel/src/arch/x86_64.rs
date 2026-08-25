@@ -54,9 +54,9 @@ pub use local_apic::{
     ApStartupTiming, ApicIpi, LocalApicController, LocalApicError, LocalApicTimer, TimerDivide,
 };
 pub use page_table::{
-    ActiveLeaf, ActiveMappingRevocationError, ActivePageTables, ActiveServiceMappingRevoker,
-    ActiveUserBuffer, PageTableBuildError, PageTableBuilder, PageTableStore,
-    PreallocatedPageTableStore,
+    AccountedPageTableStoreError, AccountedPreallocatedPageTableStore, ActiveLeaf,
+    ActiveMappingRevocationError, ActivePageTables, ActiveServiceMappingRevoker, ActiveUserBuffer,
+    PageTableBuildError, PageTableBuilder, PageTableStore, PreallocatedPageTableStore,
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
