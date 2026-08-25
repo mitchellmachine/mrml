@@ -1881,7 +1881,7 @@ fn application_main() -> Result<()> {
     let preparation_started = Instant::now();
     let mut isolation_admission = if service_mode || component_service_mode {
         Some(
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1)
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1)
                 .map_err(|error| anyhow!("WHP isolation admission failed: {:?}", error))?,
         )
     } else {
@@ -2044,6 +2044,7 @@ fn application_main() -> Result<()> {
                 ObjectId(0x5a53_5444_0000_0003),
                 3,
                 provider.artifact().version(),
+                1,
                 ZSTD_INTERFACE_FINGERPRINT,
                 *consumer.artifact().digest(),
                 *provider.artifact().digest(),
@@ -2293,10 +2294,13 @@ fn application_main() -> Result<()> {
         (isolation_admission.as_mut(), isolation_preparation)
     {
         let spec = prepared.spec();
-        let admitted_guest = prepared
+        let routed = prepared
             .commit(admission, guest)
-            .map_err(|(_, error, _)| anyhow!("WHP isolation commit failed: {:?}", error))?
-            .into_endpoint();
+            .map_err(|(_, error, _)| anyhow!("WHP isolation commit failed: {:?}", error))?;
+        if routed.system_generation() != admission.system_generation() {
+            return Err(anyhow!("WHP active SystemGeneration changed during launch"));
+        }
+        let admitted_guest = routed.into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("WHP Total MicroVM admission was not satisfied"));
         }

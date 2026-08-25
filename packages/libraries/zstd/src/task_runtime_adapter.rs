@@ -26,6 +26,7 @@ pub enum ZstdServiceBindingError {
 pub struct ZstdResolvedServiceBinding {
     interface: ObjectId,
     provider_generation: u64,
+    system_generation: u64,
     policy_generation: u64,
 }
 
@@ -33,14 +34,16 @@ impl ZstdResolvedServiceBinding {
     pub const fn new(
         interface: ObjectId,
         provider_generation: u64,
+        system_generation: u64,
         policy_generation: u64,
     ) -> Result<Self, ZstdServiceBindingError> {
-        if provider_generation == 0 || policy_generation == 0 {
+        if provider_generation == 0 || system_generation == 0 || policy_generation == 0 {
             return Err(ZstdServiceBindingError::InvalidGeneration);
         }
         Ok(Self {
             interface,
             provider_generation,
+            system_generation,
             policy_generation,
         })
     }
@@ -63,6 +66,7 @@ pub struct ZstdNativeServiceEndpoint {
     domain: ObjectId,
     interface: ObjectId,
     provider_generation: u64,
+    system_generation: u64,
     policy_generation: u64,
 }
 
@@ -85,6 +89,10 @@ impl ZstdNativeServiceEndpoint {
 
     pub const fn provider_generation(self) -> u64 {
         self.provider_generation
+    }
+
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
     }
 
     pub const fn policy_generation(self) -> u64 {
@@ -239,6 +247,7 @@ impl<
         if spec.interface() != self.expected.interface
             || spec.interface_generation() != INTERFACE_GENERATION
             || spec.provider_generation() != self.expected.provider_generation
+            || spec.system_generation() != self.expected.system_generation
             || spec.policy_generation() != self.expected.policy_generation
             || spec.class() != TotalMicrovmClass::MicrovmEligible
             || spec.placement() != IsolationPlacement::NativeService
@@ -263,6 +272,7 @@ impl<
             domain: spec.domain(),
             interface: spec.interface(),
             provider_generation: spec.provider_generation(),
+            system_generation: spec.system_generation(),
             policy_generation: spec.policy_generation(),
         };
         self.active = Some(endpoint);
@@ -353,6 +363,7 @@ impl ZstdAdmittedTaskRuntimeEndpoint {
         if routed.interface() != expected.interface
             || routed.interface_generation() != INTERFACE_GENERATION
             || routed.provider_generation() != expected.provider_generation
+            || routed.system_generation() != expected.system_generation
             || routed.policy_generation() != expected.policy_generation
             || routed.class() != TotalMicrovmClass::MicrovmEligible
             || !matches!(
@@ -399,6 +410,7 @@ pub struct ZstdTaskRuntimeAdapter<
     backend: &'a mut B,
     domain: ObjectId,
     provider_generation: u64,
+    system_generation: u64,
     policy_generation: u64,
     placement: IsolationPlacement,
     received: Option<ReceivedMessage>,
@@ -425,6 +437,7 @@ impl<
         let routed = admitted.routed;
         let domain = routed.domain();
         let provider_generation = routed.provider_generation();
+        let system_generation = routed.system_generation();
         let policy_generation = routed.policy_generation();
         let placement = routed.placement();
         let endpoint = routed.into_endpoint();
@@ -440,6 +453,7 @@ impl<
             backend,
             domain,
             provider_generation,
+            system_generation,
             policy_generation,
             placement,
             received: None,
@@ -453,6 +467,10 @@ impl<
 
     pub const fn provider_generation(&self) -> u64 {
         self.provider_generation
+    }
+
+    pub const fn system_generation(&self) -> u64 {
+        self.system_generation
     }
 
     pub const fn policy_generation(&self) -> u64 {
@@ -660,6 +678,7 @@ mod tests {
     };
 
     const PAGE_BYTES: usize = 4096;
+    const SYSTEM_GENERATION: u64 = 108;
     const FRAME: [u8; 10] = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 5, 0x2b, 0, 0, b'x'];
 
     struct BufferBackend {
@@ -752,13 +771,18 @@ mod tests {
             interface,
             interface_generation,
             provider_generation,
+            SYSTEM_GENERATION,
             policy_generation,
             TotalMicrovmClass::MicrovmEligible,
             placement,
         )
         .unwrap();
-        let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, policy_generation).unwrap();
+        let mut admission = IsolationAdmissionTable::<1>::new(
+            IsolationMode::Balanced,
+            SYSTEM_GENERATION,
+            policy_generation,
+        )
+        .unwrap();
         prepare_isolation_service_route(&mut admission, spec)
             .unwrap()
             .commit(&mut admission, endpoint)
@@ -777,6 +801,7 @@ mod tests {
             interface,
             INTERFACE_GENERATION,
             provider_generation,
+            SYSTEM_GENERATION,
             policy_generation,
             TotalMicrovmClass::MicrovmEligible,
             placement,
@@ -796,7 +821,8 @@ mod tests {
         let provider_context = context(0x30_0000, 0x50_0000, 0x0000_7000_0000_1000);
         let vm = VmTable::<1>::new().create(0x404).unwrap();
         let interface = ObjectId(0x406);
-        let expected = ZstdResolvedServiceBinding::new(interface, 11, 7).unwrap();
+        let expected =
+            ZstdResolvedServiceBinding::new(interface, 11, SYSTEM_GENERATION, 7).unwrap();
         let mut supervisor = ServiceSupervisor::<1>::new();
         let mut eraser = NativeEraser::default();
         let mut native = ZstdNativeServiceBackend::new(
@@ -811,7 +837,9 @@ mod tests {
             provider_context,
         )
         .unwrap();
-        let mut admission = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(interface, 11, 7, IsolationPlacement::NativeService);
         let route = prepare_isolation_service_route(&mut admission, spec).unwrap();
         let launch = PreparedComponentServiceLaunch::bind(
@@ -819,6 +847,7 @@ mod tests {
             interface,
             INTERFACE_GENERATION,
             11,
+            SYSTEM_GENERATION,
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -837,6 +866,8 @@ mod tests {
         let native_endpoint = *routed.endpoint();
         assert_eq!(native_endpoint.interface(), interface);
         assert_eq!(native_endpoint.provider_generation(), 11);
+        assert_eq!(native_endpoint.system_generation(), SYSTEM_GENERATION);
+        assert_eq!(routed.system_generation(), SYSTEM_GENERATION);
         let routed = native.open_data_plane(routed).unwrap();
         let provider = native_endpoint.task();
 
@@ -958,7 +989,8 @@ mod tests {
             .unwrap();
         let vm = VmTable::<1>::new().create(0x404).unwrap();
         let interface = ObjectId(0x406);
-        let expected = ZstdResolvedServiceBinding::new(interface, 11, 7).unwrap();
+        let expected =
+            ZstdResolvedServiceBinding::new(interface, 11, SYSTEM_GENERATION, 7).unwrap();
         let mut supervisor = ServiceSupervisor::<1>::new();
         let mut eraser = NativeEraser::default();
         let mut native = ZstdNativeServiceBackend::new(
@@ -974,7 +1006,8 @@ mod tests {
         )
         .unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         assert!(matches!(
             route_isolation_service(
                 &mut admission,
@@ -997,7 +1030,8 @@ mod tests {
         let caller_context = context(0x20_0000, 0x40_0000, 0x0000_7000_0000_0000);
         let caller = runtime.create(Priority::NORMAL, caller_context).unwrap();
         let vm = VmTable::<1>::new().create(0x404).unwrap();
-        let expected = ZstdResolvedServiceBinding::new(ObjectId(0x406), 11, 7).unwrap();
+        let expected =
+            ZstdResolvedServiceBinding::new(ObjectId(0x406), 11, SYSTEM_GENERATION, 7).unwrap();
         let mut supervisor = ServiceSupervisor::<1>::new();
         let mut eraser = NativeEraser::default();
         assert!(matches!(
@@ -1047,7 +1081,8 @@ mod tests {
         let provider_context = context(0x30_0000, 0x50_0000, 0x0000_7000_0000_1000);
         let vm = VmTable::<1>::new().create(0x404).unwrap();
         let interface = ObjectId(0x406);
-        let expected = ZstdResolvedServiceBinding::new(interface, 11, 7).unwrap();
+        let expected =
+            ZstdResolvedServiceBinding::new(interface, 11, SYSTEM_GENERATION, 7).unwrap();
         let mut supervisor = ServiceSupervisor::<1>::new();
         let mut eraser = NativeEraser {
             fail_first: true,
@@ -1065,7 +1100,9 @@ mod tests {
             provider_context,
         )
         .unwrap();
-        let mut admission = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
         let routed = route_isolation_service(
             &mut admission,
             &mut native,
@@ -1175,7 +1212,8 @@ mod tests {
             7,
             IsolationPlacement::Microvm,
         );
-        let expected = ZstdResolvedServiceBinding::new(interface, 11, 7).unwrap();
+        let expected =
+            ZstdResolvedServiceBinding::new(interface, 11, SYSTEM_GENERATION, 7).unwrap();
         let admitted = ZstdAdmittedTaskRuntimeEndpoint::bind(routed, expected)
             .map_err(|(_, error)| error)
             .unwrap();
@@ -1187,6 +1225,7 @@ mod tests {
             ZstdTaskRuntimeAdapter::new(&mut runtime, admitted, &bindings, &memory, &mut backend);
         assert_eq!(adapter.domain(), ObjectId(0x500));
         assert_eq!(adapter.provider_generation(), 11);
+        assert_eq!(adapter.system_generation(), SYSTEM_GENERATION);
         assert_eq!(adapter.policy_generation(), 7);
         assert_eq!(adapter.placement(), IsolationPlacement::Microvm);
         ZstdServiceLoop::new()
@@ -1218,11 +1257,15 @@ mod tests {
     #[test]
     fn adapter_requires_the_exact_committed_resolver_and_policy_binding() {
         assert_eq!(
-            ZstdResolvedServiceBinding::new(ObjectId(1), 0, 1),
+            ZstdResolvedServiceBinding::new(ObjectId(1), 0, SYSTEM_GENERATION, 1),
             Err(ZstdServiceBindingError::InvalidGeneration)
         );
         assert_eq!(
-            ZstdResolvedServiceBinding::new(ObjectId(1), 1, 0),
+            ZstdResolvedServiceBinding::new(ObjectId(1), 1, SYSTEM_GENERATION, 0),
+            Err(ZstdServiceBindingError::InvalidGeneration)
+        );
+        assert_eq!(
+            ZstdResolvedServiceBinding::new(ObjectId(1), 1, 0, 1),
             Err(ZstdServiceBindingError::InvalidGeneration)
         );
 
@@ -1261,14 +1304,23 @@ mod tests {
         );
         let (returned, error) = ZstdAdmittedTaskRuntimeEndpoint::bind(
             routed,
-            ZstdResolvedServiceBinding::new(interface, 18, 5).unwrap(),
+            ZstdResolvedServiceBinding::new(interface, 18, SYSTEM_GENERATION, 5).unwrap(),
         )
         .err()
         .expect("mismatched provider generation must be rejected");
         assert_eq!(error, ZstdServiceBindingError::AdmissionMismatch);
         assert_eq!(returned.provider_generation(), 17);
+        assert_eq!(returned.system_generation(), SYSTEM_GENERATION);
         assert_eq!(returned.policy_generation(), 5);
         assert_eq!(returned.placement(), IsolationPlacement::NativeService);
+        let (returned, error) = ZstdAdmittedTaskRuntimeEndpoint::bind(
+            returned,
+            ZstdResolvedServiceBinding::new(interface, 17, SYSTEM_GENERATION - 1, 5).unwrap(),
+        )
+        .err()
+        .expect("stale system generation must be rejected");
+        assert_eq!(error, ZstdServiceBindingError::AdmissionMismatch);
+        assert_eq!(returned.system_generation(), SYSTEM_GENERATION);
     }
 
     #[test]
@@ -1347,7 +1399,7 @@ mod tests {
         let mut response_buffer = [0xcc; DECOMPRESS_RESPONSE_BYTES];
         let admitted = ZstdAdmittedTaskRuntimeEndpoint::bind(
             routed,
-            ZstdResolvedServiceBinding::new(interface, 13, 9).unwrap(),
+            ZstdResolvedServiceBinding::new(interface, 13, SYSTEM_GENERATION, 9).unwrap(),
         )
         .map_err(|(_, error)| error)
         .unwrap();

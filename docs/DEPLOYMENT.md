@@ -44,6 +44,13 @@ candidates, conflicting exact requirements, self-dependencies, noncanonical
 edges, and package/edge/candidate limit violations. This is deterministic graph
 construction only: package signature/admission policy, capabilities, durable
 generation state, activation, rollback, and runtime loading remain **PLANNED**.
+As a bounded runtime prerequisite, kernel isolation admission now requires and
+retains one explicit active system-generation number independently from the
+isolation-policy generation. Stale generation requests fail before native or
+microVM backend construction, and committed/unavailable records preserve the
+original value. This does not authenticate, persist, select, activate, or
+recover a canonical `SystemGeneration`; those `DeploymentService` mechanisms
+remain **PLANNED**.
 
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and

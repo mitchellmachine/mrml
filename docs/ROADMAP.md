@@ -206,6 +206,14 @@ returns the complete uncommitted transaction. This implements the bounded
 control-plane/shortest-safe-data-plane split for this hosted path only; active
 `SystemGeneration` validation and the general runtime resolver remain
 **PLANNED**.
+The kernel-side dependency gate now records a nonzero active system generation
+alongside the policy generation in every isolation request and lifecycle
+record. Configuration-derived service specifications use that active value;
+the native Zstd binding and WHP/KVM commit paths reject or detect any stale
+value before opening the data plane. Windows and Arch Linux kernel, Zstd, and
+configuration suites plus WHP/KVM runner suites pass. The runners use a
+transient local generation, so persisted `DeploymentService` activation and a
+canonical build-tool-to-kernel handoff remain **PLANNED**.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the

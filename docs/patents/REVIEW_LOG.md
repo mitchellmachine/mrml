@@ -4889,6 +4889,20 @@ independently serviced component and adaptive-placement mechanisms retain their
 existing `TRIGGERED` reviews; agent review does not replace targeted independent
 human review.
 
+# 2026-08-25 — Active system-generation isolation binding
+
+**Result: NOT_TRIGGERED.** This increment adds one nonzero generation identity
+to the existing fixed-capacity isolation admission, lifecycle, configured
+service, native IPC, and WHP/KVM handoff records. It performs exact equality
+checks before invoking an existing backend and retains the checked scalar in
+existing immutable routes. It adds no generation-selection or dependency-
+resolution algorithm, persistence protocol, queue/ring transport, codec
+operation, cryptographic construction, process-isolation technique,
+virtualization mechanism, or hardware protocol. The broader component-
+interface, adaptive-placement, microVM, and deployment mechanisms retain their
+existing `TRIGGERED` reviews; this agent review does not replace targeted
+independent human review.
+
 # 2026-08-25 — Artifact-bound component control/data-plane handoff
 
 **Result: NOT_TRIGGERED after the existing component-interface and adaptive-

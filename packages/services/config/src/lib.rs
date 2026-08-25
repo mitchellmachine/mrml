@@ -2141,8 +2141,9 @@ impl AppliedIsolationPolicy {
 
     pub fn admission_table<const DOMAINS: usize>(
         self,
+        system_generation: u64,
     ) -> Result<IsolationAdmissionTable<DOMAINS>, ConfigError> {
-        IsolationAdmissionTable::new(self.mode, self.policy_generation)
+        IsolationAdmissionTable::new(self.mode, system_generation, self.policy_generation)
             .map_err(|_| ConfigError::InvalidValue)
     }
 
@@ -2270,6 +2271,7 @@ impl AdmittedIsolationServicePolicy {
 
     pub fn service_spec(
         self,
+        system_generation: u64,
         domain: ObjectId,
         interface: ObjectId,
         interface_generation: u32,
@@ -2281,6 +2283,7 @@ impl AdmittedIsolationServicePolicy {
             interface,
             interface_generation,
             provider_generation,
+            system_generation,
             self.policy_generation,
             class,
             self.placement,
@@ -2355,6 +2358,7 @@ fn configured_isolation_service_spec<
         return Err(ConfigError::IsolationPolicyMismatch);
     }
     applied.admit_service(bounds)?.service_spec(
+        admission.system_generation(),
         identity.domain,
         identity.interface,
         identity.interface_generation,
@@ -4289,6 +4293,7 @@ mod tests {
     };
 
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+    const SYSTEM_GENERATION: u64 = 108;
 
     type TestPolicySubstrate = AccountedPolicyServiceSubstrate<2, 4, 2, 3, 2>;
 
@@ -4395,6 +4400,7 @@ mod tests {
             ObjectId(0x434f_4e46_4947_0001),
             1,
             11,
+            SYSTEM_GENERATION,
             5,
             TotalMicrovmClass::MicrovmEligible,
             placement,
@@ -4405,7 +4411,8 @@ mod tests {
     #[test]
     fn configuration_backend_preserves_binding_across_both_placements() {
         let mut native_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 5).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 5)
+                .unwrap();
         let mut native_backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
             MicrovmPlacementProbe::default(),
@@ -4422,11 +4429,13 @@ mod tests {
         );
         assert_eq!(native.interface_generation(), 1);
         assert_eq!(native.provider_generation(), 11);
+        assert_eq!(native.system_generation(), SYSTEM_GENERATION);
         let (native_probe, microvm_probe) = native_backend.into_parts();
         assert_eq!((native_probe.launches, microvm_probe.launches), (1, 0));
 
         let mut microvm_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 5).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 5)
+                .unwrap();
         let mut microvm_backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
             MicrovmPlacementProbe::default(),
@@ -4451,7 +4460,8 @@ mod tests {
     #[test]
     fn unavailable_configuration_microvm_never_invokes_native_launcher() {
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 5).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 5)
+                .unwrap();
         let mut backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
             MicrovmPlacementProbe {
@@ -4485,7 +4495,8 @@ mod tests {
         let mut backend =
             ConfigurationPlacementBackend::new(NativePlacementProbe::default(), microvm);
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 5).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 5)
+                .unwrap();
         let routed = route_isolation_service(
             &mut admission,
             &mut backend,
@@ -4550,6 +4561,7 @@ mod tests {
             expected.interface(),
             expected.interface_generation(),
             expected.provider_generation() + 1,
+            expected.system_generation(),
             expected.policy_generation(),
             TotalMicrovmClass::MicrovmEligible,
             IsolationPlacement::Microvm,
@@ -4611,7 +4623,9 @@ mod tests {
         );
         let mut backend =
             ConfigurationPlacementBackend::new(native, MicrovmPlacementProbe::default());
-        let mut admission = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 5).unwrap();
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 5)
+                .unwrap();
         let routed = route_isolation_service(
             &mut admission,
             &mut backend,
@@ -7648,7 +7662,7 @@ mod tests {
             Some(IsolationPlacement::Microvm)
         );
         assert_eq!(applied.policy_generation(), 1);
-        let admission = applied.admission_table::<2>().unwrap();
+        let admission = applied.admission_table::<2>(SYSTEM_GENERATION).unwrap();
         assert_eq!(admission.mode(), IsolationMode::TotalMicrovm);
         assert_eq!(admission.policy_generation(), 1);
         assert!(matches!(
@@ -7803,6 +7817,7 @@ mod tests {
         assert_eq!(total.source(), IsolationPolicySource::TotalMicrovm);
         let spec = total
             .service_spec(
+                SYSTEM_GENERATION,
                 ObjectId(501),
                 ObjectId(502),
                 3,
@@ -7811,6 +7826,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(spec.placement(), IsolationPlacement::Microvm);
+        assert_eq!(spec.system_generation(), SYSTEM_GENERATION);
         assert_eq!(spec.policy_generation(), 10);
         assert_eq!(spec.interface_generation(), 3);
         assert_eq!(spec.provider_generation(), 17);
@@ -7928,7 +7944,8 @@ mod tests {
         )
         .unwrap();
         let mut prepared_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 1)
+                .unwrap();
         let prepared = prepare_configured_isolation_service_route(
             &configuration,
             &capabilities,
@@ -7942,7 +7959,8 @@ mod tests {
         assert_eq!(prepared.spec().provider_generation(), 19);
         prepared.cancel(&mut prepared_admission).unwrap();
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 1)
+                .unwrap();
         let mut backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
             MicrovmPlacementProbe::default(),
@@ -7985,7 +8003,8 @@ mod tests {
             .commit(&capabilities, root, &replacement)
             .unwrap();
         let mut stale_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 1)
+                .unwrap();
         let mut stale_backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
             MicrovmPlacementProbe::default(),
@@ -8017,7 +8036,8 @@ mod tests {
         )
         .unwrap();
         let mut wrong_admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 2).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 2)
+                .unwrap();
         let mut wrong_backend = ConfigurationPlacementBackend::new(
             NativePlacementProbe::default(),
             MicrovmPlacementProbe::default(),

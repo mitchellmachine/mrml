@@ -7869,6 +7869,16 @@ control planes establish authority; data planes should take the shortest safe
 path. Data-plane bytes cannot repeat resolution, change placement, or widen the
 route's authority.
 
+Kernel isolation admission now has two independent generation gates. Its table
+is created for one nonzero active `SystemGeneration` and one nonzero policy
+generation; every request, prepared route, running record, unavailable record,
+and committed service route retains both. A stale system generation and stale
+policy generation fail with distinct typed errors before backend invocation.
+The supervised Zstd endpoint and data-plane adapter recheck and retain the
+system generation as well as the exact provider and policy generations. The
+focused WHP and KVM runners currently designate transient local generation 1;
+this does not prove persistent generation activation or recovery.
+
 The focused test sends the generated 104-byte request and one attenuated shared-
 buffer capability from the caller to the launched provider task, executes the
 existing private-scratch service loop, verifies the exact reply and output, and

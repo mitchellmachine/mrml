@@ -42,6 +42,18 @@ provider or placement, carry a general interface invocation, persist policy, or
 provide transparent cross-placement transport. A fully resolved representative
 dual-placement service remains **PLANNED**.
 
+The kernel admission prerequisite now binds every prepared, running,
+unavailable, and routed domain to both a nonzero active `SystemGeneration` and
+the applied isolation-policy generation. A stale system generation is rejected
+before backend construction, separately from a stale policy generation, and
+the committed native IPC or microVM route retains both identities. The
+configuration service derives service specifications from the admission
+table's active system generation rather than package metadata. The focused
+WHP/KVM component probe uses one explicit local generation alongside its
+transient policy generation and verifies that identity again at commit. This is
+kernel/runtime identity evidence; decoding and activating a persisted canonical
+`SystemGeneration` through `DeploymentService` remains **PLANNED**.
+
 The canonical `org.mrml.zstd`/`org.mrml.zim` manifests now select the
 `isolated-service` interface form, and Zstd permits native-service or microVM
 placement with a native-service floor. Its first bounded data-plane adapter

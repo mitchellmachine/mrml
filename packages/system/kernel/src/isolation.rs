@@ -62,6 +62,7 @@ pub enum IsolationUnavailableReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnavailableIsolationDomain {
     domain: ObjectId,
+    system_generation: u64,
     policy_generation: u64,
     sequence: u64,
     class: TotalMicrovmClass,
@@ -76,6 +77,10 @@ impl UnavailableIsolationDomain {
 
     pub const fn reason(self) -> IsolationUnavailableReason {
         self.reason
+    }
+
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
     }
 
     pub const fn policy_generation(self) -> u64 {
@@ -97,6 +102,7 @@ impl UnavailableIsolationDomain {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationLaunchError {
+    InvalidSystemGeneration,
     InvalidPolicyGeneration,
     DuplicateDomain,
     TableFull,
@@ -114,6 +120,7 @@ pub struct IsolationServiceSpec {
     interface: ObjectId,
     interface_generation: u32,
     provider_generation: u64,
+    system_generation: u64,
     policy_generation: u64,
     class: TotalMicrovmClass,
     placement: IsolationPlacement,
@@ -131,11 +138,16 @@ impl IsolationServiceSpec {
         interface: ObjectId,
         interface_generation: u32,
         provider_generation: u64,
+        system_generation: u64,
         policy_generation: u64,
         class: TotalMicrovmClass,
         placement: IsolationPlacement,
     ) -> Result<Self, IsolationServiceSpecError> {
-        if interface_generation == 0 || provider_generation == 0 || policy_generation == 0 {
+        if interface_generation == 0
+            || provider_generation == 0
+            || system_generation == 0
+            || policy_generation == 0
+        {
             return Err(IsolationServiceSpecError::InvalidGeneration);
         }
         if !matches!(
@@ -149,6 +161,7 @@ impl IsolationServiceSpec {
             interface,
             interface_generation,
             provider_generation,
+            system_generation,
             policy_generation,
             class,
             placement,
@@ -166,6 +179,9 @@ impl IsolationServiceSpec {
     }
     pub const fn provider_generation(self) -> u64 {
         self.provider_generation
+    }
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
     }
     pub const fn policy_generation(self) -> u64 {
         self.policy_generation
@@ -235,6 +251,7 @@ pub struct RoutedIsolationService<E> {
     interface: ObjectId,
     interface_generation: u32,
     provider_generation: u64,
+    system_generation: u64,
     policy_generation: u64,
     class: TotalMicrovmClass,
     placement: IsolationPlacement,
@@ -337,6 +354,7 @@ impl PreparedIsolationServiceRoute {
             interface: self.spec.interface,
             interface_generation: self.spec.interface_generation,
             provider_generation: self.spec.provider_generation,
+            system_generation: self.spec.system_generation,
             policy_generation: self.spec.policy_generation,
             class: self.spec.class,
             placement: self.spec.placement,
@@ -364,6 +382,7 @@ impl PreparedComponentServiceLaunch {
         interface: ObjectId,
         interface_generation: u32,
         provider_generation: u64,
+        system_generation: u64,
         interface_fingerprint: [u8; 32],
         consumer_artifact: [u8; 64],
         provider_artifact: [u8; 64],
@@ -374,6 +393,8 @@ impl PreparedComponentServiceLaunch {
             || spec.provider_generation() != provider_generation
         {
             Some(ComponentServiceLaunchError::RouteIdentityMismatch)
+        } else if spec.system_generation() != system_generation {
+            Some(ComponentServiceLaunchError::SystemGenerationMismatch)
         } else if interface_fingerprint == [0; 32] {
             Some(ComponentServiceLaunchError::InvalidInterfaceFingerprint)
         } else if consumer_artifact == [0; 64] || provider_artifact == [0; 64] {
@@ -453,6 +474,7 @@ impl PreparedComponentServiceLaunch {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ComponentServiceLaunchError {
     RouteIdentityMismatch,
+    SystemGenerationMismatch,
     InvalidInterfaceFingerprint,
     InvalidArtifactDigest,
     ArtifactSubstitution,
@@ -480,6 +502,7 @@ pub fn prepare_isolation_service_route<const DOMAINS: usize>(
 ) -> Result<PreparedIsolationServiceRoute, IsolationLaunchError> {
     let request = IsolationLaunchRequest::new(
         spec.domain,
+        spec.system_generation,
         spec.policy_generation,
         spec.class,
         spec.placement,
@@ -509,6 +532,7 @@ impl<E> RoutedIsolationService<E> {
             interface: self.interface,
             interface_generation: self.interface_generation,
             provider_generation: self.provider_generation,
+            system_generation: self.system_generation,
             policy_generation: self.policy_generation,
             class: self.class,
             placement: self.placement,
@@ -525,6 +549,9 @@ impl<E> RoutedIsolationService<E> {
     }
     pub const fn provider_generation(&self) -> u64 {
         self.provider_generation
+    }
+    pub const fn system_generation(&self) -> u64 {
+        self.system_generation
     }
     pub const fn policy_generation(&self) -> u64 {
         self.policy_generation
@@ -632,6 +659,7 @@ pub fn launch_prepared_component_service<B: IsolationServiceBackend, const DOMAI
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IsolationLaunchRequest {
     domain: ObjectId,
+    system_generation: u64,
     policy_generation: u64,
     class: TotalMicrovmClass,
     placement: IsolationPlacement,
@@ -640,15 +668,20 @@ pub struct IsolationLaunchRequest {
 impl IsolationLaunchRequest {
     pub const fn new(
         domain: ObjectId,
+        system_generation: u64,
         policy_generation: u64,
         class: TotalMicrovmClass,
         placement: IsolationPlacement,
     ) -> Result<Self, IsolationLaunchError> {
+        if system_generation == 0 {
+            return Err(IsolationLaunchError::InvalidSystemGeneration);
+        }
         if policy_generation == 0 {
             return Err(IsolationLaunchError::InvalidPolicyGeneration);
         }
         Ok(Self {
             domain,
+            system_generation,
             policy_generation,
             class,
             placement,
@@ -666,6 +699,7 @@ pub struct PreparedIsolationLaunch {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RunningIsolationDomain {
     domain: ObjectId,
+    system_generation: u64,
     policy_generation: u64,
     class: TotalMicrovmClass,
     placement: IsolationPlacement,
@@ -678,6 +712,10 @@ impl RunningIsolationDomain {
 
     pub const fn policy_generation(self) -> u64 {
         self.policy_generation
+    }
+
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
     }
 
     pub const fn class(self) -> TotalMicrovmClass {
@@ -731,6 +769,7 @@ impl TotalMicrovmReport {
 /// table neither selects providers nor creates VMs or resources.
 pub struct IsolationAdmissionTable<const DOMAINS: usize> {
     mode: IsolationMode,
+    system_generation: u64,
     policy_generation: u64,
     slots: [Option<LaunchSlot>; DOMAINS],
     unavailable: [Option<UnavailableIsolationDomain>; DOMAINS],
@@ -741,12 +780,20 @@ pub struct IsolationAdmissionTable<const DOMAINS: usize> {
 }
 
 impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
-    pub fn new(mode: IsolationMode, policy_generation: u64) -> Result<Self, IsolationLaunchError> {
+    pub fn new(
+        mode: IsolationMode,
+        system_generation: u64,
+        policy_generation: u64,
+    ) -> Result<Self, IsolationLaunchError> {
+        if system_generation == 0 {
+            return Err(IsolationLaunchError::InvalidSystemGeneration);
+        }
         if policy_generation == 0 {
             return Err(IsolationLaunchError::InvalidPolicyGeneration);
         }
         Ok(Self {
             mode,
+            system_generation,
             policy_generation,
             slots: array::from_fn(|_| None),
             unavailable: array::from_fn(|_| None),
@@ -765,10 +812,17 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         self.policy_generation
     }
 
+    pub const fn system_generation(&self) -> u64 {
+        self.system_generation
+    }
+
     pub fn prepare(
         &mut self,
         request: IsolationLaunchRequest,
     ) -> Result<PreparedIsolationLaunch, IsolationLaunchError> {
+        if request.system_generation != self.system_generation {
+            return Err(IsolationLaunchError::InvalidSystemGeneration);
+        }
         if request.policy_generation != self.policy_generation {
             return Err(IsolationLaunchError::InvalidPolicyGeneration);
         }
@@ -797,6 +851,7 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             state: LaunchState::Prepared,
             record: RunningIsolationDomain {
                 domain: request.domain,
+                system_generation: request.system_generation,
                 policy_generation: request.policy_generation,
                 class: request.class,
                 placement: request.placement,
@@ -850,6 +905,7 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             .ok_or(IsolationLaunchError::GenerationExhausted)?;
         let unavailable = UnavailableIsolationDomain {
             domain: prepared.domain,
+            system_generation: record.system_generation,
             policy_generation: record.policy_generation,
             sequence,
             class: record.class,
@@ -1029,6 +1085,8 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
 mod tests {
     use super::*;
 
+    const SYSTEM_GENERATION: u64 = 108;
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum BackendError {
         Unavailable,
@@ -1100,6 +1158,7 @@ mod tests {
             ObjectId(0x434f_4e46_4947),
             1,
             9,
+            SYSTEM_GENERATION,
             7,
             TotalMicrovmClass::MicrovmEligible,
             placement,
@@ -1112,12 +1171,15 @@ mod tests {
         class: TotalMicrovmClass,
         placement: IsolationPlacement,
     ) -> IsolationLaunchRequest {
-        IsolationLaunchRequest::new(ObjectId(object), 7, class, placement).unwrap()
+        IsolationLaunchRequest::new(ObjectId(object), SYSTEM_GENERATION, 7, class, placement)
+            .unwrap()
     }
 
     #[test]
     fn total_mode_admits_only_backend_confirmed_eligible_microvms() {
-        let mut table = IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let prepared = table
             .prepare(request(
                 1,
@@ -1140,7 +1202,9 @@ mod tests {
 
     #[test]
     fn total_mode_rejects_native_downgrade_and_unsupported_blocker() {
-        let mut table = IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         assert_eq!(
             table.prepare(request(
                 1,
@@ -1162,7 +1226,9 @@ mod tests {
 
     #[test]
     fn unavailable_microvm_preserves_total_policy_and_exact_reason() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let prepared = table
             .prepare(request(
                 4,
@@ -1181,6 +1247,7 @@ mod tests {
         assert_eq!(table.running().count(), 0);
         assert!(table.total_microvm_report().satisfied());
         let retained = table.unavailable_domains().next().unwrap();
+        assert_eq!(retained.system_generation(), SYSTEM_GENERATION);
         assert_eq!(retained.policy_generation(), 7);
         assert_eq!(retained.sequence(), 1);
         assert_eq!(retained.class(), TotalMicrovmClass::MicrovmEligible);
@@ -1190,7 +1257,9 @@ mod tests {
 
     #[test]
     fn explicit_substrate_reason_is_not_counted_as_fallback() {
-        let mut table = IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let prepared = table
             .prepare(request(
                 3,
@@ -1208,17 +1277,32 @@ mod tests {
     }
 
     #[test]
-    fn stale_policy_duplicate_capacity_and_cancel_fail_closed() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
-        let stale = IsolationLaunchRequest::new(
+    fn stale_system_or_policy_generation_and_capacity_fail_closed() {
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let stale_system = IsolationLaunchRequest::new(
             ObjectId(1),
+            SYSTEM_GENERATION - 1,
+            7,
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::NativeProcess,
+        )
+        .unwrap();
+        assert_eq!(
+            table.prepare(stale_system),
+            Err(IsolationLaunchError::InvalidSystemGeneration)
+        );
+        let stale_policy = IsolationLaunchRequest::new(
+            ObjectId(1),
+            SYSTEM_GENERATION,
             8,
             TotalMicrovmClass::MicrovmEligible,
             IsolationPlacement::NativeProcess,
         )
         .unwrap();
         assert_eq!(
-            table.prepare(stale),
+            table.prepare(stale_policy),
             Err(IsolationLaunchError::InvalidPolicyGeneration)
         );
         let prepared = table
@@ -1250,7 +1334,9 @@ mod tests {
 
     #[test]
     fn unavailable_ledger_is_bounded_ordered_and_retry_replaces_old_failure() {
-        let mut table = IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         for (domain, reason) in [
             (1, IsolationUnavailableReason::MemoryBudget),
             (2, IsolationUnavailableReason::VcpuBudget),
@@ -1300,7 +1386,8 @@ mod tests {
     #[test]
     fn balanced_service_routes_both_placements_under_one_interface_binding() {
         let mut native_table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
         let mut native_backend = backend();
         let native = route_isolation_service(
             &mut native_table,
@@ -1309,7 +1396,8 @@ mod tests {
         )
         .unwrap();
         let mut microvm_table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
         let mut microvm_backend = backend();
         let microvm = route_isolation_service(
             &mut microvm_table,
@@ -1343,7 +1431,9 @@ mod tests {
 
     #[test]
     fn prepared_service_route_spans_construction_without_losing_binding_identity() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let prepared = prepare_isolation_service_route(&mut table, spec).unwrap();
         assert_eq!(prepared.spec(), spec);
@@ -1353,13 +1443,16 @@ mod tests {
         assert_eq!(routed.interface(), spec.interface());
         assert_eq!(routed.interface_generation(), spec.interface_generation());
         assert_eq!(routed.provider_generation(), spec.provider_generation());
+        assert_eq!(routed.system_generation(), SYSTEM_GENERATION);
         assert_eq!(routed.placement(), IsolationPlacement::Microvm);
         assert!(table.total_microvm_report().satisfied());
     }
 
     #[test]
     fn component_launch_retains_exact_two_artifact_route_until_commit() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let route = prepare_isolation_service_route(&mut table, spec).unwrap();
         let launch = PreparedComponentServiceLaunch::bind(
@@ -1367,6 +1460,7 @@ mod tests {
             spec.interface(),
             spec.interface_generation(),
             spec.provider_generation(),
+            spec.system_generation(),
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1419,7 +1513,9 @@ mod tests {
 
     #[test]
     fn artifact_bound_component_launch_invokes_only_selected_backend() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(IsolationPlacement::NativeService);
         let route = prepare_isolation_service_route(&mut table, spec).unwrap();
         let launch = PreparedComponentServiceLaunch::bind(
@@ -1427,6 +1523,7 @@ mod tests {
             spec.interface(),
             spec.interface_generation(),
             spec.provider_generation(),
+            spec.system_generation(),
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1449,7 +1546,9 @@ mod tests {
 
     #[test]
     fn artifact_mismatch_returns_complete_uncommitted_launch() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let route = prepare_isolation_service_route(&mut table, spec).unwrap();
         let launch = PreparedComponentServiceLaunch::bind(
@@ -1457,6 +1556,7 @@ mod tests {
             spec.interface(),
             spec.interface_generation(),
             spec.provider_generation(),
+            spec.system_generation(),
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1488,7 +1588,9 @@ mod tests {
 
     #[test]
     fn failed_component_construction_records_unavailable_without_native_fallback() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let route = prepare_isolation_service_route(&mut table, spec).unwrap();
         let launch = PreparedComponentServiceLaunch::bind(
@@ -1496,6 +1598,7 @@ mod tests {
             spec.interface(),
             spec.interface_generation(),
             spec.provider_generation(),
+            spec.system_generation(),
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1520,7 +1623,8 @@ mod tests {
     #[test]
     fn exhausted_vcpu_budget_consumes_total_route_without_native_fallback() {
         let mut admission =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let spec = service_spec(IsolationPlacement::Microvm);
         let route = prepare_isolation_service_route(&mut admission, spec).unwrap();
         let mut capabilities = CapabilitySpace::<1>::new();
@@ -1558,29 +1662,60 @@ mod tests {
     fn component_launch_substitution_returns_uncommitted_route_for_failure_handling() {
         for expected in [
             ComponentServiceLaunchError::RouteIdentityMismatch,
+            ComponentServiceLaunchError::SystemGenerationMismatch,
             ComponentServiceLaunchError::InvalidInterfaceFingerprint,
             ComponentServiceLaunchError::InvalidArtifactDigest,
             ComponentServiceLaunchError::ArtifactSubstitution,
         ] {
-            let mut table =
-                IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+            let mut table = IsolationAdmissionTable::<1>::new(
+                IsolationMode::TotalMicrovm,
+                SYSTEM_GENERATION,
+                7,
+            )
+            .unwrap();
             let spec = service_spec(IsolationPlacement::Microvm);
             let route = prepare_isolation_service_route(&mut table, spec).unwrap();
-            let (interface, fingerprint, consumer, provider) = match expected {
+            let (interface, system_generation, fingerprint, consumer, provider) = match expected {
                 ComponentServiceLaunchError::RouteIdentityMismatch => (
                     ObjectId(spec.interface().0 + 1),
+                    spec.system_generation(),
+                    [0x3a; 32],
+                    [0x18; 64],
+                    [0x2f; 64],
+                ),
+                ComponentServiceLaunchError::SystemGenerationMismatch => (
+                    spec.interface(),
+                    spec.system_generation() - 1,
                     [0x3a; 32],
                     [0x18; 64],
                     [0x2f; 64],
                 ),
                 ComponentServiceLaunchError::InvalidInterfaceFingerprint => {
-                    (spec.interface(), [0; 32], [0x18; 64], [0x2f; 64])
+                    (
+                        spec.interface(),
+                        spec.system_generation(),
+                        [0; 32],
+                        [0x18; 64],
+                        [0x2f; 64],
+                    )
                 }
                 ComponentServiceLaunchError::InvalidArtifactDigest => {
-                    (spec.interface(), [0x3a; 32], [0; 64], [0x2f; 64])
+                    (
+                        spec.interface(),
+                        spec.system_generation(),
+                        [0x3a; 32],
+                        [0; 64],
+                        [0x2f; 64],
+                    )
                 }
                 ComponentServiceLaunchError::ArtifactSubstitution => {
-                    (spec.interface(), [0x3a; 32], [0x2f; 64], [0x2f; 64])
+                    (
+                        spec.interface(),
+                        spec.system_generation(),
+                        [0x3a; 32],
+                        [0x2f; 64],
+                        [0x2f; 64],
+                    )
                 }
             };
             let (route, error) = PreparedComponentServiceLaunch::bind(
@@ -1588,6 +1723,7 @@ mod tests {
                 interface,
                 spec.interface_generation(),
                 spec.provider_generation(),
+                system_generation,
                 fingerprint,
                 consumer,
                 provider,
@@ -1606,7 +1742,9 @@ mod tests {
 
     #[test]
     fn total_service_rejects_native_before_backend_and_never_falls_back() {
-        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
         let mut backend = backend();
         assert_eq!(
             route_isolation_service(
@@ -1646,6 +1784,7 @@ mod tests {
                 ObjectId(2),
                 0,
                 1,
+                SYSTEM_GENERATION,
                 7,
                 TotalMicrovmClass::MicrovmEligible,
                 IsolationPlacement::Microvm,
@@ -1658,6 +1797,7 @@ mod tests {
                 ObjectId(2),
                 1,
                 1,
+                SYSTEM_GENERATION,
                 7,
                 TotalMicrovmClass::MicrovmEligible,
                 IsolationPlacement::NativeProcess,

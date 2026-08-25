@@ -120,6 +120,15 @@ do not repeat provider resolution or placement policy. Artifact mismatch calls
 neither backend and returns the complete uncommitted transaction for bounded
 cleanup. This is focused hosted transaction evidence, not active
 `SystemGeneration` integration or a general runtime resolver.
+The route and native adapter now additionally retain the active system
+generation. `ZstdResolvedServiceBinding` rejects a route from any other system
+generation even when interface, provider, and policy generations match, and
+the kernel returns a typed stale-system failure before either placement backend
+runs. Existing running routes keep their original system generation; no update
+retargeting or executable patching is introduced. The focused runners still
+construct a transient local generation rather than consuming persisted
+`DeploymentService` activation state, so the general generation-to-launch
+handoff remains **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/
