@@ -53,9 +53,13 @@ Three new persistent deltas are documented before implementation:
   service, Settings/shell projection of owner policy, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The configuration service now provides a bounded typed persistence
-  prerequisite for component placement preference and system Balanced/Total
+  prerequisite for component placement preference and system isolation-mode
   selection, using exact setting/root capabilities and its authenticated
-  checkpoint recovery path. It does not itself resolve or grant placement.
+  checkpoint recovery path. A revision-bound application plan reauthorizes the
+  system and component reads after loading, rejects intervening configuration
+  commits, and produces the typed kernel mode, component request, and admission
+  policy generation. It does not itself apply manifest floors, resolve a
+  provider, or grant placement.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.
   A one-use typed service transaction now preserves exact binding identity from

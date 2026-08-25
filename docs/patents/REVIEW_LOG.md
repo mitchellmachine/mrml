@@ -4099,3 +4099,13 @@ conventional bounded policy-record handling. It adds no placement-selection
 algorithm, VM transport, queue mechanism, hardware protocol, cryptography, or
 runtime authority path. The broader adaptive-placement selection and
 cross-placement transport review remains `TRIGGERED`.
+
+# 2026-08-25 — Revision-bound isolation-policy application
+
+**Result: NOT_TRIGGERED.** This increment reuses exact capability reads and
+ordinary configuration revision comparison before mapping already persisted
+enum values into the existing kernel isolation mode and admission-table
+generation. It adds no placement-selection algorithm, fallback rule, VM
+transport, shared queue, scheduling mechanism, cryptography, or hardware
+protocol. Broader adaptive-placement resolution and cross-placement transport
+remain `TRIGGERED`.

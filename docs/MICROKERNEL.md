@@ -2887,6 +2887,21 @@ rejected before service state changes. A `TaskRuntime::send_ipc` test proves
 that receiver generations replace different sender handles before an atomic
 two-setting commit. An authorized read can canonically return an unset value.
 
+Adaptive-isolation configuration now has one typed, bounded control-plane path.
+A canonical 16-byte record distinguishes component preferences from system
+Balanced, More Isolated, Total, and Custom modes; each target remains bound to
+its own setting object, and a component descriptor fixes its native placement
+class. A revision-bound application plan first loads both values through exact
+READ capabilities, then repeats both reads and compares the complete records and
+global configuration revision immediately before producing `IsolationMode`, an
+optional component placement request, and an `IsolationAdmissionTable` carrying
+that exact revision as its policy generation. Revoked reads, wrong objects,
+scope confusion, noncanonical bytes, and intervening commits fail before launch
+admission. The values grant no capability and the plan does not bypass package
+floors or select a provider. Windows and Arch Linux each pass all 38 focused
+configuration tests. This is hosted unit/simulation evidence, not a Settings or
+shell frontend, effective-placement proof, boot evidence, or Total readiness.
+
 The fixed supervision protocol binds request identity, opaque generational
 `ServiceId`, operation, and restart time while likewise resolving authority
 only from the kernel message. `ServiceSupervisor::state_authorized` requires

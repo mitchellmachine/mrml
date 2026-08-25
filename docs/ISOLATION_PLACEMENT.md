@@ -305,11 +305,16 @@ admission, security policy, and generation binding.
 ## Settings, boot, recovery, and accessibility
 
 The configuration service now implements the first bounded typed persistent
-records for component preference and system Balanced/Total selection. Exact
+records for component preference and system Balanced, More Isolated, Total, or
+Custom selection. Exact
 setting READ/WRITE plus configuration-root CONTROL capabilities remain required;
 records survive the authenticated checkpoint path, reject scope confusion and
-noncanonical bytes, and grant no runtime authority. This is **PARTIALLY
-IMPLEMENTED** control-plane persistence, not Settings, shell, policy resolution,
+noncanonical bytes, and grant no runtime authority. A revision-bound application
+plan now repeats both exact setting READ checks immediately before translating
+the records into the kernel `IsolationMode`, component placement request, and
+admission-table policy generation. Capability revocation or any intervening
+configuration commit invalidates the plan. This is **PARTIALLY IMPLEMENTED**
+control-plane application, not manifest-floor resolution, Settings, shell,
 effective placement, or Total-mode completion.
 
 The planned Settings application and object shell project that one typed policy
@@ -323,8 +328,10 @@ Configuration expresses desired policy; it does not prove current placement.
 
 Focused Windows and Arch Linux runs each pass all 38 configuration-service
 tests, including typed persistence, exact capability enforcement, canonical
-decoding, scope separation, and authenticated checkpoint recovery. These are
-unit tests on hosted build targets, not boot, VMM, or physical-hardware evidence.
+decoding, scope separation, authenticated checkpoint recovery, reauthorization,
+stale-plan rejection, and policy-generation handoff to kernel admission. These
+are unit tests on hosted build targets, not boot, VMM, or physical-hardware
+evidence.
 
 The planned boot menu is `MRML`, `MRML — Total MicroVM Isolation`, `MRML
 Recovery`, and an independently discovered `Windows Boot Manager` where

@@ -17,12 +17,13 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, IsolationBackendFailure, IsolationPlacement,
-    IsolationServiceBackend, IsolationServiceSpec, IsolationUnavailableReason, MemoryBackingKind,
-    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
-    PAGE_SIZE, Priority, RestartPolicy, Rights, ServiceAddressSpaceEraser, ServiceCleanupError,
-    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
-    TaskRuntime, TaskRuntimeError,
+    Capability, CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
+    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceSpec,
+    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority, RestartPolicy, Rights,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    TaskRuntimeError,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -1813,7 +1814,9 @@ pub enum OwnerIsolationSelection {
     Native,
     Microvm,
     Balanced,
+    MoreIsolated,
     TotalMicrovm,
+    Custom,
 }
 
 impl OwnerIsolationSelection {
@@ -1824,13 +1827,17 @@ impl OwnerIsolationSelection {
             Self::Microvm => 3,
             Self::Balanced => 4,
             Self::TotalMicrovm => 5,
+            Self::MoreIsolated => 6,
+            Self::Custom => 7,
         }
     }
 
     const fn scope(self) -> IsolationPolicyScope {
         match self {
             Self::Default | Self::Native | Self::Microvm => IsolationPolicyScope::Component,
-            Self::Balanced | Self::TotalMicrovm => IsolationPolicyScope::System,
+            Self::Balanced | Self::MoreIsolated | Self::TotalMicrovm | Self::Custom => {
+                IsolationPolicyScope::System
+            }
         }
     }
 
@@ -1841,6 +1848,8 @@ impl OwnerIsolationSelection {
             3 => Ok(Self::Microvm),
             4 => Ok(Self::Balanced),
             5 => Ok(Self::TotalMicrovm),
+            6 => Ok(Self::MoreIsolated),
+            7 => Ok(Self::Custom),
             _ => Err(ConfigError::InvalidValue),
         }
     }
@@ -1856,21 +1865,40 @@ pub struct IsolationPolicySetting {
     setting: SettingId,
     object: ObjectId,
     scope: IsolationPolicyScope,
+    native_placement: Option<IsolationPlacement>,
 }
 
 impl IsolationPolicySetting {
-    pub const fn component(setting: SettingId, object: ObjectId) -> Result<Self, ConfigError> {
-        Self::new(setting, object, IsolationPolicyScope::Component)
+    pub const fn component(
+        setting: SettingId,
+        object: ObjectId,
+        native_placement: IsolationPlacement,
+    ) -> Result<Self, ConfigError> {
+        if !matches!(
+            native_placement,
+            IsolationPlacement::InProcess
+                | IsolationPlacement::NativeProcess
+                | IsolationPlacement::NativeService
+        ) {
+            return Err(ConfigError::InvalidSchema);
+        }
+        Self::new(
+            setting,
+            object,
+            IsolationPolicyScope::Component,
+            Some(native_placement),
+        )
     }
 
     pub const fn system(setting: SettingId, object: ObjectId) -> Result<Self, ConfigError> {
-        Self::new(setting, object, IsolationPolicyScope::System)
+        Self::new(setting, object, IsolationPolicyScope::System, None)
     }
 
     const fn new(
         setting: SettingId,
         object: ObjectId,
         scope: IsolationPolicyScope,
+        native_placement: Option<IsolationPlacement>,
     ) -> Result<Self, ConfigError> {
         if object.0 == 0 {
             return Err(ConfigError::InvalidSchema);
@@ -1879,6 +1907,7 @@ impl IsolationPolicySetting {
             setting,
             object,
             scope,
+            native_placement,
         })
     }
 
@@ -1892,6 +1921,20 @@ impl IsolationPolicySetting {
 
     pub const fn scope(self) -> IsolationPolicyScope {
         self.scope
+    }
+
+    pub const fn native_placement(self) -> Option<IsolationPlacement> {
+        self.native_placement
+    }
+
+    const fn native_token(self) -> u8 {
+        match self.native_placement {
+            None => 0,
+            Some(IsolationPlacement::InProcess) => 1,
+            Some(IsolationPlacement::NativeProcess) => 2,
+            Some(IsolationPlacement::NativeService) => 3,
+            _ => 0,
+        }
     }
 
     pub const fn schema(self) -> Result<SettingSchema, ConfigError> {
@@ -1918,6 +1961,7 @@ impl IsolationPolicySetting {
             IsolationPolicyScope::System => 2,
         };
         encoded[9] = selection.token();
+        encoded[10] = self.native_token();
         transaction.push(ConfigUpdate::new(
             self.setting,
             write_capability,
@@ -1937,7 +1981,7 @@ impl IsolationPolicySetting {
         if value.kind() != ValueKind::Bytes
             || encoded.len() != ISOLATION_POLICY_VALUE_BYTES
             || encoded[..8] != ISOLATION_POLICY_VALUE_MAGIC
-            || encoded[10..].iter().any(|byte| *byte != 0)
+            || encoded[11..].iter().any(|byte| *byte != 0)
         {
             return Err(ConfigError::NonCanonical);
         }
@@ -1947,7 +1991,11 @@ impl IsolationPolicySetting {
             _ => return Err(ConfigError::InvalidValue),
         };
         let selection = OwnerIsolationSelection::decode(encoded[9])?;
-        if scope != self.scope || selection.scope() != scope || record.revision == 0 {
+        if scope != self.scope
+            || selection.scope() != scope
+            || encoded[10] != self.native_token()
+            || record.revision == 0
+        {
             return Err(ConfigError::SchemaViolation);
         }
         Ok(PersistedIsolationPolicy {
@@ -1976,6 +2024,124 @@ impl PersistedIsolationPolicy {
 
     pub const fn revision(self) -> u64 {
         self.revision
+    }
+
+    pub fn system_mode(self) -> Result<IsolationMode, ConfigError> {
+        if self.setting.scope != IsolationPolicyScope::System {
+            return Err(ConfigError::SchemaViolation);
+        }
+        match self.selection {
+            OwnerIsolationSelection::Balanced => Ok(IsolationMode::Balanced),
+            OwnerIsolationSelection::MoreIsolated => Ok(IsolationMode::MoreIsolated),
+            OwnerIsolationSelection::TotalMicrovm => Ok(IsolationMode::TotalMicrovm),
+            OwnerIsolationSelection::Custom => Ok(IsolationMode::Custom),
+            _ => Err(ConfigError::SchemaViolation),
+        }
+    }
+
+    pub fn component_request(self) -> Result<Option<IsolationPlacement>, ConfigError> {
+        if self.setting.scope != IsolationPolicyScope::Component {
+            return Err(ConfigError::SchemaViolation);
+        }
+        match self.selection {
+            OwnerIsolationSelection::Default => Ok(None),
+            OwnerIsolationSelection::Native => Ok(self.setting.native_placement),
+            OwnerIsolationSelection::Microvm => Ok(Some(IsolationPlacement::Microvm)),
+            _ => Err(ConfigError::SchemaViolation),
+        }
+    }
+}
+
+/// A capability-checked, revision-bound control-plane plan. Applying it repeats
+/// both reads and rejects configuration drift or capability revocation before
+/// producing input for package-policy resolution and kernel launch admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationPolicyApplicationPlan {
+    system: PersistedIsolationPolicy,
+    component: PersistedIsolationPolicy,
+    system_read: Capability,
+    component_read: Capability,
+    configuration_revision: u64,
+}
+
+impl IsolationPolicyApplicationPlan {
+    pub fn load<const SETTINGS: usize, const AUDIT: usize, A: CapabilityAuthorizer + ?Sized>(
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+    ) -> Result<Self, ConfigError> {
+        if system.scope() != IsolationPolicyScope::System
+            || component.scope() != IsolationPolicyScope::Component
+            || configuration.revision() == 0
+        {
+            return Err(ConfigError::SchemaViolation);
+        }
+        Ok(Self {
+            system: system.read(configuration, capabilities, system_read)?,
+            component: component.read(configuration, capabilities, component_read)?,
+            system_read,
+            component_read,
+            configuration_revision: configuration.revision(),
+        })
+    }
+
+    pub fn apply<const SETTINGS: usize, const AUDIT: usize, A: CapabilityAuthorizer + ?Sized>(
+        self,
+        configuration: &ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+    ) -> Result<AppliedIsolationPolicy, ConfigError> {
+        if configuration.revision() != self.configuration_revision
+            || self
+                .system
+                .setting
+                .read(configuration, capabilities, self.system_read)?
+                != self.system
+            || self
+                .component
+                .setting
+                .read(configuration, capabilities, self.component_read)?
+                != self.component
+        {
+            return Err(ConfigError::RevisionConflict {
+                current: configuration.revision(),
+            });
+        }
+        Ok(AppliedIsolationPolicy {
+            mode: self.system.system_mode()?,
+            component_request: self.component.component_request()?,
+            policy_generation: self.configuration_revision,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AppliedIsolationPolicy {
+    mode: IsolationMode,
+    component_request: Option<IsolationPlacement>,
+    policy_generation: u64,
+}
+
+impl AppliedIsolationPolicy {
+    pub const fn mode(self) -> IsolationMode {
+        self.mode
+    }
+
+    pub const fn component_request(self) -> Option<IsolationPlacement> {
+        self.component_request
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+
+    pub fn admission_table<const DOMAINS: usize>(
+        self,
+    ) -> Result<IsolationAdmissionTable<DOMAINS>, ConfigError> {
+        IsolationAdmissionTable::new(self.mode, self.policy_generation)
+            .map_err(|_| ConfigError::InvalidValue)
     }
 }
 
@@ -3830,9 +3996,7 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_kernel::{
-        IsolationAdmissionTable, IsolationMode, TotalMicrovmClass, route_isolation_service,
-    };
+    use mrml_kernel::{TotalMicrovmClass, route_isolation_service};
     use mrml_storage::{
         AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
@@ -7126,14 +7290,17 @@ mod tests {
         let root_object = ObjectId(0x4953_4f4c_4154_494f);
         let component_object = ObjectId(0x434f_4d50_4f4e_454e);
         let system_object = ObjectId(0x5359_5354_454d_504f);
-        let component =
-            IsolationPolicySetting::component(SettingId::new(40).unwrap(), component_object)
-                .unwrap();
+        let component = IsolationPolicySetting::component(
+            SettingId::new(40).unwrap(),
+            component_object,
+            IsolationPlacement::NativeService,
+        )
+        .unwrap();
         let system =
             IsolationPolicySetting::system(SettingId::new(41).unwrap(), system_object).unwrap();
         let schemas = [component.schema().unwrap(), system.schema().unwrap()];
         let mut configuration = ConfigurationService::<2, 4>::new(root_object, &schemas).unwrap();
-        let mut capabilities = CapabilitySpace::<4>::new();
+        let mut capabilities = CapabilitySpace::<5>::new();
         let root = capabilities
             .insert(root_object, Rights::CONTROL.union(Rights::READ))
             .unwrap();
@@ -7173,6 +7340,16 @@ mod tests {
         );
         assert_eq!(component_policy.setting(), component);
         assert_eq!(component_policy.revision(), 1);
+        let substituted_native_class = IsolationPolicySetting::component(
+            component.setting(),
+            component.object(),
+            IsolationPlacement::NativeProcess,
+        )
+        .unwrap();
+        assert_eq!(
+            substituted_native_class.read(&configuration, &capabilities, component_access),
+            Err(ConfigError::SchemaViolation)
+        );
         assert_eq!(
             system
                 .read(&configuration, &capabilities, system_access)
@@ -7180,6 +7357,25 @@ mod tests {
                 .selection(),
             OwnerIsolationSelection::TotalMicrovm
         );
+        let plan = IsolationPolicyApplicationPlan::load(
+            &configuration,
+            &capabilities,
+            system,
+            system_access,
+            component,
+            component_access,
+        )
+        .unwrap();
+        let applied = plan.apply(&configuration, &capabilities).unwrap();
+        assert_eq!(applied.mode(), IsolationMode::TotalMicrovm);
+        assert_eq!(
+            applied.component_request(),
+            Some(IsolationPlacement::Microvm)
+        );
+        assert_eq!(applied.policy_generation(), 1);
+        let admission = applied.admission_table::<2>().unwrap();
+        assert_eq!(admission.mode(), IsolationMode::TotalMicrovm);
+        assert_eq!(admission.policy_generation(), 1);
         assert!(matches!(
             component.read(&configuration, &capabilities, system_access),
             Err(ConfigError::WrongObject)
@@ -7210,12 +7406,57 @@ mod tests {
                 .selection(),
             OwnerIsolationSelection::TotalMicrovm
         );
+
+        let revocable_read = capabilities.insert(component_object, Rights::READ).unwrap();
+        let revoked_plan = IsolationPolicyApplicationPlan::load(
+            &configuration,
+            &capabilities,
+            system,
+            system_access,
+            component,
+            revocable_read,
+        )
+        .unwrap();
+        capabilities.revoke(revocable_read).unwrap();
+        assert_eq!(
+            revoked_plan.apply(&configuration, &capabilities),
+            Err(ConfigError::Unauthorized(CapabilityError::Invalid))
+        );
+
+        let stale_plan = IsolationPolicyApplicationPlan::load(
+            &configuration,
+            &capabilities,
+            system,
+            system_access,
+            component,
+            component_access,
+        )
+        .unwrap();
+        let mut replacement = ConfigTransaction::<1>::new(1);
+        component
+            .stage(
+                &mut replacement,
+                component_access,
+                OwnerIsolationSelection::Default,
+            )
+            .unwrap();
+        configuration
+            .commit(&capabilities, root, &replacement)
+            .unwrap();
+        assert_eq!(
+            stale_plan.apply(&configuration, &capabilities),
+            Err(ConfigError::RevisionConflict { current: 2 })
+        );
     }
 
     #[test]
     fn isolation_policy_rejects_scope_confusion_and_noncanonical_data() {
-        let component =
-            IsolationPolicySetting::component(SettingId::new(42).unwrap(), ObjectId(420)).unwrap();
+        let component = IsolationPolicySetting::component(
+            SettingId::new(42).unwrap(),
+            ObjectId(420),
+            IsolationPlacement::NativeProcess,
+        )
+        .unwrap();
         let mut transaction = ConfigTransaction::<1>::new(0);
         assert_eq!(
             component.stage(
