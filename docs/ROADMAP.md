@@ -1380,9 +1380,14 @@ can count as trusted consent.
    through one exact `VerifiedRelease`, independently extends every payload,
    and refuses journal publication while any kind is missing or invalid.
    Temporary VM/CUDA/policy firmware pages are zeroed and freed after
-   measurement. It does not yet include the configuration root or compiler/
-   runtime artifacts. No TPM-backed execution or remote-attestation
-   evidence is claimed. The implemented `VerifiedRelease` foundation now also
+   measurement. The policy payload must now be a strict canonical build receipt
+   whose kernel and service identities exactly match the already authenticated
+   payloads before publication. The signed receipt authenticates declared
+   source, lockfile, loader, configuration, and tool identities as generation
+   evidence, but boot does not independently reconstruct those inputs or prove
+   which compiler/runtime binaries executed. No TPM-backed execution or
+   remote-attestation evidence is claimed. The implemented `VerifiedRelease`
+   foundation now also
    withholds its per-kind minimum-version roots and exposes exact-release
    artifact/executable admission instead: requested kind and signed artifact
    version must equal the authenticated manifest release before signature or PE
@@ -1406,12 +1411,13 @@ can count as trusted consent.
    test covers progressive omission, publication conflict and retry, successful
    transition, installed-manifest reconstruction, and repeat boot without a
    second counter write. Coherent-set boot admission remains partial because
-   configuration/compiler/runtime identity and physical reboot/power-loss
-   behavior are not yet integrated. Verification on 2026-08-24 passed all
+   independent configuration/compiler/runtime verification and physical
+   reboot/power-loss behavior are not yet integrated. Verification on
+   2026-08-24 passed all
    5 artifact tests, all 5 release-journal tests, all 24 UEFI library tests,
    strict kernel/storage/UEFI
    library Clippy on Windows and Arch Linux/WSL2, strict native UEFI-target
-   loader Clippy on Windows, all 453 kernel and 121 storage tests on Arch
+   loader Clippy on Windows, all 456 kernel and 121 storage tests on Arch
    Linux/WSL2, and an optimized native UEFI loader build. A preceding 451-test
    Windows full run
    passed 450 tests; the known deep delegation-capacity test again overflowed
@@ -1460,6 +1466,17 @@ can count as trusted consent.
    reproducibility evidence.
 5. Bind inspectable system-generation metadata to the exact kernel, compositor,
    services, configuration root, and compiler/runtime artifacts.
+   **PARTIALLY IMPLEMENTED:** the signed policy artifact is now a canonical
+   build receipt, and configured boot checks its exact kernel and service
+   identities against authenticated payloads before monotonic publication. It
+   also authenticates source archive, lockfile, loader, selected configuration,
+   and declared compiler/Cargo identities for inspection. There is no
+   compositor yet, and boot does not independently verify the recorded source,
+   lockfile, loader, configuration bytes, or actual compiler/runtime binaries.
+   Verification on 2026-08-24 passed all 456 kernel tests, all 6 signer tests,
+   all 24 UEFI library tests, strict scoped Clippy, and an optimized native UEFI
+   loader build. These are hosted code/test results, not firmware or physical
+   TPM evidence.
 6. Implement owner-selectable trust-root enrollment, replacement, owner-build and
    development authorization, compromised-key revocation, and accessible recovery.
 7. Add scoped remote-attestation capabilities with verifier/claim/lifetime

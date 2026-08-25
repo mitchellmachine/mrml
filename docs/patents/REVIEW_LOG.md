@@ -2727,6 +2727,17 @@ semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
 mechanism, or other patent-candidate mechanism. This agent review does not
 replace the required independent human dual review.
 
+# 2026-08-24 — Boot-bound canonical build receipt
+
+**Result: NOT_TRIGGERED.** The UEFI loader conventionally parses an already
+signed bounded build receipt and compares recorded lengths and SHA3-512 digests
+with the exact authenticated kernel and service payloads before release-state
+publication. Strict textual parsing and digest equality add no optimization,
+compatibility protocol, host-share mechanism, accessibility or browser-semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. This agent review does not replace the
+required independent human dual review.
+
 # 2026-08-24 — Projected reference-path ancestor moves
 
 **Result: NOT_TRIGGERED.** The compiler conventionally follows validated

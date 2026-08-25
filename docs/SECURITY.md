@@ -181,8 +181,18 @@ manifest identity plus all five ordered artifact identities. Zero identities
 fail before measurement, and the measured-boot flag requires every extension.
 The additional firmware buffers are zeroed and returned before memory-map
 handoff. This is code and hosted-test evidence, not firmware/TPM execution,
-owner trust-root persistence, remote attestation, or measurement of
-configuration and compiler/runtime artifacts; Phase 6 remains partial.
+owner trust-root persistence, remote attestation, or direct measurement and
+independent verification of configuration and compiler/runtime artifacts;
+Phase 6 remains partial.
+The configured policy artifact is now required to decode as the canonical
+release build receipt before a new journal transition can publish. Its kernel
+and service identities must match the exact authenticated payload lengths and
+SHA3-512 digests, and all six recorded digests must be nonzero. This binds the
+remaining recorded source, lockfile, loader, configuration, and tool
+declarations into signed generation evidence, but does not independently
+verify those input bytes at boot or prove truthful compiler/runtime identity.
+Receipt contents remain data, grant no authority, and cannot widen any
+manifest capability or owner trust decision.
 At the release-manifest boundary, callers can no longer extract a per-kind
 minimum-version trust root and accidentally admit a later artifact into an
 earlier verified release. `VerifiedRelease` now authenticates only the exact
@@ -378,6 +388,11 @@ exact commit `6976f8f`, using committed configuration and an empty selected test
 configuration, matched the unsigned kernel/service/loader receipts. No
 independent-builder, cross-host, or complete configured-release result has been
 recorded.
+The same strict parser is shared by the signer and kernel/loader boundary. It
+rejects overlong input, alternate field order, noncanonical numbers or hex,
+carriage returns, missing final newline, extensions, wrong target/profile,
+zero identities, and authenticated kernel/service substitution before release
+publication.
 
 Do not claim verified boot, rollback resistance, DMA isolation, device reset,
 confidential computing, side-channel resistance, formal noninterference,

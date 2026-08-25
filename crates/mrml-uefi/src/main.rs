@@ -5,12 +5,12 @@ use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, BOOTSTRAP_STATE_BYTES, FramebufferInfo, MAX_CUDA_KERNEL_BUNDLE_BYTES,
-    MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
-    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
-    PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
-    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
-    TrustRoot,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, BuildReceipt, FramebufferInfo,
+    MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
+    MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES,
+    MemoryKind, MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr,
+    PixelFormat, RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    ServiceLaunch, SignedArtifact, TrustRoot,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
@@ -492,6 +492,15 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     } else {
         None
     };
+    if let Some(artifacts) = &additional_release_artifacts {
+        verify_release_build_receipt(
+            &artifacts[2],
+            signed.payload().len() as u64,
+            *verified.artifact().digest(),
+            service_signed.payload().len() as u64,
+            *service_verified.artifact().digest(),
+        )?;
+    }
     if let Some(release) = prepared_release.as_mut() {
         release
             .admission
@@ -1116,6 +1125,23 @@ struct LoadedFile {
 struct AdmittedReleaseArtifact {
     file: LoadedFile,
     digest: [u8; 64],
+}
+
+fn verify_release_build_receipt(
+    policy: &AdmittedReleaseArtifact,
+    kernel_length: u64,
+    kernel_digest: [u8; 64],
+    service_length: u64,
+    service_digest: [u8; 64],
+) -> Result<(), Status> {
+    let bytes = unsafe {
+        core::slice::from_raw_parts(policy.file.address as *const u8, policy.file.length)
+    };
+    let signed = SignedArtifact::decode(bytes).map_err(|_| LOAD_ERROR)?;
+    let receipt = BuildReceipt::decode(signed.payload()).map_err(|_| LOAD_ERROR)?;
+    receipt
+        .validate_uefi_release(kernel_length, kernel_digest, service_length, service_digest)
+        .map_err(|_| LOAD_ERROR)
 }
 
 unsafe fn release_loaded_file(services: &BootServices, file: LoadedFile) -> Result<(), Status> {

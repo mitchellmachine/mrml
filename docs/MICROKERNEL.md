@@ -2014,6 +2014,20 @@ be signed as a policy artifact after independent comparison. Matching receipts
 prove equality only for these recorded declarations and bytes; they do not
 prove clean builders, truthful version strings, complete source correspondence,
 independent control, or reproducibility until independent builds actually match.
+For configured release boot, sign that exact compared receipt as the policy
+bundle for the same release:
+
+```text
+mrml-sign sign-bundle policy 1 first.receipt policy.private POLICY.SIGNED
+```
+
+The signer and loader share one bounded canonical parser. Before publishing a
+new release transition, the loader requires the policy payload to name the
+`x86_64-unknown-uefi` release target/profile, contain six nonzero digests, and
+match the exact authenticated kernel and service payload lengths and SHA3-512
+digests. The other identities are authenticated declarations: the loader does
+not reconstruct the source archive, lockfile, loader, selected configuration,
+or compiler/Cargo executables at boot. Receipt data grants no authority.
 
 The repository's `x86_64-unknown-uefi` linker policy fixes the PE timestamp at
 zero and disables the embedded PE debug directory. The latter otherwise carries
@@ -2061,9 +2075,11 @@ Required mode fails closed without the configuration, while optional mode keeps
 the legacy independent-root path for development.
 The loader expects `\EFI\MRML\RELEASE.MANIFEST`, `KERNEL.SIGNED`,
 `VM.SIGNED`, `SERVICE.SIGNED`, `CUDA.SIGNED`, and `POLICY.SIGNED`; a new
-transition additionally requires `RELEASE.PUBLIC` and `RELEASE.SIG`. VM, CUDA,
-and policy payloads are bounded at 512 MiB, 64 MiB, and 16 MiB respectively;
-their temporary firmware pages are zeroed and freed after measurement. Its six
+transition additionally requires `RELEASE.PUBLIC` and `RELEASE.SIG`. VM and
+CUDA payloads are bounded at 512 MiB and 64 MiB respectively; the policy
+payload is a canonical build receipt within the 16 MiB signed-artifact input
+bound. All three temporary firmware buffers are zeroed and freed after
+measurement. Its six
 all-or-none build fields
 are `MRML_RELEASE_COUNTER_NV_INDEX_HEX`, `MRML_RELEASE_SLOT0_NV_INDEX_HEX`,
 `MRML_RELEASE_SLOT1_NV_INDEX_HEX`, `MRML_RELEASE_POLICY_DIGEST_HEX`,

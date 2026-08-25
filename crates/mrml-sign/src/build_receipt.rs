@@ -1,9 +1,9 @@
 use mrml_crypto::Sha3_512;
 use mrml_error::{Result, anyhow};
+use mrml_kernel::{BUILD_RECEIPT_MAX_BYTES, BuildReceipt};
 use mrml_runtime::{Text, Vector, mrml_println as println};
 
 const MAX_INPUT: usize = 512 * 1024 * 1024;
-const MAX_RECEIPT: usize = 4096;
 const MAX_VALUE: usize = 256;
 const HEADER: &str = "MRML-BUILD-RECEIPT-v1\n";
 
@@ -50,7 +50,7 @@ pub fn create(args: &[Text]) -> Result<()> {
     ];
 
     let mut receipt =
-        Vector::with_capacity(MAX_RECEIPT).map_err(|_| anyhow!("allocation failed"))?;
+        Vector::with_capacity(BUILD_RECEIPT_MAX_BYTES).map_err(|_| anyhow!("allocation failed"))?;
     append(&mut receipt, HEADER.as_bytes())?;
     append_field(&mut receipt, "rustc", rustc.as_bytes())?;
     append_field(&mut receipt, "cargo", cargo.as_bytes())?;
@@ -61,7 +61,7 @@ pub fn create(args: &[Text]) -> Result<()> {
         append_number(&mut receipt, input.name, "length", bytes.len() as u64)?;
         append_digest(&mut receipt, input.name, Sha3_512::digest(&bytes))?;
     }
-    if receipt.len() > MAX_RECEIPT {
+    if receipt.len() > BUILD_RECEIPT_MAX_BYTES || BuildReceipt::decode(&receipt).is_err() {
         return Err(anyhow!("build receipt exceeds canonical bound"));
     }
     mrml_runtime::write_new_file(output, &receipt)?;
@@ -70,9 +70,9 @@ pub fn create(args: &[Text]) -> Result<()> {
 }
 
 pub fn compare(first: &str, second: &str) -> Result<()> {
-    let first = mrml_runtime::read_file_bounded(first, MAX_RECEIPT)?;
-    let second = mrml_runtime::read_file_bounded(second, MAX_RECEIPT)?;
-    if first != second || !is_canonical(&first) {
+    let first = mrml_runtime::read_file_bounded(first, BUILD_RECEIPT_MAX_BYTES)?;
+    let second = mrml_runtime::read_file_bounded(second, BUILD_RECEIPT_MAX_BYTES)?;
+    if first != second || BuildReceipt::decode(&first).is_err() {
         return Err(anyhow!("build receipts differ or are noncanonical"));
     }
     println!("build receipts match byte-for-byte");
@@ -125,72 +125,6 @@ fn append_digest(output: &mut Vector<u8>, name: &str, digest: [u8; 64]) -> Resul
     )
 }
 
-fn is_canonical(receipt: &[u8]) -> bool {
-    if receipt.len() > MAX_RECEIPT || !receipt.starts_with(HEADER.as_bytes()) {
-        return false;
-    }
-    let Ok(text) = core::str::from_utf8(receipt) else {
-        return false;
-    };
-    let mut lines = text.lines();
-    if lines.next() != Some(HEADER.trim_end()) {
-        return false;
-    }
-    let fields = ["rustc", "cargo", "target", "profile"];
-    for field in fields {
-        let Some(line) = lines.next() else {
-            return false;
-        };
-        let Some(value) = line
-            .strip_prefix(field)
-            .and_then(|line| line.strip_prefix('='))
-        else {
-            return false;
-        };
-        if canonical_value(field, value).is_err() {
-            return false;
-        }
-    }
-    for name in [
-        "source-archive",
-        "cargo-lock",
-        "kernel",
-        "service",
-        "loader",
-        "configuration",
-    ] {
-        let Some(length) = lines.next() else {
-            return false;
-        };
-        let length_prefix = mrml_runtime::mrml_format!("{name}.length=");
-        let Some(length) = length.strip_prefix(length_prefix.as_str()) else {
-            return false;
-        };
-        if length.is_empty()
-            || (length.len() > 1 && length.starts_with('0'))
-            || !length.bytes().all(|byte| byte.is_ascii_digit())
-            || length.parse::<u64>().is_err()
-        {
-            return false;
-        }
-        let Some(digest) = lines.next() else {
-            return false;
-        };
-        let digest_prefix = mrml_runtime::mrml_format!("{name}.sha3-512=");
-        let Some(digest) = digest.strip_prefix(digest_prefix.as_str()) else {
-            return false;
-        };
-        if digest.len() != 128
-            || !digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return false;
-        }
-    }
-    lines.next().is_none() && receipt.ends_with(b"\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +175,7 @@ mod tests {
         assert!(compare(&first, &changed).is_err());
 
         let bytes = mrml_runtime::read_file(&first).unwrap();
-        assert!(is_canonical(&bytes));
+        assert!(BuildReceipt::decode(&bytes).is_ok());
         assert!(
             !core::str::from_utf8(&bytes)
                 .unwrap()
@@ -252,8 +186,8 @@ mod tests {
 
     #[test]
     fn canonical_parser_rejects_ambiguous_or_extended_receipts() {
-        assert!(!is_canonical(b"MRML-BUILD-RECEIPT-v1\n"));
-        assert!(!is_canonical(b"MRML-BUILD-RECEIPT-v1\nrustc=x\n"));
+        assert!(BuildReceipt::decode(b"MRML-BUILD-RECEIPT-v1\n").is_err());
+        assert!(BuildReceipt::decode(b"MRML-BUILD-RECEIPT-v1\nrustc=x\n").is_err());
         assert!(canonical_value("target", "line\nbreak").is_err());
         assert!(canonical_value("target", "").is_err());
     }

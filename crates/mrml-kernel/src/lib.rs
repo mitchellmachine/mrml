@@ -10,6 +10,7 @@ mod artifact;
 mod boot;
 mod boot_recovery;
 mod boot_recovery_syscall;
+mod build_receipt;
 mod capability;
 mod early;
 mod framebuffer;
@@ -50,6 +51,9 @@ pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};
 pub use boot_recovery_syscall::{
     BOOT_RECOVERY_SYSCALL_OPERATION, BootRecoverySyscallError, BootRecoverySyscallExecutor,
     BootRecoverySyscallRequest,
+};
+pub use build_receipt::{
+    BUILD_RECEIPT_MAX_BYTES, BuildInputIdentity, BuildReceipt, BuildReceiptError,
 };
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 pub use early::{EarlyKernelContext, EarlyKernelError};

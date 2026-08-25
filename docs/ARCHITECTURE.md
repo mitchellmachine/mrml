@@ -97,6 +97,14 @@ manually sequencing these steps. It records successful exact admission of all
 five artifact kinds and refuses journal publication while any kind is absent;
 state bytes are erased after success or drop. An already installed release
 still requires the complete set but performs no second monotonic publication.
+The policy artifact must now contain one strictly canonical build receipt for
+the UEFI release target/profile. Before publication, the loader requires its
+kernel and service length/digest identities to equal the already authenticated
+payloads exactly and rejects zero digests in every recorded identity. The
+source archive, dependency lockfile, loader, configuration, and declared tool
+metadata are therefore authenticated as system-generation evidence, but boot
+does not yet independently reconstruct those inputs or prove that the tool
+declarations describe the binaries that ran.
 The canonical handoff carries a distinct coherent-release evidence bit only
 when this manifest path was used. Kernel production policy requires that bit in
 addition to Secure Boot, measured boot, and rollback protection; development
