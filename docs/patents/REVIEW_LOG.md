@@ -2771,3 +2771,15 @@ compatibility protocol, host-share mechanism, accessibility or browser-semantic
 interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
 other patent-candidate mechanism. This agent review does not replace the
 required independent human dual review.
+
+# 2026-08-24 — Moved conditional-loan origins
+
+**Result: NOT_TRIGGERED.** The compiler conventionally derives one moved loan
+per existing conditional branch-origin effect for an immediate precise root
+move. The derived set is capped by the existing place-effect capacity, preserves
+distinct borrowed paths, and excludes origins crossed by a source-generation
+replacement. It adds no optimization, authority model, compatibility protocol,
+host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.
