@@ -4127,6 +4127,18 @@ VMM transport, or reclamation policy. Backend consumption and any broader
 microVM resource lifecycle remain subject to the existing `TRIGGERED` review;
 agent review does not replace independent human dual review.
 
+# 2026-08-25 — Hosted one-vCPU isolation reservation integration
+
+**Result: NOT_TRIGGERED within the reviewed resource-lifecycle shape.** The
+focused KVM/WHP component path uses the existing fixed CPU-budget counter to
+reserve one domain-bound vCPU before existing guest construction, retain it
+through existing guest ownership, and release it after existing teardown.
+Failure is recorded through the existing typed unavailable ledger. This adds no
+scheduling algorithm, timing enforcement, topology choice, migration policy,
+virtualization mechanism, or hardware protocol. Broader CPU/VMM resource
+enforcement remains subject to mechanism-specific review; agent review does not
+replace independent human dual review.
+
 # 2026-08-25 — Linear staged guest-RAM construction authority
 
 **Result: NOT_TRIGGERED.** The existing exact guest-RAM reservation now uses a
