@@ -459,10 +459,13 @@ launch probe a firmware boot.
 
 ## Releases, images, install, and publication
 
-`mrml release` consumes exact packages/digests, compatibility policy, and metadata
-and emits a candidate signed or unsigned release manifest. `mrml image` combines
-it with content-addressed packages, boot/recovery, profile, and optional content
-into the canonical Zstd image without needless duplication. Media tooling follows
+`mrml release create` now consumes the exact signed bootloader, kernel, and
+configuration `.mrp` packages plus a one-use signing key and emits the bounded
+signed boot `SystemRelease` `.mrs`; `mrml release verify` checks its signature
+against an explicit public root. General Store release composition remains
+**PLANNED**. `mrml image` will combine a release with content-addressed packages,
+boot/recovery, profile, and optional content into the canonical Zstd image
+without needless duplication. Media tooling follows
 [DEPLOYMENT.md](../DEPLOYMENT.md).
 
 Local development remains build -> package -> visible owner/developer admission

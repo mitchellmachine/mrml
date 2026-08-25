@@ -722,9 +722,12 @@ on a Windows host without changing trainer source behavior:
 No Linux runtime, production corpus, long-running training, CUDA/GPU execution,
 or physical-hardware evidence was established by this path-only move.
 
-`package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
-Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
-were not exercised by the Windows implementation environment.
+That historical checkpoint predated the implemented package and bounded boot
+release commands. `mrml package` now constructs/verifies canonical packages and
+boot media, while `mrml release create|verify` exposes the exact signed three-
+package boot `SystemRelease`. General Store releases, `image`, and `publish`
+remain **PLANNED**. Physical UEFI/GPU evidence is still absent unless separately
+recorded below.
 
 ## Current semantic classes
 

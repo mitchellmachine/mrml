@@ -21,8 +21,10 @@ Three new persistent deltas are documented before implementation:
 - [packages/ARTIFACT_EXTENSIONS.md](packages/ARTIFACT_EXTENSIONS.md) defines
   `.mrp`, `.mrs`, `.mrz`, `.mri`, and `.mrsig` as non-authoritative filename
   conventions. Package/release default output, the first `.mri`, and package
-  filename-independence tests are now **IMPLEMENTED**; `.mrz` and `.mrsig`
-  tooling remains **PLANNED**.
+  filename-independence tests are now **IMPLEMENTED**. The bounded exact
+  three-package boot release is available as `mrml release create|verify`;
+  general Store release composition, `.mrz`, and `.mrsig` tooling remain
+  **PLANNED**.
 - [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md) defines adaptive placement,
   mandatory floors, semantic interface compatibility across admitted forms,
   persistent owner policy, and a strict one-boot total-microVM request. Typed

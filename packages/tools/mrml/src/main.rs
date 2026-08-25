@@ -226,7 +226,8 @@ fn run() -> Result<(), String> {
         "manifest" => manifest_command(&workspace, &args[1..]),
         "interface" => interface_command(&args[1..]),
         "package" => package_command(&workspace, &args[1..]),
-        command @ ("release" | "image" | "publish") => Err(format!(
+        "release" => release_command(&workspace, &args[1..]),
+        command @ ("image" | "publish") => Err(format!(
             "UnsupportedOperation {{ command: {command}, status: PLANNED }}"
         )),
         command => Err(format!("UnknownCommand {{ command: {command} }}")),
@@ -235,13 +236,19 @@ fn run() -> Result<(), String> {
 
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
-    println!("usage: mrml <list|doctor|audit|build|test|manifest|interface> [component] [options]");
+    println!(
+        "usage: mrml <list|doctor|audit|build|test|manifest|interface|package|release> [component] [options]"
+    );
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT [OUTPUT] [--compress] [--private-key KEY]"
     );
     println!("       mrml package verify FILE [--require-signature] [--output structured]");
+    println!(
+        "       mrml release create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs]"
+    );
+    println!("       mrml release verify RELEASE.mrs PUBLIC_KEY");
     println!(
         "       mrml package adversarial-boot-fixture CASE BOOTLOADER_PACKAGE CONFIGURATION_PACKAGE KERNEL_SIGNED PACKAGE_PRIVATE RELEASE_PRIVATE KERNEL_OUTPUT RELEASE_OUTPUT"
     );
@@ -259,6 +266,22 @@ fn print_help() {
     println!("  --feature-profile P   select a declared Rust feature profile");
     println!("  --compile-env N=V     set an allowlisted manifest compile input");
     println!("  --output structured   emit stable key=value records");
+}
+
+fn release_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
+    let operation = match args.first().map(String::as_str) {
+        Some("create") if matches!(args.len(), 6 | 7) => "release-create",
+        Some("verify") if args.len() == 3 => "release-verify",
+        _ => {
+            return Err(
+                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY }"
+                    .into(),
+            );
+        }
+    };
+    let mut package_args = args.to_vec();
+    package_args[0] = operation.into();
+    package_command(workspace, &package_args)
 }
 
 fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
@@ -4747,6 +4770,25 @@ mod tests {
             OutputMode::Structured
         );
         assert_eq!(output_mode(&[]), OutputMode::Human);
+    }
+    #[test]
+    fn release_frontend_accepts_only_canonical_operations() {
+        let workspace = workspace(Vec::new());
+        assert!(
+            release_command(&workspace, &[])
+                .unwrap_err()
+                .starts_with("ReleaseUsageError")
+        );
+        assert!(
+            release_command(&workspace, &["create".into()])
+                .unwrap_err()
+                .starts_with("ReleaseUsageError")
+        );
+        assert!(
+            release_command(&workspace, &["publish".into()])
+                .unwrap_err()
+                .starts_with("ReleaseUsageError")
+        );
     }
     #[test]
     fn selector_ignores_option_values() {
