@@ -294,6 +294,11 @@ extern, feature, target, and build-action declarations migrate.
 are target-scoped; `mrml` builds the active platform leaf first and supplies its
 exact rlib path directly to rustc.
 
+The featureless percent-encoding, tokenizer, Zstandard, ZIM, JSON, Wikipedia,
+error, and terminal-style libraries have also migrated to dependency-first
+native rustc actions. Twelve components are native; the remaining 30 stay
+explicitly labeled as transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

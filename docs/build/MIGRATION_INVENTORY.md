@@ -39,6 +39,10 @@ toolchains:
   the Windows platform extern — PASS, 38 tests;
 - Arch Linux WSL2: dependency-first direct `mrml-runtime` build/test with only
   the Linux platform extern — PASS, 37 tests.
+- Windows GNU/LLVM: direct build/test of the eight-component featureless runtime
+  consumer layer — PASS, 31 tests;
+- Arch Linux WSL2: the same eight-component direct build/test layer — PASS,
+  31 tests.
 
 This is hosted WSL2 evidence. No KVM, bare-metal Linux, or physical hardware was
 exercised by this increment.
@@ -632,7 +636,8 @@ second inventory.
   cannot prove that arbitrary macro expansion introduces no additional input.
 - Native graph construction now provides dependency-first ordering, cycle
   diagnostics, and target-scoped exact extern artifacts for migrated library
-  nodes. Direct-rustc expansion still needs features, lock/digest validation,
+  nodes. Twelve components now have native actions. Direct-rustc expansion still
+  needs features, lock/digest validation,
   and explicit non-library actions before
   Cargo can be removed behind the remaining nodes.
 - Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,

@@ -647,6 +647,8 @@ fn compile_rust_component(
         .arg(&action.source)
         .args(["--crate-type", &action.crate_type])
         .args(["-C", "panic=abort"])
+        .arg("-L")
+        .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
     for external in action

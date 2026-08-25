@@ -73,6 +73,12 @@ crate extern bindings are target-scoped, dependency-first, and wired by exact
 native artifact path. Windows passed 38 direct runtime tests; Arch Linux WSL2
 passed 37 direct runtime tests. No inactive platform rlib is supplied to rustc.
 
+Eight featureless runtime consumers now use the same native path:
+`mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`, `mrml-json`,
+`mrml-wikipedia`, `mrml-error`, and `mrml-terminal-style`. Each host passed 31
+direct tests across the layer. Twelve of 42 components now have explicit native
+actions; 30 remain `cargo-transition`.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

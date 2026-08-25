@@ -47,3 +47,11 @@ rust-action|org.mrml.library.math|mrml_math|lib|packages/libraries/math/src/lib.
 rust-action|org.mrml.library.windows|mrml_windows|lib|packages/libraries/windows/src/lib.rs|
 rust-action|org.mrml.library.linux|mrml_linux|lib|packages/libraries/linux/src/lib.rs|
 rust-action|org.mrml.library.runtime|mrml_runtime|lib|packages/libraries/runtime/src/lib.rs|mrml-linux=mrml_linux@LINUX;mrml-windows=mrml_windows@WINDOWS
+rust-action|org.mrml.library.percent-encoding|mrml_percent_encoding|lib|packages/libraries/percent-encoding/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.tokenizer|mrml_tokenizer|lib|packages/libraries/tokenizer/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.zstd|mrml_zstd|lib|packages/libraries/zstd/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.zim|mrml_zim|lib|packages/libraries/zim/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.json|mrml_json|lib|packages/libraries/json/src/lib.rs|mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.wikipedia|mrml_wikipedia|lib|packages/libraries/wikipedia/src/lib.rs|mrml-runtime=mrml_runtime@*;mrml-zim=mrml_zim@*;mrml-zstd=mrml_zstd@*
+rust-action|org.mrml.library.error|mrml_error|lib|packages/libraries/error/src/lib.rs|mrml-json=mrml_json@*;mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.terminal-style|mrml_terminal_style|lib|packages/libraries/terminal-style/src/lib.rs|mrml-linux=mrml_linux@LINUX;mrml-runtime=mrml_runtime@*;mrml-windows=mrml_windows@WINDOWS

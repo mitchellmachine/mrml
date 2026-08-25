@@ -154,6 +154,10 @@ leaf with its trainer edge retained. See
 builds and wires only the target-active platform extern. Windows passed 38 tests
 and Arch Linux WSL2 passed 37 without Cargo compilation for those nodes.
 
+The next eight featureless runtime consumers are now direct-rustc nodes as well;
+Windows and Arch Linux WSL2 each passed 31 tests across that layer. Twelve of 42
+components now have native actions, with the other 30 explicitly transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

@@ -142,6 +142,13 @@ missing native actions and target mismatches, and passes exact deterministic rli
 paths through `--extern`. Windows passed 38 runtime tests and Arch Linux WSL2
 passed 37; the one-test difference is the Windows-only argument parser.
 
+The next featureless layer is also native: `mrml-percent-encoding`,
+`mrml-tokenizer`, `mrml-zstd`, `mrml-zim`, `mrml-json`, `mrml-wikipedia`,
+`mrml-error`, and `mrml-terminal-style`. Rustc receives the single bounded
+target/profile artifact directory as its transitive dependency search path and
+each direct extern remains bound to an exact rlib. Both Windows GNU/LLVM and
+Arch Linux WSL2 passed all 31 inline tests across this layer.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).
