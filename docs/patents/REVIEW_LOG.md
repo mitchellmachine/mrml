@@ -107,6 +107,10 @@ updates both inbound Cargo paths without changing HTTP/HTTPS behavior.
 **Result: NOT_TRIGGERED.** This is repository organization, not a new protocol
 mechanism.
 
+The later native HTTP action changes only build orchestration and exact extern
+selection. **Result: NOT_TRIGGERED.** Existing HTTP/TLS and package-resolver
+reviews remain in force.
+
 The fifteenth semantic move relocates `mrml-ssh` after crypto/runtime and
 updates its Git consumer without changing SSH or signing behavior. **Result:
 NOT_TRIGGERED.** This is repository organization, not a new protocol or

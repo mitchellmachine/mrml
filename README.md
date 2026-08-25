@@ -323,6 +323,11 @@ Arch Linux WSL2. Sixteen components are native and 26 remain transitional.
 independent protocol validation was implied. Seventeen components are native
 and 25 remain transitional.
 
+`mrml-http` directly consumes the native runtime/TLS artifacts and passes all
+three tests on both hosts. Live URL/range paths were not configured, so this is
+not network-interoperability evidence. Eighteen components are native and 24
+remain transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

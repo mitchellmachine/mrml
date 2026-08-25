@@ -184,6 +184,10 @@ Both hosts pass its 11 inline tests directly; absent environment-selected live
 peers and certificate fixtures remain absent evidence, not silently claimed
 coverage.
 
+`mrml-http` is the next featureless consumer and binds exact runtime/TLS rlibs.
+Both hosts pass its three inline tests directly; absent live URL/range inputs
+remain absent network evidence.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

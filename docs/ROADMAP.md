@@ -183,6 +183,11 @@ Arch Linux WSL2 each pass all 11 direct tests; environment-selected live-peer
 and external-fixture paths were not exercised. Seventeen of 42 components are
 native; 25 remain transitional.
 
+`mrml-http` now consumes exact native runtime/TLS artifacts. Windows and Arch
+Linux WSL2 each pass all three direct tests; environment-selected live URL and
+range probes were not exercised. Eighteen of 42 components are native; 24
+remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

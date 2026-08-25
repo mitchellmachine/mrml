@@ -187,6 +187,12 @@ The HTTP move was checked on a Windows host:
 
 No Linux host or runtime execution was exercised by this move.
 
+The later native HTTP action was checked with the exact dated 2026-08-24
+toolchains on Windows and Arch Linux WSL2. `mrml doctor`, `mrml audit`,
+`mrml build mrml-http`, and all three direct tests passed on both hosts. The
+environment-selected live URL/range probes, KVM, bare metal, and external
+network interoperability were not exercised.
+
 The SSH move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-ssh -- --check`

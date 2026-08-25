@@ -113,6 +113,11 @@ Arch Linux WSL2 each pass all 11 inline tests; configured live-peer and external
 certificate-fixture paths were not supplied. Seventeen components are native;
 25 remain transitional.
 
+`mrml-http` directly binds the native runtime and TLS rlibs. Windows and Arch
+Linux WSL2 each pass all three inline tests; the environment-selected live URL
+and range probes were not supplied. Eighteen components are native; 24 remain
+transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).
