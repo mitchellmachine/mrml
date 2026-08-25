@@ -2882,3 +2882,15 @@ host-share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace required independent
 human dual review.
+
+# 2026-08-25 — Shared-reference return-copy ancestry
+
+**Result: NOT_TRIGGERED.** The compiler conventionally preserves exact returned-
+reference ancestry through an immediately preceding shared-reference copy at a
+matching local initialization expression. The traversal remains bounded,
+mutable references remain move-only, and missing or ambiguous ancestry fails
+closed. It adds no optimization, authority model, compatibility protocol, host-
+share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace required independent
+human dual review.
