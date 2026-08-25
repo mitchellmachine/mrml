@@ -577,8 +577,12 @@ expression-origin loans now derive one destination fact per existing branch
 borrow effect. The facts retain distinct borrowed paths and share only the
 destination generation, so a later conflict with either possible owner is
 preserved without inventing a conflict with unrelated owners. A source-
-generation replacement blocks derivation. Chained conditional-origin moves,
-projected reference-value moves, and general alias/region propagation remain
+generation replacement blocks derivation. The same bounded relation now retains
+one fact per origin and move depth through direct root-move chains. Its checked
+`initialization_count * effect_count` enumeration and depth-qualified loan IDs
+preserve intermediate generations instead of collapsing to the terminal
+binding; every hop rechecks precise move/init shape and intervening replacement.
+Projected reference-value moves and general alias/region propagation remain
 unimplemented.
 
 Explicit direct mutable reborrows additionally derive their parent loan and

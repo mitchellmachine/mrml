@@ -3699,3 +3699,17 @@ replacement. The pinned oracle rejected the shared/mutable live-child cases and
 accepted both precision controls. Chained conditional-origin and projected
 reference-value moves remain unimplemented; this does not claim general alias
 tracking or regions. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The conditional-loan move-chain milestone passed all 758 compiler and driver
+tests on Windows gnullvm and all 758 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Conditional branch origins
+now survive bounded chains of precise root reference moves. The derived relation
+enumerates every origin at every actual move depth using checked
+`initialization_count * effect_count` work and depth-qualified loan IDs, retaining
+intermediate generations and rechecking replacement at each hop. The pinned
+oracle rejected two- and three-hop shared/mutable live-child cases against both
+possible owners, while accepting unrelated-owner and post-last-use controls.
+Projected reference-value moves and general region/outlives propagation remain
+unimplemented; this does not claim complete Polonius semantics. The
+`no_std`/allocation/unsafe hygiene scan remained empty.

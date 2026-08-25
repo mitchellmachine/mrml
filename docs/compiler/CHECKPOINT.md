@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `620fd7d`
-  (`compiler: preserve moved conditional loans`)
+- Compiler checkpoint commit: `f6cd266b`
+  (`compiler: chain moved conditional loans`)
 - Remote state when recorded: `origin/main` is still at `2cfe524`. The named
   compiler checkpoint is committed locally after independently committed VMM
   and kernel work; pushing the combined mainline history awaits explicit owner
@@ -138,8 +138,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   conditional expression-generation now derives one destination loan per
   existing branch-origin effect. The derived category is bounded by the place-
   effect capacity, retains each origin independently, and refuses derivation
-  across a source-generation replacement. Chained conditional-origin moves
-  remain unimplemented.
+  across a source-generation replacement. The same derivation now enumerates
+  every origin at every move depth up to the actual bounded initialization
+  count. Checked `initialization_count * effect_count` work and depth-qualified
+  loan IDs preserve intermediate generations and reject missing or replaced
+  hops without collapsing the chain to its terminal binding.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -475,8 +478,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 756 tests on each host: 413
-library tests, 10 conformance tests, 331 replacement tests, and 2 driver tests.
+The checkpoint source passed 758 tests on each host: 414
+library tests, 10 conformance tests, 332 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
