@@ -378,6 +378,22 @@ behavior:
 No Linux host/runtime, UEFI firmware, Secure Boot, TPM, bare-metal, or physical-
 hardware execution was exercised by this path-only move.
 
+The kernel benchmark/test-harness move from `crates/mrml-kernel-bench` to
+`tests/kernel-bench` was checked on a Windows host without changing harness
+source behavior:
+
+- `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-kernel-bench`
+  — PASS with 14 manual performance gates ignored and no measured tests run;
+- `.\target\debug\mrml.exe build mrml-kernel-bench` — PASS;
+- `git grep -n 'crates/mrml-kernel-bench/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact benchmark-package path matches.
+
+No Linux host/runtime, release-mode performance gate, affinity-pinned physical
+core, bare-metal, or physical-hardware execution was exercised by this move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

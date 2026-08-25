@@ -312,7 +312,7 @@ lifecycle and cleanup composition.
 
 ## 2026-08-23 — Phase 1 service-policy microbenchmarks
 
-MRML source: `crates/mrml-kernel-bench/src/lib.rs`.
+MRML source: `tests/kernel-bench/src/lib.rs`.
 
 The host-only release harness now times existing IPC, scheduler wakeup,
 capability transfer/revocation, shared-binding, and cross-runtime domain-handoff
@@ -324,7 +324,7 @@ operations.
 
 ## 2026-08-23 — pinned cross-core and live WHP mapping benchmarks
 
-MRML source: `crates/mrml-kernel-bench/src/lib.rs`,
+MRML source: `tests/kernel-bench/src/lib.rs`,
 `crates/mrml-whp/src/native.rs`, and `crates/mrml-kvm/src/native.rs`.
 
 The host-only harness parses documented Windows processor topology, pins two

@@ -10,7 +10,7 @@ members = [
     "services/storage",
     "packages/libraries/uefi",
     "system/kernel",
-    "crates/mrml-kernel-bench",
+    "tests/kernel-bench",
     "crates/mrml-sign",
     "packages/libraries/crypto",
     "packages/libraries/tls",
